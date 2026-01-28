@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from datafusion_engine.plan_walk import walk_logical_complete
 from datafusion_engine.udf_catalog import rewrite_tag_index
 from datafusion_engine.udf_runtime import (
     udf_names_from_snapshot,
@@ -16,11 +17,17 @@ _SINGLE_DATASET_COUNT = 1
 
 _PLAN_EXPR_ATTRS: dict[str, tuple[str, ...]] = {
     "Aggregate": ("group_expr", "group_exprs", "aggr_expr", "aggr_exprs"),
+    "Analyze": ("input",),
+    "Explain": ("plan", "input"),
     "Filter": ("predicate",),
     "Join": ("filter",),
-    "Projection": ("projections",),
+    "Limit": ("skip", "fetch"),
+    "Projection": ("expr", "projections"),
+    "Repartition": ("partitioning_scheme",),
+    "RecursiveQuery": ("input", "recursive"),
     "Sort": ("expr", "exprs", "sort_exprs"),
     "TableScan": ("filters",),
+    "Unnest": ("expr", "exprs"),
     "Window": ("window_expr", "window_exprs"),
 }
 
@@ -117,16 +124,12 @@ def extract_lineage(
     scans: list[ScanLineage] = []
     joins: list[JoinLineage] = []
     exprs: list[ExprInfo] = []
-    stack: list[object] = [plan]
-
-    while stack:
-        node = stack.pop()
+    for node in walk_logical_complete(plan):
         variant = _plan_variant(node)
         tag = _variant_name(node=node, variant=variant)
         scans.extend(_extract_scan_lineage(tag=tag, variant=variant))
         joins.extend(_extract_join_lineage(tag=tag, variant=variant))
         exprs.extend(_extract_expr_infos(tag=tag, variant=variant, udf_name_map=udf_name_map))
-        stack.extend(_plan_inputs(node))
 
     required_udfs = _required_udfs(exprs)
     required_tags = _required_rewrite_tags(required_udfs, udf_snapshot)
@@ -185,19 +188,6 @@ def _plan_variant(plan: object) -> object | None:
         return to_variant()
     except (RuntimeError, TypeError, ValueError):
         return None
-
-
-def _plan_inputs(plan: object) -> list[object]:
-    inputs = getattr(plan, "inputs", None)
-    if not callable(inputs):
-        return []
-    try:
-        children = inputs()
-    except (RuntimeError, TypeError, ValueError):
-        return []
-    if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
-        return [child for child in children if child is not None]
-    return []
 
 
 def _safe_attr(obj: object | None, name: str) -> object | None:

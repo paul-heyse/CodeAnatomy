@@ -56,8 +56,6 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=runtime.session_runtime(),
     )
     lineage = extract_lineage(bundle.optimized_logical_plan)

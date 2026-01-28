@@ -52,13 +52,11 @@ def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
     alpha_bundle = build_plan_bundle(
         ctx,
         alpha_df,
-        compute_execution_plan=False,
         session_runtime=session_runtime,
     )
     beta_bundle = build_plan_bundle(
         ctx,
         beta_df,
-        compute_execution_plan=False,
         session_runtime=session_runtime,
     )
     alpha_schema = _arrow_schema_from_df(alpha_df)

@@ -22,7 +22,7 @@ def build_plan_bundle_for_df(
     runtime: IncrementalRuntime,
     df: DataFrame,
     *,
-    compute_execution_plan: bool = False,
+    compute_execution_plan: bool = True,
 ) -> DataFusionPlanBundle:
     """Build a plan bundle from a DataFrame using the incremental runtime.
 

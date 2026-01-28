@@ -34,8 +34,14 @@ def _resolve_runtime_helper(
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
     """Return SQL options derived from a runtime profile, if available.
 
+    Parameters
+    ----------
+    profile
+        Optional runtime profile used to resolve SQL policy.
+
     Returns
     -------
+    SQLOptions
         SQL options for use with DataFusion contexts.
     """
     return _resolve_runtime_helper(
@@ -48,8 +54,14 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
 def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
     """Return statement SQL options derived from a runtime profile, if available.
 
+    Parameters
+    ----------
+    profile
+        Optional runtime profile used to resolve SQL policy.
+
     Returns
     -------
+    SQLOptions
         SQL options for statement execution.
     """
     return _resolve_runtime_helper(
@@ -59,4 +71,32 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     )
 
 
-__all__ = ["sql_options_for_profile", "statement_sql_options_for_profile"]
+def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
+    """Return read-only SQL options for planning contexts.
+
+    Parameters
+    ----------
+    profile
+        Optional runtime profile used to resolve SQL policy.
+
+    Returns
+    -------
+    SQLOptions
+        SQL options with mutating statements disabled.
+    """
+    options = sql_options_for_profile(profile)
+    allow_ddl = False
+    allow_dml = False
+    allow_statements = False
+    return (
+        options.with_allow_ddl(allow_ddl)
+        .with_allow_dml(allow_dml)
+        .with_allow_statements(allow_statements)
+    )
+
+
+__all__ = [
+    "planning_sql_options",
+    "sql_options_for_profile",
+    "statement_sql_options_for_profile",
+]

@@ -246,6 +246,7 @@ def _apply_named_profile_overrides(
             target_partitions=min(cpu_count, 8),
             batch_size=4096,
             capture_explain=True,
+            explain_verbose=True,
             explain_analyze=True,
             explain_analyze_level="dev",
         )
@@ -254,6 +255,7 @@ def _apply_named_profile_overrides(
             profile,
             config_policy_name="prod",
             capture_explain=False,
+            explain_verbose=False,
             explain_analyze=False,
             explain_analyze_level=None,
         )
@@ -264,6 +266,7 @@ def _apply_named_profile_overrides(
             target_partitions=min(cpu_count, 4),
             batch_size=4096,
             capture_explain=False,
+            explain_verbose=False,
             explain_analyze=False,
             explain_analyze_level="summary",
         )

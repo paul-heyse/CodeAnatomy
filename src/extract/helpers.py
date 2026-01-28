@@ -329,8 +329,6 @@ def _build_plan_bundle_from_df(
     return build_plan_bundle(
         session_runtime.ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=True,
         validate_udfs=True,
         session_runtime=session_runtime,
     )

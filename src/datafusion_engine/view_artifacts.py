@@ -122,6 +122,7 @@ def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | No
         ("plan_fingerprint", bundle.plan_fingerprint),
         ("function_registry_hash", artifacts.function_registry_hash),
         ("udf_snapshot_hash", artifacts.udf_snapshot_hash),
+        ("information_schema_hash", artifacts.information_schema_hash),
         ("rewrite_tags", tuple(sorted(artifacts.rewrite_tags))),
         ("domain_planner_names", tuple(sorted(artifacts.domain_planner_names))),
         ("df_settings_hash", df_settings_hash),

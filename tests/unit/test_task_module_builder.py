@@ -151,6 +151,8 @@ def _plan_for_module(
         critical_path_task_names=(),
         critical_path_length_weighted=0.0,
         bottom_level_costs=bottom_level_costs,
+        task_plan_metrics={},
+        task_costs={},
         dependency_map=dependency_map,
         dataset_specs=dataset_specs,
         active_tasks=frozenset(plan_fingerprints),

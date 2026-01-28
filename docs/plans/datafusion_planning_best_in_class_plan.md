@@ -2,7 +2,7 @@
 
 Date: 2026-01-28
 Owner: Codex (design phase)
-Status: design only (breaking changes allowed)
+Status: implemented (breaking changes applied)
 
 ## Goals
 - Treat DataFusion planning artifacts as the single source of truth for dependency inference, scheduling, and execution.
@@ -71,10 +71,14 @@ def walk_logical_complete(root: object) -> list[object]:
 - None.
 
 **Implementation checklist**
-- [ ] Add a reusable plan walker that includes embedded subplans.
-- [ ] Update lineage extraction to use the complete walker.
-- [ ] Add coverage for Subquery/SubqueryAlias/Explain/Analyze traversal.
-- [ ] Add tests for subquery dependency capture.
+- [x] Add a reusable plan walker that includes embedded subplans.
+- [x] Update lineage extraction to use the complete walker.
+- [x] Add coverage for Subquery/SubqueryAlias/Explain/Analyze traversal.
+- [x] Add tests for subquery dependency capture.
+
+**Implementation notes**
+- Added `src/datafusion_engine/plan_walk.py` and wired `lineage_datafusion.extract_lineage`.
+- Added lineage variant coverage in `tests/unit/test_lineage_plan_variants.py`.
 
 ---
 
@@ -108,9 +112,13 @@ _PLAN_EXPR_ATTRS = {
 - None.
 
 **Implementation checklist**
-- [ ] Add variant fields for Limit/Repartition/Unnest/RecursiveQuery/Explain/Analyze.
-- [ ] Ensure join key expressions are captured consistently.
-- [ ] Add tests covering each new variant.
+- [x] Add variant fields for Limit/Repartition/Unnest/RecursiveQuery/Explain/Analyze.
+- [x] Ensure join key expressions are captured consistently.
+- [x] Add tests covering each new variant.
+
+**Implementation notes**
+- Expanded `_PLAN_EXPR_ATTRS` and join key extraction in `src/datafusion_engine/lineage_datafusion.py`.
+- Added tests for repartition, unnest, recursive, and join key capture.
 
 ---
 
@@ -142,10 +150,14 @@ def _explain_verbose_rows(ctx: SessionContext, sql: str) -> list[dict[str, objec
 - None.
 
 **Implementation checklist**
-- [ ] Add tree explain capture for every plan bundle.
-- [ ] Add verbose explain capture (rule-by-rule deltas) behind a config flag.
-- [ ] Persist explain rows to the plan artifact store.
-- [ ] Add plan artifact schema version bump.
+- [x] Add tree explain capture for every plan bundle.
+- [x] Add verbose explain capture (rule-by-rule deltas) behind a config flag.
+- [x] Persist explain rows to the plan artifact store.
+- [x] Add plan artifact schema version bump.
+
+**Implementation notes**
+- Explain outputs are captured via `capture_explain` in `src/datafusion_engine/plan_bundle.py`.
+- Verbose explain gated by `DataFusionRuntimeProfile.explain_verbose`.
 
 ---
 
@@ -176,9 +188,12 @@ partition_count = bundle.execution_plan.partition_count() if bundle.execution_pl
 - None.
 
 **Implementation checklist**
-- [ ] Compute physical plans by default in plan bundles (breaking change).
-- [ ] Capture partition counts and physical plan displays.
-- [ ] Record physical plan topology in plan details.
+- [x] Compute physical plans by default in plan bundles (breaking change).
+- [x] Capture partition counts and physical plan displays.
+- [x] Record physical plan topology in plan details.
+
+**Implementation notes**
+- Physical plan display + partition/repartition counts recorded in plan details.
 
 ---
 
@@ -210,9 +225,14 @@ bottom_costs = compute_bottom_level_costs(task_graph, metrics)
 - None.
 
 **Implementation checklist**
-- [ ] Add a profiling mode that captures EXPLAIN ANALYZE metrics.
-- [ ] Persist metrics in plan artifacts.
-- [ ] Replace static bottom-level costs with metric-informed weights.
+- [x] Add a profiling mode that captures EXPLAIN ANALYZE metrics.
+- [x] Persist metrics in plan artifacts.
+- [x] Replace static bottom-level costs with metric-informed weights.
+
+**Implementation notes**
+- `src/datafusion_engine/plan_profiler.py` captures explain/analyze output and metrics.
+- Scheduling costs incorporate duration/output/partition/repartition metrics with
+  opt-out via `ExecutionPlanRequest.enable_metric_scheduling`.
 
 ---
 
@@ -242,9 +262,13 @@ snapshot = {
 - None.
 
 **Implementation checklist**
-- [ ] Add full information_schema snapshot capture to plan bundles.
-- [ ] Persist snapshots in plan artifact store.
-- [ ] Include hashes of snapshots in plan identity.
+- [x] Add full information_schema snapshot capture to plan bundles.
+- [x] Persist snapshots in plan artifact store.
+- [x] Include hashes of snapshots in plan identity.
+
+**Implementation notes**
+- Snapshots now include `df_settings`, `tables`, `schemata`, `columns`, `routines`,
+  `parameters`, and `function_catalog`.
 
 ---
 
@@ -275,9 +299,13 @@ df = safe_sql(ctx, "SELECT * FROM t WHERE a > $val", options=opts, param_values=
 - None.
 
 **Implementation checklist**
-- [ ] Replace `ctx.sql(...)` with `ctx.sql_with_options(...)` for planning.
-- [ ] Standardize SQL parameter usage (`param_values` preferred).
-- [ ] Add tests that ensure planning cannot execute DDL/DML.
+- [x] Replace `ctx.sql(...)` with `ctx.sql_with_options(...)` for planning.
+- [x] Standardize SQL parameter usage (`param_values` preferred).
+- [x] Add tests that ensure planning cannot execute DDL/DML.
+
+**Implementation notes**
+- Added `src/datafusion_engine/sql_guard.py` and `planning_sql_options` helper.
+- Safe SQL guard is exercised in `tests/unit/test_safe_sql.py`.
 
 ---
 
@@ -307,9 +335,12 @@ if not validation["matches"]:
 - None.
 
 **Implementation checklist**
-- [ ] Enforce Substrait availability for all plan bundles.
-- [ ] Add optional Substrait validation (config flag).
-- [ ] Record validation results in plan artifacts.
+- [x] Enforce Substrait availability for all plan bundles.
+- [x] Add optional Substrait validation (config flag).
+- [x] Record validation results in plan artifacts.
+
+**Implementation notes**
+- `build_plan_bundle` and `plan_fingerprint_from_bundle` now require Substrait bytes.
 
 ---
 
@@ -324,11 +355,11 @@ Persist all new planning artifacts, environment snapshots, and metrics.
 @dataclass(frozen=True)
 class PlanArtifactRow:
     ...
-    explain_tree_json: str
-    explain_verbose_json: str
-    information_schema_json: str
-    physical_plan_display: str | None
+    explain_tree_json: str | None
+    explain_verbose_json: str | None
     explain_analyze_json: str | None
+    information_schema_json: str
+    substrait_validation_json: str | None
 ```
 
 **Target files to modify**
@@ -340,9 +371,13 @@ class PlanArtifactRow:
 - None.
 
 **Implementation checklist**
-- [ ] Add schema version bump for plan artifacts.
-- [ ] Add new fields to row serialization and storage.
-- [ ] Write migration notes and backfill tools (design only).
+- [x] Add schema version bump for plan artifacts.
+- [x] Add new fields to row serialization and storage.
+- [x] Write migration notes and backfill tools (design only).
+
+**Implementation notes**
+- Plan artifacts schema bumped to `datafusion_plan_artifacts_v4`.
+- Migration notes added in `docs/plans/datafusion_plan_artifacts_v4_migration_notes.md`.
 
 ---
 
@@ -372,9 +407,9 @@ return (-(bottom_cost + critical_boost), node_.name)
 - None.
 
 **Implementation checklist**
-- [ ] Add a cost model based on EXPLAIN ANALYZE metrics.
-- [ ] Incorporate physical plan signals (partition count, repartitions).
-- [ ] Make dynamic scheduling optional with a config flag.
+- [x] Add a cost model based on EXPLAIN ANALYZE metrics.
+- [x] Incorporate physical plan signals (partition count, repartitions).
+- [x] Make dynamic scheduling optional with a config flag.
 
 ---
 
@@ -399,18 +434,22 @@ assert compare_jsonl("plans/query.tree.jsonl", rows)
 - None.
 
 **Implementation checklist**
-- [ ] Add a golden plan fixture format.
-- [ ] Add CI gate for plan artifact drift.
-- [ ] Include df_settings and information_schema snapshots in fixtures.
+- [x] Add a golden plan fixture format.
+- [x] Add CI gate for plan artifact drift.
+- [x] Include df_settings and information_schema snapshots in fixtures.
+
+**Implementation notes**
+- Golden fixtures live in `tests/plan_golden/fixtures/` and are exercised via
+  `tests/plan_golden/test_plan_artifacts.py`.
 
 ---
 
-## Scope 12: Deferred deletions (after all scopes complete)
+## Scope 12: Deferred deletions (completed)
 
 **Objective**
-Remove legacy or redundant plan-capture paths only after new planning artifacts are fully adopted and validated.
+Remove legacy or redundant plan-capture paths now that the new planning artifacts are adopted.
 
-**Candidates for deletion (defer until all scopes are complete)**
+**Candidates for deletion**
 - Any legacy plan display fallback paths that are redundant after explain/tree/verbose capture.
 - Any legacy dependency extraction paths that bypass DataFusion plan bundles (if still present).
 - Any redundant plan artifact fields that are fully superseded by new schema fields.
@@ -421,12 +460,12 @@ Remove legacy or redundant plan-capture paths only after new planning artifacts 
 - `src/relspec/inferred_deps.py`
 
 **Delete list**
-- Defer until the new plan artifacts and tests are fully in place.
+- Legacy plan display columns were removed from plan artifact storage.
 
 **Implementation checklist**
-- [ ] Identify all legacy plan capture paths after rollout.
-- [ ] Remove redundant fields and simplify plan artifacts.
-- [ ] Update tests and migration docs accordingly.
+- [x] Identify all legacy plan capture paths after rollout.
+- [x] Remove redundant fields and simplify plan artifacts.
+- [x] Update tests and migration docs accordingly.
 
 ---
 

@@ -208,6 +208,10 @@ def _compile_plan(
     requested = _task_name_list_from_config(config, key="plan_requested_tasks")
     impacted = _task_name_list_from_config(config, key="plan_impacted_tasks")
     allow_partial = bool(config.get("plan_allow_partial", False))
+    enable_metric_scheduling = True
+    metric_flag = config.get("enable_metric_scheduling")
+    if isinstance(metric_flag, bool):
+        enable_metric_scheduling = metric_flag
     request = ExecutionPlanRequest(
         view_nodes=view_ctx.view_nodes,
         snapshot=view_ctx.snapshot,
@@ -215,6 +219,7 @@ def _compile_plan(
         requested_task_names=requested,
         impacted_task_names=impacted,
         allow_partial=allow_partial,
+        enable_metric_scheduling=enable_metric_scheduling,
     )
     return compile_execution_plan(session_runtime=view_ctx.session_runtime, request=request)
 

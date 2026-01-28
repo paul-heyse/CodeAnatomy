@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
 
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v1"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v4"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v1"
 HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v1"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
@@ -64,12 +64,15 @@ class PlanArtifactRow:
     domain_planner_names_json: str
     delta_inputs_json: str
     df_settings_json: str
+    information_schema_json: str
+    information_schema_hash: str
     substrait_b64: str | None
-    logical_plan_display: str | None
-    optimized_plan_display: str | None
-    optimized_plan_pgjson: str | None
-    optimized_plan_graphviz: str | None
-    execution_plan_display: str | None
+    explain_tree_json: str | None
+    explain_verbose_json: str | None
+    explain_analyze_json: str | None
+    explain_analyze_duration_ms: float | None
+    explain_analyze_output_rows: int | None
+    substrait_validation_json: str | None
     lineage_json: str
     scan_units_json: str
     scan_keys_json: str
@@ -104,12 +107,15 @@ class PlanArtifactRow:
             "domain_planner_names_json": self.domain_planner_names_json,
             "delta_inputs_json": self.delta_inputs_json,
             "df_settings_json": self.df_settings_json,
+            "information_schema_json": self.information_schema_json,
+            "information_schema_hash": self.information_schema_hash,
             "substrait_b64": self.substrait_b64,
-            "logical_plan_display": self.logical_plan_display,
-            "optimized_plan_display": self.optimized_plan_display,
-            "optimized_plan_pgjson": self.optimized_plan_pgjson,
-            "optimized_plan_graphviz": self.optimized_plan_graphviz,
-            "execution_plan_display": self.execution_plan_display,
+            "explain_tree_json": self.explain_tree_json,
+            "explain_verbose_json": self.explain_verbose_json,
+            "explain_analyze_json": self.explain_analyze_json,
+            "explain_analyze_duration_ms": self.explain_analyze_duration_ms,
+            "explain_analyze_output_rows": self.explain_analyze_output_rows,
+            "substrait_validation_json": self.substrait_validation_json,
             "lineage_json": self.lineage_json,
             "scan_units_json": self.scan_units_json,
             "scan_keys_json": self.scan_keys_json,
@@ -905,12 +911,31 @@ def build_plan_artifact_row(
         domain_planner_names_json=_json_text(request.bundle.artifacts.domain_planner_names),
         delta_inputs_json=_json_text(delta_inputs_payload),
         df_settings_json=_json_text(request.bundle.artifacts.df_settings),
+        information_schema_json=_json_text(request.bundle.artifacts.information_schema_snapshot),
+        information_schema_hash=request.bundle.artifacts.information_schema_hash,
         substrait_b64=_substrait_b64(request.bundle.substrait_bytes),
-        logical_plan_display=request.bundle.artifacts.logical_plan_display,
-        optimized_plan_display=request.bundle.artifacts.optimized_plan_display,
-        optimized_plan_pgjson=request.bundle.artifacts.optimized_plan_pgjson,
-        optimized_plan_graphviz=request.bundle.artifacts.optimized_plan_graphviz,
-        execution_plan_display=request.bundle.artifacts.execution_plan_display,
+        explain_tree_json=(
+            _json_text(request.bundle.artifacts.explain_tree)
+            if request.bundle.artifacts.explain_tree is not None
+            else None
+        ),
+        explain_verbose_json=(
+            _json_text(request.bundle.artifacts.explain_verbose)
+            if request.bundle.artifacts.explain_verbose is not None
+            else None
+        ),
+        explain_analyze_json=(
+            _json_text(request.bundle.artifacts.explain_analyze)
+            if request.bundle.artifacts.explain_analyze is not None
+            else None
+        ),
+        explain_analyze_duration_ms=request.bundle.artifacts.explain_analyze_duration_ms,
+        explain_analyze_output_rows=request.bundle.artifacts.explain_analyze_output_rows,
+        substrait_validation_json=(
+            _json_text(request.bundle.artifacts.substrait_validation)
+            if request.bundle.artifacts.substrait_validation is not None
+            else None
+        ),
         lineage_json=_json_text(_lineage_payload(resolved_lineage)),
         scan_units_json=_json_text(scan_payload),
         scan_keys_json=_json_text(scan_keys_payload),
@@ -1328,7 +1353,7 @@ def _plan_identity_payload(
         sorted((str(key), str(value)) for key, value in bundle.artifacts.df_settings.items())
     )
     return {
-        "version": 1,
+        "version": 3,
         "plan_fingerprint": bundle.plan_fingerprint,
         "udf_snapshot_hash": bundle.artifacts.udf_snapshot_hash,
         "function_registry_hash": bundle.artifacts.function_registry_hash,
@@ -1336,6 +1361,7 @@ def _plan_identity_payload(
         "required_rewrite_tags": tuple(sorted(bundle.required_rewrite_tags)),
         "domain_planner_names": tuple(sorted(bundle.artifacts.domain_planner_names)),
         "df_settings_entries": df_settings_entries,
+        "information_schema_hash": bundle.artifacts.information_schema_hash,
         "delta_inputs": tuple(delta_inputs_payload),
         "scan_units": tuple(scan_payload),
         "scan_keys": tuple(sorted(set(scan_keys_payload))),

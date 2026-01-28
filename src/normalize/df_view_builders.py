@@ -23,6 +23,7 @@ from datafusion_engine.normalize_ids import (
 )
 from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
 from datafusion_engine.runtime import SessionRuntime
+from datafusion_engine.sql_guard import safe_sql
 from datafusion_ext import span_make, stable_id_parts, utf8_normalize, utf8_null_if_blank
 
 if TYPE_CHECKING:
@@ -50,8 +51,6 @@ def _plan_bundle_from_df(
     return build_plan_bundle(
         session_runtime.ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=True,
         validate_udfs=True,
         session_runtime=session_runtime,
     )
@@ -580,7 +579,9 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
         return df.with_column("diag_id", diag_id)
     except (RuntimeError, KeyError, ValueError):
         # Return empty diagnostic table
-        return ctx.sql("""
+        return safe_sql(
+            ctx,
+            """
             SELECT
                 CAST(NULL AS Utf8) AS file_id,
                 CAST(NULL AS Utf8) AS path,
@@ -590,7 +591,8 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
                 CAST(NULL AS Utf8) AS diag_source,
                 CAST(NULL AS Utf8) AS code
             WHERE FALSE
-        """)
+        """,
+        )
 
 
 def span_errors_df_builder(ctx: SessionContext) -> DataFrame:

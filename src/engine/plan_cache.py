@@ -23,6 +23,7 @@ class PlanCacheKey:
     plan_fingerprint: str
     udf_snapshot_hash: str
     function_registry_hash: str
+    information_schema_hash: str
     required_udfs_hash: str
     required_rewrite_tags_hash: str
     settings_hash: str
@@ -42,6 +43,7 @@ class PlanCacheKey:
             self.plan_fingerprint,
             self.udf_snapshot_hash,
             self.function_registry_hash,
+            self.information_schema_hash,
             self.required_udfs_hash,
             self.required_rewrite_tags_hash,
             self.settings_hash,
@@ -60,6 +62,7 @@ class PlanCacheEntry:
     plan_fingerprint: str = ""
     udf_snapshot_hash: str = ""
     function_registry_hash: str = ""
+    information_schema_hash: str = ""
     required_udfs_hash: str = ""
     required_rewrite_tags_hash: str = ""
     settings_hash: str = ""
@@ -80,6 +83,7 @@ class PlanCacheEntry:
             plan_fingerprint=self.plan_fingerprint,
             udf_snapshot_hash=self.udf_snapshot_hash,
             function_registry_hash=self.function_registry_hash,
+            information_schema_hash=self.information_schema_hash,
             required_udfs_hash=self.required_udfs_hash,
             required_rewrite_tags_hash=self.required_rewrite_tags_hash,
             settings_hash=self.settings_hash,

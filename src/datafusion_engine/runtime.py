@@ -516,6 +516,7 @@ class SchemaHardeningProfile:
     timezone: str = "UTC"
     parser_dialect: str | None = None
     show_schema_in_explain: bool = True
+    explain_format: str = "tree"
     show_types_in_format: bool = True
     strict_aggregate_schema_check: bool = True
 
@@ -529,6 +530,7 @@ class SchemaHardeningProfile:
         """
         settings = {
             "datafusion.explain.show_schema": str(self.show_schema_in_explain).lower(),
+            "datafusion.explain.format": self.explain_format,
             "datafusion.format.types_info": str(self.show_types_in_format).lower(),
             "datafusion.execution.time_zone": str(self.timezone),
             "datafusion.execution.skip_physical_aggregate_schema_check": str(
@@ -1228,7 +1230,7 @@ def _build_view_nodes(
         plan_bundle = build_plan_bundle(
             ctx,
             df,
-            compute_execution_plan=False,
+            compute_execution_plan=True,
             session_runtime=session_runtime,
         )
         nodes.append(
@@ -1962,7 +1964,7 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v1", normalized)
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v4", normalized)
 
     return _hook
 
@@ -2489,6 +2491,7 @@ class _RuntimeDiagnosticsMixin:
             "tracing_hook": bool(profile.tracing_hook),
             "tracing_collector": bool(profile.tracing_collector),
             "capture_explain": profile.capture_explain,
+            "explain_verbose": profile.explain_verbose,
             "explain_analyze": profile.explain_analyze,
             "explain_analyze_level": profile.explain_analyze_level,
             "explain_collector": bool(profile.explain_collector),
@@ -2911,7 +2914,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     tracing_hook: Callable[[SessionContext], None] | None = None
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     enforce_preflight: bool = True
-    capture_explain: bool = False
+    capture_explain: bool = True
+    explain_verbose: bool = False
     explain_analyze: bool = True
     explain_analyze_level: str | None = None
     explain_collector: DataFusionExplainCollector | None = field(

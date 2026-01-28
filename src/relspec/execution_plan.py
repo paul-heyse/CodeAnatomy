@@ -104,6 +104,8 @@ class ExecutionPlan:
     critical_path_task_names: tuple[str, ...]
     critical_path_length_weighted: float | None
     bottom_level_costs: Mapping[str, float]
+    task_plan_metrics: Mapping[str, TaskPlanMetrics]
+    task_costs: Mapping[str, float]
     dependency_map: Mapping[str, tuple[str, ...]]
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
@@ -133,6 +135,17 @@ class ExecutionPlanRequest:
     requested_task_names: Iterable[str] | None = None
     impacted_task_names: Iterable[str] | None = None
     allow_partial: bool = False
+    enable_metric_scheduling: bool = True
+
+
+@dataclass(frozen=True)
+class TaskPlanMetrics:
+    """Captured planning metrics for a task."""
+
+    duration_ms: float | None = None
+    output_rows: int | None = None
+    partition_count: int | None = None
+    repartition_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +210,48 @@ class _ContractsEvidence:
 
 
 @dataclass(frozen=True)
+class _PlanAssembly:
+    """Compiled plan pieces used for execution plan assembly."""
+
+    schedule: TaskSchedule
+    schedule_metadata: Mapping[str, TaskScheduleMetadata]
+    plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
+    task_plan_metrics: Mapping[str, TaskPlanMetrics]
+    task_costs: Mapping[str, float]
+    signature: str
+    diagnostics: GraphDiagnostics
+    bottom_costs: Mapping[str, float]
+    dependency_map: Mapping[str, tuple[str, ...]]
+    scan_delta_pins: Mapping[str, tuple[int | None, str | None]]
+    session_runtime_hash: str | None
+
+
+@dataclass(frozen=True)
+class _PrunedScanComponents:
+    """Scan-unit related plan components after pruning."""
+
+    scan_units: tuple[ScanUnit, ...]
+    scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class _PrunedPlanMaps:
+    """Plan mappings that are filtered to active tasks."""
+
+    plan_fingerprints: Mapping[str, str]
+    plan_task_signatures: Mapping[str, str]
+    plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
+    output_contracts: Mapping[str, OutputContract]
+    dependency_map: Mapping[str, tuple[str, ...]]
+    task_plan_metrics: Mapping[str, TaskPlanMetrics]
+    task_costs: Mapping[str, float]
+    lineage_by_view: Mapping[str, LineageReport]
+
+
+@dataclass(frozen=True)
 class _PrunedPlanComponents:
     """Pruned plan components used for recomputation."""
 
@@ -207,6 +262,8 @@ class _PrunedPlanComponents:
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
     output_contracts: Mapping[str, OutputContract]
     dependency_map: Mapping[str, tuple[str, ...]]
+    task_plan_metrics: Mapping[str, TaskPlanMetrics]
+    task_costs: Mapping[str, float]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_task_units_by_name: Mapping[str, ScanUnit]
@@ -271,6 +328,72 @@ def _scan_unit_delta_pins(
     return pins
 
 
+def _assemble_plan_components(
+    *,
+    context: _PlanBuildContext,
+    request: ExecutionPlanRequest,
+    plan_fingerprints: Mapping[str, str],
+    plan_task_signatures: Mapping[str, str],
+    reduction: TaskDependencyReduction,
+) -> _PlanAssembly:
+    """Assemble plan components for an execution plan.
+
+    Returns
+    -------
+    _PlanAssembly
+        Plan components used to build the final execution plan.
+    """
+    output_schema_for = _output_schema_lookup(context.output_contracts)
+    schedule = schedule_tasks(
+        context.task_graph,
+        evidence=context.evidence,
+        output_schema_for=output_schema_for,
+        allow_partial=request.allow_partial,
+        reduced_dependency_graph=reduction.reduced_graph,
+    )
+    schedule_meta = task_schedule_metadata(schedule)
+    plan_snapshots = _plan_snapshot_map(
+        context.view_nodes,
+        plan_fingerprints,
+        plan_task_signatures,
+    )
+    if request.enable_metric_scheduling:
+        plan_metrics = _task_plan_metrics(context.view_nodes)
+        task_costs = _task_costs_from_metrics(
+            plan_metrics,
+            scan_units_by_task=context.scan_task_units_by_name,
+        )
+    else:
+        plan_metrics: dict[str, TaskPlanMetrics] = {}
+        task_costs: dict[str, float] = {}
+    signature, diagnostics = _plan_signature_and_diagnostics(
+        context.task_graph,
+        plan_task_signatures,
+        reduction=reduction,
+    )
+    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=task_costs)
+    dependency_map = dependency_map_from_inferred(
+        context.inferred,
+        active_tasks=context.active_tasks,
+        scan_task_names_by_task=context.scan_task_names_by_task,
+    )
+    scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
+    session_runtime_hash = _session_runtime_hash(context.session_runtime)
+    return _PlanAssembly(
+        schedule=schedule,
+        schedule_metadata=schedule_meta,
+        plan_snapshots=plan_snapshots,
+        task_plan_metrics=plan_metrics,
+        task_costs=task_costs,
+        signature=signature,
+        diagnostics=diagnostics,
+        bottom_costs=bottom_costs,
+        dependency_map=dependency_map,
+        scan_delta_pins=scan_delta_pins,
+        session_runtime_hash=session_runtime_hash,
+    )
+
+
 def compile_execution_plan(
     *,
     session_runtime: SessionRuntime,
@@ -298,62 +421,44 @@ def compile_execution_plan(
         plan_fingerprints=plan_fingerprints,
     )
     reduction = _task_dependency_reduction(context.task_graph, plan_task_signatures)
-    output_schema_for = _output_schema_lookup(context.output_contracts)
-    schedule = schedule_tasks(
-        context.task_graph,
-        evidence=context.evidence,
-        output_schema_for=output_schema_for,
-        allow_partial=request.allow_partial,
-        reduced_dependency_graph=reduction.reduced_graph,
-    )
-    schedule_meta = task_schedule_metadata(schedule)
-    plan_snapshots = _plan_snapshot_map(
-        context.view_nodes,
-        plan_fingerprints,
-        plan_task_signatures,
-    )
-    signature, diagnostics = _plan_signature_and_diagnostics(
-        context.task_graph,
-        plan_task_signatures,
+    assembly = _assemble_plan_components(
+        context=context,
+        request=request,
+        plan_fingerprints=plan_fingerprints,
+        plan_task_signatures=plan_task_signatures,
         reduction=reduction,
     )
-    bottom_costs = bottom_level_costs(reduction.reduced_graph)
-    dependency_map = dependency_map_from_inferred(
-        context.inferred,
-        active_tasks=context.active_tasks,
-        scan_task_names_by_task=context.scan_task_names_by_task,
-    )
-    scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
-    session_runtime_hash = _session_runtime_hash(context.session_runtime)
     return ExecutionPlan(
         view_nodes=context.view_nodes,
         task_graph=context.task_graph,
         task_dependency_graph=reduction.full_graph,
         reduced_task_dependency_graph=reduction.reduced_graph,
         evidence=context.evidence,
-        task_schedule=schedule,
-        schedule_metadata=schedule_meta,
+        task_schedule=assembly.schedule,
+        schedule_metadata=assembly.schedule_metadata,
         plan_fingerprints=plan_fingerprints,
         plan_task_signatures=plan_task_signatures,
-        plan_snapshots=plan_snapshots,
+        plan_snapshots=assembly.plan_snapshots,
         output_contracts=context.output_contracts,
-        plan_signature=signature,
+        plan_signature=assembly.signature,
         task_dependency_signature=reduction.full_signature,
         reduced_task_dependency_signature=reduction.reduced_signature,
         reduction_node_map=reduction.node_map,
         reduction_edge_count=reduction.edge_count,
         reduction_removed_edge_count=reduction.removed_edge_count,
-        diagnostics=diagnostics,
-        critical_path_task_names=diagnostics.critical_path_task_names,
-        critical_path_length_weighted=diagnostics.critical_path_length_weighted,
-        bottom_level_costs=bottom_costs,
-        dependency_map=dependency_map,
+        diagnostics=assembly.diagnostics,
+        critical_path_task_names=assembly.diagnostics.critical_path_task_names,
+        critical_path_length_weighted=assembly.diagnostics.critical_path_length_weighted,
+        bottom_level_costs=assembly.bottom_costs,
+        task_plan_metrics=assembly.task_plan_metrics,
+        task_costs=assembly.task_costs,
+        dependency_map=assembly.dependency_map,
         dataset_specs=context.dataset_spec_map,
         active_tasks=frozenset(context.active_tasks),
         runtime_profile=context.runtime_profile,
-        session_runtime_hash=session_runtime_hash,
+        session_runtime_hash=assembly.session_runtime_hash,
         scan_units=context.scan_units,
-        scan_unit_delta_pins=scan_delta_pins,
+        scan_unit_delta_pins=assembly.scan_delta_pins,
         scan_keys_by_task=context.scan_keys_by_task,
         scan_task_units_by_name=context.scan_task_units_by_name,
         scan_task_name_by_key=context.scan_task_name_by_key,
@@ -737,7 +842,9 @@ def _output_schema_lookup(
     return _lookup
 
 
-def bottom_level_costs(graph: rx.PyDiGraph) -> dict[str, float]:
+def bottom_level_costs(
+    graph: rx.PyDiGraph, *, task_costs: Mapping[str, float] | None = None
+) -> dict[str, float]:
     """Compute bottom-level costs to prioritize critical-path tasks.
 
     Returns
@@ -747,12 +854,16 @@ def bottom_level_costs(graph: rx.PyDiGraph) -> dict[str, float]:
     """
     topo = list(rx.topological_sort(graph))
     bottom: dict[int, float] = {}
+    costs = dict(task_costs or {})
     for node_idx in reversed(topo):
         succs = graph.successor_indices(node_idx)
         best_succ = max((bottom[s] for s in succs), default=0.0)
         node = graph[node_idx]
         task_name, priority = _task_name_priority(node)
-        cost = float(max(priority, 1)) if task_name is not None else 1.0
+        if task_name is not None and task_name in costs:
+            cost = float(max(costs[task_name], 1.0))
+        else:
+            cost = float(max(priority, 1)) if task_name is not None else 1.0
         bottom[node_idx] = cost + best_succ
     out: dict[str, float] = {}
     for node_idx, score in bottom.items():
@@ -1144,6 +1255,7 @@ def _plan_bundle_task_signature(
     domain_planner_names = tuple(sorted(getattr(artifacts, "domain_planner_names", ())))
     df_settings = getattr(artifacts, "df_settings", {})
     df_settings_hash = _df_settings_hash(df_settings) if isinstance(df_settings, Mapping) else ""
+    info_schema_hash = getattr(artifacts, "information_schema_hash", "")
     required_udfs = tuple(sorted(getattr(bundle, "required_udfs", ())))
     required_rewrite_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
     delta_inputs_payload = _delta_inputs_payload(bundle)
@@ -1153,6 +1265,7 @@ def _plan_bundle_task_signature(
         ("plan_fingerprint", str(plan_fingerprint)),
         ("function_registry_hash", str(function_registry_hash)),
         ("udf_snapshot_hash", str(udf_snapshot_hash)),
+        ("information_schema_hash", str(info_schema_hash)),
         ("rewrite_tags", rewrite_tags),
         ("domain_planner_names", domain_planner_names),
         ("df_settings_hash", df_settings_hash),
@@ -1219,6 +1332,126 @@ def _plan_snapshot_map(
     return snapshots
 
 
+def _task_plan_metrics(view_nodes: Sequence[ViewNode]) -> dict[str, TaskPlanMetrics]:
+    metrics: dict[str, TaskPlanMetrics] = {}
+    for node in view_nodes:
+        bundle = node.plan_bundle
+        if bundle is None:
+            continue
+        details = getattr(bundle, "plan_details", {})
+        if not isinstance(details, Mapping):
+            continue
+        duration_ms = _float_from_value(details.get("explain_analyze_duration_ms"))
+        output_rows = _int_from_value(details.get("explain_analyze_output_rows"))
+        partition_count = _int_from_value(details.get("partition_count"))
+        repartition_count = _int_from_value(details.get("repartition_count"))
+        metrics[node.name] = TaskPlanMetrics(
+            duration_ms=duration_ms,
+            output_rows=output_rows,
+            partition_count=partition_count,
+            repartition_count=repartition_count,
+        )
+    return metrics
+
+
+def _task_costs_from_metrics(
+    metrics: Mapping[str, TaskPlanMetrics],
+    *,
+    scan_units_by_task: Mapping[str, ScanUnit],
+) -> dict[str, float]:
+    costs: dict[str, float] = {}
+    for name, metric in metrics.items():
+        base_cost = _base_cost_from_metrics(metric)
+        if base_cost is not None:
+            costs[name] = _apply_physical_adjustments(base_cost, metric)
+    for name, unit in scan_units_by_task.items():
+        if name in costs:
+            continue
+        candidate = unit.candidate_file_count
+        total_files = unit.total_files
+        file_cost = candidate if candidate > 0 else total_files
+        costs[name] = float(max(file_cost, 1))
+    return costs
+
+
+def _base_cost_from_metrics(metric: TaskPlanMetrics) -> float | None:
+    """Return the base cost derived from EXPLAIN ANALYZE metrics.
+
+    Parameters
+    ----------
+    metric
+        Task plan metrics captured from DataFusion explains.
+
+    Returns
+    -------
+    float | None
+        Base cost derived from duration, output rows, or partition count.
+    """
+    if metric.duration_ms is not None:
+        return max(metric.duration_ms, 1.0)
+    if metric.output_rows is not None:
+        return float(max(metric.output_rows, 1))
+    if metric.partition_count is not None:
+        return float(max(metric.partition_count, 1))
+    if metric.repartition_count is not None:
+        return float(max(metric.repartition_count, 1))
+    return None
+
+
+def _apply_physical_adjustments(base_cost: float, metric: TaskPlanMetrics) -> float:
+    """Adjust the cost based on physical plan signals.
+
+    Parameters
+    ----------
+    base_cost
+        Base cost derived from plan metrics.
+    metric
+        Task plan metrics captured from DataFusion explains.
+
+    Returns
+    -------
+    float
+        Adjusted cost incorporating partition and repartition signals.
+    """
+    adjusted = float(base_cost)
+    if metric.partition_count is not None:
+        adjusted += float(max(metric.partition_count, 1))
+    if metric.repartition_count is not None:
+        adjusted += float(max(metric.repartition_count, 0)) * 10.0
+    return adjusted
+
+
+def _float_from_value(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _int_from_value(value: object) -> int | None:
+    result: int | None = None
+    if value is None or isinstance(value, bool):
+        result = None
+    elif isinstance(value, int):
+        result = value
+    elif isinstance(value, float):
+        result = int(value)
+    elif isinstance(value, str):
+        try:
+            result = int(value)
+        except ValueError:
+            result = None
+    return result
+
+
 def _output_contract_map(
     session: SessionContext,
     view_nodes: Sequence[ViewNode],
@@ -1250,13 +1483,18 @@ def _arrow_schema_from_session_table(session: SessionContext, name: str) -> pa.S
     raise TypeError(msg)
 
 
-def _pruned_plan_components(
+def _pruned_scan_components(
     *,
     plan: ExecutionPlan,
     active_tasks: set[str],
-) -> _PrunedPlanComponents:
-    pruned_graph = _prune_task_graph(plan.task_graph, active_tasks=active_tasks)
-    pruned_view_nodes = _prune_view_nodes(plan.view_nodes, active_tasks=active_tasks)
+) -> _PrunedScanComponents:
+    """Prune scan-unit related components to active tasks.
+
+    Returns
+    -------
+    _PrunedScanComponents
+        Pruned scan-unit components for active tasks.
+    """
     pruned_scan_units, pruned_scan_keys_by_task = _prune_scan_units(
         scan_units=plan.scan_units,
         scan_keys_by_task=plan.scan_keys_by_task,
@@ -1275,6 +1513,28 @@ def _pruned_plan_components(
         for task, names in plan.scan_task_names_by_task.items()
         if task in active_tasks
     }
+    return _PrunedScanComponents(
+        scan_units=pruned_scan_units,
+        scan_keys_by_task=pruned_scan_keys_by_task,
+        scan_task_units_by_name=pruned_scan_task_units,
+        scan_task_name_by_key=pruned_scan_task_name_by_key,
+        scan_task_names_by_task=pruned_scan_task_names_by_task,
+    )
+
+
+def _pruned_plan_maps(
+    *,
+    plan: ExecutionPlan,
+    active_tasks: set[str],
+    pruned_view_nodes: tuple[ViewNode, ...],
+) -> _PrunedPlanMaps:
+    """Prune plan mappings to active tasks.
+
+    Returns
+    -------
+    _PrunedPlanMaps
+        Pruned plan mappings for active tasks.
+    """
     pruned_lineage_by_view = {
         node.name: plan.lineage_by_view[node.name]
         for node in pruned_view_nodes
@@ -1305,24 +1565,56 @@ def _pruned_plan_components(
         for name, deps in plan.dependency_map.items()
         if name in active_tasks
     }
-    pruned_diff = _prune_incremental_diff(
-        plan.incremental_diff,
-        active_tasks=active_tasks,
-    )
-    return _PrunedPlanComponents(
-        task_graph=pruned_graph,
-        view_nodes=pruned_view_nodes,
+    pruned_task_metrics = {
+        name: plan.task_plan_metrics[name]
+        for name in sorted(active_tasks)
+        if name in plan.task_plan_metrics
+    }
+    pruned_task_costs = {
+        name: plan.task_costs[name] for name in sorted(active_tasks) if name in plan.task_costs
+    }
+    return _PrunedPlanMaps(
         plan_fingerprints=pruned_fingerprints,
         plan_task_signatures=pruned_task_signatures,
         plan_snapshots=pruned_snapshots,
         output_contracts=pruned_contracts,
         dependency_map=pruned_dependency_map,
-        scan_units=pruned_scan_units,
-        scan_keys_by_task=pruned_scan_keys_by_task,
-        scan_task_units_by_name=pruned_scan_task_units,
-        scan_task_name_by_key=pruned_scan_task_name_by_key,
-        scan_task_names_by_task=pruned_scan_task_names_by_task,
+        task_plan_metrics=pruned_task_metrics,
+        task_costs=pruned_task_costs,
         lineage_by_view=pruned_lineage_by_view,
+    )
+
+
+def _pruned_plan_components(
+    *,
+    plan: ExecutionPlan,
+    active_tasks: set[str],
+) -> _PrunedPlanComponents:
+    pruned_graph = _prune_task_graph(plan.task_graph, active_tasks=active_tasks)
+    pruned_view_nodes = _prune_view_nodes(plan.view_nodes, active_tasks=active_tasks)
+    pruned_scan = _pruned_scan_components(plan=plan, active_tasks=active_tasks)
+    pruned_maps = _pruned_plan_maps(
+        plan=plan,
+        active_tasks=active_tasks,
+        pruned_view_nodes=pruned_view_nodes,
+    )
+    pruned_diff = _prune_incremental_diff(plan.incremental_diff, active_tasks=active_tasks)
+    return _PrunedPlanComponents(
+        task_graph=pruned_graph,
+        view_nodes=pruned_view_nodes,
+        plan_fingerprints=pruned_maps.plan_fingerprints,
+        plan_task_signatures=pruned_maps.plan_task_signatures,
+        plan_snapshots=pruned_maps.plan_snapshots,
+        output_contracts=pruned_maps.output_contracts,
+        dependency_map=pruned_maps.dependency_map,
+        task_plan_metrics=pruned_maps.task_plan_metrics,
+        task_costs=pruned_maps.task_costs,
+        scan_units=pruned_scan.scan_units,
+        scan_keys_by_task=pruned_scan.scan_keys_by_task,
+        scan_task_units_by_name=pruned_scan.scan_task_units_by_name,
+        scan_task_name_by_key=pruned_scan.scan_task_name_by_key,
+        scan_task_names_by_task=pruned_scan.scan_task_names_by_task,
+        lineage_by_view=pruned_maps.lineage_by_view,
         requested_task_names=tuple(
             name for name in plan.requested_task_names if name in active_tasks
         ),
@@ -1377,7 +1669,7 @@ def prune_execution_plan(
         components.plan_task_signatures,
         reduction=reduction,
     )
-    bottom_costs = bottom_level_costs(reduction.reduced_graph)
+    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=components.task_costs)
     scan_delta_pins = _scan_unit_delta_pins(components.scan_units)
     return ExecutionPlan(
         view_nodes=components.view_nodes,
@@ -1401,6 +1693,8 @@ def prune_execution_plan(
         critical_path_task_names=diagnostics.critical_path_task_names,
         critical_path_length_weighted=diagnostics.critical_path_length_weighted,
         bottom_level_costs=bottom_costs,
+        task_plan_metrics=components.task_plan_metrics,
+        task_costs=components.task_costs,
         dependency_map=components.dependency_map,
         dataset_specs=plan.dataset_specs,
         active_tasks=frozenset(target_active),
@@ -1449,6 +1743,7 @@ def _prune_incremental_diff(
 __all__ = [
     "ExecutionPlan",
     "ExecutionPlanRequest",
+    "TaskPlanMetrics",
     "bottom_level_costs",
     "compile_execution_plan",
     "dependency_map_from_inferred",

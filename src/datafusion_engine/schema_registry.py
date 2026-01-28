@@ -1331,7 +1331,7 @@ DATAFUSION_RUNS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_plan_artifacts_v1",
+    "datafusion_plan_artifacts_v4",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1347,12 +1347,15 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("domain_planner_names_json", pa.string(), nullable=False),
             pa.field("delta_inputs_json", pa.string(), nullable=False),
             pa.field("df_settings_json", pa.string(), nullable=False),
+            pa.field("information_schema_json", pa.string(), nullable=False),
+            pa.field("information_schema_hash", pa.string(), nullable=False),
             pa.field("substrait_b64", pa.string(), nullable=True),
-            pa.field("logical_plan_display", pa.string(), nullable=True),
-            pa.field("optimized_plan_display", pa.string(), nullable=True),
-            pa.field("optimized_plan_pgjson", pa.string(), nullable=True),
-            pa.field("optimized_plan_graphviz", pa.string(), nullable=True),
-            pa.field("execution_plan_display", pa.string(), nullable=True),
+            pa.field("explain_tree_json", pa.string(), nullable=True),
+            pa.field("explain_verbose_json", pa.string(), nullable=True),
+            pa.field("explain_analyze_json", pa.string(), nullable=True),
+            pa.field("explain_analyze_duration_ms", pa.float64(), nullable=True),
+            pa.field("explain_analyze_output_rows", pa.int64(), nullable=True),
+            pa.field("substrait_validation_json", pa.string(), nullable=True),
             pa.field("lineage_json", pa.string(), nullable=False),
             pa.field("scan_units_json", pa.string(), nullable=False),
             pa.field("scan_keys_json", pa.string(), nullable=False),

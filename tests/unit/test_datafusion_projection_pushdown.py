@@ -32,8 +32,6 @@ def test_dynamic_projection_reduces_columns() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=session_runtime,
     )
     plan_text = bundle.display_optimized_plan() or bundle.display_logical_plan() or ""

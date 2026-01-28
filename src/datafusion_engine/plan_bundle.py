@@ -19,6 +19,8 @@ from datafusion_engine.delta_store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
 )
+from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from serde_msgspec import dumps_msgpack
 
 if TYPE_CHECKING:
@@ -42,12 +44,15 @@ DataFrameBuilder = Callable[[SessionContext], DataFrame]
 class PlanArtifacts:
     """Serializable planning artifacts for reproducibility and scheduling."""
 
-    logical_plan_display: str | None
-    optimized_plan_display: str | None
-    optimized_plan_graphviz: str | None
-    optimized_plan_pgjson: str | None
-    execution_plan_display: str | None
+    explain_tree: Mapping[str, object] | None
+    explain_verbose: Mapping[str, object] | None
+    explain_analyze: Mapping[str, object] | None
+    explain_analyze_duration_ms: float | None
+    explain_analyze_output_rows: int | None
     df_settings: Mapping[str, str]
+    information_schema_snapshot: Mapping[str, object]
+    information_schema_hash: str
+    substrait_validation: Mapping[str, object] | None
     udf_snapshot_hash: str
     function_registry_hash: str
     function_registry_snapshot: Mapping[str, object]
@@ -72,7 +77,7 @@ class DeltaInputPin:
 class PlanBundleOptions:
     """Options for building a DataFusion plan bundle."""
 
-    compute_execution_plan: bool = False
+    compute_execution_plan: bool = True
     compute_substrait: bool = True
     validate_udfs: bool = False
     registry_snapshot: Mapping[str, object] | None = None
@@ -87,6 +92,21 @@ class PlanDetailContext:
 
     cdf_windows: Sequence[Mapping[str, object]] = ()
     delta_store_policy_hash: str | None = None
+    information_schema_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class PlanDetailInputs:
+    """Inputs used to assemble plan detail diagnostics."""
+
+    logical: object | None
+    optimized: object | None
+    execution: object | None
+    explain_tree: ExplainCapture | None
+    explain_verbose: ExplainCapture | None
+    explain_analyze: ExplainCapture | None
+    substrait_validation: Mapping[str, object] | None = None
+    detail_context: PlanDetailContext | None = None
 
 
 @dataclass(frozen=True)
@@ -285,7 +305,7 @@ def build_plan_bundle(  # noqa: PLR0913
     ctx: SessionContext,
     df: DataFrame,
     *,
-    compute_execution_plan: bool = False,
+    compute_execution_plan: bool = True,
     compute_substrait: bool = True,
     validate_udfs: bool = False,
     registry_snapshot: Mapping[str, object] | None = None,
@@ -330,8 +350,11 @@ def build_plan_bundle(  # noqa: PLR0913
     Raises
     ------
     ValueError
-        Raised when session runtime information is unavailable.
+        Raised when session runtime information is unavailable or Substrait is disabled.
     """
+    if not compute_substrait:
+        msg = "Substrait bytes are required for plan bundle construction."
+        raise ValueError(msg)
     if session_runtime is None:
         msg = "SessionRuntime is required for plan bundle construction."
         raise ValueError(msg)
@@ -380,12 +403,61 @@ class _BundleComponents:
     plan_details: Mapping[str, object]
 
 
-def _bundle_components(
+@dataclass(frozen=True)
+class _PlanCoreComponents:
+    """Core logical/physical plan objects for bundling."""
+
+    logical: DataFusionLogicalPlan
+    optimized: DataFusionLogicalPlan | None
+    execution: object | None
+    substrait_bytes: bytes | None
+
+
+@dataclass(frozen=True)
+class _ExplainArtifacts:
+    """Explain outputs captured during planning."""
+
+    tree: ExplainCapture | None
+    verbose: ExplainCapture | None
+    analyze: ExplainCapture | None
+
+
+@dataclass(frozen=True)
+class _EnvironmentArtifacts:
+    """Captured environment snapshots used for plan fingerprinting."""
+
+    df_settings: Mapping[str, str]
+    information_schema_snapshot: Mapping[str, object]
+    information_schema_hash: str
+    cdf_windows: tuple[dict[str, object], ...]
+    delta_store_policy_hash: str | None
+
+
+@dataclass(frozen=True)
+class _PlanArtifactsInputs:
+    """Inputs for assembling PlanArtifacts."""
+
+    plan_core: _PlanCoreComponents
+    explain_artifacts: _ExplainArtifacts
+    udf_artifacts: _UdfArtifacts
+    registry_artifacts: _RegistryArtifacts
+    environment: _EnvironmentArtifacts
+    substrait_validation: Mapping[str, object] | None
+
+
+def _plan_core_components(
     ctx: SessionContext,
     df: DataFrame,
     *,
     options: PlanBundleOptions,
-) -> _BundleComponents:
+) -> _PlanCoreComponents:
+    """Collect core logical/physical plan objects.
+
+    Returns
+    -------
+    _PlanCoreComponents
+        Core plan objects for bundling.
+    """
     logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
     optimized = cast("DataFusionLogicalPlan | None", _safe_optimized_logical_plan(df))
     execution = _safe_execution_plan(df) if options.compute_execution_plan else None
@@ -394,14 +466,176 @@ def _bundle_components(
         if options.compute_substrait and optimized is not None
         else None
     )
+    return _PlanCoreComponents(
+        logical=logical,
+        optimized=optimized,
+        execution=execution,
+        substrait_bytes=substrait_bytes,
+    )
+
+
+def _capture_explain_artifacts(
+    df: DataFrame,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> _ExplainArtifacts:
+    """Capture explain outputs for plan artifacts.
+
+    Returns
+    -------
+    _ExplainArtifacts
+        Explain outputs captured for the bundle.
+    """
+    verbose = None
+    if session_runtime is not None and session_runtime.profile.explain_verbose:
+        verbose = capture_explain(df, verbose=True, analyze=False)
+    return _ExplainArtifacts(
+        tree=capture_explain(df, verbose=False, analyze=False),
+        verbose=verbose,
+        analyze=_capture_explain_analyze(df, session_runtime=session_runtime),
+    )
+
+
+def _environment_artifacts(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> _EnvironmentArtifacts:
+    """Capture planning environment snapshots.
+
+    Returns
+    -------
+    _EnvironmentArtifacts
+        Environment artifacts for fingerprints and diagnostics.
+    """
+    df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
+    info_schema_snapshot = _information_schema_snapshot(ctx, session_runtime=session_runtime)
+    info_schema_hash = _information_schema_hash(info_schema_snapshot)
+    cdf_windows = _cdf_window_snapshot(session_runtime)
+    store_policy_hash = None
+    if session_runtime is not None:
+        store_policy_hash = delta_store_policy_hash(session_runtime.profile.delta_store_policy)
+    return _EnvironmentArtifacts(
+        df_settings=df_settings,
+        information_schema_snapshot=info_schema_snapshot,
+        information_schema_hash=info_schema_hash,
+        cdf_windows=cdf_windows,
+        delta_store_policy_hash=store_policy_hash,
+    )
+
+
+def _merged_delta_inputs_for_bundle(
+    ctx: SessionContext,
+    *,
+    plan: DataFusionLogicalPlan,
+    options: PlanBundleOptions,
+) -> tuple[DeltaInputPin, ...]:
+    """Resolve Delta input pins for plan fingerprinting.
+
+    Returns
+    -------
+    tuple[DeltaInputPin, ...]
+        Merged Delta input pins from explicit inputs and scan units.
+    """
+    scan_units = options.scan_units
+    if not scan_units:
+        scan_units = _scan_units_for_bundle(
+            ctx,
+            plan=plan,
+            session_runtime=options.session_runtime,
+        )
+    scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
+    return _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
+
+
+def _explain_payload(
+    capture: ExplainCapture | None,
+    *,
+    kind: str,
+) -> Mapping[str, object] | None:
+    """Return a JSON-ready payload for explain output.
+
+    Parameters
+    ----------
+    capture
+        Captured explain output, or ``None`` when unavailable.
+    kind
+        Explain variant label (``tree``, ``verbose``, or ``analyze``).
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Payload containing explain text and parsed metrics, or ``None``.
+    """
+    if capture is None:
+        return None
+    payload: dict[str, object] = {"kind": kind, "text": capture.text}
+    if capture.duration_ms is not None:
+        payload["duration_ms"] = capture.duration_ms
+    if capture.output_rows is not None:
+        payload["output_rows"] = capture.output_rows
+    return payload
+
+
+def _plan_artifacts_from_components(
+    inputs: _PlanArtifactsInputs,
+) -> PlanArtifacts:
+    """Assemble PlanArtifacts from captured components.
+
+    Returns
+    -------
+    PlanArtifacts
+        Serializable plan artifacts.
+    """
+    explain_artifacts = inputs.explain_artifacts
+    return PlanArtifacts(
+        explain_tree=_explain_payload(explain_artifacts.tree, kind="tree"),
+        explain_verbose=_explain_payload(explain_artifacts.verbose, kind="verbose"),
+        explain_analyze=_explain_payload(explain_artifacts.analyze, kind="analyze"),
+        explain_analyze_duration_ms=(
+            explain_artifacts.analyze.duration_ms if explain_artifacts.analyze is not None else None
+        ),
+        explain_analyze_output_rows=(
+            explain_artifacts.analyze.output_rows if explain_artifacts.analyze is not None else None
+        ),
+        df_settings=inputs.environment.df_settings,
+        information_schema_snapshot=inputs.environment.information_schema_snapshot,
+        information_schema_hash=inputs.environment.information_schema_hash,
+        substrait_validation=inputs.substrait_validation,
+        udf_snapshot_hash=inputs.udf_artifacts.snapshot_hash,
+        function_registry_hash=inputs.registry_artifacts.registry_hash,
+        function_registry_snapshot=inputs.registry_artifacts.registry_snapshot,
+        rewrite_tags=inputs.udf_artifacts.rewrite_tags,
+        domain_planner_names=inputs.udf_artifacts.domain_planner_names,
+        udf_snapshot=inputs.udf_artifacts.snapshot,
+    )
+
+
+def _bundle_components(
+    ctx: SessionContext,
+    df: DataFrame,
+    *,
+    options: PlanBundleOptions,
+) -> _BundleComponents:
+    plan_core = _plan_core_components(ctx, df, options=options)
+    explain_artifacts = _capture_explain_artifacts(
+        df,
+        session_runtime=options.session_runtime,
+    )
     udf_artifacts = _udf_artifacts(
         ctx,
         registry_snapshot=options.registry_snapshot,
         session_runtime=options.session_runtime,
     )
-    registry_artifacts = _function_registry_artifacts(ctx)
-    df_settings = _df_settings_snapshot(ctx, session_runtime=options.session_runtime)
-    required = _required_udf_artifacts(optimized or logical, snapshot=udf_artifacts.snapshot)
+    registry_artifacts = _function_registry_artifacts(
+        ctx,
+        session_runtime=options.session_runtime,
+    )
+    environment = _environment_artifacts(ctx, session_runtime=options.session_runtime)
+    required = _required_udf_artifacts(
+        plan_core.optimized or plan_core.logical,
+        snapshot=udf_artifacts.snapshot,
+    )
 
     if options.validate_udfs:
         from datafusion_engine.udf_runtime import validate_required_udfs
@@ -409,68 +643,64 @@ def _bundle_components(
         if required.required_udfs:
             validate_required_udfs(udf_artifacts.snapshot, required=required.required_udfs)
 
-    scan_units = options.scan_units
-    if not scan_units:
-        scan_units = _scan_units_for_bundle(
-            ctx,
-            plan=optimized or logical,
-            session_runtime=options.session_runtime,
-        )
-    scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
-    merged_delta_inputs = _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
-    cdf_windows = _cdf_window_snapshot(options.session_runtime)
-    store_policy_hash = None
-    if options.session_runtime is not None:
-        store_policy_hash = delta_store_policy_hash(
-            options.session_runtime.profile.delta_store_policy
-        )
+    substrait_validation = None
+    if options.session_runtime is not None and options.session_runtime.profile.substrait_validation:
+        substrait_validation = _substrait_validation_payload(plan_core.substrait_bytes, df=df)
+
+    merged_delta_inputs = _merged_delta_inputs_for_bundle(
+        ctx,
+        plan=plan_core.optimized or plan_core.logical,
+        options=options,
+    )
     fingerprint = _hash_plan(
         PlanFingerprintInputs(
-            substrait_bytes=substrait_bytes,
-            df_settings=df_settings,
+            substrait_bytes=plan_core.substrait_bytes,
+            df_settings=environment.df_settings,
             udf_snapshot_hash=udf_artifacts.snapshot_hash,
             required_udfs=required.required_udfs,
             required_rewrite_tags=required.required_rewrite_tags,
             delta_inputs=merged_delta_inputs,
-            delta_store_policy_hash=store_policy_hash,
+            delta_store_policy_hash=environment.delta_store_policy_hash,
+            information_schema_hash=environment.information_schema_hash,
         )
     )
 
-    artifacts = PlanArtifacts(
-        logical_plan_display=_plan_display(logical, method="display_indent_schema"),
-        optimized_plan_display=_plan_display(optimized, method="display_indent_schema"),
-        optimized_plan_graphviz=_plan_graphviz(optimized),
-        optimized_plan_pgjson=_plan_pgjson(optimized),
-        execution_plan_display=_plan_display(execution, method="display_indent"),
-        df_settings=df_settings,
-        udf_snapshot_hash=udf_artifacts.snapshot_hash,
-        function_registry_hash=registry_artifacts.registry_hash,
-        function_registry_snapshot=registry_artifacts.registry_snapshot,
-        rewrite_tags=udf_artifacts.rewrite_tags,
-        domain_planner_names=udf_artifacts.domain_planner_names,
-        udf_snapshot=udf_artifacts.snapshot,
+    artifacts = _plan_artifacts_from_components(
+        _PlanArtifactsInputs(
+            plan_core=plan_core,
+            explain_artifacts=explain_artifacts,
+            udf_artifacts=udf_artifacts,
+            registry_artifacts=registry_artifacts,
+            environment=environment,
+            substrait_validation=substrait_validation,
+        )
+    )
+    detail_inputs = PlanDetailInputs(
+        logical=plan_core.logical,
+        optimized=plan_core.optimized,
+        execution=plan_core.execution,
+        explain_tree=explain_artifacts.tree,
+        explain_verbose=explain_artifacts.verbose,
+        explain_analyze=explain_artifacts.analyze,
+        substrait_validation=substrait_validation,
+        detail_context=PlanDetailContext(
+            cdf_windows=environment.cdf_windows,
+            delta_store_policy_hash=environment.delta_store_policy_hash,
+            information_schema_hash=environment.information_schema_hash,
+        ),
     )
 
     return _BundleComponents(
-        logical=logical,
-        optimized=optimized,
-        execution=execution,
-        substrait_bytes=substrait_bytes,
+        logical=plan_core.logical,
+        optimized=plan_core.optimized,
+        execution=plan_core.execution,
+        substrait_bytes=plan_core.substrait_bytes,
         fingerprint=fingerprint,
         artifacts=artifacts,
         merged_delta_inputs=merged_delta_inputs,
         required_udfs=required.required_udfs,
         required_rewrite_tags=required.required_rewrite_tags,
-        plan_details=_plan_details(
-            df,
-            logical=logical,
-            optimized=optimized,
-            execution=execution,
-            detail_context=PlanDetailContext(
-                cdf_windows=cdf_windows,
-                delta_store_policy_hash=store_policy_hash,
-            ),
-        ),
+        plan_details=_plan_details(df, detail_inputs=detail_inputs),
     )
 
 
@@ -606,12 +836,138 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes 
     return None
 
 
+def _capture_explain_analyze(
+    df: DataFrame,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> ExplainCapture | None:
+    """Capture EXPLAIN ANALYZE output when enabled.
+
+    Parameters
+    ----------
+    df
+        DataFusion DataFrame to profile.
+    session_runtime
+        Session runtime controlling explain settings.
+
+    Returns
+    -------
+    ExplainCapture | None
+        Captured explain output, or ``None`` when disabled.
+    """
+    if session_runtime is None:
+        return None
+    if not session_runtime.profile.explain_analyze:
+        return None
+    return capture_explain(df, verbose=True, analyze=True)
+
+
+def _substrait_validation_payload(
+    substrait_bytes: bytes | None,
+    *,
+    df: DataFrame,
+) -> Mapping[str, object] | None:
+    """Validate Substrait bytes and return the validation payload.
+
+    Parameters
+    ----------
+    substrait_bytes
+        Serialized Substrait plan bytes.
+    df
+        DataFusion DataFrame used for cross-validation.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Validation payload from the Substrait validator.
+
+    Raises
+    ------
+    ValueError
+        Raised when validation fails or Substrait bytes are missing.
+    """
+    if substrait_bytes is None:
+        msg = "Substrait bytes are required for plan validation."
+        raise ValueError(msg)
+    from datafusion_engine.execution_helpers import validate_substrait_plan
+
+    validation = validate_substrait_plan(substrait_bytes, df=df)
+    match = validation.get("match")
+    if match is False:
+        msg = f"Substrait validation failed: {validation}"
+        raise ValueError(msg)
+    return validation
+
+
+def _information_schema_snapshot(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> Mapping[str, object]:
+    """Return a full information_schema snapshot for plan artifacts.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context used for introspection.
+    session_runtime
+        Optional session runtime for policy-aware introspection.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Snapshot payload containing settings, tables, columns, and routines.
+    """
+    if session_runtime is None:
+        return {}
+    sql_options = None
+    if session_runtime is not None:
+        try:
+            from datafusion_engine.sql_options import planning_sql_options
+
+            sql_options = planning_sql_options(session_runtime.profile)
+        except (RuntimeError, TypeError, ValueError, ImportError):
+            sql_options = None
+    try:
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+    except (RuntimeError, TypeError, ValueError):
+        return {}
+    return {
+        "df_settings": _df_settings_snapshot(ctx, session_runtime=session_runtime),
+        "settings": introspector.settings_snapshot(),
+        "tables": introspector.tables_snapshot(),
+        "schemata": introspector.schemata_snapshot(),
+        "columns": introspector.columns_snapshot(),
+        "routines": introspector.routines_snapshot(),
+        "parameters": introspector.parameters_snapshot(),
+        "function_catalog": introspector.function_catalog_snapshot(include_parameters=True),
+    }
+
+
+def _information_schema_hash(snapshot: Mapping[str, object]) -> str:
+    """Return a stable hash for an information_schema snapshot.
+
+    Parameters
+    ----------
+    snapshot
+        Information schema snapshot payload.
+
+    Returns
+    -------
+    str
+        SHA-256 hash of the snapshot payload.
+    """
+    payload = dumps_msgpack(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
 @dataclass(frozen=True)
 class PlanFingerprintInputs:
     """Inputs required to fingerprint a plan bundle."""
 
     substrait_bytes: bytes | None
     df_settings: Mapping[str, str]
+    information_schema_hash: str | None
     udf_snapshot_hash: str
     required_udfs: Sequence[str]
     required_rewrite_tags: Sequence[str]
@@ -660,6 +1016,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
     payload = (
         ("substrait_hash", substrait_hash),
         ("settings_hash", settings_hash),
+        ("information_schema_hash", inputs.information_schema_hash or ""),
         ("udf_snapshot_hash", inputs.udf_snapshot_hash),
         ("required_udfs", tuple(sorted(inputs.required_udfs))),
         ("required_rewrite_tags", tuple(sorted(inputs.required_rewrite_tags))),
@@ -834,10 +1191,7 @@ def _plan_pgjson(plan: object | None) -> str | None:
 def _plan_details(
     df: DataFrame,
     *,
-    logical: object | None,
-    optimized: object | None,
-    execution: object | None,
-    detail_context: PlanDetailContext | None = None,
+    detail_inputs: PlanDetailInputs,
 ) -> dict[str, object]:
     """Collect plan details for diagnostics.
 
@@ -846,20 +1200,43 @@ def _plan_details(
     dict[str, object]
         Diagnostic plan metadata.
     """
-    context = detail_context or PlanDetailContext()
+    context = detail_inputs.detail_context or PlanDetailContext()
     details: dict[str, object] = {}
-    details["logical_plan"] = _plan_display(logical, method="display_indent_schema")
-    details["optimized_plan"] = _plan_display(optimized, method="display_indent_schema")
-    details["physical_plan"] = _plan_display(execution, method="display_indent")
-    details["graphviz"] = _plan_graphviz(optimized)
-    details["optimized_plan_pgjson"] = _plan_pgjson(optimized)
-    details["partition_count"] = _plan_partition_count(execution)
+    details["logical_plan"] = _plan_display(
+        detail_inputs.logical,
+        method="display_indent_schema",
+    )
+    details["optimized_plan"] = _plan_display(
+        detail_inputs.optimized,
+        method="display_indent_schema",
+    )
+    physical_plan = _plan_display(
+        detail_inputs.execution,
+        method="display_indent",
+    )
+    details["physical_plan"] = physical_plan
+    details["graphviz"] = _plan_graphviz(detail_inputs.optimized)
+    details["optimized_plan_pgjson"] = _plan_pgjson(detail_inputs.optimized)
+    details["partition_count"] = _plan_partition_count(detail_inputs.execution)
+    details["repartition_count"] = _repartition_count_from_display(physical_plan)
+    if detail_inputs.explain_tree is not None:
+        details["explain_tree"] = detail_inputs.explain_tree.text
+    if detail_inputs.explain_verbose is not None:
+        details["explain_verbose"] = detail_inputs.explain_verbose.text
+    if detail_inputs.explain_analyze is not None:
+        details["explain_analyze"] = detail_inputs.explain_analyze.text
+        details["explain_analyze_duration_ms"] = detail_inputs.explain_analyze.duration_ms
+        details["explain_analyze_output_rows"] = detail_inputs.explain_analyze.output_rows
+    if detail_inputs.substrait_validation is not None:
+        details["substrait_validation"] = detail_inputs.substrait_validation
     schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
     details["schema_names"] = schema_names
     if context.cdf_windows:
         details["cdf_windows"] = [dict(window) for window in context.cdf_windows]
     if context.delta_store_policy_hash is not None:
         details["delta_store_policy_hash"] = context.delta_store_policy_hash
+    if context.information_schema_hash is not None:
+        details["information_schema_hash"] = context.information_schema_hash
     return details
 
 
@@ -905,6 +1282,26 @@ def _plan_partition_count(plan: object | None) -> int | None:
         return None
 
 
+def _repartition_count_from_display(plan_display: str | None) -> int | None:
+    """Count repartition operators from a physical plan display string.
+
+    Parameters
+    ----------
+    plan_display
+        Physical plan display string produced by DataFusion.
+
+    Returns
+    -------
+    int | None
+        Count of repartition operators, or ``None`` if unavailable.
+    """
+    if plan_display is None:
+        return None
+    token = "RepartitionExec"
+    count = plan_display.count(token)
+    return count if count > 0 else None
+
+
 def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for row in rows:
@@ -926,7 +1323,15 @@ def _df_settings_snapshot(
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
     try:
-        introspector = SchemaIntrospector(ctx)
+        sql_options = None
+        if session_runtime is not None:
+            try:
+                from datafusion_engine.sql_options import planning_sql_options
+
+                sql_options = planning_sql_options(session_runtime.profile)
+            except (RuntimeError, TypeError, ValueError, ImportError):
+                sql_options = None
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
         rows = introspector.settings_snapshot()
         if not rows:
             return {}
@@ -940,12 +1345,24 @@ def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _function_registry_artifacts(ctx: SessionContext) -> _RegistryArtifacts:
+def _function_registry_artifacts(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> _RegistryArtifacts:
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
     functions: Sequence[Mapping[str, object]] = ()
     try:
-        introspector = SchemaIntrospector(ctx)
+        sql_options = None
+        if session_runtime is not None:
+            try:
+                from datafusion_engine.sql_options import planning_sql_options
+
+                sql_options = planning_sql_options(session_runtime.profile)
+            except (RuntimeError, TypeError, ValueError, ImportError):
+                sql_options = None
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
         functions = introspector.function_catalog_snapshot(include_parameters=True)
     except (RuntimeError, TypeError, ValueError):
         functions = ()

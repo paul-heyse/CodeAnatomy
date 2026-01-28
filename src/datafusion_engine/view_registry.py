@@ -2892,7 +2892,7 @@ def registry_view_nodes(
         plan_bundle = build_plan_bundle(
             ctx,
             df,
-            compute_execution_plan=False,
+            compute_execution_plan=True,
             session_runtime=session_runtime,
         )
         nodes.append(

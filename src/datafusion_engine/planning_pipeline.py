@@ -175,7 +175,7 @@ def _plan_view_nodes(
         bundle = build_plan_bundle(
             ctx,
             df,
-            compute_execution_plan=False,
+            compute_execution_plan=True,
             session_runtime=session_runtime,
             scan_units=scan_units,
         )

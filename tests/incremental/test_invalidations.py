@@ -73,8 +73,6 @@ def _record_view_artifact(
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=True,
         session_runtime=session_runtime,
     )
     required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))

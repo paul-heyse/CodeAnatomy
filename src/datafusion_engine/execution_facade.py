@@ -379,7 +379,7 @@ class DataFusionExecutionFacade:
         self,
         builder: DataFrameBuilder,
         *,
-        compute_execution_plan: bool = False,
+        compute_execution_plan: bool = True,
     ) -> DataFusionPlanBundle:
         """Compile a DataFrame builder to a DataFusionPlanBundle.
 
@@ -390,7 +390,7 @@ class DataFusionExecutionFacade:
         builder
             Callable that returns a DataFrame given a SessionContext.
         compute_execution_plan
-            Whether to compute the physical execution plan (expensive).
+            Whether to compute the physical execution plan.
 
         Returns
         -------
@@ -714,7 +714,7 @@ class DataFusionExecutionFacade:
         self,
         df: DataFrame,
         *,
-        compute_execution_plan: bool = False,
+        compute_execution_plan: bool = True,
         compute_substrait: bool = True,
     ) -> DataFusionPlanBundle:
         """Build a plan bundle from a DataFrame.
@@ -727,7 +727,7 @@ class DataFusionExecutionFacade:
         df
             DataFusion DataFrame to build plan bundle from.
         compute_execution_plan
-            Whether to compute the physical execution plan (expensive).
+            Whether to compute the physical execution plan.
         compute_substrait
             Whether to compute Substrait bytes for fingerprinting.
 

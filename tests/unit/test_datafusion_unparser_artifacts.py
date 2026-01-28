@@ -24,15 +24,11 @@ def test_datafusion_unparser_payload_is_deterministic() -> None:
     first = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=session_runtime,
     )
     second = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=session_runtime,
     )
     assert first.display_optimized_plan() == second.display_optimized_plan()
@@ -51,8 +47,6 @@ def test_plan_bundle_includes_fingerprint() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=True,
         session_runtime=session_runtime,
     )
     assert bundle.plan_fingerprint
@@ -71,8 +65,6 @@ def test_plan_bundle_projection_is_deterministic() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=session_runtime,
     )
     plan_text = bundle.display_optimized_plan() or bundle.display_logical_plan() or ""
@@ -92,8 +84,6 @@ def test_plan_bundle_graphviz_is_optional() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=False,
         session_runtime=session_runtime,
     )
     _ = bundle.graphviz()

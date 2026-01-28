@@ -45,26 +45,28 @@ def plan_fingerprint_from_bundle(
 ) -> str:
     """Compute plan fingerprint from DataFusion plan bundle data.
 
-    Prefers Substrait bytes when available, falls back to plan display.
-
     Parameters
     ----------
     substrait_bytes : bytes | None
-        Substrait serialization bytes (preferred).
+        Substrait serialization bytes (required).
     optimized : object
-        Optimized logical plan for fallback fingerprinting.
+        Optimized logical plan (unused when Substrait is required).
 
     Returns
     -------
     str
         SHA256 fingerprint of the plan.
+
+    Raises
+    ------
+    ValueError
+        Raised when Substrait bytes are unavailable.
     """
-    if substrait_bytes is not None:
-        return hashlib.sha256(substrait_bytes).hexdigest()
-    display = _plan_display(optimized, display_method="display_indent_schema")
-    if display is not None:
-        return hashlib.sha256(display.encode("utf-8")).hexdigest()
-    return hashlib.sha256(b"empty_plan").hexdigest()
+    if substrait_bytes is None:
+        msg = "Substrait bytes are required for plan fingerprinting."
+        raise ValueError(msg)
+    _ = optimized
+    return hashlib.sha256(substrait_bytes).hexdigest()
 
 
 def _hash_payload(payload: object) -> str:
@@ -160,6 +162,7 @@ def plan_bundle_cache_key(
         plan_fingerprint=bundle.plan_fingerprint,
         udf_snapshot_hash=bundle.artifacts.udf_snapshot_hash,
         function_registry_hash=bundle.artifacts.function_registry_hash,
+        information_schema_hash=bundle.artifacts.information_schema_hash,
         required_udfs_hash=required_udfs_hash,
         required_rewrite_tags_hash=required_tags_hash,
         settings_hash=settings_hash,
@@ -353,18 +356,6 @@ def rehydrate_plan_artifacts(
         msg = "Invalid base64 payload for Substrait artifacts."
         raise ValueError(msg) from exc
     return replay_substrait_bytes(ctx, plan_bytes)
-
-
-def _plan_display(plan: object, *, display_method: str) -> str | None:
-    if plan is None:
-        return None
-    method = getattr(plan, display_method, None)
-    if not callable(method):
-        return None
-    try:
-        return str(method())
-    except (RuntimeError, TypeError, ValueError):
-        return None
 
 
 __all__ = [

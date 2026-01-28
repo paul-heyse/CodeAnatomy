@@ -130,7 +130,7 @@ def _bundle_deps_and_udfs(
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
+        compute_execution_plan=True,
         validate_udfs=True,
         session_runtime=session_runtime,
     )

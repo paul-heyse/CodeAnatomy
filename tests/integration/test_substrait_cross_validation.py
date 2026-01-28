@@ -25,8 +25,6 @@ def test_substrait_cross_validation_match() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=False,
-        compute_substrait=True,
         session_runtime=session_runtime,
     )
     if bundle.substrait_bytes is None:

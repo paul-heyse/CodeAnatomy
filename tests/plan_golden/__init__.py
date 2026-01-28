@@ -1,0 +1,1 @@
+"""Golden plan artifact tests."""

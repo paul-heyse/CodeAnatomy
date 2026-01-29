@@ -24,27 +24,84 @@ def _stub_expr(*values: object) -> Expr:
     return lit(None)
 
 
-def register_udfs(
-    ctx: SessionContext,
-    *,
-    enable_async: bool = False,
-    async_udf_timeout_ms: int | None = None,
-    async_udf_batch_size: int | None = None,
-) -> None:
-    """Register stub UDFs in a session context.
+class _StubPluginHandle:
+    """Placeholder handle for DataFusion plugin stubs."""
+
+
+def load_df_plugin(path: str) -> object:
+    """Return a stub DataFusion plugin handle.
 
     Parameters
     ----------
-    ctx
-        DataFusion session context.
-    enable_async
-        Whether async UDFs are enabled.
-    async_udf_timeout_ms
-        Async UDF timeout in milliseconds.
-    async_udf_batch_size
-        Async UDF batch size.
+    path
+        Plugin library path.
+
+    Returns
+    -------
+    object
+        Stub plugin handle instance.
     """
-    _ = (ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
+    _ = path
+    return _StubPluginHandle()
+
+
+def register_df_plugin_udfs(
+    ctx: SessionContext,
+    plugin: object,
+    options_json: str | None = None,
+) -> None:
+    """Register stub plugin UDFs in a session context."""
+    _ = (ctx, plugin, options_json)
+
+
+def register_df_plugin_table_functions(ctx: SessionContext, plugin: object) -> None:
+    """Register stub plugin table functions in a session context."""
+    _ = (ctx, plugin)
+
+
+def register_df_plugin_table_providers(
+    ctx: SessionContext,
+    plugin: object,
+    table_names: object | None = None,
+    options_json: object | None = None,
+) -> None:
+    """Register stub plugin table providers in a session context."""
+    _ = (ctx, plugin, table_names, options_json)
+
+
+def create_df_plugin_table_provider(
+    plugin: object,
+    provider_name: str,
+    options_json: str | None = None,
+) -> object:
+    """Return a stub table provider capsule.
+
+    Parameters
+    ----------
+    plugin
+        Plugin handle placeholder.
+    provider_name
+        Provider name to register.
+    options_json
+        Optional provider options payload.
+
+    Returns
+    -------
+    object
+        Stub table provider capsule.
+    """
+    _ = (plugin, provider_name, options_json)
+    return object()
+
+
+def register_df_plugin(
+    ctx: SessionContext,
+    plugin: object,
+    table_names: object | None = None,
+    options_json: object | None = None,
+) -> None:
+    """Register stub plugin UDFs and table providers."""
+    _ = (ctx, plugin, table_names, options_json)
 
 
 def install_function_factory(ctx: SessionContext, payload: bytes) -> None:
@@ -932,6 +989,7 @@ __all__ = [
     "cdf_is_upsert",
     "col_to_byte",
     "count_distinct_agg",
+    "create_df_plugin_table_provider",
     "first_value_agg",
     "install_delta_table_factory",
     "install_expr_planners",
@@ -944,6 +1002,7 @@ __all__ = [
     "list_extract",
     "list_unique",
     "list_unique_sorted",
+    "load_df_plugin",
     "map_entries",
     "map_extract",
     "map_get_default",
@@ -953,7 +1012,10 @@ __all__ = [
     "prefixed_hash64",
     "prefixed_hash_parts64",
     "qname_normalize",
-    "register_udfs",
+    "register_df_plugin",
+    "register_df_plugin_table_functions",
+    "register_df_plugin_table_providers",
+    "register_df_plugin_udfs",
     "registry_snapshot",
     "row_number_window",
     "semantic_tag",

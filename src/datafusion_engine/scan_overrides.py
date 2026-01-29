@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -26,25 +25,6 @@ from storage.deltalake.delta import delta_table_version
 _MIN_QUALIFIED_PARTS = 2
 
 
-def _validate_delta_provider_available() -> bool:
-    """Validate that Delta provider APIs are available at import time.
-
-    Returns
-    -------
-    bool
-        True if the provider is available, False otherwise.
-    """
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
-        return False
-    provider_fn = getattr(module, "delta_table_provider_with_files", None)
-    return callable(provider_fn)
-
-
-_DELTA_PROVIDER_AVAILABLE = _validate_delta_provider_available()
-
-
 def apply_scan_unit_overrides(
     ctx: SessionContext,
     *,
@@ -59,6 +39,8 @@ def apply_scan_unit_overrides(
     for dataset_name in sorted(units_by_dataset):
         location = _resolve_dataset_location(runtime_profile, dataset_name)
         if location is None or location.format != "delta":
+            continue
+        if location.datafusion_provider == "delta_cdf" or location.delta_cdf_options is not None:
             continue
         gate = resolve_delta_feature_gate(location)
         units = units_by_dataset[dataset_name]
@@ -218,7 +200,6 @@ def _register_delta_override(
 ) -> None:
     if spec.scan_files:
         provider = _delta_table_provider_with_files(
-            ctx,
             location=spec.location,
             scan_files=spec.scan_files,
             runtime_profile=spec.runtime_profile,
@@ -241,38 +222,47 @@ def _register_delta_override(
 
 
 def _delta_table_provider_with_files(
-    ctx: SessionContext,
     *,
     location: DatasetLocation,
     scan_files: Sequence[str],
     runtime_profile: DataFusionRuntimeProfile,
 ) -> object:
-    if not _DELTA_PROVIDER_AVAILABLE:
-        msg = "datafusion_ext.delta_table_provider_with_files is unavailable."
-        raise TypeError(msg)
-    from datafusion_engine.delta_control_plane import (
-        DeltaProviderRequest,
-        delta_provider_with_files,
-    )
-
+    manager = _plugin_manager_for_profile(runtime_profile)
     delta_scan = resolve_delta_scan_options(location)
     if delta_scan is not None and delta_scan.schema_force_view_types is None:
         enable_view_types = _schema_hardening_view_types(runtime_profile)
         delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
     storage_options = _delta_storage_options(location)
-    bundle = delta_provider_with_files(
-        ctx,
-        files=scan_files,
-        request=DeltaProviderRequest(
-            table_uri=str(location.path),
-            storage_options=storage_options,
-            version=location.delta_version,
-            timestamp=location.delta_timestamp,
-            delta_scan=delta_scan,
-            gate=resolve_delta_feature_gate(location),
-        ),
-    )
-    return bundle.provider
+    gate = resolve_delta_feature_gate(location)
+    options: dict[str, object] = {
+        "table_uri": str(location.path),
+        "storage_options": dict(storage_options) if storage_options else None,
+        "version": location.delta_version,
+        "timestamp": location.delta_timestamp,
+        "file_column_name": delta_scan.file_column_name if delta_scan else None,
+        "enable_parquet_pushdown": delta_scan.enable_parquet_pushdown if delta_scan else None,
+        "schema_force_view_types": delta_scan.schema_force_view_types if delta_scan else None,
+        "wrap_partition_values": delta_scan.wrap_partition_values if delta_scan else None,
+        "files": list(scan_files),
+    }
+    gate_payload = _gate_payload(gate)
+    if gate_payload is not None:
+        options.update(gate_payload)
+    return manager.create_table_provider(provider_name="delta", options=options)
+
+
+def _plugin_manager_for_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPluginManager:
+    manager = runtime_profile.plugin_manager
+    if manager is not None:
+        return manager
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+    if not runtime_profile.plugin_specs:
+        msg = "Plugin-based Delta overrides require plugin specs."
+        raise RuntimeError(msg)
+    return DataFusionPluginManager(runtime_profile.plugin_specs)
 
 
 def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
@@ -343,6 +333,7 @@ def _hash_payload(payload: object) -> str:
 
 
 if TYPE_CHECKING:
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
 

@@ -1,15 +1,15 @@
 {
   "kind": "semantic_validation",
   "payload": {
-    "view_name": "cpg_nodes_v1",
-    "status": "ok",
     "entries": [
       {
+        "actual": "NodeId",
         "column_name": "node_id",
         "expected": "NodeId",
-        "actual": "NodeId",
         "status": "ok"
       }
-    ]
+    ],
+    "status": "ok",
+    "view_name": "cpg_nodes_v1"
   }
 }

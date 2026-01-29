@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         DeltaFeatureEnableRequest,
     )
     from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
@@ -90,6 +91,61 @@ def _runtime_profile_ctx(
     if runtime_profile is not None:
         return runtime_profile.session_context()
     return _runtime_ctx(None)
+
+
+def _runtime_profile_for_delta(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionRuntimeProfile:
+    if runtime_profile is not None:
+        return runtime_profile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    return DataFusionRuntimeProfile()
+
+
+def _plugin_manager_for_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPluginManager:
+    manager = runtime_profile.plugin_manager
+    if manager is not None:
+        return manager
+    if not runtime_profile.plugin_specs:
+        msg = "Plugin-based Delta providers require plugin specs."
+        raise RuntimeError(msg)
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+    return DataFusionPluginManager(runtime_profile.plugin_specs)
+
+
+def _delta_gate_payload(gate: DeltaFeatureGate | None) -> dict[str, object] | None:
+    if gate is None:
+        return None
+    return {
+        "min_reader_version": getattr(gate, "min_reader_version", None),
+        "min_writer_version": getattr(gate, "min_writer_version", None),
+        "required_reader_features": list(getattr(gate, "required_reader_features", ())),
+        "required_writer_features": list(getattr(gate, "required_writer_features", ())),
+    }
+
+
+def _delta_provider_options(
+    *,
+    path: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    gate: DeltaFeatureGate | None,
+) -> dict[str, object]:
+    options: dict[str, object] = {
+        "table_uri": path,
+        "storage_options": dict(storage_options) if storage_options else None,
+        "version": version,
+        "timestamp": timestamp,
+    }
+    gate_payload = _delta_gate_payload(gate)
+    if gate_payload is not None:
+        options.update(gate_payload)
+    return options
 
 
 def query_delta_sql(
@@ -369,27 +425,23 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         Arrow schema for the Delta table or ``None`` when the table does not exist.
     """
     storage = _log_storage_dict(request.storage_options, request.log_storage_options)
-    ctx = _runtime_ctx(None)
+    profile = _runtime_profile_for_delta(None)
+    ctx = profile.session_context()
     try:
-        from datafusion_engine.delta_control_plane import (
-            DeltaProviderRequest,
-            delta_provider_from_session,
+        manager = _plugin_manager_for_profile(profile)
+        options = _delta_provider_options(
+            path=request.path,
+            storage_options=storage or None,
+            version=request.version,
+            timestamp=request.timestamp,
+            gate=request.gate,
         )
-
-        bundle = delta_provider_from_session(
-            ctx,
-            request=DeltaProviderRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=request.version,
-                timestamp=request.timestamp,
-                delta_scan=None,
-                gate=request.gate,
-            ),
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError):
+        provider = manager.create_table_provider(provider_name="delta", options=options)
+    except (RuntimeError, TypeError, ValueError):
         return None
-    df = ctx.read_table(bundle.provider)
+    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+
+    df = ctx.read_table(TableProviderCapsule(provider))
     schema = df.schema()
     if isinstance(schema, pa.Schema):
         return schema
@@ -418,28 +470,24 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
         msg = "Delta read request must set either version or timestamp, not both."
         raise ValueError(msg)
     storage = _log_storage_dict(request.storage_options, request.log_storage_options)
-    ctx = _runtime_profile_ctx(request.runtime_profile)
+    profile = _runtime_profile_for_delta(request.runtime_profile)
+    ctx = profile.session_context()
     try:
-        from datafusion_engine.delta_control_plane import (
-            DeltaProviderRequest,
-            delta_provider_from_session,
+        manager = _plugin_manager_for_profile(profile)
+        options = _delta_provider_options(
+            path=request.path,
+            storage_options=storage or None,
+            version=request.version,
+            timestamp=request.timestamp,
+            gate=request.gate,
         )
-
-        bundle = delta_provider_from_session(
-            ctx,
-            request=DeltaProviderRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=request.version,
-                timestamp=request.timestamp,
-                delta_scan=None,
-                gate=request.gate,
-            ),
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        provider = manager.create_table_provider(provider_name="delta", options=options)
+    except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Delta read provider request failed: {exc}"
         raise ValueError(msg) from exc
-    df = ctx.read_table(bundle.provider)
+    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+
+    df = ctx.read_table(TableProviderCapsule(provider))
     if request.predicate:
         try:
             predicate_expr = df.parse_sql_expr(request.predicate)

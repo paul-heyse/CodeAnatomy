@@ -13,6 +13,8 @@ The DataFusion Engine provides the primary query planning and execution infrastr
 
 **Integration Architecture**: The DataFusion engine sits at Layer 3 of the four-stage pipeline (Extraction → Normalization → Task Catalog → CPG Build). Task specifications from `src/relspec/` compile to DataFusion DataFrames via builder functions. The engine captures plan bundles containing logical, optimized, and physical plans plus Substrait bytes for reproducibility. These bundles feed into Hamilton DAG orchestration and drive downstream CPG materialization.
 
+> **Module Consolidation Note:** The DataFusion engine consolidates functionality that was previously spread across separate modules. Lineage extraction, SQL analysis, and expression building are now DataFusion-native operations. The engine provides unified query planning, UDF registration, schema validation, and plan fingerprinting through a single cohesive interface.
+
 ## Core Architecture Components
 
 ### Plan Bundle - The Central Artifact
@@ -313,6 +315,75 @@ _RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
 ```
 
 This ensures validation runs once per context and snapshots persist for the session lifecycle without preventing garbage collection.
+
+### Rust UDF Platform
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/udf_platform.py`
+
+The Rust UDF Platform provides a unified installation mechanism for planning-critical extensions. Planner extensions (Rust UDFs, ExprPlanners, FunctionFactory, and RelationPlanners) are installed before any plan-bundle construction to ensure deterministic query planning.
+
+**RustUdfPlatformOptions** (lines 79-93):
+```python
+@dataclass(frozen=True)
+class RustUdfPlatformOptions:
+    """Configuration for installing the Rust UDF platform."""
+
+    enable_udfs: bool = True
+    enable_async_udfs: bool = False
+    async_udf_timeout_ms: int | None = None
+    async_udf_batch_size: int | None = None
+    enable_function_factory: bool = True
+    enable_expr_planners: bool = True
+    function_factory_policy: FunctionFactoryPolicy | None = None
+    function_factory_hook: Callable[[SessionContext], None] | None = None
+    expr_planner_hook: Callable[[SessionContext], None] | None = None
+    expr_planner_names: Sequence[str] = ()
+    strict: bool = True
+```
+
+**Platform Installation Pattern**:
+```python
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.udf_platform import (
+    RustUdfPlatformOptions,
+    install_rust_udf_platform,
+)
+
+ctx = DataFusionRuntimeProfile().session_context()
+options = RustUdfPlatformOptions(
+    enable_udfs=True,
+    enable_function_factory=True,
+    enable_expr_planners=True,
+    expr_planner_names=("codeanatomy_domain",),
+    strict=True,
+)
+install_rust_udf_platform(ctx, options=options)
+```
+
+**Platform Components**:
+- **Rust UDFs**: Scalar, aggregate, window, and table functions implemented in `datafusion_ext`
+- **FunctionFactory**: Dynamic function resolution for unknown function calls during planning
+- **ExprPlanners**: Custom expression rewrite rules (e.g., domain-specific transformations)
+- **TableProviderCapsule**: PyCapsule-based integration for custom table providers
+
+**RustUdfPlatform Snapshot** (lines 64-76):
+```python
+@dataclass(frozen=True)
+class RustUdfPlatform:
+    """Snapshot of a Rust UDF platform installation."""
+
+    snapshot: Mapping[str, object] | None
+    snapshot_hash: str | None
+    rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
+    docs: Mapping[str, object] | None
+    function_factory: ExtensionInstallStatus | None
+    expr_planners: ExtensionInstallStatus | None
+    function_factory_policy: Mapping[str, object] | None
+    expr_planner_policy: Mapping[str, object] | None
+```
+
+All DataFusion execution facades automatically install the platform in `__post_init__` to ensure extensions are available before plan operations. The platform snapshot is captured in plan bundles for reproducibility.
 
 ## Key Data Flow Patterns
 

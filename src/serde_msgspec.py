@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -43,6 +44,19 @@ class StructBaseCompat(
     """Base struct for forward-compatible persisted artifacts."""
 
 
+class StructBaseHotPath(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    omit_defaults=True,
+    repr_omit_defaults=True,
+    forbid_unknown_fields=False,
+    gc=False,
+    cache_hash=True,
+):
+    """Base struct for high-volume, immutable artifacts."""
+
+
 StructBase = StructBaseStrict
 
 
@@ -66,6 +80,10 @@ class _ArrowSchema(Protocol):
 def _json_enc_hook(obj: object) -> object:
     if isinstance(obj, Path):
         return str(obj)
+    if isinstance(obj, type):
+        return f"{obj.__module__}.{obj.__qualname__}"
+    if obj is msgspec.NODEFAULT:
+        return "NODEFAULT"
     if isinstance(
         obj,
         (
@@ -76,6 +94,8 @@ def _json_enc_hook(obj: object) -> object:
         ),
     ):
         return obj.data.hex()
+    if isinstance(obj, msgspec.Raw):
+        return bytes(obj).hex()
     if isinstance(obj, (bytes, bytearray, memoryview)):
         return bytes(obj).hex()
     raise TypeError
@@ -106,17 +126,20 @@ def _msgpack_enc_hook(obj: object) -> object:
 
 
 def _dec_hook(type_hint: Any, obj: object) -> object:
-    if type_hint is Path and isinstance(obj, str):
-        return Path(obj)
-    if type_hint is SubstraitBytes and isinstance(obj, str):
-        return SubstraitBytes(bytes.fromhex(obj))
-    if type_hint is LogicalPlanProtoBytes and isinstance(obj, str):
-        return LogicalPlanProtoBytes(bytes.fromhex(obj))
-    if type_hint is OptimizedPlanProtoBytes and isinstance(obj, str):
-        return OptimizedPlanProtoBytes(bytes.fromhex(obj))
-    if type_hint is ExecutionPlanProtoBytes and isinstance(obj, str):
-        return ExecutionPlanProtoBytes(bytes.fromhex(obj))
-    return obj
+    if not isinstance(obj, str):
+        return obj
+    converters: dict[object, Callable[[str], object]] = {
+        Path: Path,
+        SubstraitBytes: lambda value: SubstraitBytes(bytes.fromhex(value)),
+        LogicalPlanProtoBytes: lambda value: LogicalPlanProtoBytes(bytes.fromhex(value)),
+        OptimizedPlanProtoBytes: lambda value: OptimizedPlanProtoBytes(bytes.fromhex(value)),
+        ExecutionPlanProtoBytes: lambda value: ExecutionPlanProtoBytes(bytes.fromhex(value)),
+        msgspec.Raw: lambda value: msgspec.Raw(bytes.fromhex(value)),
+    }
+    handler = converters.get(type_hint)
+    if handler is None:
+        return obj
+    return handler(obj)
 
 
 def _msgpack_ext_hook(code: int, data: memoryview) -> object:
@@ -141,6 +164,12 @@ def _msgpack_ext_hook(code: int, data: memoryview) -> object:
 JSON_ENCODER = msgspec.json.Encoder(
     enc_hook=_json_enc_hook,
     order=_DEFAULT_ORDER,
+    decimal_format="string",
+    uuid_format="canonical",
+)
+JSON_ENCODER_SORTED = msgspec.json.Encoder(
+    enc_hook=_json_enc_hook,
+    order="sorted",
     decimal_format="string",
     uuid_format="canonical",
 )
@@ -219,6 +248,27 @@ def dumps_json(obj: object, *, pretty: bool = False) -> bytes:
     return msgspec.json.format(raw, indent=2)
 
 
+def dumps_json_sorted(obj: object, *, pretty: bool = False) -> bytes:
+    """Serialize an object to JSON bytes with sorted keys.
+
+    Parameters
+    ----------
+    obj
+        Object to serialize.
+    pretty
+        Whether to format with indentation.
+
+    Returns
+    -------
+    bytes
+        JSON payload with sorted keys.
+    """
+    raw = JSON_ENCODER_SORTED.encode(obj)
+    if not pretty:
+        return raw
+    return msgspec.json.format(raw, indent=2)
+
+
 def loads_json[T](buf: bytes | str, *, target_type: type[T], strict: bool = True) -> T:
     """Deserialize JSON bytes into the requested type.
 
@@ -242,6 +292,31 @@ def loads_json[T](buf: bytes | str, *, target_type: type[T], strict: bool = True
         strict=strict,
     )
     return decoder.decode(buf)
+
+
+def decode_json_lines[T](buf: bytes, *, target_type: type[T], strict: bool = True) -> list[T]:
+    """Deserialize JSON Lines bytes into a list of typed payloads.
+
+    Parameters
+    ----------
+    buf
+        JSON Lines payload.
+    target_type
+        Target type for decoding.
+    strict
+        Whether to enforce strict decoding.
+
+    Returns
+    -------
+    list[T]
+        Decoded payloads.
+    """
+    decoder = msgspec.json.Decoder(
+        type=target_type,
+        dec_hook=_dec_hook,
+        strict=strict,
+    )
+    return decoder.decode_lines(buf)
 
 
 def dumps_msgpack(obj: object) -> bytes:
@@ -349,6 +424,36 @@ def convert[T](
     )
 
 
+def convert_from_attributes[T](
+    obj: object,
+    *,
+    target_type: type[T],
+    strict: bool = True,
+) -> T:
+    """Convert an object into a target type using attribute access.
+
+    Parameters
+    ----------
+    obj
+        Object to convert.
+    target_type
+        Target type for conversion.
+    strict
+        Whether to enforce strict conversion.
+
+    Returns
+    -------
+    T
+        Converted payload.
+    """
+    return convert(
+        obj,
+        target_type=target_type,
+        strict=strict,
+        from_attributes=True,
+    )
+
+
 def to_builtins(obj: object, *, str_keys: bool = True) -> object:
     """Convert an object into builtin JSON-friendly types.
 
@@ -370,6 +475,48 @@ def to_builtins(obj: object, *, str_keys: bool = True) -> object:
         str_keys=str_keys,
         enc_hook=_json_enc_hook,
     )
+
+
+def to_builtins_sorted(obj: object, *, str_keys: bool = True) -> object:
+    """Convert an object into builtin JSON-friendly types with sorted keys.
+
+    Parameters
+    ----------
+    obj
+        Object to convert.
+    str_keys
+        Whether to coerce mapping keys to strings.
+
+    Returns
+    -------
+    object
+        Builtin-friendly representation with sorted mapping keys.
+    """
+    return msgspec.to_builtins(
+        obj,
+        order="sorted",
+        str_keys=str_keys,
+        enc_hook=_json_enc_hook,
+    )
+
+
+def ensure_raw(payload: bytes | msgspec.Raw, *, copy: bool = False) -> msgspec.Raw:
+    """Return a msgspec.Raw wrapper, optionally detaching the buffer.
+
+    Parameters
+    ----------
+    payload
+        Bytes or existing Raw payload.
+    copy
+        Whether to detach the Raw buffer with ``Raw.copy()``.
+
+    Returns
+    -------
+    msgspec.Raw
+        Raw wrapper for the payload.
+    """
+    raw = payload if isinstance(payload, msgspec.Raw) else msgspec.Raw(payload)
+    return raw.copy() if copy else raw
 
 
 def is_unset(value: object) -> bool:

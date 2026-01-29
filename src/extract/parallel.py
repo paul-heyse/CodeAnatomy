@@ -9,6 +9,8 @@ from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TypeVar
 
+from opentelemetry import context as otel_context
+
 T = TypeVar("T")
 U = TypeVar("U")
 
@@ -46,10 +48,19 @@ def supports_fork() -> bool:
 
 
 def _process_executor(max_workers: int | None) -> ProcessPoolExecutor:
+    def _worker_init() -> None:
+        from obs.otel import configure_otel
+
+        configure_otel(service_name="codeanatomy")
+
     if supports_fork():
         ctx = multiprocessing.get_context("fork")
-        return ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx)
-    return ProcessPoolExecutor(max_workers=max_workers)
+        return ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=ctx,
+            initializer=_worker_init,
+        )
+    return ProcessPoolExecutor(max_workers=max_workers, initializer=_worker_init)
 
 
 def parallel_map(
@@ -66,8 +77,17 @@ def parallel_map(
         Results produced by applying the function to each item.
     """
     if _gil_disabled():
+        current = otel_context.get_current()
+
+        def _wrapped(item: T) -> U:
+            token = otel_context.attach(current)
+            try:
+                return fn(item)
+            finally:
+                otel_context.detach(token)
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for item in executor.map(fn, items):
+            for item in executor.map(_wrapped, items):
                 yield item
         return
     with _process_executor(max_workers) as executor:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import msgspec
+
 from serde_artifacts import (
     DeltaStatsDecision,
     DeltaStatsDecisionEnvelope,
@@ -20,6 +22,7 @@ from serde_artifacts import (
     SemanticValidationEntry,
     ViewCacheArtifact,
     ViewCacheArtifactEnvelope,
+    WriteArtifactRow,
 )
 from serde_msgspec import dumps_msgpack
 from serde_msgspec_ext import LogicalPlanProtoBytes, SubstraitBytes
@@ -73,8 +76,8 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         profile_name="default",
         event_kind="plan",
         view_name="example_view",
-        plan_fingerprint="fp-1",
-        plan_identity_hash="pid-1",
+        plan_fingerprint="4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+        plan_identity_hash=("9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"),
         udf_snapshot_hash="udf-hash",
         function_registry_hash="registry-hash",
         required_udfs=("udf_a",),
@@ -128,7 +131,7 @@ def test_msgpack_contract_plan_artifact_row(*, update_goldens: bool) -> None:
 
 def _sample_plan_schedule_artifact() -> PlanScheduleArtifact:
     return PlanScheduleArtifact(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         plan_signature="sig-1",
         reduced_plan_signature="sig-1:reduced",
         task_count=3,
@@ -172,7 +175,7 @@ def test_msgpack_contract_plan_schedule_envelope(*, update_goldens: bool) -> Non
 
 def _sample_plan_validation_artifact() -> PlanValidationArtifact:
     return PlanValidationArtifact(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         plan_signature="sig-1",
         reduced_plan_signature="sig-1:reduced",
         total_tasks=2,
@@ -365,8 +368,8 @@ def _sample_view_cache_artifact() -> ViewCacheArtifact:
     return ViewCacheArtifact(
         view_name="cpg_edges_v1",
         cache_policy="delta_staging",
-        cache_path="/tmp/datafusion_view_cache/cpg_edges_v1__fp-1",
-        plan_fingerprint="fp-1",
+        cache_path=("/tmp/datafusion_view_cache/cpg_edges_v1__4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"),
+        plan_fingerprint="4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c",
         status="cached",
         hit=None,
     )
@@ -446,11 +449,11 @@ def test_msgpack_contract_semantic_validation_artifact_envelope(*, update_golden
 
 def _sample_run_manifest() -> RunManifest:
     return RunManifest(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         status="completed",
         event_time_unix_ms=1735689600000,
         plan_signature="sig-1",
-        plan_fingerprints={"cpg_nodes_v1": "fp-1"},
+        plan_fingerprints={"cpg_nodes_v1": "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"},
         delta_inputs=(
             {
                 "dataset_name": "cpg_nodes",
@@ -473,7 +476,7 @@ def _sample_run_manifest() -> RunManifest:
         artifact_ids={
             "plan_schedule": "schedule-1",
             "plan_validation": "validation-1",
-            "cpg_nodes": "pid-1",
+            "cpg_nodes": "9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
         },
     )
 
@@ -512,6 +515,47 @@ def _sample_plan_proto_status() -> PlanProtoStatus:
         installed=False,
         reason="delta_plan_codecs_unavailable",
     )
+
+
+def _sample_write_artifact_row() -> WriteArtifactRow:
+    return WriteArtifactRow(
+        event_time_unix_ms=1735689600000,
+        profile_name="default",
+        event_kind="write",
+        destination="cpg_nodes",
+        format="delta",
+        mode="append",
+        method="streaming",
+        table_uri="/tmp/out/cpg_nodes",
+        delta_version=1,
+        commit_app_id="commit-app",
+        commit_version=2,
+        commit_run_id="run_01HZX4J3C8F8M2KQ",
+        delta_write_policy_msgpack=msgspec.Raw(dumps_msgpack({"policy": "auto"})),
+        delta_schema_policy_msgpack=msgspec.Raw(dumps_msgpack({"schema_mode": "merge"})),
+        partition_by=("repo",),
+        table_properties={"delta.autoOptimize.optimizeWrite": "true"},
+        commit_metadata={"operation": "write"},
+        delta_stats_decision_msgpack=msgspec.Raw(dumps_msgpack({"stats": "ok"})),
+        duration_ms=12.5,
+        row_count=10,
+        status="ok",
+        error=None,
+    )
+
+
+def test_msgpack_contract_write_artifact_row(*, update_goldens: bool) -> None:
+    """Snapshot MessagePack payloads for write artifact rows."""
+    row = _sample_write_artifact_row()
+    payload = encode_msgpack(row)
+    assert_bytes_snapshot_b64(
+        path=GOLDENS_DIR / "write_artifact_row.msgpack.b64",
+        data=payload,
+        update=update_goldens,
+    )
+
+    decoded = decode_msgpack(payload, target_type=WriteArtifactRow)
+    assert decoded == row
 
 
 def test_msgpack_contract_plan_proto_status(*, update_goldens: bool) -> None:

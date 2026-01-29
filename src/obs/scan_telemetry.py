@@ -11,6 +11,7 @@ from core_types import JsonDict
 from datafusion_engine.arrow_interop import ComputeExpression, SchemaLike
 from datafusion_engine.arrow_schema.abi import schema_to_dict
 from obs.metrics import fragment_file_hints, list_fragments, row_group_count, scan_task_count
+from obs.otel.metrics import set_scan_telemetry
 from serde_msgspec import StructBaseCompat
 
 
@@ -80,6 +81,13 @@ def fragment_telemetry(
         task_count = scan_task_count(scanner)
     except (AttributeError, TypeError):
         task_count = row_group_count(fragments)
+    dataset_name = getattr(dataset, "name", None)
+    if isinstance(dataset_name, str) and dataset_name:
+        set_scan_telemetry(
+            dataset_name,
+            fragment_count=len(fragments),
+            row_group_count=task_count,
+        )
     return ScanTelemetry(
         fragment_count=len(fragments),
         row_group_count=task_count,

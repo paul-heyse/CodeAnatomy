@@ -72,7 +72,15 @@ use crate::delta_observability::{
 use crate::delta_protocol::{gate_from_parts, DeltaFeatureGate, DeltaSnapshotInfo};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
-use crate::{expr_planner, function_factory, function_rewrite, registry_snapshot, udf_builtin, udf_custom, udf_docs, udf_registry};
+use crate::{
+    expr_planner,
+    function_factory,
+    function_rewrite,
+    registry_snapshot,
+    udf_builtin,
+    udf_custom,
+    udf_docs,
+};
 
 pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
@@ -358,24 +366,6 @@ fn extract_plugin_handle(py: Python<'_>, plugin: &Py<PyAny>) -> PyResult<Arc<Plu
     Ok(handle.clone())
 }
 
-#[pyfunction]
-#[pyo3(signature = (ctx, enable_async = false, async_udf_timeout_ms = None, async_udf_batch_size = None))]
-fn register_udfs(
-    ctx: PyRef<PySessionContext>,
-    enable_async: bool,
-    async_udf_timeout_ms: Option<u64>,
-    async_udf_batch_size: Option<usize>,
-) -> PyResult<()> {
-    udf_registry::register_all_with_policy(
-        &ctx.ctx,
-        enable_async,
-        async_udf_timeout_ms,
-        async_udf_batch_size,
-    )
-    .map_err(|err| PyRuntimeError::new_err(format!("Failed to register UDFs: {err}")))?;
-    Ok(())
-}
-
 #[pyfunction(name = "registry_snapshot")]
 fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
     let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
@@ -474,14 +464,16 @@ fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (ctx, plugin, options_json = None))]
 fn register_df_plugin_udfs(
     py: Python<'_>,
     ctx: PyRef<PySessionContext>,
     plugin: Py<PyAny>,
+    options_json: Option<String>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&ctx.ctx)
+        .register_udfs(&ctx.ctx, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     Ok(())
 }
@@ -527,7 +519,7 @@ fn register_df_plugin(
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&ctx.ctx)
+        .register_udfs(&ctx.ctx, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     handle.register_table_functions(&ctx.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
@@ -2299,7 +2291,6 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         udf_custom::install_function_factory,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(register_udfs, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;

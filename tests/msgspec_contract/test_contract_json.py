@@ -21,7 +21,7 @@ from serde_artifacts import (
     ViewCacheArtifact,
     ViewCacheArtifactEnvelope,
 )
-from serde_msgspec import dumps_msgpack
+from serde_msgspec import decode_json_lines, dumps_msgpack, encode_json_lines
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from tests.msgspec_contract._support.codecs import decode_json, encode_json_pretty
 from tests.msgspec_contract._support.goldens import GOLDENS_DIR, assert_text_snapshot
@@ -58,6 +58,14 @@ def test_json_contract_envelope(*, update_goldens: bool) -> None:
     assert decoded == envelope
 
 
+def test_json_contract_envelope_lines() -> None:
+    """Validate JSON Lines encode/decode for typed payloads."""
+    envelopes = (_sample_envelope(), _sample_envelope())
+    payload = encode_json_lines(list(envelopes))
+    decoded = decode_json_lines(payload, target_type=Envelope)
+    assert decoded == list(envelopes)
+
+
 def _sample_plan_artifact_row() -> PlanArtifactRow:
     delta_inputs: tuple[dict[str, object], ...] = (
         {
@@ -71,8 +79,8 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         profile_name="default",
         event_kind="plan",
         view_name="example_view",
-        plan_fingerprint="fp-1",
-        plan_identity_hash="pid-1",
+        plan_fingerprint="4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+        plan_identity_hash=("9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"),
         udf_snapshot_hash="udf-hash",
         function_registry_hash="registry-hash",
         required_udfs=("udf_a",),
@@ -248,8 +256,8 @@ def _sample_view_cache_artifact() -> ViewCacheArtifact:
     return ViewCacheArtifact(
         view_name="cpg_edges_v1",
         cache_policy="delta_staging",
-        cache_path="/tmp/datafusion_view_cache/cpg_edges_v1__fp-1",
-        plan_fingerprint="fp-1",
+        cache_path=("/tmp/datafusion_view_cache/cpg_edges_v1__4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"),
+        plan_fingerprint="4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c",
         status="cached",
         hit=None,
     )
@@ -329,7 +337,7 @@ def test_json_contract_semantic_validation_artifact_envelope(*, update_goldens: 
 
 def _sample_plan_schedule_artifact() -> PlanScheduleArtifact:
     return PlanScheduleArtifact(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         plan_signature="sig-1",
         reduced_plan_signature="sig-1:reduced",
         task_count=3,
@@ -373,7 +381,7 @@ def test_json_contract_plan_schedule_envelope(*, update_goldens: bool) -> None:
 
 def _sample_plan_validation_artifact() -> PlanValidationArtifact:
     return PlanValidationArtifact(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         plan_signature="sig-1",
         reduced_plan_signature="sig-1:reduced",
         total_tasks=2,
@@ -444,11 +452,11 @@ def test_json_contract_plan_validation_envelope(*, update_goldens: bool) -> None
 
 def _sample_run_manifest() -> RunManifest:
     return RunManifest(
-        run_id="run-1",
+        run_id="run_01HZX4J3C8F8M2KQ",
         status="completed",
         event_time_unix_ms=1735689600000,
         plan_signature="sig-1",
-        plan_fingerprints={"cpg_nodes_v1": "fp-1"},
+        plan_fingerprints={"cpg_nodes_v1": "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"},
         delta_inputs=(
             {
                 "dataset_name": "cpg_nodes",
@@ -471,7 +479,7 @@ def _sample_run_manifest() -> RunManifest:
         artifact_ids={
             "plan_schedule": "schedule-1",
             "plan_validation": "validation-1",
-            "cpg_nodes": "pid-1",
+            "cpg_nodes": "9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
         },
     )
 

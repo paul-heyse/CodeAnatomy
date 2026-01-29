@@ -27,6 +27,7 @@ from datafusion_engine.streaming_executor import StreamingExecutionResult
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
+from obs.otel import OtelBootstrapOptions, configure_otel
 from storage.deltalake import DeltaWriteResult
 
 if TYPE_CHECKING:
@@ -255,6 +256,12 @@ def build_view_product(
     ValueError
         Raised when the runtime profile or view registration is missing.
     """
+    configure_otel(
+        service_name="codeanatomy",
+        options=OtelBootstrapOptions(
+            resource_overrides={"codeanatomy.view_name": view_name}
+        ),
+    )
     profile = session_runtime.profile
     session = session_runtime.ctx
     if not session.table_exist(view_name):

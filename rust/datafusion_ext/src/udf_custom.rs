@@ -13,6 +13,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::ipc::reader::StreamReader;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
+use datafusion::config::ConfigOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -32,13 +33,13 @@ use unicode_normalization::UnicodeNormalization;
 
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
+use crate::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
 const ENC_UTF32: i32 = 3;
 const PART_SEPARATOR: &str = "\u{001f}";
 const NULL_SENTINEL: &str = "__NULL__";
-const DEFAULT_SPAN_COL_UNIT: &str = "byte";
 const DEFAULT_NORMALIZE_FORM: &str = "NFKC";
 
 #[derive(Debug)]
@@ -359,6 +360,7 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         ))),
         "span_make" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
             signature: SignatureEqHash::new(signature),
+            policy: CodeAnatomyUdfConfig::default(),
         }))),
         "span_len" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanLenUdf {
             signature: SignatureEqHash::new(signature),
@@ -380,6 +382,7 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "utf8_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
             Utf8NormalizeUdf {
                 signature: SignatureEqHash::new(signature),
+                policy: CodeAnatomyUdfConfig::default(),
             },
         ))),
         "utf8_null_if_blank" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
@@ -399,6 +402,7 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         ))),
         "map_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
             signature: SignatureEqHash::new(signature),
+            policy: CodeAnatomyUdfConfig::default(),
         }))),
         "list_compact" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(ListCompactUdf {
             signature: SignatureEqHash::new(signature),
@@ -530,6 +534,22 @@ fn signature_with_names(signature: Signature, names: &[&str]) -> Signature {
         Ok(signature) => signature,
         Err(_) => signature,
     }
+}
+
+fn field_from_first_arg_typed(
+    args: ReturnFieldArgs,
+    name: &str,
+    dtype: DataType,
+) -> Result<FieldRef> {
+    let field = args
+        .arg_fields
+        .first()
+        .ok_or_else(|| DataFusionError::Plan(format!("{name} expects at least one argument")))?;
+    let mut output = Field::new(name, dtype.clone(), field.is_nullable());
+    if field.data_type() == &dtype && !field.metadata().is_empty() {
+        output = output.with_metadata(field.metadata().clone());
+    }
+    Ok(Arc::new(output))
 }
 
 fn string_int_string_signature(volatility: Volatility) -> Signature {
@@ -843,6 +863,26 @@ fn columnar_to_bool(
     }
 }
 
+fn all_scalars(values: &[ColumnarValue]) -> bool {
+    values
+        .iter()
+        .all(|value| matches!(value, ColumnarValue::Scalar(_)))
+}
+
+fn array_to_scalar(array: ArrayRef, context: &str) -> Result<ScalarValue> {
+    ScalarValue::try_from_array(array.as_ref(), 0).map_err(|err| {
+        DataFusionError::Plan(format!("{context}: failed to read scalar output: {err}"))
+    })
+}
+
+fn columnar_result(array: ArrayRef, all_scalar: bool, context: &str) -> Result<ColumnarValue> {
+    if all_scalar {
+        Ok(ColumnarValue::Scalar(array_to_scalar(array, context)?))
+    } else {
+        Ok(ColumnarValue::Array(array))
+    }
+}
+
 fn span_struct_type() -> DataType {
     DataType::Struct(Fields::from(vec![
         Field::new("bstart", DataType::Int64, true),
@@ -853,23 +893,28 @@ fn span_struct_type() -> DataType {
     ]))
 }
 
-fn span_metadata_from_scalars(args: &ReturnFieldArgs) -> Result<HashMap<String, String>> {
+fn span_metadata_from_scalars(
+    args: &ReturnFieldArgs,
+    defaults: &CodeAnatomyUdfConfig,
+) -> Result<HashMap<String, String>> {
     let mut metadata = HashMap::new();
     metadata.insert("semantic_type".to_string(), "Span".to_string());
     let line_base = match scalar_argument(args, 2) {
-        Some(value) => scalar_to_i32(value, "span_make line_base metadata")?.unwrap_or(0),
-        None => 0,
+        Some(value) => scalar_to_i32(value, "span_make line_base metadata")?
+            .unwrap_or(defaults.span_default_line_base),
+        None => defaults.span_default_line_base,
     };
     metadata.insert("line_base".to_string(), line_base.to_string());
     let col_unit = match scalar_argument(args, 3) {
         Some(value) => scalar_to_string(value)?
-            .unwrap_or_else(|| DEFAULT_SPAN_COL_UNIT.to_string()),
-        None => DEFAULT_SPAN_COL_UNIT.to_string(),
+            .unwrap_or_else(|| defaults.span_default_col_unit.clone()),
+        None => defaults.span_default_col_unit.clone(),
     };
     metadata.insert("col_unit".to_string(), col_unit);
     let end_exclusive = match scalar_argument(args, 4) {
-        Some(value) => scalar_to_bool(value, "span_make end_exclusive metadata")?.unwrap_or(true),
-        None => true,
+        Some(value) => scalar_to_bool(value, "span_make end_exclusive metadata")?
+            .unwrap_or(defaults.span_default_end_exclusive),
+        None => defaults.span_default_end_exclusive,
     };
     metadata.insert("end_exclusive".to_string(), end_exclusive.to_string());
     Ok(metadata)
@@ -890,6 +935,21 @@ fn scalar_argument_string(
     scalar_to_string(value).map_err(|err| {
         DataFusionError::Plan(format!("{context}: failed to read scalar argument: {err}"))
     })
+}
+
+pub fn config_defaults_for(
+    udf: &dyn ScalarUDFImpl,
+) -> Option<BTreeMap<String, UdfConfigValue>> {
+    if let Some(udf) = udf.as_any().downcast_ref::<Utf8NormalizeUdf>() {
+        return Some(udf.policy.utf8_normalize_defaults());
+    }
+    if let Some(udf) = udf.as_any().downcast_ref::<MapNormalizeUdf>() {
+        return Some(udf.policy.map_normalize_defaults());
+    }
+    if let Some(udf) = udf.as_any().downcast_ref::<SpanMakeUdf>() {
+        return Some(udf.policy.span_make_defaults());
+    }
+    None
 }
 
 fn semantic_type_from_prefix(prefix: &str) -> Option<&'static str> {
@@ -1053,16 +1113,7 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args
-            .arg_fields
-            .first()
-            .map(|field| field.is_nullable())
-            .unwrap_or(true);
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Float64,
-            nullable,
-        )))
+        field_from_first_arg_typed(args, self.name(), DataType::Float64)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1327,6 +1378,7 @@ pub fn span_make_udf() -> ScalarUDF {
     let signature = variadic_any_signature(2, 5, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
         signature: SignatureEqHash::new(signature),
+        policy: CodeAnatomyUdfConfig::default(),
     }))
 }
 
@@ -1382,6 +1434,7 @@ pub fn utf8_normalize_udf() -> ScalarUDF {
     let signature = variadic_any_signature(1, 4, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
         signature: SignatureEqHash::new(signature),
+        policy: CodeAnatomyUdfConfig::default(),
     }))
 }
 
@@ -1416,6 +1469,7 @@ pub fn map_normalize_udf() -> ScalarUDF {
     let signature = variadic_any_signature(1, 3, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
         signature: SignatureEqHash::new(signature),
+        policy: CodeAnatomyUdfConfig::default(),
     }))
 }
 
@@ -2708,6 +2762,7 @@ fn adjusted_end(end: i64, exclusive: bool) -> i64 {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct SpanMakeUdf {
     signature: SignatureEqHash,
+    policy: CodeAnatomyUdfConfig,
 }
 
 impl ScalarUDFImpl for SpanMakeUdf {
@@ -2757,7 +2812,7 @@ impl ScalarUDFImpl for SpanMakeUdf {
                 return Ok(Arc::new(field));
             }
         }
-        let metadata = span_metadata_from_scalars(&args)?;
+        let metadata = span_metadata_from_scalars(&args, &self.policy)?;
         if !metadata.is_empty() {
             field = field.with_metadata(metadata);
         }
@@ -2774,7 +2829,8 @@ impl ScalarUDFImpl for SpanMakeUdf {
                 "span_make expects between two and five arguments".into(),
             ));
         }
-        let num_rows = args.number_rows;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
         let bstart_values = columnar_to_i64(
             &args.args[0],
             num_rows,
@@ -2792,7 +2848,7 @@ impl ScalarUDFImpl for SpanMakeUdf {
                 "span_make line_base must be int32-compatible",
             )?
         } else {
-            vec![Some(0); num_rows]
+            vec![Some(self.policy.span_default_line_base); num_rows]
         };
         let col_unit_values = if args.args.len() >= 4 {
             let values = columnar_to_optional_strings(
@@ -2802,10 +2858,10 @@ impl ScalarUDFImpl for SpanMakeUdf {
             )?;
             values
                 .into_iter()
-                .map(|value| value.unwrap_or_else(|| DEFAULT_SPAN_COL_UNIT.to_string()))
+                .map(|value| value.unwrap_or_else(|| self.policy.span_default_col_unit.clone()))
                 .collect::<Vec<_>>()
         } else {
-            vec![DEFAULT_SPAN_COL_UNIT.to_string(); num_rows]
+            vec![self.policy.span_default_col_unit.clone(); num_rows]
         };
         let end_exclusive_values = if args.args.len() >= 5 {
             let values = columnar_to_bool(
@@ -2815,10 +2871,10 @@ impl ScalarUDFImpl for SpanMakeUdf {
             )?;
             values
                 .into_iter()
-                .map(|value| value.unwrap_or(true))
+                .map(|value| value.unwrap_or(self.policy.span_default_end_exclusive))
                 .collect::<Vec<_>>()
         } else {
-            vec![true; num_rows]
+            vec![self.policy.span_default_end_exclusive; num_rows]
         };
 
         let mut bstart_builder = Int64Builder::with_capacity(num_rows);
@@ -2862,7 +2918,19 @@ impl ScalarUDFImpl for SpanMakeUdf {
             Arc::new(end_exclusive_builder.finish()),
         ];
         let span_array = StructArray::new(span_fields, arrays, None);
-        Ok(ColumnarValue::Array(Arc::new(span_array) as ArrayRef))
+        columnar_result(Arc::new(span_array) as ArrayRef, all_scalar, "span_make")
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let policy = CodeAnatomyUdfConfig::from_config(config);
+        if policy == self.policy {
+            return None;
+        }
+        let inner = Arc::new(Self {
+            signature: self.signature.clone(),
+            policy,
+        });
+        Some(ScalarUDF::new_from_shared_impl(inner))
     }
 }
 
@@ -2913,7 +2981,9 @@ impl ScalarUDFImpl for SpanLenUdf {
                 "span_len expects one argument".into(),
             ));
         };
-        let span_array = span_value.to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let span_array = span_value.to_array(num_rows)?;
         let span_struct = span_array
             .as_any()
             .downcast_ref::<StructArray>()
@@ -2928,7 +2998,7 @@ impl ScalarUDFImpl for SpanLenUdf {
             }
             builder.append_value(bend.value(row) - bstart.value(row));
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_len")
     }
 }
 
@@ -2981,7 +3051,8 @@ impl ScalarUDFImpl for IntervalAlignScoreUdf {
                 "interval_align_score expects four arguments".into(),
             ));
         };
-        let num_rows = args.number_rows;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
         let left_start_values =
             columnar_to_i64(left_start, num_rows, "interval_align_score left_start")?;
         let left_end_values =
@@ -3003,7 +3074,11 @@ impl ScalarUDFImpl for IntervalAlignScoreUdf {
             let length = right_end_values[row].unwrap() - right_start_values[row].unwrap();
             builder.append_value(-(length as f64));
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "interval_align_score",
+        )
     }
 }
 
@@ -3066,8 +3141,10 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
                 "span_overlaps expects two arguments".into(),
             ));
         };
-        let left_array = left_value.to_array(args.number_rows)?;
-        let right_array = right_value.to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let left_array = left_value.to_array(num_rows)?;
+        let right_array = right_value.to_array(num_rows)?;
         let left_struct = left_array
             .as_any()
             .downcast_ref::<StructArray>()
@@ -3084,7 +3161,7 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
         let left_exclusive = span_bool_column(left_struct, "end_exclusive");
         let right_exclusive = span_bool_column(right_struct, "end_exclusive");
 
-        let len = args.number_rows;
+        let len = num_rows;
         if left_struct.len() != len || right_struct.len() != len {
             return Err(DataFusionError::Plan(
                 "span_overlaps input lengths must match".into(),
@@ -3110,7 +3187,7 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
                 && right_start.value(row) < left_adjusted_end;
             builder.append_value(overlaps);
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_overlaps")
     }
 }
 
@@ -3173,8 +3250,10 @@ impl ScalarUDFImpl for SpanContainsUdf {
                 "span_contains expects two arguments".into(),
             ));
         };
-        let left_array = left_value.to_array(args.number_rows)?;
-        let right_array = right_value.to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let left_array = left_value.to_array(num_rows)?;
+        let right_array = right_value.to_array(num_rows)?;
         let left_struct = left_array
             .as_any()
             .downcast_ref::<StructArray>()
@@ -3191,7 +3270,7 @@ impl ScalarUDFImpl for SpanContainsUdf {
         let left_exclusive = span_bool_column(left_struct, "end_exclusive");
         let right_exclusive = span_bool_column(right_struct, "end_exclusive");
 
-        let len = args.number_rows;
+        let len = num_rows;
         if left_struct.len() != len || right_struct.len() != len {
             return Err(DataFusionError::Plan(
                 "span_contains input lengths must match".into(),
@@ -3217,7 +3296,7 @@ impl ScalarUDFImpl for SpanContainsUdf {
                 && right_adjusted_end <= left_adjusted_end;
             builder.append_value(contains);
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_contains")
     }
 }
 
@@ -3272,7 +3351,8 @@ impl ScalarUDFImpl for SpanIdUdf {
                 "span_id expects four or five arguments".into(),
             ));
         }
-        let num_rows = args.number_rows;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
         let prefixes = columnar_to_optional_strings(
             &args.args[0],
             num_rows,
@@ -3302,7 +3382,7 @@ impl ScalarUDFImpl for SpanIdUdf {
             }
             builder.append_value(stable_id_value(prefix, &joined));
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_id")
     }
 }
 
@@ -3415,6 +3495,7 @@ impl ScalarUDFImpl for SemanticTagUdf {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Utf8NormalizeUdf {
     signature: SignatureEqHash,
+    policy: CodeAnatomyUdfConfig,
 }
 
 impl ScalarUDFImpl for Utf8NormalizeUdf {
@@ -3454,8 +3535,8 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
         Ok(coerced)
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        field_from_first_arg_typed(args, self.name(), DataType::Utf8)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3480,19 +3561,19 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
             .map(|value| scalar_to_string(value))
             .transpose()?
             .flatten()
-            .unwrap_or_else(|| DEFAULT_NORMALIZE_FORM.to_string());
+            .unwrap_or_else(|| self.policy.utf8_normalize_form.clone());
         let casefold = scalars
             .get(2)
             .map(|value| scalar_to_bool(value, "utf8_normalize casefold flag"))
             .transpose()?
             .flatten()
-            .unwrap_or(true);
+            .unwrap_or(self.policy.utf8_normalize_casefold);
         let collapse_ws = scalars
             .get(3)
             .map(|value| scalar_to_bool(value, "utf8_normalize collapse_ws flag"))
             .transpose()?
             .flatten()
-            .unwrap_or(true);
+            .unwrap_or(self.policy.utf8_normalize_collapse_ws);
         let value = scalar_to_string(scalars[0])?;
         let Some(value) = value else {
             return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(None))));
@@ -3519,28 +3600,37 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
                 &args.args[1],
                 "utf8_normalize form must be a scalar literal",
             )?;
-            scalar_to_string(&scalar)?.unwrap_or_else(|| DEFAULT_NORMALIZE_FORM.to_string())
+            scalar_to_string(&scalar)?
+                .unwrap_or_else(|| self.policy.utf8_normalize_form.clone())
         } else {
-            DEFAULT_NORMALIZE_FORM.to_string()
+            self.policy.utf8_normalize_form.clone()
         };
         let casefold = if args.args.len() >= 3 {
             let scalar = scalar_columnar_value(
                 &args.args[2],
                 "utf8_normalize casefold must be a scalar literal",
             )?;
-            scalar_to_bool(&scalar, "utf8_normalize casefold flag")?.unwrap_or(true)
+            scalar_to_bool(&scalar, "utf8_normalize casefold flag")?
+                .unwrap_or(self.policy.utf8_normalize_casefold)
         } else {
-            true
+            self.policy.utf8_normalize_casefold
         };
         let collapse_ws = if args.args.len() >= 4 {
             let scalar = scalar_columnar_value(
                 &args.args[3],
                 "utf8_normalize collapse_ws must be a scalar literal",
             )?;
-            scalar_to_bool(&scalar, "utf8_normalize collapse_ws flag")?.unwrap_or(true)
+            scalar_to_bool(&scalar, "utf8_normalize collapse_ws flag")?
+                .unwrap_or(self.policy.utf8_normalize_collapse_ws)
         } else {
-            true
+            self.policy.utf8_normalize_collapse_ws
         };
+        if let ColumnarValue::Scalar(value) = &args.args[0] {
+            let normalized = scalar_to_string(value)?
+                .map(|value| normalize_text(&value, &form, casefold, collapse_ws))
+                .filter(|value| !value.is_empty());
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(normalized)));
+        }
         let values = columnar_to_optional_strings(
             &args.args[0],
             args.number_rows,
@@ -3560,6 +3650,18 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
             }
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let policy = CodeAnatomyUdfConfig::from_config(config);
+        if policy == self.policy {
+            return None;
+        }
+        let inner = Arc::new(Self {
+            signature: self.signature.clone(),
+            policy,
+        });
+        Some(ScalarUDF::new_from_shared_impl(inner))
     }
 }
 
@@ -3600,8 +3702,8 @@ impl ScalarUDFImpl for Utf8NullIfBlankUdf {
         Ok(vec![DataType::Utf8; arg_types.len()])
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        field_from_first_arg_typed(args, self.name(), DataType::Utf8)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3614,6 +3716,14 @@ impl ScalarUDFImpl for Utf8NullIfBlankUdf {
                 "utf8_null_if_blank expects one argument".into(),
             ));
         };
+        if let ColumnarValue::Scalar(scalar) = value {
+            let trimmed = scalar_to_string(scalar)?.map(|value| value.trim().to_string());
+            let normalized = trimmed
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string());
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(normalized)));
+        }
         let values = columnar_to_optional_strings(
             value,
             args.number_rows,
@@ -3672,8 +3782,8 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
         Ok(vec![arg_types[0].clone(), DataType::Utf8, DataType::Utf8])
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        field_from_first_arg_typed(args, self.name(), DataType::Utf8)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3685,6 +3795,47 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
             return Err(DataFusionError::Plan(
                 "qname_normalize expects between one and three arguments".into(),
             ));
+        }
+        if args
+            .args
+            .iter()
+            .all(|value| matches!(value, ColumnarValue::Scalar(_)))
+        {
+            let symbol = scalar_to_string(
+                scalar_columnar_value(&args.args[0], "qname_normalize symbol literal")?,
+            )?;
+            let module = if args.args.len() >= 2 {
+                scalar_to_string(
+                    scalar_columnar_value(&args.args[1], "qname_normalize module literal")?,
+                )?
+            } else {
+                None
+            };
+            let normalized = match symbol.as_deref() {
+                Some(symbol) => {
+                    let normalized_symbol =
+                        normalize_text(symbol, DEFAULT_NORMALIZE_FORM, true, true);
+                    if normalized_symbol.is_empty() {
+                        None
+                    } else {
+                        let normalized_module = module
+                            .as_deref()
+                            .map(|module| {
+                                normalize_text(module, DEFAULT_NORMALIZE_FORM, true, true)
+                            })
+                            .filter(|module| !module.is_empty());
+                        if normalized_symbol.contains('.') || normalized_module.is_none() {
+                            Some(normalized_symbol)
+                        } else if let Some(module) = normalized_module {
+                            Some(format!("{module}.{normalized_symbol}"))
+                        } else {
+                            Some(normalized_symbol)
+                        }
+                    }
+                }
+                None => None,
+            };
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(normalized)));
         }
         let symbols = columnar_to_optional_strings(
             &args.args[0],
@@ -3787,8 +3938,8 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
         self.signature.signature()
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        field_from_first_arg_typed(args, self.name(), DataType::Utf8)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3805,6 +3956,8 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
                 "map_get_default expects exactly three arguments".into(),
             ));
         }
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
         let key_scalar = scalar_columnar_value(
             &args.args[1],
             "map_get_default key must be a scalar literal",
@@ -3815,7 +3968,7 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
             ));
         };
 
-        let map_array = args.args[0].to_array(args.number_rows)?;
+        let map_array = args.args[0].to_array(num_rows)?;
         let map_values = map_array
             .as_any()
             .downcast_ref::<MapArray>()
@@ -3823,12 +3976,12 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
 
         let default_values = columnar_to_optional_strings(
             &args.args[2],
-            args.number_rows,
+            num_rows,
             "map_get_default default must be string-compatible",
         )?;
 
-        let mut builder = StringBuilder::with_capacity(args.number_rows, args.number_rows * 8);
-        for row in 0..args.number_rows {
+        let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 8);
+        for row in 0..num_rows {
             let default_value = default_values[row].as_deref();
             if map_values.is_null(row) {
                 if let Some(value) = default_value {
@@ -3874,7 +4027,7 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
                 builder.append_null();
             }
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "map_get_default")
     }
 }
 
@@ -3895,6 +4048,7 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct MapNormalizeUdf {
     signature: SignatureEqHash,
+    policy: CodeAnatomyUdfConfig,
 }
 
 impl ScalarUDFImpl for MapNormalizeUdf {
@@ -3953,33 +4107,37 @@ impl ScalarUDFImpl for MapNormalizeUdf {
                 "map_normalize expects between one and three arguments".into(),
             ));
         }
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
         let key_case = if args.args.len() >= 2 {
             let scalar = scalar_columnar_value(
                 &args.args[1],
                 "map_normalize key_case must be a scalar literal",
             )?;
-            scalar_to_string(&scalar)?.unwrap_or_else(|| "lower".to_string())
+            scalar_to_string(&scalar)?
+                .unwrap_or_else(|| self.policy.map_normalize_key_case.clone())
         } else {
-            "lower".to_string()
+            self.policy.map_normalize_key_case.clone()
         };
         let sort_keys = if args.args.len() >= 3 {
             let scalar = scalar_columnar_value(
                 &args.args[2],
                 "map_normalize sort_keys must be a scalar literal",
             )?;
-            scalar_to_bool(&scalar, "map_normalize sort_keys flag")?.unwrap_or(true)
+            scalar_to_bool(&scalar, "map_normalize sort_keys flag")?
+                .unwrap_or(self.policy.map_normalize_sort_keys)
         } else {
-            true
+            self.policy.map_normalize_sort_keys
         };
 
-        let map_array = args.args[0].to_array(args.number_rows)?;
+        let map_array = args.args[0].to_array(num_rows)?;
         let maps = map_array
             .as_any()
             .downcast_ref::<MapArray>()
             .ok_or_else(|| DataFusionError::Plan("map_normalize expects a map input".into()))?;
 
         let mut builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
-        for row in 0..args.number_rows {
+        for row in 0..num_rows {
             if maps.is_null(row) {
                 builder.append(false)?;
                 continue;
@@ -4030,7 +4188,19 @@ impl ScalarUDFImpl for MapNormalizeUdf {
             }
             builder.append(true)?;
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "map_normalize")
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let policy = CodeAnatomyUdfConfig::from_config(config);
+        if policy == self.policy {
+            return None;
+        }
+        let inner = Arc::new(Self {
+            signature: self.signature.clone(),
+            policy,
+        });
+        Some(ScalarUDF::new_from_shared_impl(inner))
     }
 }
 
@@ -4095,13 +4265,15 @@ impl ScalarUDFImpl for ListCompactUdf {
                 "list_compact expects one argument".into(),
             ));
         };
-        let list_array = value.to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let list_array = value.to_array(num_rows)?;
         let lists = list_array
             .as_any()
             .downcast_ref::<ListArray>()
             .ok_or_else(|| DataFusionError::Plan("list_compact expects a list input".into()))?;
         let mut builder = ListBuilder::new(StringBuilder::new());
-        for row in 0..args.number_rows {
+        for row in 0..num_rows {
             if lists.is_null(row) {
                 builder.append(false);
                 continue;
@@ -4116,7 +4288,7 @@ impl ScalarUDFImpl for ListCompactUdf {
             }
             builder.append(true);
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "list_compact")
     }
 }
 
@@ -4181,7 +4353,9 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
                 "list_unique_sorted expects one argument".into(),
             ));
         };
-        let list_array = value.to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let list_array = value.to_array(num_rows)?;
         let lists = list_array
             .as_any()
             .downcast_ref::<ListArray>()
@@ -4189,7 +4363,7 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
                 DataFusionError::Plan("list_unique_sorted expects a list input".into())
             })?;
         let mut builder = ListBuilder::new(StringBuilder::new());
-        for row in 0..args.number_rows {
+        for row in 0..num_rows {
             if lists.is_null(row) {
                 builder.append(false);
                 continue;
@@ -4208,7 +4382,11 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
             }
             builder.append(true);
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "list_unique_sorted",
+        )
     }
 }
 
@@ -4317,7 +4495,9 @@ impl ScalarUDFImpl for StructPickUdf {
                 "struct_pick expects a struct and at least one field name".into(),
             ));
         }
-        let struct_array = args.args[0].to_array(args.number_rows)?;
+        let all_scalar = all_scalars(&args.args);
+        let num_rows = if all_scalar { 1 } else { args.number_rows };
+        let struct_array = args.args[0].to_array(num_rows)?;
         let struct_values = struct_array
             .as_any()
             .downcast_ref::<StructArray>()
@@ -4360,7 +4540,7 @@ impl ScalarUDFImpl for StructPickUdf {
         }
         let nulls = struct_values.nulls().cloned();
         let picked = StructArray::new(Fields::from(selected_fields), selected_arrays, nulls);
-        Ok(ColumnarValue::Array(Arc::new(picked) as ArrayRef))
+        columnar_result(Arc::new(picked) as ArrayRef, all_scalar, "struct_pick")
     }
 }
 

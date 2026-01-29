@@ -1,0 +1,50 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+      http: {}
+
+processors:
+  batch: {}
+  attributes/sanitize:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 5000
+    expected_new_traces_per_sec: 200
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: high_latency
+        type: latency
+        latency:
+          threshold_ms: 1000
+
+exporters:
+  otlp:
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+    tls:
+      insecure: true
+  logging:
+    loglevel: info
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/sanitize, tail_sampling, batch]
+      exporters: [otlp, logging]
+    metrics:
+      receivers: [otlp]
+      processors: [attributes/sanitize, batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [attributes/sanitize, batch]
+      exporters: [otlp]

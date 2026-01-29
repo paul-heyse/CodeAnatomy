@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from pathlib import Path
 from typing import cast
@@ -159,7 +160,12 @@ _SCHEMA_TAGS: dict[type[object], dict[str, object]] = {
 
 
 def _schema_hook(obj: type[object]) -> dict[str, object]:
-    return dict(_SCHEMA_TAGS.get(obj, {}))
+    payload = dict(_SCHEMA_TAGS.get(obj, {}))
+    payload.setdefault("title", obj.__name__)
+    doc = inspect.getdoc(obj)
+    if doc:
+        payload.setdefault("description", doc)
+    return payload
 
 
 def schema_components() -> tuple[dict[str, object], dict[str, object]]:
@@ -178,7 +184,16 @@ def schema_components() -> tuple[dict[str, object], dict[str, object]]:
         schema_type.__name__: schema
         for schema_type, schema in zip(SCHEMA_TYPES, schemas, strict=False)
     }
-    return cast("dict[str, object]", schema_map), cast("dict[str, object]", dict(components))
+    component_map = dict(components)
+    for schema_type in SCHEMA_TYPES:
+        name = schema_type.__name__
+        schema = component_map.get(name)
+        if not isinstance(schema, dict):
+            continue
+        metadata = _schema_hook(schema_type)
+        for key, value in metadata.items():
+            schema.setdefault(key, value)
+    return cast("dict[str, object]", schema_map), cast("dict[str, object]", component_map)
 
 
 def schema_contract_payload() -> dict[str, object]:

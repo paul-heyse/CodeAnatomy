@@ -20,10 +20,12 @@ use serde::Deserialize;
 use tokio::runtime::Runtime;
 
 use datafusion_ext::delta_control_plane::{
-    delta_cdf_provider, load_delta_table, DeltaCdfScanOptions,
+    add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfScanOptions,
 };
 use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate};
 use datafusion_ext::udf_registry::{self, UdfHandle, UdfKind};
+#[cfg(feature = "async-udf")]
+use datafusion_ext::udf_async;
 
 static ASYNC_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -41,6 +43,7 @@ struct DeltaProviderOptions {
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
+    files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +61,14 @@ struct DeltaCdfProviderOptions {
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PluginUdfOptions {
+    enable_async: Option<bool>,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
 }
 
 fn async_runtime() -> &'static Runtime {
@@ -93,12 +104,45 @@ fn manifest() -> DfPluginManifestV1 {
     }
 }
 
-fn build_udf_bundle() -> DfUdfBundleV1 {
+fn parse_udf_options(options: ROption<RString>) -> Result<PluginUdfOptions, String> {
+    match options {
+        ROption::RSome(value) => serde_json::from_str(value.as_str())
+            .map_err(|err| format!("Invalid UDF options JSON: {err}")),
+        ROption::RNone => Ok(PluginUdfOptions::default()),
+    }
+}
+
+fn resolve_udf_policy(options: &PluginUdfOptions) -> Result<(bool, Option<u64>, Option<usize>), String> {
+    let enable_async = options.enable_async.unwrap_or(false);
+    if enable_async {
+        let timeout_ms = options
+            .async_udf_timeout_ms
+            .ok_or_else(|| "async_udf_timeout_ms must be set when async UDFs are enabled.".to_string())?;
+        if timeout_ms == 0 {
+            return Err("async_udf_timeout_ms must be a positive integer.".to_string());
+        }
+        let batch_size = options
+            .async_udf_batch_size
+            .ok_or_else(|| "async_udf_batch_size must be set when async UDFs are enabled.".to_string())?;
+        if batch_size == 0 {
+            return Err("async_udf_batch_size must be a positive integer.".to_string());
+        }
+        return Ok((true, Some(timeout_ms), Some(batch_size)));
+    }
+    if options.async_udf_timeout_ms.is_some() || options.async_udf_batch_size.is_some() {
+        return Err(
+            "Async UDF settings require enable_async=true in plugin UDF options.".to_string(),
+        );
+    }
+    Ok((false, None, None))
+}
+
+fn build_udf_bundle_from_specs(specs: Vec<udf_registry::UdfSpec>) -> DfUdfBundleV1 {
     let mut scalar = Vec::new();
     let mut aggregate = Vec::new();
     let mut window = Vec::new();
 
-    for spec in udf_registry::all_udfs() {
+    for spec in specs {
         match (spec.kind, (spec.builder)()) {
             (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
                 let udf = if spec.aliases.is_empty() {
@@ -140,6 +184,29 @@ fn build_udf_bundle() -> DfUdfBundleV1 {
         aggregate: RVec::from(aggregate),
         window: RVec::from(window),
     }
+}
+
+fn build_udf_bundle_with_options(options: PluginUdfOptions) -> Result<DfUdfBundleV1, String> {
+    let (enable_async, timeout_ms, batch_size) = resolve_udf_policy(&options)?;
+    if enable_async {
+        #[cfg(feature = "async-udf")]
+        {
+            udf_async::set_async_udf_policy(batch_size, timeout_ms)
+                .map_err(|err| format!("Failed to set async UDF policy: {err}"))?;
+        }
+        #[cfg(not(feature = "async-udf"))]
+        {
+            return Err("Async UDFs require the async-udf feature.".to_string());
+        }
+    }
+    let specs = udf_registry::all_udfs_with_async(enable_async)
+        .map_err(|err| format!("Failed to build UDF bundle: {err}"))?;
+    Ok(build_udf_bundle_from_specs(specs))
+}
+
+fn build_udf_bundle() -> DfUdfBundleV1 {
+    build_udf_bundle_with_options(PluginUdfOptions::default())
+        .unwrap_or_else(|err| panic!("Failed to build UDF bundle: {err}"))
 }
 
 fn build_table_functions() -> Vec<DfTableFunctionV1> {
@@ -228,7 +295,14 @@ fn build_delta_provider(options: DeltaProviderOptions) -> Result<FFI_TableProvid
         let eager_snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
         let scan_config = delta_scan_config_from_options(&options);
-        DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config)
+        let mut provider = DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config)?;
+        if let Some(files) = options.files.as_ref() {
+            if !files.is_empty() {
+                let add_actions = add_actions_for_paths(&table, files)?;
+                provider = provider.with_files(add_actions);
+            }
+        }
+        Ok(provider)
     });
     let provider = result.map_err(|err| format!("Delta provider failed: {err}"))?;
     Ok(FFI_TableProvider::new(Arc::new(provider), true, None))
@@ -290,11 +364,20 @@ extern "C" fn plugin_exports() -> DfPluginExportsV1 {
     exports()
 }
 
+extern "C" fn plugin_udf_bundle(options_json: ROption<RString>) -> DfResult<DfUdfBundleV1> {
+    let result = parse_udf_options(options_json).and_then(build_udf_bundle_with_options);
+    match result {
+        Ok(value) => RResult::ROk(value),
+        Err(err) => RResult::RErr(RString::from(err)),
+    }
+}
+
 #[export_root_module]
 pub fn get_library() -> DfPluginMod_Ref {
     DfPluginMod {
         manifest: plugin_manifest,
         exports: plugin_exports,
+        udf_bundle_with_options: plugin_udf_bundle,
         create_table_provider,
     }
     .leak_into_prefix()

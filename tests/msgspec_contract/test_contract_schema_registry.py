@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from msgspec.inspect import is_struct_type
 
 from obs.scan_telemetry import ScanTelemetry
-from serde_msgspec import StructBaseCompat, StructBaseStrict
-from serde_schema_registry import SCHEMA_TYPES
+from serde_msgspec import StructBaseCompat, StructBaseHotPath, StructBaseStrict
+from serde_schema_registry import SCHEMA_TYPES, schema_contract_payload
 
 
 def test_schema_registry_types_are_structs() -> None:
@@ -16,6 +18,12 @@ def test_schema_registry_types_are_structs() -> None:
         assert is_struct_type(schema_type)
         if issubclass(schema_type, StructBaseStrict):
             assert schema_type.__struct_config__.forbid_unknown_fields is True
+            continue
+        if issubclass(schema_type, StructBaseHotPath):
+            config = schema_type.__struct_config__
+            assert config.forbid_unknown_fields is False
+            assert config.gc is False
+            assert config.cache_hash is True
             continue
         if issubclass(schema_type, StructBaseCompat):
             assert schema_type.__struct_config__.forbid_unknown_fields is False
@@ -39,3 +47,15 @@ def test_array_like_structs_are_telemetry_only() -> None:
         assert schema_type.__struct_config__.array_like is False
     for struct_type in allowed_array_like:
         assert struct_type.__struct_config__.array_like is True
+
+
+def test_schema_registry_metadata_present() -> None:
+    """Ensure schemas include required metadata tags and descriptions."""
+    payload = schema_contract_payload()
+    components = cast("dict[str, dict[str, object]]", payload.get("components", {}))
+    schema_names = {schema_type.__name__ for schema_type in SCHEMA_TYPES}
+    for name, schema in components.items():
+        assert "title" in schema, f"Schema {name} missing title"
+        assert "description" in schema, f"Schema {name} missing description"
+        if name in schema_names:
+            assert "x-codeanatomy-domain" in schema, f"Schema {name} missing domain tag"

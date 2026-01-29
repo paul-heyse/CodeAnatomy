@@ -53,6 +53,8 @@ from extract.parallel import parallel_map, resolve_max_workers, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
@@ -1792,42 +1794,48 @@ def extract_cst_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted CST outputs keyed by output name.
     """
-    repo_files = kwargs["repo_files"]
-    normalized_options = normalize_options("cst", kwargs.get("options"), CSTExtractOptions)
-    file_contexts = kwargs.get("file_contexts")
-    evidence_plan = kwargs.get("evidence_plan")
-    profile = kwargs.get("profile", "default")
-    prefer_reader = kwargs.get("prefer_reader", False)
-    exec_context = ExtractExecutionContext(
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        session=kwargs.get("session"),
-        profile=profile,
-    )
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(
-        options=normalized_options,
-        repo_id=normalized_options.repo_id,
-    )
-    options = ExtractMaterializeOptions(
-        normalize=normalize,
-        prefer_reader=prefer_reader,
-        apply_post_kernels=True,
-    )
-    plans = extract_cst_plans(
-        repo_files,
-        options=normalized_options,
-        context=exec_context,
-    )
-    return {
-        "libcst_files": materialize_extract_plan(
-            "libcst_files_v1",
-            plans["libcst_files"],
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=options,
+    with stage_span(
+        "extract.cst_tables",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={"codeanatomy.extractor": "cst"},
+    ):
+        repo_files = kwargs["repo_files"]
+        normalized_options = normalize_options("cst", kwargs.get("options"), CSTExtractOptions)
+        file_contexts = kwargs.get("file_contexts")
+        evidence_plan = kwargs.get("evidence_plan")
+        profile = kwargs.get("profile", "default")
+        prefer_reader = kwargs.get("prefer_reader", False)
+        exec_context = ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            session=kwargs.get("session"),
+            profile=profile,
         )
-    }
+        session = exec_context.ensure_session()
+        exec_context = replace(exec_context, session=session)
+        runtime_profile = exec_context.ensure_runtime_profile()
+        determinism_tier = exec_context.determinism_tier()
+        normalize = ExtractNormalizeOptions(
+            options=normalized_options,
+            repo_id=normalized_options.repo_id,
+        )
+        options = ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        )
+        plans = extract_cst_plans(
+            repo_files,
+            options=normalized_options,
+            context=exec_context,
+        )
+        return {
+            "libcst_files": materialize_extract_plan(
+                "libcst_files_v1",
+                plans["libcst_files"],
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
+                options=options,
+            )
+        }

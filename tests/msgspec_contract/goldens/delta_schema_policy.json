@@ -1,4 +1,4 @@
 {
-  "schema_mode": "merge",
-  "column_mapping_mode": "name"
+  "column_mapping_mode": "name",
+  "schema_mode": "merge"
 }

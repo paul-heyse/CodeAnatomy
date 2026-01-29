@@ -160,6 +160,28 @@ def test_error_contract_run_manifest(*, update_goldens: bool) -> None:
     )
 
 
+def test_error_contract_run_manifest_fingerprint(*, update_goldens: bool) -> None:
+    """Snapshot validation errors for invalid plan fingerprint values."""
+    _assert_error_snapshot(
+        payload={
+            "run_id": "run_01HZX4J3C8F8M2KQ",
+            "status": "ok",
+            "event_time_unix_ms": 1735689600000,
+            "plan_signature": "sig-1",
+            "plan_fingerprints": {"cpg_nodes_v1": "not-a-hex"},
+            "delta_inputs": [],
+            "outputs": [],
+            "runtime_profile_name": None,
+            "runtime_profile_hash": None,
+            "determinism_tier": None,
+            "output_dir": None,
+        },
+        target_type=RunManifest,
+        snapshot_name="run_manifest.plan_fingerprint.error.json",
+        update_goldens=update_goldens,
+    )
+
+
 def test_error_contract_plan_schedule_artifact(*, update_goldens: bool) -> None:
     """Snapshot validation errors for plan schedule artifacts."""
     _assert_error_snapshot(

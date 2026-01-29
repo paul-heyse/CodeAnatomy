@@ -30,6 +30,8 @@ from datafusion_engine.expr_udf_shims import semantic_tag, span_id, stable_id_pa
 from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
+from obs.otel.scopes import SCOPE_CPG
+from obs.otel.tracing import stage_span
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from serde_artifacts import (
     SemanticValidationArtifact,
@@ -259,43 +261,49 @@ def build_cpg_nodes_df(
     ValueError
         Raised when required source tables are missing or no plans are produced.
     """
-    ctx = session_runtime.ctx
-    specs = node_plan_specs()
-    task_name = task_identity.name if task_identity is not None else None
-    task_priority = task_identity.priority if task_identity is not None else None
+    with stage_span(
+        "cpg.nodes",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_nodes_v1"},
+    ):
+        ctx = session_runtime.ctx
+        specs = node_plan_specs()
+        task_name = task_identity.name if task_identity is not None else None
+        task_priority = task_identity.priority if task_identity is not None else None
 
-    frames: list[DataFrame] = []
-    for spec in specs:
-        try:
-            source_df = ctx.table(spec.table_ref)
-        except KeyError as exc:
-            msg = f"Missing required source table {spec.table_ref!r} for CPG nodes."
-            raise ValueError(msg) from exc
+        frames: list[DataFrame] = []
+        for spec in specs:
+            try:
+                source_df = ctx.table(spec.table_ref)
+            except KeyError as exc:
+                msg = f"Missing required source table {spec.table_ref!r} for CPG nodes."
+                raise ValueError(msg) from exc
 
-        node_df = _emit_nodes_df(
-            source_df,
-            spec=spec.emit,
-            task_name=task_name,
-            task_priority=task_priority,
+            node_df = _emit_nodes_df(
+                source_df,
+                spec=spec.emit,
+                task_name=task_name,
+                task_priority=task_priority,
+            )
+            frames.append(node_df)
+
+        if not frames:
+            msg = "CPG node builder did not produce any plans."
+            raise ValueError(msg)
+
+        combined = frames[0]
+        for frame in frames[1:]:
+            combined = combined.union(frame)
+
+        result = combined.select(*_NODE_OUTPUT_COLUMNS)
+        _require_semantic_types(
+            result,
+            view_name="cpg_nodes_v1",
+            expected={"node_id": "NodeId"},
+            runtime_profile=session_runtime.profile,
         )
-        frames.append(node_df)
-
-    if not frames:
-        msg = "CPG node builder did not produce any plans."
-        raise ValueError(msg)
-
-    combined = frames[0]
-    for frame in frames[1:]:
-        combined = combined.union(frame)
-
-    result = combined.select(*_NODE_OUTPUT_COLUMNS)
-    _require_semantic_types(
-        result,
-        view_name="cpg_nodes_v1",
-        expected={"node_id": "NodeId"},
-        runtime_profile=session_runtime.profile,
-    )
-    return result
+        return result
 
 
 def _emit_nodes_df(
@@ -384,25 +392,31 @@ def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
     ValueError
         Raised when the relation output table is missing.
     """
-    ctx = session_runtime.ctx
-    try:
-        relation_df = ctx.table(RELATION_OUTPUT_NAME)
-    except KeyError as exc:
-        msg = f"Missing required source table {RELATION_OUTPUT_NAME!r} for CPG edges."
-        raise ValueError(msg) from exc
+    with stage_span(
+        "cpg.edges",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_edges_v1"},
+    ):
+        ctx = session_runtime.ctx
+        try:
+            relation_df = ctx.table(RELATION_OUTPUT_NAME)
+        except KeyError as exc:
+            msg = f"Missing required source table {RELATION_OUTPUT_NAME!r} for CPG edges."
+            raise ValueError(msg) from exc
 
-    result = _emit_edges_from_relation_df(relation_df)
-    _require_semantic_types(
-        result,
-        view_name="cpg_edges_v1",
-        expected={
-            "edge_id": "EdgeId",
-            "src_node_id": "NodeId",
-            "dst_node_id": "NodeId",
-        },
-        runtime_profile=session_runtime.profile,
-    )
-    return result
+        result = _emit_edges_from_relation_df(relation_df)
+        _require_semantic_types(
+            result,
+            view_name="cpg_edges_v1",
+            expected={
+                "edge_id": "EdgeId",
+                "src_node_id": "NodeId",
+                "dst_node_id": "NodeId",
+            },
+            runtime_profile=session_runtime.profile,
+        )
+        return result
 
 
 def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
@@ -496,38 +510,44 @@ def build_cpg_props_df(
     ValueError
         Raised when required source tables are missing.
     """
-    ctx = session_runtime.ctx
-    resolved_options = options or CpgPropOptions()
-    source_columns_lookup = _source_columns_lookup_df(session_runtime)
-    prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
-    prop_specs.append(scip_role_flag_prop_spec())
-    prop_specs.append(edge_prop_spec())
+    with stage_span(
+        "cpg.props",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_props_v1"},
+    ):
+        ctx = session_runtime.ctx
+        resolved_options = options or CpgPropOptions()
+        source_columns_lookup = _source_columns_lookup_df(session_runtime)
+        prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
+        prop_specs.append(scip_role_flag_prop_spec())
+        prop_specs.append(edge_prop_spec())
 
-    frames: list[DataFrame] = []
-    for spec in prop_specs:
-        try:
-            source_df = ctx.table(spec.table_ref)
-        except KeyError as exc:
-            msg = f"Missing required source table {spec.table_ref!r} for CPG props."
-            raise ValueError(msg) from exc
+        frames: list[DataFrame] = []
+        for spec in prop_specs:
+            try:
+                source_df = ctx.table(spec.table_ref)
+            except KeyError as exc:
+                msg = f"Missing required source table {spec.table_ref!r} for CPG props."
+                raise ValueError(msg) from exc
 
-        prop_df = _emit_props_df(
-            source_df,
-            spec=spec,
-            options=resolved_options,
-            task_identity=task_identity,
-        )
-        if prop_df is not None:
-            frames.append(prop_df)
+            prop_df = _emit_props_df(
+                source_df,
+                spec=spec,
+                options=resolved_options,
+                task_identity=task_identity,
+            )
+            if prop_df is not None:
+                frames.append(prop_df)
 
-    if not frames:
-        return _empty_props_df(ctx)
+        if not frames:
+            return _empty_props_df(ctx)
 
-    combined = frames[0]
-    for frame in frames[1:]:
-        combined = combined.union(frame)
+        combined = frames[0]
+        for frame in frames[1:]:
+            combined = combined.union(frame)
 
-    return combined.select(*_PROP_OUTPUT_COLUMNS)
+        return combined.select(*_PROP_OUTPUT_COLUMNS)
 
 
 def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
@@ -538,28 +558,34 @@ def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
     DataFrame
         Aggregated property map rows keyed by entity.
     """
-    ctx = session_runtime.ctx
-    df = ctx.table("cpg_props_v1")
-    value_struct = f.named_struct(
-        [
-            ("value_type", col("value_type")),
-            ("value_string", col("value_string")),
-            ("value_int", col("value_int")),
-            ("value_float", col("value_float")),
-            ("value_bool", col("value_bool")),
-            ("value_json", col("value_json")),
-        ]
-    )
-    entry = f.named_struct(
-        [
-            ("prop_key", col("prop_key")),
-            ("value", value_struct),
-        ]
-    )
-    return df.aggregate(
-        [col("entity_kind"), col("entity_id"), col("node_kind")],
-        [f.array_agg(entry).alias("props")],
-    )
+    with stage_span(
+        "cpg.props_map",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_props_map_v1"},
+    ):
+        ctx = session_runtime.ctx
+        df = ctx.table("cpg_props_v1")
+        value_struct = f.named_struct(
+            [
+                ("value_type", col("value_type")),
+                ("value_string", col("value_string")),
+                ("value_int", col("value_int")),
+                ("value_float", col("value_float")),
+                ("value_bool", col("value_bool")),
+                ("value_json", col("value_json")),
+            ]
+        )
+        entry = f.named_struct(
+            [
+                ("prop_key", col("prop_key")),
+                ("value", value_struct),
+            ]
+        )
+        return df.aggregate(
+            [col("entity_kind"), col("entity_id"), col("node_kind")],
+            [f.array_agg(entry).alias("props")],
+        )
 
 
 def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
@@ -570,29 +596,35 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
     DataFrame
         Aggregated adjacency rows keyed by source node.
     """
-    ctx = session_runtime.ctx
-    df = ctx.table("cpg_edges_v1")
-    entry = f.named_struct(
-        [
-            ("edge_id", col("edge_id")),
-            ("edge_kind", col("edge_kind")),
-            ("dst_node_id", col("dst_node_id")),
-            ("path", col("path")),
-            ("bstart", col("bstart")),
-            ("bend", col("bend")),
-            ("origin", col("origin")),
-            ("resolution_method", col("resolution_method")),
-            ("confidence", col("confidence")),
-            ("score", col("score")),
-            ("symbol_roles", col("symbol_roles")),
-            ("qname_source", col("qname_source")),
-            ("ambiguity_group_id", col("ambiguity_group_id")),
-        ]
-    )
-    return df.aggregate(
-        [col("src_node_id")],
-        [f.array_agg(entry).alias("edges")],
-    )
+    with stage_span(
+        "cpg.edges_by_src",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_edges_by_src_v1"},
+    ):
+        ctx = session_runtime.ctx
+        df = ctx.table("cpg_edges_v1")
+        entry = f.named_struct(
+            [
+                ("edge_id", col("edge_id")),
+                ("edge_kind", col("edge_kind")),
+                ("dst_node_id", col("dst_node_id")),
+                ("path", col("path")),
+                ("bstart", col("bstart")),
+                ("bend", col("bend")),
+                ("origin", col("origin")),
+                ("resolution_method", col("resolution_method")),
+                ("confidence", col("confidence")),
+                ("score", col("score")),
+                ("symbol_roles", col("symbol_roles")),
+                ("qname_source", col("qname_source")),
+                ("ambiguity_group_id", col("ambiguity_group_id")),
+            ]
+        )
+        return df.aggregate(
+            [col("src_node_id")],
+            [f.array_agg(entry).alias("edges")],
+        )
 
 
 def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
@@ -603,29 +635,35 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
     DataFrame
         Aggregated adjacency rows keyed by destination node.
     """
-    ctx = session_runtime.ctx
-    df = ctx.table("cpg_edges_v1")
-    entry = f.named_struct(
-        [
-            ("edge_id", col("edge_id")),
-            ("edge_kind", col("edge_kind")),
-            ("src_node_id", col("src_node_id")),
-            ("path", col("path")),
-            ("bstart", col("bstart")),
-            ("bend", col("bend")),
-            ("origin", col("origin")),
-            ("resolution_method", col("resolution_method")),
-            ("confidence", col("confidence")),
-            ("score", col("score")),
-            ("symbol_roles", col("symbol_roles")),
-            ("qname_source", col("qname_source")),
-            ("ambiguity_group_id", col("ambiguity_group_id")),
-        ]
-    )
-    return df.aggregate(
-        [col("dst_node_id")],
-        [f.array_agg(entry).alias("edges")],
-    )
+    with stage_span(
+        "cpg.edges_by_dst",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_edges_by_dst_v1"},
+    ):
+        ctx = session_runtime.ctx
+        df = ctx.table("cpg_edges_v1")
+        entry = f.named_struct(
+            [
+                ("edge_id", col("edge_id")),
+                ("edge_kind", col("edge_kind")),
+                ("src_node_id", col("src_node_id")),
+                ("path", col("path")),
+                ("bstart", col("bstart")),
+                ("bend", col("bend")),
+                ("origin", col("origin")),
+                ("resolution_method", col("resolution_method")),
+                ("confidence", col("confidence")),
+                ("score", col("score")),
+                ("symbol_roles", col("symbol_roles")),
+                ("qname_source", col("qname_source")),
+                ("ambiguity_group_id", col("ambiguity_group_id")),
+            ]
+        )
+        return df.aggregate(
+            [col("dst_node_id")],
+            [f.array_agg(entry).alias("edges")],
+        )
 
 
 def _emit_props_df(

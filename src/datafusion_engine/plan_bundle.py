@@ -25,6 +25,8 @@ from datafusion_engine.delta_store_policy import (
 from datafusion_engine.plan_cache import PlanCacheEntry
 from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from obs.otel.scopes import SCOPE_PLANNING
+from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaInputPin, JsonValue, PlanArtifacts, PlanProtoStatus
 from serde_msgspec import dumps_msgpack, encode_json_into, to_builtins
 from serde_msgspec_ext import (
@@ -307,39 +309,45 @@ def build_plan_bundle(
     ValueError
         Raised when session runtime information is unavailable or Substrait is disabled.
     """
-    resolved = options or PlanBundleOptions()
-    if not resolved.compute_substrait:
-        msg = "Substrait bytes are required for plan bundle construction."
-        raise ValueError(msg)
-    if resolved.session_runtime is None:
-        msg = "SessionRuntime is required for plan bundle construction."
-        raise ValueError(msg)
-    components = _bundle_components(
-        ctx,
-        df,
-        options=resolved,
-    )
+    with stage_span(
+        "planning.plan_bundle",
+        stage="planning",
+        scope_name=SCOPE_PLANNING,
+        attributes={"codeanatomy.plan_kind": "bundle"},
+    ):
+        resolved = options or PlanBundleOptions()
+        if not resolved.compute_substrait:
+            msg = "Substrait bytes are required for plan bundle construction."
+            raise ValueError(msg)
+        if resolved.session_runtime is None:
+            msg = "SessionRuntime is required for plan bundle construction."
+            raise ValueError(msg)
+        components = _bundle_components(
+            ctx,
+            df,
+            options=resolved,
+        )
 
-    bundle = DataFusionPlanBundle(
-        df=df,
-        logical_plan=components.logical,
-        optimized_logical_plan=components.optimized,
-        execution_plan=components.execution,
-        substrait_bytes=components.substrait_bytes,
-        plan_fingerprint=components.fingerprint,
-        artifacts=components.artifacts,
-        delta_inputs=components.merged_delta_inputs,
-        scan_units=components.scan_units,
-        plan_identity_hash=components.plan_identity_hash,
-        required_udfs=components.required_udfs,
-        required_rewrite_tags=components.required_rewrite_tags,
-        plan_details=components.plan_details,
-    )
-    _store_plan_cache_entry(
-        bundle=bundle,
-        runtime_profile=resolved.session_runtime.profile,
-    )
-    return bundle
+        bundle = DataFusionPlanBundle(
+            df=df,
+            logical_plan=components.logical,
+            optimized_logical_plan=components.optimized,
+            execution_plan=components.execution,
+            substrait_bytes=components.substrait_bytes,
+            plan_fingerprint=components.fingerprint,
+            artifacts=components.artifacts,
+            delta_inputs=components.merged_delta_inputs,
+            scan_units=components.scan_units,
+            plan_identity_hash=components.plan_identity_hash,
+            required_udfs=components.required_udfs,
+            required_rewrite_tags=components.required_rewrite_tags,
+            plan_details=components.plan_details,
+        )
+        _store_plan_cache_entry(
+            bundle=bundle,
+            runtime_profile=resolved.session_runtime.profile,
+        )
+        return bundle
 
 
 def _store_plan_cache_entry(

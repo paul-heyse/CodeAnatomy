@@ -38,6 +38,8 @@ from extract.repo_scan_fs import iter_repo_files_fs
 from extract.repo_scan_pygit2 import iter_repo_files_pygit2
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -371,27 +373,50 @@ def scan_repo(
     TableLike | RecordBatchReaderLike
         Repo file metadata output.
     """
-    normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
-    exec_context = context or ExtractExecutionContext()
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(
-        options=normalized_options,
-        repo_id=normalized_options.repo_id,
-    )
-    max_files = normalized_options.max_files
-    if max_files is not None and max_files <= 0:
-        empty_plan = extract_plan_from_rows(
-            "repo_files_v1",
-            [],
-            session=session,
-            options=ExtractPlanOptions(normalize=normalize),
+    with stage_span(
+        "extract.repo_scan",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={
+            "codeanatomy.extractor": "repo_scan",
+            "codeanatomy.repo_root": str(repo_root),
+            "codeanatomy.prefer_reader": prefer_reader,
+        },
+    ):
+        normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
+        exec_context = context or ExtractExecutionContext()
+        session = exec_context.ensure_session()
+        exec_context = replace(exec_context, session=session)
+        runtime_profile = exec_context.ensure_runtime_profile()
+        determinism_tier = exec_context.determinism_tier()
+        normalize = ExtractNormalizeOptions(
+            options=normalized_options,
+            repo_id=normalized_options.repo_id,
         )
+        max_files = normalized_options.max_files
+        if max_files is not None and max_files <= 0:
+            empty_plan = extract_plan_from_rows(
+                "repo_files_v1",
+                [],
+                session=session,
+                options=ExtractPlanOptions(normalize=normalize),
+            )
+            return materialize_extract_plan(
+                "repo_files_v1",
+                empty_plan,
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    prefer_reader=prefer_reader,
+                    apply_post_kernels=True,
+                ),
+            )
+
+        plan = scan_repo_plan(repo_root, options=normalized_options, session=session)
         return materialize_extract_plan(
             "repo_files_v1",
-            empty_plan,
+            plan,
             runtime_profile=runtime_profile,
             determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
@@ -400,19 +425,6 @@ def scan_repo(
                 apply_post_kernels=True,
             ),
         )
-
-    plan = scan_repo_plan(repo_root, options=normalized_options, session=session)
-    return materialize_extract_plan(
-        "repo_files_v1",
-        plan,
-        runtime_profile=runtime_profile,
-        determinism_tier=determinism_tier,
-        options=ExtractMaterializeOptions(
-            normalize=normalize,
-            prefer_reader=prefer_reader,
-            apply_post_kernels=True,
-        ),
-    )
 
 
 def scan_repo_plan(

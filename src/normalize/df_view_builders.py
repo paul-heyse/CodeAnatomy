@@ -34,6 +34,8 @@ from datafusion_engine.plan_bundle import (
 )
 from datafusion_engine.runtime import SessionRuntime
 from datafusion_engine.sql_guard import safe_sql
+from obs.otel.scopes import SCOPE_NORMALIZE
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -77,8 +79,14 @@ def _bundle_builder(builder: DataFrameBuilder) -> PlanBundleBuilder:
     """
 
     def _build(session_runtime: SessionRuntime) -> DataFusionPlanBundle:
-        df = builder(session_runtime.ctx)
-        return _plan_bundle_from_df(df, session_runtime=session_runtime)
+        with stage_span(
+            "normalize.view_builder",
+            stage="normalize",
+            scope_name=SCOPE_NORMALIZE,
+            attributes={"codeanatomy.view_builder": builder.__name__},
+        ):
+            df = builder(session_runtime.ctx)
+            return _plan_bundle_from_df(df, session_runtime=session_runtime)
 
     return _build
 

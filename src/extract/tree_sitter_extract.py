@@ -47,6 +47,8 @@ from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
@@ -1524,42 +1526,48 @@ def extract_ts_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted tree-sitter outputs keyed by output name.
     """
-    repo_files = kwargs["repo_files"]
-    normalized_options = normalize_options(
-        "tree_sitter",
-        kwargs.get("options"),
-        TreeSitterExtractOptions,
-    )
-    normalized_options = _normalize_ts_options(normalized_options)
-    context = kwargs.get("context")
-    if context is None:
-        context = ExtractExecutionContext(
-            file_contexts=kwargs.get("file_contexts"),
-            evidence_plan=kwargs.get("evidence_plan"),
-            session=kwargs.get("session"),
-            profile=kwargs.get("profile", "default"),
+    with stage_span(
+        "extract.tree_sitter_tables",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={"codeanatomy.extractor": "tree_sitter"},
+    ):
+        repo_files = kwargs["repo_files"]
+        normalized_options = normalize_options(
+            "tree_sitter",
+            kwargs.get("options"),
+            TreeSitterExtractOptions,
         )
-    session = context.ensure_session()
-    context = replace(context, session=session)
-    runtime_profile = context.ensure_runtime_profile()
-    determinism_tier = context.determinism_tier()
-    prefer_reader = kwargs.get("prefer_reader", False)
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    plans = extract_ts_plans(
-        repo_files,
-        options=normalized_options,
-        context=context,
-    )
-    return {
-        "tree_sitter_files": materialize_extract_plan(
-            "tree_sitter_files_v1",
-            plans["tree_sitter_files"],
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=True,
+        normalized_options = _normalize_ts_options(normalized_options)
+        context = kwargs.get("context")
+        if context is None:
+            context = ExtractExecutionContext(
+                file_contexts=kwargs.get("file_contexts"),
+                evidence_plan=kwargs.get("evidence_plan"),
+                session=kwargs.get("session"),
+                profile=kwargs.get("profile", "default"),
+            )
+        session = context.ensure_session()
+        context = replace(context, session=session)
+        runtime_profile = context.ensure_runtime_profile()
+        determinism_tier = context.determinism_tier()
+        prefer_reader = kwargs.get("prefer_reader", False)
+        normalize = ExtractNormalizeOptions(options=normalized_options)
+        plans = extract_ts_plans(
+            repo_files,
+            options=normalized_options,
+            context=context,
+        )
+        return {
+            "tree_sitter_files": materialize_extract_plan(
+                "tree_sitter_files_v1",
+                plans["tree_sitter_files"],
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    prefer_reader=prefer_reader,
+                    apply_post_kernels=True,
+                ),
             ),
-        ),
-    }
+        }

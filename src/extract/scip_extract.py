@@ -33,6 +33,8 @@ from extract.helpers import (
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
 from extract.session import ExtractSession, build_extract_session
 from extract.string_utils import normalize_string_items
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_policy import SchemaPolicy
@@ -267,46 +269,55 @@ def run_scip_python_index(
     FileNotFoundError
         Raised when the output file is not found after execution.
     """
-    repo_root = opts.repo_root.resolve()
-    out = opts.output_path or (repo_root / "build" / "scip" / "index.scip")
-    if not out.is_absolute():
-        out = repo_root / out
-    out.parent.mkdir(parents=True, exist_ok=True)
+    with stage_span(
+        "extract.scip_index",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={
+            "codeanatomy.extractor": "scip_python",
+            "codeanatomy.repo_root": str(opts.repo_root),
+        },
+    ):
+        repo_root = opts.repo_root.resolve()
+        out = opts.output_path or (repo_root / "build" / "scip" / "index.scip")
+        if not out.is_absolute():
+            out = repo_root / out
+        out.parent.mkdir(parents=True, exist_ok=True)
 
-    env_json = opts.environment_json
-    if env_json is not None and not env_json.is_absolute():
-        env_json = repo_root / env_json
+        env_json = opts.environment_json
+        if env_json is not None and not env_json.is_absolute():
+            env_json = repo_root / env_json
 
-    cmd = _scip_index_command(opts, out=out, env_json=env_json)
-    env = _node_options_env(opts.node_max_old_space_mb)
+        cmd = _scip_index_command(opts, out=out, env_json=env_json)
+        env = _node_options_env(opts.node_max_old_space_mb)
 
-    start = time.monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=opts.timeout_s,
-    )
-    report = ScipIndexRunReport(
-        command=tuple(cmd),
-        returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
-        duration_s=time.monotonic() - start,
-    )
-    if on_complete is not None:
-        on_complete(report)
-    if proc.returncode != 0:
-        msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
-        raise RuntimeError(msg)
+        start = time.monotonic()
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=opts.timeout_s,
+        )
+        report = ScipIndexRunReport(
+            command=tuple(cmd),
+            returncode=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+            duration_s=time.monotonic() - start,
+        )
+        if on_complete is not None:
+            on_complete(report)
+        if proc.returncode != 0:
+            msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
+            raise RuntimeError(msg)
 
-    if not out.exists():
-        msg = f"scip-python reported success but output not found: {out}"
-        raise FileNotFoundError(msg)
-    return out
+        if not out.exists():
+            msg = f"scip-python reported success but output not found: {out}"
+            raise FileNotFoundError(msg)
+        return out
 
 
 def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | None:
@@ -1362,48 +1373,58 @@ def extract_scip_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted SCIP outputs keyed by output name.
     """
-    options = options or ScipExtractOptions()
-    normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
-    evidence_plan = options.evidence_plan
-    session = context.ensure_session()
-    runtime_profile = context.ensure_runtime_profile()
-    determinism_tier = session.engine_session.surface_policy.determinism_tier
-    resolved = _resolve_scip_index(context, normalized_opts, runtime_profile)
-    if resolved is not None and _should_stream_outputs(
-        resolved.index_path, options=options, prefer_reader=prefer_reader
+    with stage_span(
+        "extract.scip_tables",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={
+            "codeanatomy.extractor": "scip_tables",
+            "codeanatomy.repo_root": context.repo_root,
+            "codeanatomy.prefer_reader": prefer_reader,
+        },
     ):
-        return _extract_scip_tables_streaming(resolved, options)
-    if resolved is not None:
-        return _extract_scip_tables_in_memory(
-            resolved,
-            options,
-            evidence_plan=evidence_plan,
-            session=session,
-            prefer_reader=prefer_reader,
-        )
-    dataset_names = tuple(dataset for _, dataset in SCIP_OUTPUT_DATASETS)
-    normalize = ExtractNormalizeOptions(options=normalized_opts)
-    plans = {
-        dataset: _build_scip_plan(
-            dataset,
-            (),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            session=session,
-        )
-        for dataset in dataset_names
-    }
-    return {
-        output: materialize_extract_plan(
-            dataset,
-            plans[dataset],
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
+        options = options or ScipExtractOptions()
+        normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
+        evidence_plan = options.evidence_plan
+        session = context.ensure_session()
+        runtime_profile = context.ensure_runtime_profile()
+        determinism_tier = session.engine_session.surface_policy.determinism_tier
+        resolved = _resolve_scip_index(context, normalized_opts, runtime_profile)
+        if resolved is not None and _should_stream_outputs(
+            resolved.index_path, options=options, prefer_reader=prefer_reader
+        ):
+            return _extract_scip_tables_streaming(resolved, options)
+        if resolved is not None:
+            return _extract_scip_tables_in_memory(
+                resolved,
+                options,
+                evidence_plan=evidence_plan,
+                session=session,
                 prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        )
-        for output, dataset in SCIP_OUTPUT_DATASETS
-    }
+            )
+        dataset_names = tuple(dataset for _, dataset in SCIP_OUTPUT_DATASETS)
+        normalize = ExtractNormalizeOptions(options=normalized_opts)
+        plans = {
+            dataset: _build_scip_plan(
+                dataset,
+                (),
+                normalize=normalize,
+                evidence_plan=evidence_plan,
+                session=session,
+            )
+            for dataset in dataset_names
+        }
+        return {
+            output: materialize_extract_plan(
+                dataset,
+                plans[dataset],
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    prefer_reader=prefer_reader,
+                    apply_post_kernels=False,
+                ),
+            )
+            for output, dataset in SCIP_OUTPUT_DATASETS
+        }

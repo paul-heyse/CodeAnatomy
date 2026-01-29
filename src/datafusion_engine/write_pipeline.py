@@ -39,6 +39,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+import msgspec
 import pyarrow as pa
 from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions, col
 from datafusion.dataframe import DataFrame
@@ -56,7 +57,7 @@ from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
-from serde_msgspec import convert
+from serde_msgspec import convert, convert_from_attributes
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -1682,6 +1683,11 @@ def _delta_write_policy_override(options: Mapping[str, object]) -> DeltaWritePol
     if isinstance(raw, Mapping):
         payload = dict(raw)
         return convert(payload, target_type=DeltaWritePolicy, strict=True)
+    if raw is not None:
+        try:
+            return convert_from_attributes(raw, target_type=DeltaWritePolicy, strict=True)
+        except msgspec.ValidationError:
+            return None
     return None
 
 
@@ -1693,6 +1699,11 @@ def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaP
         return raw
     if isinstance(raw, Mapping):
         return convert(dict(raw), target_type=DeltaSchemaPolicy, strict=True)
+    if raw is not None:
+        try:
+            return convert_from_attributes(raw, target_type=DeltaSchemaPolicy, strict=True)
+        except msgspec.ValidationError:
+            return None
     return None
 
 

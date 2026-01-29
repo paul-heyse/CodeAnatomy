@@ -7,12 +7,19 @@ from typing import Annotated, Any, Literal
 
 import msgspec
 
+from core_types import (
+    EVENT_KIND_PATTERN,
+    HASH_PATTERN,
+    IDENTIFIER_PATTERN,
+    RUN_ID_PATTERN,
+    STATUS_PATTERN,
+)
 from datafusion_engine.delta_protocol import (
     DeltaFeatureGate,
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
 )
-from serde_msgspec import StructBaseCompat, dumps_msgpack
+from serde_msgspec import StructBaseCompat, StructBaseHotPath, dumps_msgpack
 from serde_msgspec_ext import (
     ExecutionPlanProtoBytes,
     LogicalPlanProtoBytes,
@@ -25,38 +32,138 @@ type JsonValue = Any
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 NonNegFloat = Annotated[float, msgspec.Meta(ge=0)]
-NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
+NonEmptyStr = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Non-empty String",
+        description="Non-empty string value.",
+        examples=["value"],
+    ),
+]
+HashValue = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Hash Value",
+        description="Deterministic hash value.",
+        examples=["sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"],
+    ),
+]
+PlanSignature = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Plan Signature",
+        description="Deterministic plan signature string.",
+        examples=["sig_01HZX4J3C8F8M2KQ"],
+    ),
+]
+CachePolicyName = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Cache Policy",
+        description="Cache policy identifier.",
+        examples=["prefer_cache"],
+    ),
+]
+StatsPolicyName = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Stats Policy",
+        description="Delta stats policy identifier.",
+        examples=["auto"],
+    ),
+]
 PlanFingerprint = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Deterministic plan fingerprint for reproducibility."),
+    msgspec.Meta(
+        min_length=32,
+        max_length=128,
+        pattern=HASH_PATTERN,
+        title="Plan Fingerprint",
+        description="Deterministic plan fingerprint for reproducibility.",
+        examples=["4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"],
+    ),
 ]
 PlanIdentityHash = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Deterministic plan identity hash for artifact rows."),
+    msgspec.Meta(
+        min_length=32,
+        max_length=128,
+        pattern=HASH_PATTERN,
+        title="Plan Identity Hash",
+        description="Deterministic plan identity hash for artifact rows.",
+        examples=["9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"],
+    ),
 ]
 ProfileName = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Runtime profile name."),
+    msgspec.Meta(
+        min_length=1,
+        max_length=128,
+        pattern=IDENTIFIER_PATTERN,
+        title="Profile Name",
+        description="Runtime profile name.",
+        examples=["default", "prod_primary"],
+    ),
 ]
 DatasetName = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Dataset identifier."),
+    msgspec.Meta(
+        min_length=1,
+        max_length=128,
+        pattern=IDENTIFIER_PATTERN,
+        title="Dataset Name",
+        description="Dataset identifier.",
+        examples=["cpg_nodes", "analytics.events_v2"],
+    ),
 ]
 ViewName = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="View name."),
+    msgspec.Meta(
+        min_length=1,
+        max_length=128,
+        pattern=IDENTIFIER_PATTERN,
+        title="View Name",
+        description="View name.",
+        examples=["example_view", "analytics.view_summary"],
+    ),
 ]
 RunId = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Unique run identifier."),
+    msgspec.Meta(
+        min_length=8,
+        max_length=64,
+        pattern=RUN_ID_PATTERN,
+        title="Run Id",
+        description="Unique identifier for a pipeline run.",
+        examples=["run_01HZX4J3C8F8M2KQ"],
+    ),
 ]
 EventKind = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Artifact event kind identifier."),
+    msgspec.Meta(
+        min_length=1,
+        max_length=64,
+        pattern=EVENT_KIND_PATTERN,
+        title="Event Kind",
+        description="Artifact event kind identifier.",
+        examples=["plan", "execution", "write"],
+    ),
 ]
 ArtifactStatus = Annotated[
     str,
-    msgspec.Meta(min_length=1, description="Artifact status value."),
+    msgspec.Meta(
+        min_length=1,
+        max_length=32,
+        pattern=STATUS_PATTERN,
+        title="Artifact Status",
+        description="Artifact status value.",
+        examples=["ok", "error"],
+    ),
 ]
 
 
@@ -69,17 +176,17 @@ class PlanArtifacts(StructBaseCompat, frozen=True):
     explain_analyze_output_rows: NonNegInt | None
     df_settings: dict[str, str]
     planning_env_snapshot: dict[str, JsonValue]
-    planning_env_hash: str
+    planning_env_hash: HashValue
     rulepack_snapshot: dict[str, JsonValue] | None
-    rulepack_hash: str | None
+    rulepack_hash: HashValue | None
     information_schema_snapshot: dict[str, JsonValue]
-    information_schema_hash: str
+    information_schema_hash: HashValue
     substrait_validation: dict[str, JsonValue] | None
     logical_plan_proto: LogicalPlanProtoBytes | None
     optimized_plan_proto: OptimizedPlanProtoBytes | None
     execution_plan_proto: ExecutionPlanProtoBytes | None
-    udf_snapshot_hash: str
-    function_registry_hash: str
+    udf_snapshot_hash: HashValue
+    function_registry_hash: HashValue
     function_registry_snapshot: dict[str, JsonValue]
     rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
@@ -99,7 +206,7 @@ class DeltaStatsDecision(StructBaseCompat, frozen=True):
     """Resolved stats decision for a Delta write."""
 
     dataset_name: DatasetName
-    stats_policy: NonEmptyStr
+    stats_policy: StatsPolicyName
     stats_columns: tuple[str, ...] | None
     lineage_columns: tuple[str, ...]
     partition_by: tuple[str, ...] = ()
@@ -107,11 +214,11 @@ class DeltaStatsDecision(StructBaseCompat, frozen=True):
     stats_max_columns: NonNegInt | None = None
 
 
-class ViewCacheArtifact(StructBaseCompat, frozen=True):
+class ViewCacheArtifact(StructBaseHotPath, frozen=True):
     """Cache materialization artifact for view registration."""
 
     view_name: ViewName
-    cache_policy: NonEmptyStr
+    cache_policy: CachePolicyName
     cache_path: str | None
     plan_fingerprint: PlanFingerprint | None
     status: ArtifactStatus
@@ -171,19 +278,19 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     view_name: ViewName
     plan_fingerprint: PlanFingerprint
     plan_identity_hash: PlanIdentityHash
-    udf_snapshot_hash: str
-    function_registry_hash: str
+    udf_snapshot_hash: HashValue
+    function_registry_hash: HashValue
     required_udfs: tuple[str, ...]
     required_rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
     delta_inputs_msgpack: bytes
     df_settings: dict[str, str]
     planning_env_msgpack: bytes
-    planning_env_hash: str
+    planning_env_hash: HashValue
     rulepack_msgpack: bytes | None
-    rulepack_hash: str | None
+    rulepack_hash: HashValue | None
     information_schema_msgpack: bytes
-    information_schema_hash: str
+    information_schema_hash: HashValue
     substrait_msgpack: bytes | None
     logical_plan_proto_msgpack: bytes | None
     optimized_plan_proto_msgpack: bytes | None
@@ -272,13 +379,13 @@ class WriteArtifactRow(StructBaseCompat, frozen=True):
     delta_version: int | None
     commit_app_id: str | None
     commit_version: int | None
-    commit_run_id: str | None
-    delta_write_policy_msgpack: bytes
-    delta_schema_policy_msgpack: bytes
+    commit_run_id: RunId | None
+    delta_write_policy_msgpack: msgspec.Raw
+    delta_schema_policy_msgpack: msgspec.Raw
     partition_by: tuple[str, ...]
     table_properties: dict[str, str]
     commit_metadata: dict[str, str]
-    delta_stats_decision_msgpack: bytes
+    delta_stats_decision_msgpack: msgspec.Raw
     duration_ms: NonNegFloat | None
     row_count: NonNegInt | None
     status: str | None
@@ -305,12 +412,12 @@ class WriteArtifactRow(StructBaseCompat, frozen=True):
             "commit_app_id": self.commit_app_id,
             "commit_version": self.commit_version,
             "commit_run_id": self.commit_run_id,
-            "delta_write_policy_msgpack": self.delta_write_policy_msgpack,
-            "delta_schema_policy_msgpack": self.delta_schema_policy_msgpack,
+            "delta_write_policy_msgpack": bytes(self.delta_write_policy_msgpack),
+            "delta_schema_policy_msgpack": bytes(self.delta_schema_policy_msgpack),
             "partition_by": list(self.partition_by),
             "table_properties": dict(self.table_properties),
             "commit_metadata": dict(self.commit_metadata),
-            "delta_stats_decision_msgpack": self.delta_stats_decision_msgpack,
+            "delta_stats_decision_msgpack": bytes(self.delta_stats_decision_msgpack),
             "duration_ms": self.duration_ms,
             "row_count": self.row_count,
             "status": self.status,
@@ -322,7 +429,7 @@ class SubstraitPayload(StructBaseCompat, frozen=True):
     """Named wrapper for Substrait bytes payloads."""
 
     payload: SubstraitBytes
-    fingerprint: str
+    fingerprint: HashValue
 
 
 class ViewArtifactPayload(StructBaseCompat, frozen=True):
@@ -330,7 +437,7 @@ class ViewArtifactPayload(StructBaseCompat, frozen=True):
 
     name: ViewName
     plan_fingerprint: PlanFingerprint
-    plan_task_signature: str
+    plan_task_signature: PlanSignature
     schema: dict[str, JsonValue]
     schema_describe: tuple[dict[str, JsonValue], ...]
     schema_provenance: dict[str, JsonValue]
@@ -343,11 +450,11 @@ class RuntimeProfileSnapshot(StructBaseCompat, frozen=True):
 
     version: NonNegInt
     name: ProfileName
-    determinism_tier: str
-    datafusion_settings_hash: str
+    determinism_tier: NonEmptyStr
+    datafusion_settings_hash: HashValue
     datafusion_settings: dict[str, str]
     telemetry_payload: dict[str, JsonValue]
-    profile_hash: str
+    profile_hash: HashValue
 
     def payload(self) -> dict[str, object]:
         """Return the snapshot payload for serialization.
@@ -371,24 +478,24 @@ class RuntimeProfileSnapshot(StructBaseCompat, frozen=True):
 class IncrementalMetadataSnapshot(StructBaseCompat, frozen=True):
     """Snapshot payload for incremental runtime metadata."""
 
-    datafusion_settings_hash: str
-    runtime_profile_hash: str
+    datafusion_settings_hash: HashValue
+    runtime_profile_hash: HashValue
     runtime_profile: RuntimeProfileSnapshot
 
 
-class RunManifest(StructBaseCompat, frozen=True):
+class RunManifest(StructBaseHotPath, frozen=True):
     """Canonical run manifest payload for deterministic outputs."""
 
     run_id: RunId
     status: ArtifactStatus
     event_time_unix_ms: NonNegInt
-    plan_signature: str | None
-    plan_fingerprints: dict[str, str]
+    plan_signature: PlanSignature | None
+    plan_fingerprints: dict[str, PlanFingerprint]
     delta_inputs: tuple[dict[str, JsonValue], ...]
     outputs: tuple[dict[str, JsonValue], ...]
     runtime_profile_name: ProfileName | None
-    runtime_profile_hash: str | None
-    determinism_tier: str | None
+    runtime_profile_hash: HashValue | None
+    determinism_tier: NonEmptyStr | None
     output_dir: str | None
     artifact_ids: dict[str, str] | None = None
     cache_path: str | None = None
@@ -418,7 +525,7 @@ class ExtractErrorsArtifact(StructBaseCompat, frozen=True):
     error_count: NonNegInt
 
 
-class ArtifactEnvelopeBase(StructBaseCompat, frozen=True, tag=True, tag_field="kind"):
+class ArtifactEnvelopeBase(StructBaseHotPath, frozen=True, tag=True, tag_field="kind"):
     """Tagged envelope for artifact payload streams."""
 
 
@@ -446,8 +553,8 @@ class PlanScheduleArtifact(StructBaseCompat, frozen=True):
     """Schedule artifact for deterministic plan scheduling."""
 
     run_id: RunId
-    plan_signature: str
-    reduced_plan_signature: str
+    plan_signature: PlanSignature
+    reduced_plan_signature: PlanSignature
     task_count: NonNegInt
     ordered_tasks: tuple[str, ...]
     generations: tuple[tuple[str, ...], ...]
@@ -472,8 +579,8 @@ class PlanValidationArtifact(StructBaseCompat, frozen=True):
     """Validation artifact for plan evidence edges."""
 
     run_id: RunId
-    plan_signature: str
-    reduced_plan_signature: str
+    plan_signature: PlanSignature
+    reduced_plan_signature: PlanSignature
     total_tasks: NonNegInt
     valid_tasks: NonNegInt
     invalid_tasks: NonNegInt

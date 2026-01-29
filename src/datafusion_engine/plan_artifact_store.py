@@ -6,7 +6,7 @@ import contextlib
 import hashlib
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,8 +24,10 @@ from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRo
 from serde_msgspec import (
     StructBaseCompat,
     convert,
+    decode_json_lines,
     dumps_msgpack,
     encode_json_into,
+    ensure_raw,
     to_builtins,
     validation_error_payload,
 )
@@ -131,6 +133,13 @@ class HamiltonEventRow:
         }
 
 
+class HamiltonEventLine(StructBaseCompat, frozen=True):
+    """Typed line entry for NDJSON Hamilton event ingestion."""
+
+    event_name: str
+    payload: object
+
+
 def ensure_plan_artifacts_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -192,8 +201,25 @@ class HamiltonEventsRequest:
     run_id: str
     plan_signature: str
     reduced_plan_signature: str
-    events_snapshot: Mapping[str, Sequence[object]]
+    events_snapshot: Mapping[str, Sequence[object]] = field(default_factory=dict)
     event_names: Sequence[str] | None = None
+    events_ndjson: bytes | None = None
+
+
+def _events_snapshot_as_lists(
+    snapshot: Mapping[str, Sequence[object]],
+) -> dict[str, list[object]]:
+    """Convert event snapshot mappings into list-backed payloads.
+
+    Returns
+    -------
+    dict[str, list[object]]
+        Normalized snapshot entries with mutable payload lists.
+    """
+    normalized: dict[str, list[object]] = {}
+    for event_name, payloads in snapshot.items():
+        normalized[event_name] = list(payloads)
+    return normalized
 
 
 def persist_plan_artifacts_for_views(
@@ -518,16 +544,16 @@ def persist_write_artifact(
         commit_app_id=request.commit_app_id,
         commit_version=request.commit_version,
         commit_run_id=request.commit_run_id,
-        delta_write_policy_msgpack=_msgpack_payload(
+        delta_write_policy_msgpack=_msgpack_payload_raw(
             request.delta_write_policy if request.delta_write_policy is not None else {}
         ),
-        delta_schema_policy_msgpack=_msgpack_payload(
+        delta_schema_policy_msgpack=_msgpack_payload_raw(
             request.delta_schema_policy if request.delta_schema_policy is not None else {}
         ),
         partition_by=tuple(request.partition_by),
         table_properties=dict(request.table_properties) if request.table_properties else {},
         commit_metadata=dict(request.commit_metadata) if request.commit_metadata else {},
-        delta_stats_decision_msgpack=_msgpack_payload(
+        delta_stats_decision_msgpack=_msgpack_payload_raw(
             request.stats_decision if request.stats_decision is not None else {}
         ),
         duration_ms=request.duration_ms,
@@ -670,7 +696,11 @@ def persist_hamilton_events(
     location = ensure_hamilton_events_table(ctx, profile)
     if location is None:
         return ()
-    events_snapshot = request.events_snapshot
+    events_snapshot = _events_snapshot_as_lists(request.events_snapshot)
+    if request.events_ndjson is not None:
+        decoded = decode_json_lines(request.events_ndjson, target_type=HamiltonEventLine)
+        for line in decoded:
+            events_snapshot.setdefault(line.event_name, []).append(line.payload)
     names = (
         tuple(request.event_names)
         if request.event_names is not None
@@ -1375,10 +1405,14 @@ def _msgpack_payload(payload: object) -> bytes:
     return dumps_msgpack(to_builtins(payload, str_keys=True))
 
 
+def _msgpack_payload_raw(payload: object) -> msgspec.Raw:
+    return ensure_raw(dumps_msgpack(to_builtins(payload, str_keys=True)))
+
+
 def _msgpack_or_none(payload: object | None) -> bytes | None:
     if payload is None:
         return None
-    return _msgpack_payload(payload)
+    return dumps_msgpack(to_builtins(payload, str_keys=True))
 
 
 __all__ = [

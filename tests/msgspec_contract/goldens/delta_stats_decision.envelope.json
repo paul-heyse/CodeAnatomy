@@ -1,0 +1,23 @@
+{
+  "kind": "delta_stats_decision",
+  "payload": {
+    "dataset_name": "cpg_nodes",
+    "stats_policy": "auto",
+    "stats_columns": [
+      "file_id",
+      "node_id"
+    ],
+    "lineage_columns": [
+      "file_id",
+      "node_kind"
+    ],
+    "partition_by": [
+      "node_kind"
+    ],
+    "zorder_by": [
+      "file_id",
+      "node_id"
+    ],
+    "stats_max_columns": 32
+  }
+}

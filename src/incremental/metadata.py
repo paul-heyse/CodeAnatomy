@@ -21,6 +21,7 @@ from incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
     write_delta_table_via_pipeline,
 )
+from serde_artifacts import IncrementalMetadataSnapshot
 from serde_msgspec import to_builtins
 from storage.deltalake import (
     StorageOptions,
@@ -54,12 +55,12 @@ def write_incremental_metadata(
         name=runtime.profile.config_policy_name,
         determinism_tier=runtime.determinism_tier,
     )
-    payload = {
-        "datafusion_settings_hash": runtime.profile.settings_hash(),
-        "runtime_profile_hash": runtime_snapshot.profile_hash,
-        "runtime_profile": runtime_snapshot.payload(),
-    }
-    table = pa.Table.from_pylist([payload])
+    payload = IncrementalMetadataSnapshot(
+        datafusion_settings_hash=runtime.profile.settings_hash(),
+        runtime_profile_hash=runtime_snapshot.profile_hash,
+        runtime_profile=runtime_snapshot,
+    )
+    table = pa.Table.from_pylist([cast("dict[str, object]", to_builtins(payload))])
     path = state_store.incremental_metadata_path()
     write_delta_table_via_pipeline(
         runtime=runtime,

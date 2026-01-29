@@ -1,0 +1,4 @@
+{
+  "type": "ValidationError",
+  "summary": "Object missing required field `name`"
+}

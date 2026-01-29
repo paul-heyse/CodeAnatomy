@@ -53,7 +53,12 @@ from extract.schema_ops import (
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
-from serde_msgspec import to_builtins
+from serde_msgspec import (
+    StructBaseCompat,
+    convert,
+    to_builtins,
+    validation_error_payload,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -74,6 +79,27 @@ class FileContext:
     data: bytes | None = None
 
     @classmethod
+    def _payload_from_row(cls, row: Mapping[str, object]) -> RepoFileRow:
+        """Convert a repo_files row into a typed payload.
+
+        Returns
+        -------
+        RepoFileRow
+            Typed row payload.
+
+        Raises
+        ------
+        ValueError
+            Raised when the row payload does not conform to the expected schema.
+        """
+        try:
+            return convert(dict(row), target_type=RepoFileRow, strict=False)
+        except msgspec.ValidationError as exc:
+            details = validation_error_payload(exc)
+            msg = f"Repo file payload validation failed: {details}"
+            raise ValueError(msg) from exc
+
+    @classmethod
     def from_repo_row(cls, row: Mapping[str, object]) -> FileContext:
         """Build a FileContext from a repo_files row.
 
@@ -87,21 +113,14 @@ class FileContext:
         FileContext
             Parsed file context.
         """
-        file_id_raw = row.get("file_id")
-        path_raw = row.get("path")
-        abs_path_raw = row.get("abs_path")
-        sha_raw = row.get("file_sha256")
-        encoding_raw = row.get("encoding")
-        text_raw = row.get("text")
-        data_raw = row.get("bytes")
-
-        file_id = file_id_raw if isinstance(file_id_raw, str) else ""
-        path = path_raw if isinstance(path_raw, str) else ""
-        abs_path = abs_path_raw if isinstance(abs_path_raw, str) else None
-        file_sha256 = sha_raw if isinstance(sha_raw, str) else None
-        encoding = encoding_raw if isinstance(encoding_raw, str) else None
-        text = text_raw if isinstance(text_raw, str) else None
-        data = bytes(data_raw) if isinstance(data_raw, (bytes, bytearray, memoryview)) else None
+        payload = cls._payload_from_row(row)
+        file_id = payload.file_id or ""
+        path = payload.path or ""
+        abs_path = payload.abs_path
+        file_sha256 = payload.file_sha256
+        encoding = payload.encoding
+        text = payload.text
+        data = payload.data
 
         return cls(
             file_id=file_id,
@@ -112,6 +131,18 @@ class FileContext:
             text=text,
             data=data,
         )
+
+
+class RepoFileRow(StructBaseCompat, frozen=True):
+    """Typed repo_files row payload for extractor ingestion."""
+
+    file_id: str | None = None
+    path: str | None = None
+    abs_path: str | None = None
+    file_sha256: str | None = None
+    encoding: str | None = None
+    text: str | None = None
+    data: bytes | None = msgspec.field(name="bytes", default=None)
 
 
 @dataclass(frozen=True)

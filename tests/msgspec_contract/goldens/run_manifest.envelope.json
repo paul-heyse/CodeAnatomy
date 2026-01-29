@@ -1,0 +1,36 @@
+{
+  "kind": "run_manifest",
+  "payload": {
+    "run_id": "run-1",
+    "status": "completed",
+    "event_time_unix_ms": 1735689600000,
+    "plan_signature": "sig-1",
+    "plan_fingerprints": {
+      "cpg_nodes_v1": "fp-1"
+    },
+    "delta_inputs": [
+      {
+        "dataset_name": "cpg_nodes",
+        "timestamp": null,
+        "version": 1
+      }
+    ],
+    "outputs": [
+      {
+        "delta_version": 1,
+        "name": "cpg_nodes",
+        "path": "/tmp/out/cpg_nodes",
+        "rows": 10
+      }
+    ],
+    "runtime_profile_name": "default",
+    "runtime_profile_hash": "profile-hash",
+    "determinism_tier": "strict",
+    "output_dir": "/tmp/out",
+    "artifact_ids": {
+      "cpg_nodes": "pid-1",
+      "plan_schedule": "schedule-1",
+      "plan_validation": "validation-1"
+    }
+  }
+}

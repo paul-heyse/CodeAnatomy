@@ -13,6 +13,7 @@ import pyarrow as pa
 
 from core_types import DeterminismTier
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
 
@@ -68,37 +69,6 @@ class RuntimeProfileSpec:
             Hash for the runtime profile snapshot.
         """
         return self.runtime_profile_snapshot().profile_hash
-
-
-@dataclass(frozen=True)
-class RuntimeProfileSnapshot:
-    """Unified runtime profile snapshot for reproducibility."""
-
-    version: int
-    name: str
-    determinism_tier: str
-    datafusion_settings_hash: str
-    datafusion_settings: dict[str, str]
-    telemetry_payload: dict[str, object]
-    profile_hash: str
-
-    def payload(self) -> dict[str, object]:
-        """Return the snapshot payload for serialization.
-
-        Returns
-        -------
-        dict[str, object]
-            Serialized payload for the runtime profile snapshot.
-        """
-        return {
-            "version": self.version,
-            "name": self.name,
-            "determinism_tier": self.determinism_tier,
-            "datafusion_settings_hash": self.datafusion_settings_hash,
-            "datafusion_settings": self.datafusion_settings,
-            "telemetry_payload": self.telemetry_payload,
-            "profile_hash": self.profile_hash,
-        }
 
 
 def _cpu_count() -> int:

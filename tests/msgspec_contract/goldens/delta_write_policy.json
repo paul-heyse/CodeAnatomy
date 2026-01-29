@@ -1,0 +1,32 @@
+{
+  "target_file_size": 128,
+  "partition_by": [
+    "repo"
+  ],
+  "zorder_by": [
+    "node_id"
+  ],
+  "stats_policy": "explicit",
+  "stats_columns": [
+    "node_id",
+    "path"
+  ],
+  "stats_max_columns": 16,
+  "parquet_writer_policy": {
+    "statistics_enabled": [
+      "node_id",
+      "path"
+    ],
+    "bloom_filter_enabled": [
+      "node_id"
+    ],
+    "bloom_filter_fpp": 0.01,
+    "bloom_filter_ndv": 1000,
+    "dictionary_enabled": [
+      "node_kind"
+    ]
+  },
+  "enable_features": [
+    "change_data_feed"
+  ]
+}

@@ -13,19 +13,20 @@ import pyarrow as pa
 
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
+from serde_msgspec import dumps_msgpack, to_builtins
 from storage.deltalake import DeltaWriteOptions, idempotent_commit_properties, write_delta_table
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.delta_protocol import DeltaFeatureGate
+    from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
-DELTA_SNAPSHOT_TABLE_NAME = "datafusion_delta_snapshots_v1"
-DELTA_MUTATION_TABLE_NAME = "datafusion_delta_mutations_v1"
-DELTA_SCAN_PLAN_TABLE_NAME = "datafusion_delta_scan_plans_v1"
-DELTA_MAINTENANCE_TABLE_NAME = "datafusion_delta_maintenance_v1"
+DELTA_SNAPSHOT_TABLE_NAME = "datafusion_delta_snapshots_v2"
+DELTA_MUTATION_TABLE_NAME = "datafusion_delta_mutations_v2"
+DELTA_SCAN_PLAN_TABLE_NAME = "datafusion_delta_scan_plans_v2"
+DELTA_MAINTENANCE_TABLE_NAME = "datafusion_delta_maintenance_v2"
 
 try:
     _DEFAULT_OBSERVABILITY_ROOT = Path(__file__).resolve().parents[2] / ".artifacts"
@@ -74,7 +75,7 @@ class DeltaScanPlanArtifact:
     pruned_files: int
     pushed_filters: Sequence[str]
     projected_columns: Sequence[str]
-    delta_protocol: Mapping[str, object] | None
+    delta_protocol: DeltaProtocolSnapshot | None
     delta_feature_gate: DeltaFeatureGate | None
     storage_options_hash: str | None = None
 
@@ -137,11 +138,11 @@ def record_delta_snapshot(
         "snapshot_timestamp": _coerce_int(snapshot.get("snapshot_timestamp")),
         "min_reader_version": _coerce_int(snapshot.get("min_reader_version")),
         "min_writer_version": _coerce_int(snapshot.get("min_writer_version")),
-        "reader_features_json": _json_text(snapshot.get("reader_features") or ()),
-        "writer_features_json": _json_text(snapshot.get("writer_features") or ()),
-        "table_properties_json": _json_text(snapshot.get("table_properties") or {}),
-        "schema_json": str(snapshot.get("schema_json") or ""),
-        "partition_columns_json": _json_text(snapshot.get("partition_columns") or ()),
+        "reader_features": _string_list(snapshot.get("reader_features") or ()),
+        "writer_features": _string_list(snapshot.get("writer_features") or ()),
+        "table_properties": _string_map(snapshot.get("table_properties") or {}),
+        "schema_msgpack": _msgpack_payload(_schema_payload(snapshot.get("schema_json"))),
+        "partition_columns": _string_list(snapshot.get("partition_columns") or ()),
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
@@ -191,16 +192,16 @@ def record_delta_mutation(
         "delta_version": _coerce_int(report.get("version")),
         "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
         "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
-        "reader_features_json": _json_text(snapshot_payload.get("reader_features") or ()),
-        "writer_features_json": _json_text(snapshot_payload.get("writer_features") or ()),
-        "table_properties_json": _json_text(table_properties),
+        "reader_features": _string_list(snapshot_payload.get("reader_features") or ()),
+        "writer_features": _string_list(snapshot_payload.get("writer_features") or ()),
+        "table_properties": table_properties,
         "constraint_status": artifact.constraint_status,
-        "constraint_violations_json": _json_text(list(artifact.constraint_violations)),
+        "constraint_violations": _string_list(artifact.constraint_violations),
         "commit_app_id": artifact.commit_app_id,
         "commit_version": artifact.commit_version,
         "commit_run_id": artifact.commit_run_id,
-        "commit_metadata_json": _json_text(dict(artifact.commit_metadata or {})),
-        "metrics_json": _json_text(report.get("metrics") or {}),
+        "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
+        "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
@@ -247,10 +248,10 @@ def record_delta_scan_plan(
         "total_files": artifact.total_files,
         "candidate_files": artifact.candidate_files,
         "pruned_files": artifact.pruned_files,
-        "pushed_filters_json": _json_text(list(artifact.pushed_filters)),
-        "projected_columns_json": _json_text(list(artifact.projected_columns)),
-        "delta_protocol_json": _json_text(artifact.delta_protocol or {}),
-        "delta_feature_gate_json": _json_text(_gate_payload(artifact.delta_feature_gate)),
+        "pushed_filters": _string_list(artifact.pushed_filters),
+        "projected_columns": _string_list(artifact.projected_columns),
+        "delta_protocol_msgpack": _msgpack_or_none(artifact.delta_protocol),
+        "delta_feature_gate_msgpack": _msgpack_or_none(artifact.delta_feature_gate),
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
@@ -303,17 +304,17 @@ def record_delta_maintenance(
         "delta_version": _coerce_int(report.get("version")),
         "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
         "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
-        "reader_features_json": _json_text(snapshot_payload.get("reader_features") or ()),
-        "writer_features_json": _json_text(snapshot_payload.get("writer_features") or ()),
-        "table_properties_json": _json_text(table_properties),
+        "reader_features": _string_list(snapshot_payload.get("reader_features") or ()),
+        "writer_features": _string_list(snapshot_payload.get("writer_features") or ()),
+        "table_properties": table_properties,
         "log_retention_duration": log_retention,
         "checkpoint_interval": checkpoint_interval,
         "checkpoint_retention_duration": checkpoint_retention,
         "checkpoint_protection": checkpoint_protection,
         "retention_hours": artifact.retention_hours,
         "dry_run": artifact.dry_run,
-        "metrics_json": _json_text(report.get("metrics") or {}),
-        "commit_metadata_json": _json_text(dict(artifact.commit_metadata or {})),
+        "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
+        "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
@@ -408,11 +409,11 @@ def _delta_snapshot_schema() -> pa.Schema:
             pa.field("snapshot_timestamp", pa.int64()),
             pa.field("min_reader_version", pa.int32()),
             pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features_json", pa.string()),
-            pa.field("writer_features_json", pa.string()),
-            pa.field("table_properties_json", pa.string()),
-            pa.field("schema_json", pa.string()),
-            pa.field("partition_columns_json", pa.string()),
+            pa.field("reader_features", pa.list_(pa.string())),
+            pa.field("writer_features", pa.list_(pa.string())),
+            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
+            pa.field("schema_msgpack", pa.binary(), nullable=False),
+            pa.field("partition_columns", pa.list_(pa.string())),
             pa.field("storage_options_hash", pa.string()),
         ]
     )
@@ -429,16 +430,16 @@ def _delta_mutation_schema() -> pa.Schema:
             pa.field("delta_version", pa.int64()),
             pa.field("min_reader_version", pa.int32()),
             pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features_json", pa.string()),
-            pa.field("writer_features_json", pa.string()),
-            pa.field("table_properties_json", pa.string()),
+            pa.field("reader_features", pa.list_(pa.string())),
+            pa.field("writer_features", pa.list_(pa.string())),
+            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
             pa.field("constraint_status", pa.string()),
-            pa.field("constraint_violations_json", pa.string()),
+            pa.field("constraint_violations", pa.list_(pa.string())),
             pa.field("commit_app_id", pa.string()),
             pa.field("commit_version", pa.int64()),
             pa.field("commit_run_id", pa.string()),
-            pa.field("commit_metadata_json", pa.string()),
-            pa.field("metrics_json", pa.string()),
+            pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
+            pa.field("metrics_msgpack", pa.binary(), nullable=False),
             pa.field("storage_options_hash", pa.string()),
         ]
     )
@@ -455,10 +456,10 @@ def _delta_scan_plan_schema() -> pa.Schema:
             pa.field("total_files", pa.int64(), nullable=False),
             pa.field("candidate_files", pa.int64(), nullable=False),
             pa.field("pruned_files", pa.int64(), nullable=False),
-            pa.field("pushed_filters_json", pa.string()),
-            pa.field("projected_columns_json", pa.string()),
-            pa.field("delta_protocol_json", pa.string()),
-            pa.field("delta_feature_gate_json", pa.string()),
+            pa.field("pushed_filters", pa.list_(pa.string())),
+            pa.field("projected_columns", pa.list_(pa.string())),
+            pa.field("delta_protocol_msgpack", pa.binary(), nullable=True),
+            pa.field("delta_feature_gate_msgpack", pa.binary(), nullable=True),
             pa.field("storage_options_hash", pa.string()),
         ]
     )
@@ -474,24 +475,20 @@ def _delta_maintenance_schema() -> pa.Schema:
             pa.field("delta_version", pa.int64()),
             pa.field("min_reader_version", pa.int32()),
             pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features_json", pa.string()),
-            pa.field("writer_features_json", pa.string()),
-            pa.field("table_properties_json", pa.string()),
+            pa.field("reader_features", pa.list_(pa.string())),
+            pa.field("writer_features", pa.list_(pa.string())),
+            pa.field("table_properties", pa.map_(pa.string(), pa.string())),
             pa.field("log_retention_duration", pa.string()),
             pa.field("checkpoint_interval", pa.string()),
             pa.field("checkpoint_retention_duration", pa.string()),
             pa.field("checkpoint_protection", pa.string()),
             pa.field("retention_hours", pa.int64()),
             pa.field("dry_run", pa.bool_()),
-            pa.field("metrics_json", pa.string()),
-            pa.field("commit_metadata_json", pa.string()),
+            pa.field("metrics_msgpack", pa.binary(), nullable=False),
+            pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
             pa.field("storage_options_hash", pa.string()),
         ]
     )
-
-
-def _json_text(value: object) -> str:
-    return json.dumps(_coerce_json_value(value), sort_keys=True)
 
 
 def _snapshot_payload(report: Mapping[str, object]) -> dict[str, object]:
@@ -513,16 +510,44 @@ def _snapshot_table_properties(snapshot_payload: Mapping[str, object]) -> dict[s
     return {str(key): str(value) for key, value in dict(properties).items()}
 
 
-def _coerce_json_value(value: object) -> object:
-    if isinstance(value, dict):
-        return {str(key): _coerce_json_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_coerce_json_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_coerce_json_value(item) for item in value]
-    if value is None or isinstance(value, (bool, float, int, str)):
-        return value
-    return str(value)
+def _msgpack_payload(value: object) -> bytes:
+    return dumps_msgpack(to_builtins(value, str_keys=True))
+
+
+def _msgpack_or_none(value: object | None) -> bytes | None:
+    if value is None:
+        return None
+    return _msgpack_payload(value)
+
+
+def _string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, memoryview)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _string_map(value: object) -> dict[str, str]:
+    if isinstance(value, Mapping):
+        return {str(key): str(item) for key, item in value.items()}
+    return {}
+
+
+def _schema_payload(value: object) -> object:
+    empty: dict[str, object] = {}
+    if value is None:
+        return empty
+    if isinstance(value, str):
+        if not value:
+            return empty
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {"raw": value}
+    return value
 
 
 def _coerce_int(value: object) -> int | None:
@@ -538,17 +563,6 @@ def _coerce_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _gate_payload(gate: DeltaFeatureGate | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    return {
-        "min_reader_version": gate.min_reader_version,
-        "min_writer_version": gate.min_writer_version,
-        "required_reader_features": list(gate.required_reader_features),
-        "required_writer_features": list(gate.required_writer_features),
-    }
 
 
 __all__ = [

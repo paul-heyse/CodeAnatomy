@@ -185,7 +185,12 @@ def _routine_metadata(
 
 
 def _parameter_groups(parameters: pa.Table) -> dict[str, list[tuple[int, str]]]:
-    routine_col = parameters.column("routine_name").to_pylist()
+    if "routine_name" in parameters.column_names:
+        routine_col = parameters.column("routine_name").to_pylist()
+    elif "specific_name" in parameters.column_names:
+        routine_col = parameters.column("specific_name").to_pylist()
+    else:
+        return {}
     dtype_col = parameters.column("data_type").to_pylist()
     ordinal_col = parameters.column("ordinal_position").to_pylist()
     mode_col = (

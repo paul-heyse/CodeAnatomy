@@ -473,7 +473,14 @@ def _cpg_view_nodes(
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
-    from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df, build_cpg_props_df
+    from cpg.view_builders_df import (
+        build_cpg_edges_by_dst_df,
+        build_cpg_edges_by_src_df,
+        build_cpg_edges_df,
+        build_cpg_nodes_df,
+        build_cpg_props_df,
+        build_cpg_props_map_df,
+    )
 
     if runtime_profile is None:
         msg = "Runtime profile is required for CPG view planning."
@@ -494,6 +501,9 @@ def _cpg_view_nodes(
         ("cpg_nodes_v1", _wrap(partial(build_cpg_nodes_df, task_identity=nodes_identity))),
         ("cpg_edges_v1", _wrap(build_cpg_edges_df)),
         ("cpg_props_v1", _wrap(partial(build_cpg_props_df, task_identity=props_identity))),
+        ("cpg_props_map_v1", _wrap(build_cpg_props_map_df)),
+        ("cpg_edges_by_src_v1", _wrap(build_cpg_edges_by_src_df)),
+        ("cpg_edges_by_dst_v1", _wrap(build_cpg_edges_by_dst_df)),
     )
 
     nodes: list[ViewNode] = []
@@ -507,6 +517,9 @@ def _cpg_view_nodes(
         )
         metadata = _metadata_with_required_udfs(None, required)
         schema = _arrow_schema_from_df(bundle.df)
+        cache_policy = "none"
+        if name in {"cpg_edges_v1", "cpg_props_v1"}:
+            cache_policy = "delta_staging"
         nodes.append(
             ViewNode(
                 name=name,
@@ -520,6 +533,7 @@ def _cpg_view_nodes(
                 ),
                 required_udfs=required,
                 plan_bundle=bundle,
+                cache_policy=cache_policy,
             )
         )
     return nodes

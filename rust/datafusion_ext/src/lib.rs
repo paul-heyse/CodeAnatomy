@@ -2353,6 +2353,7 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     module.add_function(wrap_pyfunction!(udf_custom::stable_hash128, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::prefixed_hash64, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::stable_id, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom::semantic_tag, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::stable_id_parts, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::prefixed_hash_parts64, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::stable_hash_any, module)?)?;

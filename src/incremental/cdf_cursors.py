@@ -7,12 +7,12 @@ from typing import Annotated
 
 import msgspec
 
-from serde_msgspec import StructBase, dumps_json, loads_json
+from serde_msgspec import StructBaseCompat, StructBaseStrict, dumps_json, loads_json
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
-class CdfCursor(StructBase, frozen=True):
+class CdfCursor(StructBaseCompat, frozen=True):
     """Cursor tracking the last processed Delta table version for CDF reads.
 
     Attributes
@@ -27,7 +27,7 @@ class CdfCursor(StructBase, frozen=True):
     last_version: NonNegInt
 
 
-class CdfCursorStore(StructBase, frozen=True):
+class CdfCursorStore(StructBaseStrict, frozen=True):
     """Persistent storage for CDF cursors.
 
     This store manages per-dataset cursors that track the last processed

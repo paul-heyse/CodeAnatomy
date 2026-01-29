@@ -68,7 +68,9 @@ def _record_view_artifact(
 ) -> None:
     ctx = runtime.session_context()
     session_runtime = runtime.profile.session_runtime()
-    ctx.register_record_batches(name, [table.to_batches()])
+    from datafusion_engine.ingest import datafusion_from_arrow
+
+    datafusion_from_arrow(ctx, name=name, value=table)
     df = ctx.table(name)
     bundle = build_plan_bundle(
         ctx,

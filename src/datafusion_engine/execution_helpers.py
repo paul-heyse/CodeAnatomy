@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 from datafusion import DataFrameWriteOptions, SessionContext
@@ -17,7 +17,8 @@ from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from engine.plan_cache import PlanCacheKey
 from schema_spec.policies import DataFusionWritePolicy
-from serde_msgspec import dumps_msgpack
+from serde_msgspec import dumps_msgpack, loads_msgpack, to_builtins
+from serde_msgspec_ext import SubstraitBytes
 
 try:
     import pyarrow.substrait as pa_substrait
@@ -80,13 +81,21 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "version": pin.version,
             "timestamp": pin.timestamp,
             "feature_gate": _delta_gate_payload(pin.feature_gate),
-            "protocol": _delta_protocol_payload(pin.protocol),
+            "protocol": (
+                to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
+            ),
             "storage_options_hash": pin.storage_options_hash,
-            "delta_scan_config": pin.delta_scan_config,
+            "delta_scan_config": (
+                to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
+            ),
             "delta_scan_config_hash": pin.delta_scan_config_hash,
             "datafusion_provider": pin.datafusion_provider,
             "protocol_compatible": pin.protocol_compatible,
-            "protocol_compatibility": pin.protocol_compatibility,
+            "protocol_compatibility": (
+                to_builtins(pin.protocol_compatibility)
+                if pin.protocol_compatibility is not None
+                else None
+            ),
         }
         for pin in bundle.delta_inputs
     ]
@@ -120,18 +129,16 @@ def _delta_gate_payload(
 def _delta_protocol_payload(
     protocol: object | None,
 ) -> dict[str, object] | None:
-    if not isinstance(protocol, Mapping):
+    if protocol is None:
         return None
-    payload: dict[str, object] = {}
-    for key, value in protocol.items():
-        if isinstance(value, (str, int, float)) or value is None:
-            payload[str(key)] = value
-            continue
-        if isinstance(value, (list, tuple)):
-            payload[str(key)] = [str(item) for item in value]
-            continue
-        payload[str(key)] = str(value)
-    return payload or None
+    if isinstance(protocol, Mapping):
+        payload = {str(key): value for key, value in protocol.items()}
+        return payload or None
+    if isinstance(protocol, msgspec.Struct):
+        resolved = to_builtins(protocol, str_keys=True)
+        if isinstance(resolved, Mapping):
+            return {str(key): value for key, value in resolved.items()} or None
+    return None
 
 
 def plan_bundle_cache_key(
@@ -345,22 +352,23 @@ def rehydrate_plan_artifacts(
     Raises
     ------
     TypeError
-        Raised when the payload does not contain a base64 string.
+        Raised when the payload does not contain msgpack bytes.
     ValueError
         Raised when the Substrait payload cannot be decoded.
     """
-    substrait_b64 = payload.get("substrait_b64")
-    if not substrait_b64:
+    substrait_msgpack = payload.get("substrait_msgpack")
+    if not substrait_msgpack:
         return None
-    if not isinstance(substrait_b64, str):
-        msg = "Substrait payload must be base64-encoded string."
+    if not isinstance(substrait_msgpack, (bytes, bytearray, memoryview)):
+        msg = "Substrait payload must be msgpack bytes."
         raise TypeError(msg)
     try:
-        plan_bytes = base64.b64decode(substrait_b64)
+        payload_bytes = bytes(substrait_msgpack)
+        substrait = loads_msgpack(payload_bytes, target_type=SubstraitBytes)
     except (ValueError, TypeError) as exc:
-        msg = "Invalid base64 payload for Substrait artifacts."
+        msg = "Invalid msgpack payload for Substrait artifacts."
         raise ValueError(msg) from exc
-    return replay_substrait_bytes(ctx, plan_bytes)
+    return replay_substrait_bytes(ctx, substrait.data)
 
 
 __all__ = [

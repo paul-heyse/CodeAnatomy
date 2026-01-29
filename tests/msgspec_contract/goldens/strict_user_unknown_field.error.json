@@ -1,0 +1,4 @@
+{
+  "type": "ValidationError",
+  "summary": "Object contains unknown field `extra`"
+}

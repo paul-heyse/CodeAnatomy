@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from core_types import DeterminismTier
 from graph import GraphProductBuildRequest, build_graph_product
-from hamilton_pipeline.pipeline_types import ScipIndexConfig
+from hamilton_pipeline.pipeline_types import ExecutionMode, ExecutorConfig, ScipIndexConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -104,6 +104,42 @@ def _build_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
+    parser.add_argument(
+        "--execution-mode",
+        default=ExecutionMode.PLAN_PARALLEL.value,
+        choices=tuple(mode.value for mode in ExecutionMode),
+        help="Execution mode for Hamilton orchestration.",
+    )
+    parser.add_argument(
+        "--executor-kind",
+        default=None,
+        choices=("threadpool", "multiprocessing", "dask", "ray"),
+        help="Primary executor kind for dynamic execution.",
+    )
+    parser.add_argument(
+        "--executor-max-tasks",
+        type=int,
+        default=None,
+        help="Max tasks for the primary executor.",
+    )
+    parser.add_argument(
+        "--executor-remote-kind",
+        default=None,
+        choices=("threadpool", "multiprocessing", "dask", "ray"),
+        help="Remote executor kind for scan/high-cost tasks.",
+    )
+    parser.add_argument(
+        "--executor-remote-max-tasks",
+        type=int,
+        default=None,
+        help="Max tasks for the remote executor.",
+    )
+    parser.add_argument(
+        "--executor-cost-threshold",
+        type=float,
+        default=None,
+        help="Cost threshold for routing tasks to the remote executor.",
+    )
     return parser
 
 
@@ -138,6 +174,24 @@ def _build_scip_config(args: argparse.Namespace) -> ScipIndexConfig:
     )
 
 
+def _build_executor_config(args: argparse.Namespace) -> ExecutorConfig | None:
+    if (
+        args.executor_kind is None
+        and args.executor_max_tasks is None
+        and args.executor_remote_kind is None
+        and args.executor_remote_max_tasks is None
+        and args.executor_cost_threshold is None
+    ):
+        return None
+    return ExecutorConfig(
+        kind=args.executor_kind or "multiprocessing",
+        max_tasks=args.executor_max_tasks or 4,
+        remote_kind=args.executor_remote_kind,
+        remote_max_tasks=args.executor_remote_max_tasks,
+        cost_threshold=args.executor_cost_threshold,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the graph product build with CLI-provided options.
 
@@ -153,6 +207,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     scip_config = _build_scip_config(args)
     determinism_override = _parse_determinism_tier(args.determinism_tier)
+    execution_mode = ExecutionMode(args.execution_mode)
+    executor_config = _build_executor_config(args)
     result = build_graph_product(
         GraphProductBuildRequest(
             repo_root=args.repo_root,
@@ -161,6 +217,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_profile_name=args.runtime_profile,
             determinism_override=determinism_override,
             writer_strategy=args.writer_strategy,
+            execution_mode=execution_mode,
+            executor_config=executor_config,
             scip_index_config=scip_config,
             incremental_impact_strategy=args.incremental_impact_strategy,
             include_quality=True,

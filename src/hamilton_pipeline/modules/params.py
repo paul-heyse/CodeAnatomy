@@ -377,9 +377,25 @@ def write_param_tables_delta(
 def _delta_write_policy_payload(policy: DeltaWritePolicy | None) -> JsonDict | None:
     if policy is None:
         return None
+    parquet_policy = None
+    if policy.parquet_writer_policy is not None:
+        parquet_policy = {
+            "statistics_enabled": list(policy.parquet_writer_policy.statistics_enabled),
+            "statistics_level": policy.parquet_writer_policy.statistics_level,
+            "bloom_filter_enabled": list(policy.parquet_writer_policy.bloom_filter_enabled),
+            "bloom_filter_fpp": policy.parquet_writer_policy.bloom_filter_fpp,
+            "bloom_filter_ndv": policy.parquet_writer_policy.bloom_filter_ndv,
+            "dictionary_enabled": list(policy.parquet_writer_policy.dictionary_enabled),
+        }
     return {
         "target_file_size": policy.target_file_size,
+        "partition_by": list(policy.partition_by),
+        "zorder_by": list(policy.zorder_by),
+        "stats_policy": policy.stats_policy,
         "stats_columns": list(policy.stats_columns) if policy.stats_columns is not None else None,
+        "stats_max_columns": policy.stats_max_columns,
+        "enable_features": list(policy.enable_features),
+        "parquet_writer_policy": parquet_policy,
     }
 
 

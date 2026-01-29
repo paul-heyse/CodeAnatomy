@@ -184,14 +184,14 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
         [pa.array([None], type=dtype)],
         names=["value"],
     )
-    batches = list(table.to_batches())
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from datafusion_engine.ingest import datafusion_from_arrow
 
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches("t", [batches], overwrite=True)
-    df = ctx.table("t").select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
-    result = _expr_table(df)
-    value = result["dtype"][0].as_py()
+    df = datafusion_from_arrow(ctx, name="t", value=table)
+    try:
+        result = _expr_table(df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1))
+        value = result["dtype"][0].as_py()
+    finally:
+        _deregister_table(ctx, name="t")
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)
@@ -202,15 +202,14 @@ def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) 
     name = f"__{prefix}_{uuid.uuid4().hex}"
     resolved = coerce_table_like(table)
     if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("pa.RecordBatchReader", resolved)
-        resolved_table = reader.read_all()
+        resolved_table = cast("pa.RecordBatchReader", resolved).read_all()
     else:
         resolved_table = cast("ArrowTable", resolved)
-    batches = list(resolved_table.to_batches())
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(name, [batches])
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if not callable(from_arrow):
+        msg = "SessionContext does not support from_arrow ingestion."
+        raise NotImplementedError(msg)
+    from_arrow(resolved_table, name=name)
     return name
 
 

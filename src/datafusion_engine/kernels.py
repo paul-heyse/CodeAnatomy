@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -31,8 +31,10 @@ from datafusion_engine.arrow_schema.metadata import (
 )
 from datafusion_engine.kernel_specs import DedupeSpec, IntervalAlignOptions, SortKey
 from datafusion_engine.kernel_specs import SortKey as PlanSortKey
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_runtime import register_rust_udfs
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type KernelFn = Callable[..., TableLike]
 
@@ -41,7 +43,12 @@ MIN_JOIN_PARTITIONS: int = 2
 
 
 def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
-    profile = runtime_profile or DataFusionRuntimeProfile()
+    if runtime_profile is None:
+        from datafusion_engine.runtime import DataFusionRuntimeProfile as RuntimeProfile
+
+        profile = RuntimeProfile()
+    else:
+        profile = runtime_profile
     session_runtime = profile.session_runtime()
     session = session_runtime.ctx
     async_timeout_ms = None

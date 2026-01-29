@@ -327,6 +327,8 @@ class DeltaMaintenancePolicy:
 
     optimize_on_write: bool = False
     optimize_target_size: int | None = None
+    z_order_cols: tuple[str, ...] = ()
+    z_order_when: Literal["never", "periodic", "after_partition_complete"] = "never"
     vacuum_on_write: bool = False
     vacuum_retention_hours: int | None = None
     vacuum_dry_run: bool = False
@@ -476,6 +478,13 @@ class DatasetSpec:
             Arrow schema with metadata.
         """
         ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
+        if (
+            ordering is None
+            and self.delta_write_policy is not None
+            and self.delta_write_policy.zorder_by
+        ):
+            keys = tuple((name, "ascending") for name in self.delta_write_policy.zorder_by)
+            ordering = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
         merged = merge_metadata_specs(self.metadata_spec, ordering)
         return merged.apply(self.table_spec.to_arrow_schema())
 

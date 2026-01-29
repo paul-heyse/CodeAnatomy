@@ -1,0 +1,2138 @@
+{
+  "components": {
+    "DeltaFeatureGate": {
+      "additionalProperties": false,
+      "description": "Protocol and feature-gating requirements for Delta tables.\n\nParameters\n----------\nmin_reader_version:\n    Minimum reader protocol version required.\nmin_writer_version:\n    Minimum writer protocol version required.\nrequired_reader_features:\n    Required Delta reader features.\nrequired_writer_features:\n    Required Delta writer features.",
+      "properties": {
+        "min_reader_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "min_writer_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "required_reader_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_writer_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "title": "DeltaFeatureGate",
+      "type": "object"
+    },
+    "DeltaProtocolCompatibility": {
+      "description": "Compatibility evaluation for a Delta protocol snapshot.",
+      "properties": {
+        "compatible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feature_support_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "missing_reader_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "missing_writer_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reader_version_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "required_reader_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_reader_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "required_writer_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_writer_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supported_reader_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supported_reader_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supported_writer_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supported_writer_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "writer_version_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "compatible"
+      ],
+      "title": "DeltaProtocolCompatibility",
+      "type": "object"
+    },
+    "DeltaProtocolSnapshot": {
+      "description": "Snapshot of Delta protocol versions and feature flags.",
+      "properties": {
+        "min_reader_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "min_writer_version": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reader_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "writer_features": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "title": "DeltaProtocolSnapshot",
+      "type": "object"
+    },
+    "DeltaScanConfigSnapshot": {
+      "description": "Snapshot of Delta scan configuration for artifacts.",
+      "properties": {
+        "enable_parquet_pushdown": {
+          "default": true,
+          "type": "boolean"
+        },
+        "file_column_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_force_view_types": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "wrap_partition_values": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "title": "DeltaScanConfigSnapshot",
+      "type": "object"
+    },
+    "DeltaSchemaPolicy": {
+      "additionalProperties": false,
+      "description": "Schema evolution and column mapping policy for Delta.",
+      "properties": {
+        "column_mapping_mode": {
+          "anyOf": [
+            {
+              "description": "Delta column mapping mode.",
+              "enum": [
+                "id",
+                "name"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_mode": {
+          "anyOf": [
+            {
+              "description": "Schema evolution mode for Delta writes.",
+              "enum": [
+                "merge",
+                "overwrite"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "title": "DeltaSchemaPolicy",
+      "type": "object"
+    },
+    "DeltaStatsDecision": {
+      "description": "Resolved stats decision for a Delta write.",
+      "properties": {
+        "dataset_name": {
+          "description": "Dataset identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "lineage_columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "partition_by": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stats_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stats_max_columns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stats_policy": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "zorder_by": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "dataset_name",
+        "stats_policy",
+        "stats_columns",
+        "lineage_columns"
+      ],
+      "title": "DeltaStatsDecision",
+      "type": "object"
+    },
+    "DeltaStatsDecisionEnvelope": {
+      "description": "Envelope for Delta stats decision artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "delta_stats_decision"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/DeltaStatsDecision"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "DeltaStatsDecisionEnvelope",
+      "type": "object"
+    },
+    "DeltaWritePolicy": {
+      "additionalProperties": false,
+      "description": "Configuration for Delta write behavior.",
+      "properties": {
+        "enable_features": {
+          "default": [],
+          "items": {
+            "enum": [
+              "change_data_feed",
+              "column_mapping",
+              "deletion_vectors",
+              "in_commit_timestamps",
+              "row_tracking",
+              "v2_checkpoints"
+            ]
+          },
+          "type": "array"
+        },
+        "parquet_writer_policy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ParquetWriterPolicy"
+            }
+          ],
+          "default": null
+        },
+        "partition_by": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stats_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stats_max_columns": {
+          "default": 32,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stats_policy": {
+          "default": "auto",
+          "description": "Stats collection policy for Delta writes.",
+          "enum": [
+            "auto",
+            "explicit",
+            "off"
+          ]
+        },
+        "target_file_size": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 100663296
+        },
+        "zorder_by": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "title": "DeltaWritePolicy",
+      "type": "object"
+    },
+    "ExecutionPlanProtoBytes": {
+      "description": "Wrapper for execution plan proto bytes.",
+      "properties": {
+        "data": {
+          "contentEncoding": "base64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ExecutionPlanProtoBytes",
+      "type": "object"
+    },
+    "ExtractErrorsArtifact": {
+      "description": "Extract error summary artifact.",
+      "properties": {
+        "error_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "event_time_unix_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Unique run identifier.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_time_unix_ms",
+        "run_id",
+        "output_dir",
+        "errors",
+        "error_count"
+      ],
+      "title": "ExtractErrorsArtifact",
+      "type": "object"
+    },
+    "IncrementalMetadataSnapshot": {
+      "description": "Snapshot payload for incremental runtime metadata.",
+      "properties": {
+        "datafusion_settings_hash": {
+          "type": "string"
+        },
+        "runtime_profile": {
+          "$ref": "#/$defs/RuntimeProfileSnapshot"
+        },
+        "runtime_profile_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "datafusion_settings_hash",
+        "runtime_profile_hash",
+        "runtime_profile"
+      ],
+      "title": "IncrementalMetadataSnapshot",
+      "type": "object"
+    },
+    "LogicalPlanProtoBytes": {
+      "description": "Wrapper for logical plan proto bytes.",
+      "properties": {
+        "data": {
+          "contentEncoding": "base64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "LogicalPlanProtoBytes",
+      "type": "object"
+    },
+    "NormalizeOutputsArtifact": {
+      "description": "Normalize outputs summary artifact.",
+      "properties": {
+        "event_time_unix_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "row_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "description": "Unique run identifier.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_time_unix_ms",
+        "run_id",
+        "output_dir",
+        "outputs",
+        "row_count"
+      ],
+      "title": "NormalizeOutputsArtifact",
+      "type": "object"
+    },
+    "OptimizedPlanProtoBytes": {
+      "description": "Wrapper for optimized plan proto bytes.",
+      "properties": {
+        "data": {
+          "contentEncoding": "base64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "OptimizedPlanProtoBytes",
+      "type": "object"
+    },
+    "ParquetWriterPolicy": {
+      "additionalProperties": false,
+      "description": "Per-column Parquet writer settings for Delta writes.",
+      "properties": {
+        "bloom_filter_enabled": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bloom_filter_fpp": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bloom_filter_ndv": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dictionary_enabled": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "statistics_enabled": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "statistics_level": {
+          "default": "page",
+          "enum": [
+            "chunk",
+            "none",
+            "page"
+          ]
+        }
+      },
+      "required": [],
+      "title": "ParquetWriterPolicy",
+      "type": "object"
+    },
+    "PlanArtifactRow": {
+      "description": "Serializable plan artifact row persisted to the Delta store.",
+      "properties": {
+        "delta_inputs_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "df_settings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "domain_planner_names": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "event_kind": {
+          "description": "Artifact event kind identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "event_time_unix_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_plan_proto_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explain_analyze_duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_analyze_output_rows": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_tree_rows_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_verbose_rows_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "function_registry_hash": {
+          "type": "string"
+        },
+        "function_registry_snapshot_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "information_schema_hash": {
+          "type": "string"
+        },
+        "information_schema_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "lineage_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "logical_plan_proto_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "optimized_plan_proto_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_details_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "plan_fingerprint": {
+          "description": "Deterministic plan fingerprint for reproducibility.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "plan_identity_hash": {
+          "description": "Deterministic plan identity hash for artifact rows.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "planning_env_hash": {
+          "type": "string"
+        },
+        "planning_env_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "profile_name": {
+          "anyOf": [
+            {
+              "description": "Runtime profile name.",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_rewrite_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_udfs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rulepack_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rulepack_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scan_keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scan_units_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "substrait_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "substrait_validation_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "udf_compatibility_detail_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "udf_compatibility_ok": {
+          "type": "boolean"
+        },
+        "udf_planner_snapshot_msgpack": {
+          "anyOf": [
+            {
+              "contentEncoding": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "udf_snapshot_hash": {
+          "type": "string"
+        },
+        "udf_snapshot_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "view_name": {
+          "description": "View name.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_time_unix_ms",
+        "profile_name",
+        "event_kind",
+        "view_name",
+        "plan_fingerprint",
+        "plan_identity_hash",
+        "udf_snapshot_hash",
+        "function_registry_hash",
+        "required_udfs",
+        "required_rewrite_tags",
+        "domain_planner_names",
+        "delta_inputs_msgpack",
+        "df_settings",
+        "planning_env_msgpack",
+        "planning_env_hash",
+        "rulepack_msgpack",
+        "rulepack_hash",
+        "information_schema_msgpack",
+        "information_schema_hash",
+        "substrait_msgpack",
+        "logical_plan_proto_msgpack",
+        "optimized_plan_proto_msgpack",
+        "execution_plan_proto_msgpack",
+        "explain_tree_rows_msgpack",
+        "explain_verbose_rows_msgpack",
+        "explain_analyze_duration_ms",
+        "explain_analyze_output_rows",
+        "substrait_validation_msgpack",
+        "lineage_msgpack",
+        "scan_units_msgpack",
+        "scan_keys",
+        "plan_details_msgpack",
+        "function_registry_snapshot_msgpack",
+        "udf_snapshot_msgpack",
+        "udf_planner_snapshot_msgpack",
+        "udf_compatibility_ok",
+        "udf_compatibility_detail_msgpack"
+      ],
+      "title": "PlanArtifactRow",
+      "type": "object"
+    },
+    "PlanArtifacts": {
+      "description": "Serializable plan artifacts captured during planning.",
+      "properties": {
+        "df_settings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "domain_planner_names": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execution_plan_proto": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionPlanProtoBytes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_analyze_duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_analyze_output_rows": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_tree_rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explain_verbose_rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "function_registry_hash": {
+          "type": "string"
+        },
+        "function_registry_snapshot": {
+          "type": "object"
+        },
+        "information_schema_hash": {
+          "type": "string"
+        },
+        "information_schema_snapshot": {
+          "type": "object"
+        },
+        "logical_plan_proto": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalPlanProtoBytes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "optimized_plan_proto": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OptimizedPlanProtoBytes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planning_env_hash": {
+          "type": "string"
+        },
+        "planning_env_snapshot": {
+          "type": "object"
+        },
+        "rewrite_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rulepack_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rulepack_snapshot": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "substrait_validation": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "udf_planner_snapshot": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "udf_snapshot": {
+          "type": "object"
+        },
+        "udf_snapshot_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "explain_tree_rows",
+        "explain_verbose_rows",
+        "explain_analyze_duration_ms",
+        "explain_analyze_output_rows",
+        "df_settings",
+        "planning_env_snapshot",
+        "planning_env_hash",
+        "rulepack_snapshot",
+        "rulepack_hash",
+        "information_schema_snapshot",
+        "information_schema_hash",
+        "substrait_validation",
+        "logical_plan_proto",
+        "optimized_plan_proto",
+        "execution_plan_proto",
+        "udf_snapshot_hash",
+        "function_registry_hash",
+        "function_registry_snapshot",
+        "rewrite_tags",
+        "domain_planner_names",
+        "udf_snapshot",
+        "udf_planner_snapshot"
+      ],
+      "title": "PlanArtifacts",
+      "type": "object"
+    },
+    "PlanProtoStatus": {
+      "description": "Status payload for plan proto serialization.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "installed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "enabled",
+        "installed"
+      ],
+      "title": "PlanProtoStatus",
+      "type": "object"
+    },
+    "PlanScheduleArtifact": {
+      "description": "Schedule artifact for deterministic plan scheduling.",
+      "properties": {
+        "bottom_level_costs": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": "object"
+        },
+        "critical_path_length_weighted": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "critical_path_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "generations": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "ordered_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_signature": {
+          "type": "string"
+        },
+        "reduced_plan_signature": {
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Unique run identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "slack_by_task": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "task_costs": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": "object"
+        },
+        "task_count": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_signature",
+        "reduced_plan_signature",
+        "task_count",
+        "ordered_tasks",
+        "generations",
+        "critical_path_tasks",
+        "critical_path_length_weighted",
+        "task_costs",
+        "bottom_level_costs"
+      ],
+      "title": "PlanScheduleArtifact",
+      "type": "object"
+    },
+    "PlanScheduleEnvelope": {
+      "description": "Envelope for plan schedule artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "plan_schedule"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/PlanScheduleArtifact"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "PlanScheduleEnvelope",
+      "type": "object"
+    },
+    "PlanValidationArtifact": {
+      "description": "Validation artifact for plan evidence edges.",
+      "properties": {
+        "invalid_edges": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "invalid_tasks": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_signature": {
+          "type": "string"
+        },
+        "reduced_plan_signature": {
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Unique run identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "task_results": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total_edges": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tasks": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "valid_edges": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "valid_tasks": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_signature",
+        "reduced_plan_signature",
+        "total_tasks",
+        "valid_tasks",
+        "invalid_tasks",
+        "total_edges",
+        "valid_edges",
+        "invalid_edges",
+        "task_results"
+      ],
+      "title": "PlanValidationArtifact",
+      "type": "object"
+    },
+    "PlanValidationEnvelope": {
+      "description": "Envelope for plan validation artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "plan_validation"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/PlanValidationArtifact"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "PlanValidationEnvelope",
+      "type": "object"
+    },
+    "RunManifest": {
+      "description": "Canonical run manifest payload for deterministic outputs.",
+      "properties": {
+        "artifact_ids": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "delta_inputs": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "determinism_tier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event_time_unix_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputs": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "plan_fingerprints": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "plan_signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "description": "Unique run identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "runtime_profile_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_profile_name": {
+          "anyOf": [
+            {
+              "description": "Runtime profile name.",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "description": "Artifact status value.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "event_time_unix_ms",
+        "plan_signature",
+        "plan_fingerprints",
+        "delta_inputs",
+        "outputs",
+        "runtime_profile_name",
+        "runtime_profile_hash",
+        "determinism_tier",
+        "output_dir"
+      ],
+      "title": "RunManifest",
+      "type": "object"
+    },
+    "RunManifestEnvelope": {
+      "description": "Envelope for run manifest artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "run_manifest"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/RunManifest"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "RunManifestEnvelope",
+      "type": "object"
+    },
+    "RuntimeProfileSnapshot": {
+      "description": "Unified runtime profile snapshot for reproducibility.",
+      "properties": {
+        "datafusion_settings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "datafusion_settings_hash": {
+          "type": "string"
+        },
+        "determinism_tier": {
+          "type": "string"
+        },
+        "name": {
+          "description": "Runtime profile name.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "profile_hash": {
+          "type": "string"
+        },
+        "telemetry_payload": {
+          "type": "object"
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "name",
+        "determinism_tier",
+        "datafusion_settings_hash",
+        "datafusion_settings",
+        "telemetry_payload",
+        "profile_hash"
+      ],
+      "title": "RuntimeProfileSnapshot",
+      "type": "object"
+    },
+    "SemanticValidationArtifact": {
+      "description": "Semantic metadata validation artifact for a view.",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/SemanticValidationEntry"
+          },
+          "type": "array"
+        },
+        "errors": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "error",
+            "ok"
+          ]
+        },
+        "view_name": {
+          "description": "View name.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "view_name",
+        "status",
+        "entries"
+      ],
+      "title": "SemanticValidationArtifact",
+      "type": "object"
+    },
+    "SemanticValidationArtifactEnvelope": {
+      "description": "Envelope for semantic validation artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "semantic_validation"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/SemanticValidationArtifact"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "SemanticValidationArtifactEnvelope",
+      "type": "object"
+    },
+    "SemanticValidationEntry": {
+      "description": "Validation entry for semantic metadata enforcement.",
+      "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "column_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expected": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "mismatch",
+            "missing",
+            "ok"
+          ]
+        }
+      },
+      "required": [
+        "column_name",
+        "expected",
+        "actual",
+        "status"
+      ],
+      "title": "SemanticValidationEntry",
+      "type": "object"
+    },
+    "ViewArtifactPayload": {
+      "description": "Serializable view artifact payload.",
+      "properties": {
+        "name": {
+          "description": "View name.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "plan_fingerprint": {
+          "description": "Deterministic plan fingerprint for reproducibility.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "plan_task_signature": {
+          "type": "string"
+        },
+        "referenced_tables": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_udfs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "type": "object"
+        },
+        "schema_describe": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema_provenance": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "plan_fingerprint",
+        "plan_task_signature",
+        "schema",
+        "schema_describe",
+        "schema_provenance",
+        "required_udfs",
+        "referenced_tables"
+      ],
+      "title": "ViewArtifactPayload",
+      "type": "object"
+    },
+    "ViewCacheArtifact": {
+      "description": "Cache materialization artifact for view registration.",
+      "properties": {
+        "cache_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_policy": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hit": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plan_fingerprint": {
+          "anyOf": [
+            {
+              "description": "Deterministic plan fingerprint for reproducibility.",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "description": "Artifact status value.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "view_name": {
+          "description": "View name.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "view_name",
+        "cache_policy",
+        "cache_path",
+        "plan_fingerprint",
+        "status"
+      ],
+      "title": "ViewCacheArtifact",
+      "type": "object"
+    },
+    "ViewCacheArtifactEnvelope": {
+      "description": "Envelope for view cache artifacts.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "view_cache_artifact"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/ViewCacheArtifact"
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "title": "ViewCacheArtifactEnvelope",
+      "type": "object"
+    },
+    "WriteArtifactRow": {
+      "description": "Serializable write artifact row persisted to the Delta store.",
+      "properties": {
+        "commit_app_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit_metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "commit_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delta_schema_policy_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "delta_stats_decision_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "delta_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delta_write_policy_msgpack": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event_kind": {
+          "description": "Artifact event kind identifier.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "event_time_unix_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "format": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "partition_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "profile_name": {
+          "anyOf": [
+            {
+              "description": "Runtime profile name.",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "row_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table_properties": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "table_uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_time_unix_ms",
+        "profile_name",
+        "event_kind",
+        "destination",
+        "format",
+        "mode",
+        "method",
+        "table_uri",
+        "delta_version",
+        "commit_app_id",
+        "commit_version",
+        "commit_run_id",
+        "delta_write_policy_msgpack",
+        "delta_schema_policy_msgpack",
+        "partition_by",
+        "table_properties",
+        "commit_metadata",
+        "delta_stats_decision_msgpack",
+        "duration_ms",
+        "row_count",
+        "status",
+        "error"
+      ],
+      "title": "WriteArtifactRow",
+      "type": "object"
+    }
+  },
+  "schemas": {
+    "DeltaFeatureGate": {
+      "$ref": "#/$defs/DeltaFeatureGate"
+    },
+    "DeltaProtocolCompatibility": {
+      "$ref": "#/$defs/DeltaProtocolCompatibility"
+    },
+    "DeltaProtocolSnapshot": {
+      "$ref": "#/$defs/DeltaProtocolSnapshot"
+    },
+    "DeltaScanConfigSnapshot": {
+      "$ref": "#/$defs/DeltaScanConfigSnapshot"
+    },
+    "DeltaSchemaPolicy": {
+      "$ref": "#/$defs/DeltaSchemaPolicy"
+    },
+    "DeltaStatsDecision": {
+      "$ref": "#/$defs/DeltaStatsDecision"
+    },
+    "DeltaStatsDecisionEnvelope": {
+      "$ref": "#/$defs/DeltaStatsDecisionEnvelope"
+    },
+    "DeltaWritePolicy": {
+      "$ref": "#/$defs/DeltaWritePolicy"
+    },
+    "ExtractErrorsArtifact": {
+      "$ref": "#/$defs/ExtractErrorsArtifact"
+    },
+    "IncrementalMetadataSnapshot": {
+      "$ref": "#/$defs/IncrementalMetadataSnapshot"
+    },
+    "NormalizeOutputsArtifact": {
+      "$ref": "#/$defs/NormalizeOutputsArtifact"
+    },
+    "ParquetWriterPolicy": {
+      "$ref": "#/$defs/ParquetWriterPolicy"
+    },
+    "PlanArtifactRow": {
+      "$ref": "#/$defs/PlanArtifactRow"
+    },
+    "PlanArtifacts": {
+      "$ref": "#/$defs/PlanArtifacts"
+    },
+    "PlanProtoStatus": {
+      "$ref": "#/$defs/PlanProtoStatus"
+    },
+    "PlanScheduleArtifact": {
+      "$ref": "#/$defs/PlanScheduleArtifact"
+    },
+    "PlanScheduleEnvelope": {
+      "$ref": "#/$defs/PlanScheduleEnvelope"
+    },
+    "PlanValidationArtifact": {
+      "$ref": "#/$defs/PlanValidationArtifact"
+    },
+    "PlanValidationEnvelope": {
+      "$ref": "#/$defs/PlanValidationEnvelope"
+    },
+    "RunManifest": {
+      "$ref": "#/$defs/RunManifest"
+    },
+    "RunManifestEnvelope": {
+      "$ref": "#/$defs/RunManifestEnvelope"
+    },
+    "RuntimeProfileSnapshot": {
+      "$ref": "#/$defs/RuntimeProfileSnapshot"
+    },
+    "SemanticValidationArtifact": {
+      "$ref": "#/$defs/SemanticValidationArtifact"
+    },
+    "SemanticValidationArtifactEnvelope": {
+      "$ref": "#/$defs/SemanticValidationArtifactEnvelope"
+    },
+    "SemanticValidationEntry": {
+      "$ref": "#/$defs/SemanticValidationEntry"
+    },
+    "ViewArtifactPayload": {
+      "$ref": "#/$defs/ViewArtifactPayload"
+    },
+    "ViewCacheArtifact": {
+      "$ref": "#/$defs/ViewCacheArtifact"
+    },
+    "ViewCacheArtifactEnvelope": {
+      "$ref": "#/$defs/ViewCacheArtifactEnvelope"
+    },
+    "WriteArtifactRow": {
+      "$ref": "#/$defs/WriteArtifactRow"
+    }
+  }
+}

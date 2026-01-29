@@ -1,0 +1,12 @@
+{
+  "view_name": "cpg_nodes_v1",
+  "status": "ok",
+  "entries": [
+    {
+      "column_name": "node_id",
+      "expected": "NodeId",
+      "actual": "NodeId",
+      "status": "ok"
+    }
+  ]
+}

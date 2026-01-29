@@ -31,11 +31,7 @@ def test_datafusion_from_arrow_table() -> None:
     result = df.to_arrow_table()
     assert result.num_rows == table.num_rows
     assert payloads
-    method = payloads[0].get("method")
-    if callable(getattr(ctx, "from_arrow", None)):
-        assert method == "from_arrow"
-    else:
-        assert method == "record_batches"
+    assert payloads[0].get("method") == "from_arrow"
 
 
 def test_datafusion_from_arrow_pydict() -> None:
@@ -54,7 +50,7 @@ def test_datafusion_from_arrow_pydict() -> None:
     if callable(getattr(ctx, "from_pydict", None)):
         assert method == "from_pydict"
     else:
-        assert method == "record_batches"
+        assert method == "from_arrow"
 
 
 def test_datafusion_from_arrow_row_mappings() -> None:
@@ -69,11 +65,7 @@ def test_datafusion_from_arrow_row_mappings() -> None:
     )
     assert df.to_arrow_table().num_rows == TWO_ROWS
     assert payloads
-    method = payloads[0].get("method")
-    if callable(getattr(ctx, "from_arrow", None)):
-        assert method == "from_arrow"
-    else:
-        assert method == "record_batches"
+    assert payloads[0].get("method") == "from_arrow"
 
 
 def test_datafusion_record_batch_partitioning_payload() -> None:
@@ -91,7 +83,7 @@ def test_datafusion_record_batch_partitioning_payload() -> None:
     assert df.to_arrow_table().num_rows == table.num_rows
     assert payloads
     payload = payloads[0]
-    assert payload.get("method") == "record_batches"
-    assert payload.get("partitioning") == "record_batches"
+    assert payload.get("method") == "from_arrow"
+    assert payload.get("partitioning") == "record_batch_reader"
     assert payload.get("batch_count") == THREE_ROWS
     assert payload.get("row_count") == table.num_rows

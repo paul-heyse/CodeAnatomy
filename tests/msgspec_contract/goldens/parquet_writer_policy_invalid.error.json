@@ -1,0 +1,4 @@
+{
+  "type": "ValidationError",
+  "summary": "Expected `float` > 0.0 - at `$.bloom_filter_fpp`"
+}

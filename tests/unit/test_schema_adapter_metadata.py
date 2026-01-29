@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError
+from typing import cast
+
 import pytest
 
 from datafusion_engine.table_provider_metadata import TableProviderMetadata
@@ -78,5 +82,7 @@ def test_schema_adapter_metadata_immutability() -> None:
         table_name="test_table",
         schema_adapter_enabled=False,
     )
-    with pytest.raises(AttributeError):
-        metadata.schema_adapter_enabled = True  # type: ignore[misc]
+    setattr_fn = cast("Callable[[str, object], None]", metadata.__setattr__)
+    new_value = True
+    with pytest.raises(FrozenInstanceError):
+        setattr_fn("schema_adapter_enabled", new_value)

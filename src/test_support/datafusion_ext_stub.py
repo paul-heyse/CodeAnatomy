@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datafusion import Expr, SessionContext, lit
 
+IS_STUB: bool = True
+
 
 def _stub_expr(*values: object) -> Expr:
     """Return a placeholder DataFusion expression.
@@ -43,6 +45,45 @@ def register_udfs(
         Async UDF batch size.
     """
     _ = (ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
+
+
+def install_function_factory(ctx: SessionContext, payload: bytes) -> None:
+    """Install a stub FunctionFactory extension.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    payload
+        Serialized policy payload.
+    """
+    _ = (ctx, payload)
+
+
+def install_expr_planners(ctx: SessionContext, planners: object) -> None:
+    """Install stub ExprPlanner extensions.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    planners
+        Planner names or payload.
+    """
+    _ = (ctx, planners)
+
+
+def install_delta_table_factory(ctx: SessionContext, name: str | None = None) -> None:
+    """Install a stub Delta table factory.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    name
+        Optional factory name override.
+    """
+    _ = (ctx, name)
 
 
 def registry_snapshot(ctx: SessionContext) -> dict[str, object]:
@@ -429,6 +470,24 @@ def stable_id(prefix: str, value: Expr) -> Expr:
     return _stub_expr(prefix, value)
 
 
+def semantic_tag(semantic_type: str, value: Expr) -> Expr:
+    """Return a stub expression for semantic_tag.
+
+    Parameters
+    ----------
+    semantic_type
+        Semantic type tag.
+    value
+        Input expression.
+
+    Returns
+    -------
+    Expr
+        Placeholder expression.
+    """
+    return _stub_expr(semantic_type, value)
+
+
 def stable_id_parts(prefix: str, part1: Expr, *parts: Expr) -> Expr:
     """Return a stub expression for stable_id_parts.
 
@@ -497,7 +556,6 @@ def stable_hash_any(
 def span_make(
     bstart: Expr,
     bend: Expr,
-    *,
     line_base: Expr | None = None,
     col_unit: Expr | None = None,
     end_exclusive: Expr | None = None,
@@ -875,6 +933,9 @@ __all__ = [
     "col_to_byte",
     "count_distinct_agg",
     "first_value_agg",
+    "install_delta_table_factory",
+    "install_expr_planners",
+    "install_function_factory",
     "interval_align_score",
     "lag_window",
     "last_value_agg",
@@ -895,6 +956,7 @@ __all__ = [
     "register_udfs",
     "registry_snapshot",
     "row_number_window",
+    "semantic_tag",
     "span_contains",
     "span_id",
     "span_len",

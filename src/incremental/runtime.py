@@ -100,19 +100,6 @@ class TempTableRegistry:
         self._names.append(name)
         return name
 
-    def register_batches(self, batches: list[pa.RecordBatch], *, prefix: str) -> str:
-        """Register Arrow record batches and track their name.
-
-        Returns
-        -------
-        str
-            Registered table name.
-        """
-        name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        self._runtime.io_adapter().register_record_batches(name, batches, overwrite=True)
-        self._names.append(name)
-        return name
-
     def track(self, name: str) -> str:
         """Track a table name registered elsewhere.
 

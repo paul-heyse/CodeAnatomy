@@ -6,15 +6,21 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cpg.view_builders_df import (
+        build_cpg_edges_by_dst_df,
+        build_cpg_edges_by_src_df,
         build_cpg_edges_df,
         build_cpg_nodes_df,
         build_cpg_props_df,
+        build_cpg_props_map_df,
     )
 
 __all__ = [
+    "build_cpg_edges_by_dst_df",
+    "build_cpg_edges_by_src_df",
     "build_cpg_edges_df",
     "build_cpg_nodes_df",
     "build_cpg_props_df",
+    "build_cpg_props_map_df",
 ]
 
 
@@ -31,7 +37,14 @@ def __getattr__(name: str) -> object:
     AttributeError
         If the attribute is not found.
     """
-    if name in {"build_cpg_nodes_df", "build_cpg_edges_df", "build_cpg_props_df"}:
+    if name in {
+        "build_cpg_nodes_df",
+        "build_cpg_edges_df",
+        "build_cpg_props_df",
+        "build_cpg_props_map_df",
+        "build_cpg_edges_by_src_df",
+        "build_cpg_edges_by_dst_df",
+    }:
         from cpg import view_builders_df
 
         value = getattr(view_builders_df, name)

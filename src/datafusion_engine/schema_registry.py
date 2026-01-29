@@ -1331,7 +1331,7 @@ DATAFUSION_RUNS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_plan_artifacts_v6",
+    "datafusion_plan_artifacts_v8",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1342,35 +1342,35 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("plan_identity_hash", pa.string(), nullable=False),
             pa.field("udf_snapshot_hash", pa.string(), nullable=False),
             pa.field("function_registry_hash", pa.string(), nullable=False),
-            pa.field("required_udfs_json", pa.string(), nullable=False),
-            pa.field("required_rewrite_tags_json", pa.string(), nullable=False),
-            pa.field("domain_planner_names_json", pa.string(), nullable=False),
-            pa.field("delta_inputs_json", pa.string(), nullable=False),
-            pa.field("df_settings_json", pa.string(), nullable=False),
-            pa.field("planning_env_json", pa.string(), nullable=False),
+            pa.field("required_udfs", pa.list_(pa.string()), nullable=False),
+            pa.field("required_rewrite_tags", pa.list_(pa.string()), nullable=False),
+            pa.field("domain_planner_names", pa.list_(pa.string()), nullable=False),
+            pa.field("delta_inputs_msgpack", pa.binary(), nullable=False),
+            pa.field("df_settings", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("planning_env_msgpack", pa.binary(), nullable=False),
             pa.field("planning_env_hash", pa.string(), nullable=False),
-            pa.field("rulepack_json", pa.string(), nullable=True),
+            pa.field("rulepack_msgpack", pa.binary(), nullable=True),
             pa.field("rulepack_hash", pa.string(), nullable=True),
-            pa.field("information_schema_json", pa.string(), nullable=False),
+            pa.field("information_schema_msgpack", pa.binary(), nullable=False),
             pa.field("information_schema_hash", pa.string(), nullable=False),
-            pa.field("substrait_b64", pa.string(), nullable=True),
-            pa.field("logical_plan_proto_b64", pa.string(), nullable=True),
-            pa.field("optimized_plan_proto_b64", pa.string(), nullable=True),
-            pa.field("execution_plan_proto_b64", pa.string(), nullable=True),
-            pa.field("explain_tree_rows_json", pa.string(), nullable=True),
-            pa.field("explain_verbose_rows_json", pa.string(), nullable=True),
+            pa.field("substrait_msgpack", pa.binary(), nullable=True),
+            pa.field("logical_plan_proto_msgpack", pa.binary(), nullable=True),
+            pa.field("optimized_plan_proto_msgpack", pa.binary(), nullable=True),
+            pa.field("execution_plan_proto_msgpack", pa.binary(), nullable=True),
+            pa.field("explain_tree_rows_msgpack", pa.binary(), nullable=True),
+            pa.field("explain_verbose_rows_msgpack", pa.binary(), nullable=True),
             pa.field("explain_analyze_duration_ms", pa.float64(), nullable=True),
             pa.field("explain_analyze_output_rows", pa.int64(), nullable=True),
-            pa.field("substrait_validation_json", pa.string(), nullable=True),
-            pa.field("lineage_json", pa.string(), nullable=False),
-            pa.field("scan_units_json", pa.string(), nullable=False),
-            pa.field("scan_keys_json", pa.string(), nullable=False),
-            pa.field("plan_details_json", pa.string(), nullable=False),
-            pa.field("function_registry_snapshot_json", pa.string(), nullable=False),
-            pa.field("udf_snapshot_json", pa.string(), nullable=False),
-            pa.field("udf_planner_snapshot_json", pa.string(), nullable=True),
+            pa.field("substrait_validation_msgpack", pa.binary(), nullable=True),
+            pa.field("lineage_msgpack", pa.binary(), nullable=False),
+            pa.field("scan_units_msgpack", pa.binary(), nullable=False),
+            pa.field("scan_keys", pa.list_(pa.string()), nullable=False),
+            pa.field("plan_details_msgpack", pa.binary(), nullable=False),
+            pa.field("function_registry_snapshot_msgpack", pa.binary(), nullable=False),
+            pa.field("udf_snapshot_msgpack", pa.binary(), nullable=False),
+            pa.field("udf_planner_snapshot_msgpack", pa.binary(), nullable=True),
             pa.field("udf_compatibility_ok", pa.bool_(), nullable=False),
-            pa.field("udf_compatibility_detail_json", pa.string(), nullable=False),
+            pa.field("udf_compatibility_detail_msgpack", pa.binary(), nullable=False),
             pa.field("execution_duration_ms", pa.float64(), nullable=True),
             pa.field("execution_status", pa.string(), nullable=True),
             pa.field("execution_error", pa.string(), nullable=True),
@@ -1379,7 +1379,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_view_artifacts_v3",
+    "datafusion_view_artifacts_v4",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1388,8 +1388,8 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("plan_task_signature", pa.string(), nullable=False),
             pa.field("schema_fingerprint", pa.string(), nullable=False),
             pa.field("schema_msgpack", pa.binary(), nullable=False),
-            pa.field("schema_describe_json", pa.string(), nullable=True),
-            pa.field("schema_provenance_json", pa.string(), nullable=True),
+            pa.field("schema_describe_msgpack", pa.binary(), nullable=True),
+            pa.field("schema_provenance_msgpack", pa.binary(), nullable=True),
             pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
             pa.field("referenced_tables", pa.list_(pa.string()), nullable=True),
         ]
@@ -1498,8 +1498,8 @@ HAMILTON_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
     ),
 )
 
-DATAFUSION_HAMILTON_EVENTS_SCHEMA = _schema_with_metadata(
-    "datafusion_hamilton_events_v1",
+DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA = _schema_with_metadata(
+    "datafusion_hamilton_events_v2",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1508,7 +1508,7 @@ DATAFUSION_HAMILTON_EVENTS_SCHEMA = _schema_with_metadata(
             pa.field("event_name", pa.string(), nullable=False),
             pa.field("plan_signature", pa.string(), nullable=False),
             pa.field("reduced_plan_signature", pa.string(), nullable=False),
-            pa.field("event_payload_json", pa.string(), nullable=False),
+            pa.field("event_payload_msgpack", pa.binary(), nullable=False),
             pa.field("event_payload_hash", pa.string(), nullable=False),
         ]
     ),
@@ -3750,7 +3750,7 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
-    "DATAFUSION_HAMILTON_EVENTS_SCHEMA",
+    "DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA",
     "DATAFUSION_PLAN_ARTIFACTS_SCHEMA",
     "DATAFUSION_RUNS_SCHEMA",
     "DATAFUSION_SQL_INGEST_SCHEMA",

@@ -84,8 +84,8 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert payload["plan_task_signature"] == "sig:test_fp"
     assert "schema_fingerprint" in payload
     assert "schema_msgpack" in payload
-    assert "schema_describe_json" in payload
-    assert "schema_provenance_json" in payload
+    assert "schema_describe_msgpack" in payload
+    assert "schema_provenance_msgpack" in payload
     assert payload["required_udfs"] == []
     assert payload["referenced_tables"] == []
 
@@ -167,5 +167,7 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
         substrait_bytes=None,
         plan_fingerprint="mock_fp_12345",
         artifacts=artifacts,
+        scan_units=(),
+        plan_identity_hash=None,
         plan_details={},
     )

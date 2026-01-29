@@ -18,9 +18,8 @@ def test_engine_session_runs_plan() -> None:
     session = build_engine_session(runtime_spec=runtime_spec)
     df_ctx = session.df_ctx()
     assert df_ctx is not None
-    df_ctx.register_record_batches(
-        "values",
-        [pa.table({"value": [1, 2]}).to_batches()],
-    )
+    from datafusion_engine.ingest import datafusion_from_arrow
+
+    datafusion_from_arrow(df_ctx, name="values", value=pa.table({"value": [1, 2]}))
     table = df_ctx.sql("SELECT * FROM values").to_arrow_table()
     assert table.num_rows == EXPECTED_ROWS

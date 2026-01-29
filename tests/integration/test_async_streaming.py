@@ -22,7 +22,9 @@ def test_datafusion_async_streaming_batches() -> None:
     """Yield RecordBatches asynchronously from DataFusion results."""
     ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"entity_id": [1, 2, 3], "name": ["a", "b", "c"]})
-    ctx.register_record_batches("input_table", [table.to_batches()])
+    from datafusion_engine.ingest import datafusion_from_arrow
+
+    datafusion_from_arrow(ctx, name="input_table", value=table)
     df = ctx.sql("select * from input_table")
     batches = asyncio.run(_collect_batches(df))
     assert batches

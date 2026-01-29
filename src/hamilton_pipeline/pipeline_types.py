@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -146,6 +147,28 @@ class TreeSitterConfig:
 
 
 ScipIndexConfig = ScipIndexSettings
+
+
+ExecutorKind = Literal["threadpool", "multiprocessing", "dask", "ray"]
+
+
+class ExecutionMode(StrEnum):
+    """Execution mode for Hamilton orchestration."""
+
+    DETERMINISTIC_SERIAL = "deterministic_serial"
+    PLAN_PARALLEL = "plan_parallel"
+    PLAN_PARALLEL_REMOTE = "plan_parallel_remote"
+
+
+@dataclass(frozen=True)
+class ExecutorConfig:
+    """Executor configuration for plan-aware scheduling."""
+
+    kind: ExecutorKind = "multiprocessing"
+    max_tasks: int = 4
+    remote_kind: ExecutorKind | None = None
+    remote_max_tasks: int | None = None
+    cost_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -306,7 +329,6 @@ class CpgOutputTables:
     cpg_nodes: TableLike
     cpg_edges: TableLike
     cpg_props: TableLike
-    cpg_props_json: TableLike | None = None
 
     def as_dict(self) -> dict[str, TableLike]:
         """Return the CPG outputs as a name->table mapping.
@@ -316,14 +338,11 @@ class CpgOutputTables:
         dict[str, TableLike]
             Mapping of CPG output names to tables.
         """
-        tables = {
+        return {
             "cpg_nodes": self.cpg_nodes,
             "cpg_edges": self.cpg_edges,
             "cpg_props": self.cpg_props,
         }
-        if self.cpg_props_json is not None:
-            tables["cpg_props_json"] = self.cpg_props_json
-        return tables
 
 
 @dataclass(frozen=True)

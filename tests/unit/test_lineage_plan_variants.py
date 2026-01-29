@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.lineage_datafusion import LineageReport, extract_lineage
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -28,8 +29,8 @@ def _runtime_context() -> tuple[SessionContext, SessionRuntime]:
 def _register_base_tables(ctx: SessionContext) -> None:
     events = pa.table({"id": [1, 2], "label": ["a", "b"]})
     users = pa.table({"id": [1, 3], "name": ["alpha", "beta"]})
-    ctx.register_record_batches("events", [events.to_batches()])
-    ctx.register_record_batches("users", [users.to_batches()])
+    datafusion_from_arrow(ctx, name="events", value=events)
+    datafusion_from_arrow(ctx, name="users", value=users)
 
 
 def _lineage_for_sql(

@@ -1,0 +1,49 @@
+{
+  "event_time_unix_ms": 1735689600000,
+  "profile_name": "default",
+  "event_kind": "plan",
+  "view_name": "example_view",
+  "plan_fingerprint": "fp-1",
+  "plan_identity_hash": "pid-1",
+  "udf_snapshot_hash": "udf-hash",
+  "function_registry_hash": "registry-hash",
+  "required_udfs": [
+    "udf_a"
+  ],
+  "required_rewrite_tags": [
+    "rewrite_a"
+  ],
+  "domain_planner_names": [
+    "domain_a"
+  ],
+  "delta_inputs_msgpack": "kYOsZGF0YXNldF9uYW1lqWNwZ19ub2Rlc6l0aW1lc3RhbXDAp3ZlcnNpb24B",
+  "df_settings": {
+    "execution_mode": "test"
+  },
+  "planning_env_msgpack": "ga5weXRob25fdmVyc2lvbqQzLjEz",
+  "planning_env_hash": "env-hash",
+  "rulepack_msgpack": null,
+  "rulepack_hash": null,
+  "information_schema_msgpack": "gaZ0YWJsZXOQ",
+  "information_schema_hash": "info-hash",
+  "substrait_msgpack": null,
+  "logical_plan_proto_msgpack": null,
+  "optimized_plan_proto_msgpack": null,
+  "execution_plan_proto_msgpack": null,
+  "explain_tree_rows_msgpack": null,
+  "explain_verbose_rows_msgpack": null,
+  "explain_analyze_duration_ms": null,
+  "explain_analyze_output_rows": null,
+  "substrait_validation_msgpack": null,
+  "lineage_msgpack": "gaVub2Rlc5A=",
+  "scan_units_msgpack": "kYGkbmFtZaZzY2FuLTE=",
+  "scan_keys": [
+    "scan_key_1"
+  ],
+  "plan_details_msgpack": "gaRtb2RlpHRlc3Q=",
+  "function_registry_snapshot_msgpack": "gaRoYXNorXJlZ2lzdHJ5LWhhc2g=",
+  "udf_snapshot_msgpack": "gaRoYXNoqHVkZi1oYXNo",
+  "udf_planner_snapshot_msgpack": null,
+  "udf_compatibility_ok": true,
+  "udf_compatibility_detail_msgpack": "gaZzdGF0dXOib2s="
+}

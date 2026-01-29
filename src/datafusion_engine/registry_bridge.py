@@ -48,10 +48,12 @@ import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
+from datafusion.expr import Expr
 
 from arrow_utils.core.ordering import OrderingLevel
 from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
 from core_types import ensure_path
+from datafusion_engine import sql_options as _sql_options
 from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
 from datafusion_engine.arrow_schema.metadata import (
@@ -83,12 +85,6 @@ from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
 )
-from datafusion_engine.sql_options import (
-    sql_options_for_profile as _sql_options_for_profile,
-)
-from datafusion_engine.sql_options import (
-    statement_sql_options_for_profile as _statement_sql_options_for_profile,
-)
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -104,6 +100,8 @@ from schema_spec.system import (
     dataset_spec_from_schema,
     make_dataset_spec,
 )
+from serde_artifacts import DeltaScanConfigSnapshot
+from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
@@ -647,7 +645,7 @@ def _validate_constraints_and_defaults(
     expected_defaults = _expected_column_defaults(schema)
     if not key_fields and not expected_defaults:
         return
-    sql_options = _sql_options_for_profile(context.runtime_profile)
+    sql_options = _sql_options.sql_options_for_profile(context.runtime_profile)
     if context.runtime_profile is not None:
         introspector = schema_introspector_for_profile(context.runtime_profile, context.ctx)
     else:
@@ -1134,9 +1132,9 @@ def _register_delta_ddl_table(
     if callable(deregister):
         with suppress(KeyError, RuntimeError, TypeError, ValueError):
             deregister(context.name)
-    sql_options = _statement_sql_options_for_profile(context.runtime_profile).with_allow_ddl(
-        allow=True
-    )
+    sql_options = _sql_options.statement_sql_options_for_profile(
+        context.runtime_profile
+    ).with_allow_ddl(allow=True)
     df = context.ctx.sql_with_options(ddl, sql_options)
     df.collect()
     df = context.ctx.table(context.name)
@@ -1287,13 +1285,14 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
     if options is None:
         return None
     schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
-    return {
-        "file_column_name": options.file_column_name,
-        "enable_parquet_pushdown": options.enable_parquet_pushdown,
-        "schema_force_view_types": options.schema_force_view_types,
-        "wrap_partition_values": options.wrap_partition_values,
-        "schema": schema_payload,
-    }
+    snapshot = DeltaScanConfigSnapshot(
+        file_column_name=options.file_column_name,
+        enable_parquet_pushdown=options.enable_parquet_pushdown,
+        schema_force_view_types=options.schema_force_view_types,
+        wrap_partition_values=options.wrap_partition_values,
+        schema=dict(schema_payload) if schema_payload is not None else None,
+    )
+    return cast("dict[str, object]", to_builtins(snapshot, str_keys=True))
 
 
 def _file_extension_for_location(
@@ -1404,7 +1403,7 @@ def _register_file_list_dataset(
     _apply_scan_settings(
         context.ctx,
         scan=scan,
-        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        sql_options=_sql_options.statement_sql_options_for_profile(context.runtime_profile),
     )
     files = context.location.files
     if not files:
@@ -1578,7 +1577,7 @@ def _record_listing_table_artifact(
         context.ctx,
         name=context.name,
         enable_information_schema=profile.enable_information_schema,
-        sql_options=_sql_options_for_profile(profile),
+        sql_options=_sql_options.sql_options_for_profile(profile),
         runtime_profile=profile,
     )
     expected_schema = context.options.schema
@@ -1692,11 +1691,20 @@ def _apply_projection_exprs(
     _ = sql_options
     df = ctx.table(table_name)
     schema_names = set(df.schema().names)
-    selected = [name for name in projection_exprs if name in schema_names]
-    if not selected:
+    resolved_exprs: list[Expr | str] = []
+    for expr_text in projection_exprs:
+        if expr_text in schema_names:
+            resolved_exprs.append(col(expr_text))
+            continue
+        try:
+            resolved_exprs.append(df.parse_sql_expr(expr_text))
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Projection expression parse failed: {expr_text!r} ({exc})"
+            raise ValueError(msg) from exc
+    if not resolved_exprs:
         msg = "Projection expressions are required for dynamic projection."
         raise ValueError(msg)
-    projected = df.select(*[col(name) for name in selected])
+    projected = df.select(*resolved_exprs)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     adapter.register_view(table_name, projected, overwrite=True, temporary=False)
     if runtime_profile is not None:
@@ -1963,7 +1971,7 @@ def _validate_schema_contracts(context: DataFusionRegistrationContext) -> None:
     _validate_table_schema_contract(contract)
     cache = introspection_cache_for_ctx(
         context.ctx,
-        sql_options=_sql_options_for_profile(context.runtime_profile),
+        sql_options=_sql_options.sql_options_for_profile(context.runtime_profile),
     )
     cache.invalidate()
     snapshot = cache.snapshot
@@ -2244,7 +2252,7 @@ def _partition_column_rows(
                 ctx,
             ).table_columns_with_ordinal(table_name)
         else:
-            sql_options = _sql_options_for_profile(runtime_profile)
+            sql_options = _sql_options.sql_options_for_profile(runtime_profile)
             table = SchemaIntrospector(ctx, sql_options=sql_options).table_columns_with_ordinal(
                 table_name
             )

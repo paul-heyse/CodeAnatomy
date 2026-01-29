@@ -11,8 +11,13 @@ from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from hamilton_pipeline.driver_factory import build_driver
-from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
+from hamilton_pipeline.driver_factory import DriverBuildRequest, build_driver
+from hamilton_pipeline.pipeline_types import (
+    ExecutionMode,
+    ExecutorConfig,
+    ScipIdentityOverrides,
+    ScipIndexConfig,
+)
 from incremental.types import IncrementalConfig
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
@@ -22,7 +27,9 @@ FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_cpg_nodes_quality_delta",
     "write_cpg_edges_delta",
     "write_cpg_props_delta",
-    "write_cpg_props_json_delta",
+    "write_cpg_props_map_delta",
+    "write_cpg_edges_by_src_delta",
+    "write_cpg_edges_by_dst_delta",
     "write_cpg_props_quality_delta",
     "write_normalize_outputs_delta",
     "write_extract_error_artifacts_delta",
@@ -44,6 +51,8 @@ class PipelineExecutionOptions:
     scip_identity_overrides: ScipIdentityOverrides | None = None
     incremental_config: IncrementalConfig | None = None
     incremental_impact_strategy: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
+    executor_config: ExecutorConfig | None = None
     outputs: Sequence[str] | None = None
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     pipeline_driver: hamilton_driver.Driver | None = None
@@ -147,7 +156,13 @@ def execute_pipeline(
     driver_instance = (
         options.pipeline_driver
         if options.pipeline_driver is not None
-        else build_driver(config=options.config)
+        else build_driver(
+            request=DriverBuildRequest(
+                config=options.config,
+                execution_mode=options.execution_mode,
+                executor_config=options.executor_config,
+            )
+        )
     )
     output_nodes = cast(
         "list[PipelineFinalVar]",

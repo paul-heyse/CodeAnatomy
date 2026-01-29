@@ -47,6 +47,12 @@ pub fn all_udfs() -> Vec<UdfSpec> {
             aliases: &[],
         },
         UdfSpec {
+            name: "semantic_tag",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::semantic_tag_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
             name: "cpg_score",
             kind: UdfKind::Scalar,
             builder: || UdfHandle::Scalar(udf_custom::cpg_score_udf()),

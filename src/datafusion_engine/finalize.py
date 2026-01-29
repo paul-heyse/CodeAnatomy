@@ -31,10 +31,8 @@ from datafusion_engine.arrow_schema.build import ColumnDefaultsSpec, ConstExpr
 from datafusion_engine.arrow_schema.chunking import ChunkPolicy
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
@@ -43,6 +41,7 @@ from datafusion_ext import stable_hash64
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.schema_policy import SchemaPolicy
 
 
@@ -592,8 +591,9 @@ def _row_id_for_errors(
         else:
             resolved_table = cast("pa.Table", resolved)
         table_name = f"_finalize_errors_{uuid.uuid4().hex}"
-        adapter = DataFusionIOAdapter(ctx=df_ctx, profile=runtime_profile)
-        adapter.register_record_batches(table_name, [resolved_table.to_batches()])
+        from datafusion_engine.ingest import datafusion_from_arrow
+
+        datafusion_from_arrow(df_ctx, name=table_name, value=resolved_table)
         try:
             prefix = f"{contract.name}:row"
             df = df_ctx.table(table_name)
@@ -609,7 +609,9 @@ def _row_id_for_errors(
             result = df.select(stable_hash64(concat_expr).alias("row_id")).to_arrow_table()
         finally:
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(table_name)
+                deregister = getattr(df_ctx, "deregister_table", None)
+                if callable(deregister):
+                    deregister(table_name)
         return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 
@@ -691,8 +693,11 @@ def _register_temp_table(
     else:
         resolved_table = cast("pa.Table", resolved)
     table_name = f"_{prefix}_{uuid.uuid4().hex}"
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(table_name, [resolved_table.to_batches()])
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if not callable(from_arrow):
+        msg = "SessionContext does not support from_arrow ingestion."
+        raise NotImplementedError(msg)
+    from_arrow(resolved_table, name=table_name)
     return table_name, resolved_table
 
 

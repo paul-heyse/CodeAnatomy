@@ -10,7 +10,6 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike, coerce_table_like
-from datafusion_engine.io_adapter import DataFusionIOAdapter
 
 
 @dataclass(frozen=True)
@@ -44,8 +43,10 @@ def register_nested_table(
     resolved_table = cast("pa.Table", resolved_table)
     with suppress(KeyError, ValueError):
         df_ctx.deregister_table(name)
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(name, [resolved_table.to_batches()])
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if not callable(from_arrow):
+        return
+    from_arrow(resolved_table, name=name)
 
 
 def materialize_view_reference(

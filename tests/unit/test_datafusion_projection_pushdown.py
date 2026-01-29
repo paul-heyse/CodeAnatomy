@@ -5,6 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
@@ -16,17 +17,16 @@ def test_dynamic_projection_reduces_columns() -> None:
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [
-            pa.table(
-                {
-                    "id": [1, 2],
-                    "label": ["a", "b"],
-                    "extra": [10, 20],
-                }
-            ).to_batches()
-        ],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table(
+            {
+                "id": [1, 2],
+                "label": ["a", "b"],
+                "extra": [10, 20],
+            }
+        ),
     )
     df = ctx.sql("SELECT events.id FROM events")
     bundle = build_plan_bundle(

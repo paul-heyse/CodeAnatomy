@@ -16,7 +16,7 @@ from datafusion_engine.diagnostics import (
 )
 from datafusion_engine.schema_contracts import SchemaViolation
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
-from serde_msgspec import StructBase
+from serde_msgspec import StructBaseCompat
 
 _ = _datafusion_ext
 
@@ -74,7 +74,7 @@ class DiagnosticsCollector:
         return {name: list(rows) for name, rows in self.artifacts.items()}
 
 
-class PreparedStatementSpec(StructBase, frozen=True):
+class PreparedStatementSpec(StructBaseCompat, frozen=True):
     """Prepared statement metadata for diagnostics reporting."""
 
     name: str
@@ -182,7 +182,7 @@ def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionView
     """Record a deterministic view artifact payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id="obs")
     recorder_sink.record_artifact(
-        "datafusion_view_artifacts_v3",
+        "datafusion_view_artifacts_v4",
         artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000)),
     )
 

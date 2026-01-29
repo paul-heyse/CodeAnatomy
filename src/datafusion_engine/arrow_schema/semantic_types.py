@@ -46,6 +46,21 @@ BYTE_SPAN_TYPE_INFO = SemanticTypeInfo(
     extension_name="codeintel.byte_span",
     storage_type=BYTE_SPAN_STORAGE,
 )
+NODE_ID_TYPE_INFO = SemanticTypeInfo(
+    name="NodeId",
+    extension_name="codeintel.node_id",
+    storage_type=pa.string(),
+)
+EDGE_ID_TYPE_INFO = SemanticTypeInfo(
+    name="EdgeId",
+    extension_name="codeintel.edge_id",
+    storage_type=pa.string(),
+)
+SPAN_ID_TYPE_INFO = SemanticTypeInfo(
+    name="SpanId",
+    extension_name="codeintel.span_id",
+    storage_type=pa.string(),
+)
 
 
 class _SemanticExtensionType(pa.ExtensionType):
@@ -67,6 +82,12 @@ class _SemanticExtensionType(pa.ExtensionType):
             return _SemanticExtensionType(SPAN_TYPE_INFO)
         if name == BYTE_SPAN_TYPE_INFO.name:
             return _SemanticExtensionType(BYTE_SPAN_TYPE_INFO)
+        if name == NODE_ID_TYPE_INFO.name:
+            return _SemanticExtensionType(NODE_ID_TYPE_INFO)
+        if name == EDGE_ID_TYPE_INFO.name:
+            return _SemanticExtensionType(EDGE_ID_TYPE_INFO)
+        if name == SPAN_ID_TYPE_INFO.name:
+            return _SemanticExtensionType(SPAN_ID_TYPE_INFO)
         msg = f"Unsupported semantic extension type: {name!r}."
         raise ValueError(msg)
 
@@ -79,7 +100,13 @@ _SemanticExtensionType.__arrow_ext_deserialize__ = classmethod(
 
 def register_semantic_extension_types() -> None:
     """Register semantic extension types with pyarrow."""
-    for info in (SPAN_TYPE_INFO, BYTE_SPAN_TYPE_INFO):
+    for info in (
+        SPAN_TYPE_INFO,
+        BYTE_SPAN_TYPE_INFO,
+        NODE_ID_TYPE_INFO,
+        EDGE_ID_TYPE_INFO,
+        SPAN_ID_TYPE_INFO,
+    ):
         with contextlib.suppress(ValueError, pa.ArrowKeyError):
             pa.register_extension_type(_SemanticExtensionType(info))
 
@@ -127,6 +154,57 @@ def span_metadata(
     return metadata
 
 
+def node_id_metadata(
+    *,
+    extra: Mapping[bytes, bytes] | None = None,
+) -> dict[bytes, bytes]:
+    """Return metadata for node-id semantic types.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping for node id semantic types.
+    """
+    metadata = semantic_type_metadata(NODE_ID_TYPE_INFO)
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
+def edge_id_metadata(
+    *,
+    extra: Mapping[bytes, bytes] | None = None,
+) -> dict[bytes, bytes]:
+    """Return metadata for edge-id semantic types.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping for edge id semantic types.
+    """
+    metadata = semantic_type_metadata(EDGE_ID_TYPE_INFO)
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
+def span_id_metadata(
+    *,
+    extra: Mapping[bytes, bytes] | None = None,
+) -> dict[bytes, bytes]:
+    """Return metadata for span-id semantic types.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping for span id semantic types.
+    """
+    metadata = semantic_type_metadata(SPAN_ID_TYPE_INFO)
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
 def span_type() -> pa.DataType:
     """Return the registered Span extension type.
 
@@ -149,15 +227,57 @@ def byte_span_type() -> pa.DataType:
     return _extension_type(BYTE_SPAN_TYPE_INFO)
 
 
+def node_id_type() -> pa.DataType:
+    """Return the registered NodeId extension type.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Extension data type for node ids.
+    """
+    return _extension_type(NODE_ID_TYPE_INFO)
+
+
+def edge_id_type() -> pa.DataType:
+    """Return the registered EdgeId extension type.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Extension data type for edge ids.
+    """
+    return _extension_type(EDGE_ID_TYPE_INFO)
+
+
+def span_id_type() -> pa.DataType:
+    """Return the registered SpanId extension type.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Extension data type for span ids.
+    """
+    return _extension_type(SPAN_ID_TYPE_INFO)
+
+
 __all__ = [
     "BYTE_SPAN_STORAGE",
     "BYTE_SPAN_TYPE_INFO",
+    "EDGE_ID_TYPE_INFO",
+    "NODE_ID_TYPE_INFO",
     "SEMANTIC_TYPE_META",
+    "SPAN_ID_TYPE_INFO",
     "SPAN_STORAGE",
     "SPAN_TYPE_INFO",
     "byte_span_type",
+    "edge_id_metadata",
+    "edge_id_type",
+    "node_id_metadata",
+    "node_id_type",
     "register_semantic_extension_types",
     "semantic_type_metadata",
+    "span_id_metadata",
+    "span_id_type",
     "span_metadata",
     "span_type",
 ]

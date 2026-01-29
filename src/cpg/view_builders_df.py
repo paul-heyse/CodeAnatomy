@@ -7,8 +7,8 @@ in a future release.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import col, lit
@@ -24,11 +24,19 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
-from datafusion_engine.runtime import SessionRuntime
+from datafusion_engine.arrow_schema.semantic_types import SEMANTIC_TYPE_META
+from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_ext import span_id, stable_id_parts
+from datafusion_ext import semantic_tag, span_id, stable_id_parts
 from relspec.view_defs import RELATION_OUTPUT_NAME
+from serde_artifacts import (
+    SemanticValidationArtifact,
+    SemanticValidationArtifactEnvelope,
+    SemanticValidationEntry,
+)
+from serde_msgspec import convert, to_builtins
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -56,6 +64,128 @@ def _null_expr(data_type: str) -> Expr:
         Null expression with specified type.
     """
     return _arrow_cast(lit(None), data_type)
+
+
+def _semantic_validation_enabled() -> bool:
+    import datafusion_ext
+
+    return not bool(getattr(datafusion_ext, "IS_STUB", False))
+
+
+def _schema_from_df(df: DataFrame) -> pa.Schema:
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve Arrow schema for CPG output."
+    raise TypeError(msg)
+
+
+def _metadata_value(metadata: Mapping[object, object], key: bytes) -> str | None:
+    for meta_key, meta_value in metadata.items():
+        if meta_key == key or (isinstance(meta_key, str) and meta_key.encode() == key):
+            if isinstance(meta_value, bytes):
+                return meta_value.decode("utf-8", errors="replace")
+            return str(meta_value)
+    return None
+
+
+def _semantic_validation_artifact(
+    df: DataFrame,
+    *,
+    view_name: str,
+    expected: Mapping[str, str],
+) -> SemanticValidationArtifact:
+    schema = _schema_from_df(df)
+    entries: list[SemanticValidationEntry] = []
+    errors: list[str] = []
+    for column, semantic_type in expected.items():
+        if column not in schema.names:
+            entries.append(
+                SemanticValidationEntry(
+                    column_name=column,
+                    expected=semantic_type,
+                    actual=None,
+                    status="missing",
+                )
+            )
+            errors.append(f"Missing semantic column {column!r} in CPG output.")
+            continue
+        field = schema.field(column)
+        metadata = dict(field.metadata or {})
+        actual = _metadata_value(metadata, SEMANTIC_TYPE_META)
+        if actual is None:
+            entries.append(
+                SemanticValidationEntry(
+                    column_name=column,
+                    expected=semantic_type,
+                    actual=None,
+                    status="missing",
+                )
+            )
+            errors.append(f"Missing semantic_type metadata for CPG column {column!r}.")
+            continue
+        if actual != semantic_type:
+            entries.append(
+                SemanticValidationEntry(
+                    column_name=column,
+                    expected=semantic_type,
+                    actual=actual,
+                    status="mismatch",
+                )
+            )
+            errors.append(
+                f"Semantic type mismatch for CPG column {column!r}: "
+                f"expected {semantic_type!r}, got {actual!r}."
+            )
+            continue
+        entries.append(
+            SemanticValidationEntry(
+                column_name=column,
+                expected=semantic_type,
+                actual=actual,
+                status="ok",
+            )
+        )
+    status: Literal["ok", "error"] = "ok" if not errors else "error"
+    return SemanticValidationArtifact(
+        view_name=view_name,
+        status=status,
+        entries=tuple(entries),
+        errors=tuple(errors),
+    )
+
+
+def _require_semantic_types(
+    df: DataFrame,
+    *,
+    view_name: str,
+    expected: Mapping[str, str],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> None:
+    if not _semantic_validation_enabled():
+        return
+    artifact = _semantic_validation_artifact(df, view_name=view_name, expected=expected)
+    envelope = SemanticValidationArtifactEnvelope(payload=artifact)
+    validated = convert(
+        to_builtins(envelope, str_keys=True),
+        target_type=SemanticValidationArtifactEnvelope,
+        strict=True,
+    )
+    payload = to_builtins(validated, str_keys=True)
+    record_artifact(
+        runtime_profile,
+        "semantic_validation_v1",
+        cast("Mapping[str, object]", payload),
+    )
+    if artifact.status == "ok":
+        return
+    msg = "Semantic validation failed: " + "; ".join(artifact.errors)
+    raise ValueError(msg)
 
 
 def _coalesce_cols(df: DataFrame, columns: Sequence[str], dtype: pa.DataType) -> Expr:
@@ -158,7 +288,14 @@ def build_cpg_nodes_df(
     for frame in frames[1:]:
         combined = combined.union(frame)
 
-    return combined.select(*_NODE_OUTPUT_COLUMNS)
+    result = combined.select(*_NODE_OUTPUT_COLUMNS)
+    _require_semantic_types(
+        result,
+        view_name="cpg_nodes_v1",
+        expected={"node_id": "NodeId"},
+        runtime_profile=session_runtime.profile,
+    )
+    return result
 
 
 def _emit_nodes_df(
@@ -190,7 +327,7 @@ def _emit_nodes_df(
     node_id_parts = [col(c) if c in df.schema().names else _null_expr("Utf8") for c in id_cols]
     node_id_parts.append(lit(str(spec.node_kind)))
 
-    node_id = _stable_id_from_parts("node", node_id_parts)
+    node_id = semantic_tag("NodeId", _stable_id_from_parts("node", node_id_parts))
     node_kind = lit(str(spec.node_kind))
     path = _coalesce_cols(df, spec.path_cols, pa.string())
     bstart = _coalesce_cols(df, spec.bstart_cols, pa.int64())
@@ -254,7 +391,18 @@ def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
         msg = f"Missing required source table {RELATION_OUTPUT_NAME!r} for CPG edges."
         raise ValueError(msg) from exc
 
-    return _emit_edges_from_relation_df(relation_df)
+    result = _emit_edges_from_relation_df(relation_df)
+    _require_semantic_types(
+        result,
+        view_name="cpg_edges_v1",
+        expected={
+            "edge_id": "EdgeId",
+            "src_node_id": "NodeId",
+            "dst_node_id": "NodeId",
+        },
+        runtime_profile=session_runtime.profile,
+    )
+    return result
 
 
 def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
@@ -285,6 +433,7 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
         .when(lit(value=True), f.coalesce(span_id_expr, base_id))
         .otherwise(_null_expr("Utf8"))
     )
+    edge_id = semantic_tag("EdgeId", edge_id)
 
     origin = col("origin") if "origin" in names else _null_expr("Utf8")
     resolution_method = (
@@ -303,8 +452,8 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     return df.select(
         edge_id.alias("edge_id"),
         edge_kind.alias("edge_kind"),
-        col("src").alias("src_node_id"),
-        col("dst").alias("dst_node_id"),
+        semantic_tag("NodeId", col("src")).alias("src_node_id"),
+        semantic_tag("NodeId", col("dst")).alias("dst_node_id"),
         col("path").alias("path"),
         col("bstart").alias("bstart"),
         col("bend").alias("bend"),
@@ -379,6 +528,104 @@ def build_cpg_props_df(
         combined = combined.union(frame)
 
     return combined.select(*_PROP_OUTPUT_COLUMNS)
+
+
+def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
+    """Build CPG property maps grouped by entity.
+
+    Returns
+    -------
+    DataFrame
+        Aggregated property map rows keyed by entity.
+    """
+    ctx = session_runtime.ctx
+    df = ctx.table("cpg_props_v1")
+    value_struct = f.named_struct(
+        [
+            ("value_type", col("value_type")),
+            ("value_string", col("value_string")),
+            ("value_int", col("value_int")),
+            ("value_float", col("value_float")),
+            ("value_bool", col("value_bool")),
+            ("value_json", col("value_json")),
+        ]
+    )
+    entry = f.named_struct(
+        [
+            ("prop_key", col("prop_key")),
+            ("value", value_struct),
+        ]
+    )
+    return df.aggregate(
+        [col("entity_kind"), col("entity_id"), col("node_kind")],
+        [f.array_agg(entry).alias("props")],
+    )
+
+
+def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
+    """Build adjacency lists grouped by source node.
+
+    Returns
+    -------
+    DataFrame
+        Aggregated adjacency rows keyed by source node.
+    """
+    ctx = session_runtime.ctx
+    df = ctx.table("cpg_edges_v1")
+    entry = f.named_struct(
+        [
+            ("edge_id", col("edge_id")),
+            ("edge_kind", col("edge_kind")),
+            ("dst_node_id", col("dst_node_id")),
+            ("path", col("path")),
+            ("bstart", col("bstart")),
+            ("bend", col("bend")),
+            ("origin", col("origin")),
+            ("resolution_method", col("resolution_method")),
+            ("confidence", col("confidence")),
+            ("score", col("score")),
+            ("symbol_roles", col("symbol_roles")),
+            ("qname_source", col("qname_source")),
+            ("ambiguity_group_id", col("ambiguity_group_id")),
+        ]
+    )
+    return df.aggregate(
+        [col("src_node_id")],
+        [f.array_agg(entry).alias("edges")],
+    )
+
+
+def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
+    """Build adjacency lists grouped by destination node.
+
+    Returns
+    -------
+    DataFrame
+        Aggregated adjacency rows keyed by destination node.
+    """
+    ctx = session_runtime.ctx
+    df = ctx.table("cpg_edges_v1")
+    entry = f.named_struct(
+        [
+            ("edge_id", col("edge_id")),
+            ("edge_kind", col("edge_kind")),
+            ("src_node_id", col("src_node_id")),
+            ("path", col("path")),
+            ("bstart", col("bstart")),
+            ("bend", col("bend")),
+            ("origin", col("origin")),
+            ("resolution_method", col("resolution_method")),
+            ("confidence", col("confidence")),
+            ("score", col("score")),
+            ("symbol_roles", col("symbol_roles")),
+            ("qname_source", col("qname_source")),
+            ("ambiguity_group_id", col("ambiguity_group_id")),
+        ]
+    )
+    return df.aggregate(
+        [col("dst_node_id")],
+        [f.array_agg(entry).alias("edges")],
+    )
 
 
 def _emit_props_df(
@@ -673,7 +920,10 @@ def _source_columns_lookup_df(
 
 
 __all__ = [
+    "build_cpg_edges_by_dst_df",
+    "build_cpg_edges_by_src_df",
     "build_cpg_edges_df",
     "build_cpg_nodes_df",
     "build_cpg_props_df",
+    "build_cpg_props_map_df",
 ]

@@ -17,7 +17,12 @@ from cpg.schemas import SCHEMA_VERSION
 from engine.plan_policy import WriterStrategy
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.execution import ImpactStrategy
-from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
+from hamilton_pipeline.pipeline_types import (
+    ExecutionMode,
+    ExecutorConfig,
+    ScipIdentityOverrides,
+    ScipIndexConfig,
+)
 from incremental.types import IncrementalConfig
 
 GraphProduct = Literal["cpg"]
@@ -64,6 +69,9 @@ class GraphProductBuildResult:
     cpg_nodes: FinalizeDeltaReport
     cpg_edges: FinalizeDeltaReport
     cpg_props: FinalizeDeltaReport
+    cpg_props_map: TableDeltaReport
+    cpg_edges_by_src: TableDeltaReport
+    cpg_edges_by_dst: TableDeltaReport
 
     cpg_nodes_quality: TableDeltaReport | None = None
     cpg_props_quality: TableDeltaReport | None = None
@@ -81,6 +89,8 @@ class GraphProductBuildRequest:
 
     repo_root: PathLike
     product: GraphProduct = "cpg"
+    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
+    executor_config: ExecutorConfig | None = None
 
     output_dir: PathLike | None = None
     work_dir: PathLike | None = None
@@ -132,6 +142,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         scip_identity_overrides=request.scip_identity_overrides,
         incremental_config=request.incremental_config,
         incremental_impact_strategy=request.incremental_impact_strategy,
+        execution_mode=request.execution_mode,
+        executor_config=request.executor_config,
         outputs=outputs,
         config=request.config,
         overrides=overrides or None,
@@ -150,6 +162,9 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
         "write_cpg_nodes_delta",
         "write_cpg_edges_delta",
         "write_cpg_props_delta",
+        "write_cpg_props_map_delta",
+        "write_cpg_edges_by_src_delta",
+        "write_cpg_edges_by_dst_delta",
     ]
     if request.include_quality:
         outputs.extend(
@@ -232,6 +247,76 @@ def _parse_table(report: JsonDict) -> TableDeltaReport:
     )
 
 
+def _parse_quality_report(
+    pipeline_outputs: Mapping[str, JsonDict | None],
+    *,
+    include_quality: bool,
+    key: str,
+) -> TableDeltaReport | None:
+    if not include_quality:
+        return None
+    quality = _optional(pipeline_outputs, key)
+    if quality is None:
+        return None
+    return _parse_table(quality)
+
+
+def _parse_manifest_path(
+    pipeline_outputs: Mapping[str, JsonDict | None],
+    *,
+    include_manifest: bool,
+) -> Path | None:
+    if not include_manifest:
+        return None
+    manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
+    if manifest is None or not manifest.get("path"):
+        return None
+    return Path(cast("str", manifest["path"]))
+
+
+def _parse_manifest_details(
+    pipeline_outputs: Mapping[str, JsonDict | None],
+    *,
+    include_manifest: bool,
+) -> tuple[Path | None, str | None]:
+    if not include_manifest:
+        return None, None
+    manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
+    if manifest is None:
+        return None, None
+    manifest_path = None
+    if manifest.get("path"):
+        manifest_path = Path(cast("str", manifest["path"]))
+    manifest_run_id = None
+    if manifest.get("manifest"):
+        manifest_payload = cast("dict[str, object]", manifest["manifest"])
+        manifest_run_id = cast("str | None", manifest_payload.get("run_id"))
+    return manifest_path, manifest_run_id
+
+
+def _parse_run_bundle(
+    pipeline_outputs: Mapping[str, JsonDict | None],
+    *,
+    include_run_bundle: bool,
+) -> tuple[Path | None, str | None]:
+    if not include_run_bundle:
+        return None, None
+    bundle = _optional(pipeline_outputs, "write_run_bundle_dir")
+    if bundle is None:
+        return None, None
+    run_bundle_dir = None
+    run_id = None
+    bundle_dir = bundle.get("bundle_dir")
+    if bundle_dir:
+        run_bundle_dir = Path(cast("str", bundle_dir))
+    bundle_run_id = bundle.get("run_id")
+    if bundle_run_id:
+        run_id = cast("str", bundle_run_id)
+    if run_id is None and run_bundle_dir is not None:
+        run_id = run_bundle_dir.name
+    return run_bundle_dir, run_id
+
+
 def _resolve_version(packages: Sequence[str]) -> str | None:
     for name in packages:
         try:
@@ -269,35 +354,38 @@ def _parse_result(
 
     edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_delta"))
     props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_delta"))
+    props_map_report = _parse_table(_require(pipeline_outputs, "write_cpg_props_map_delta"))
+    edges_by_src_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_src_delta"))
+    edges_by_dst_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_dst_delta"))
 
-    nodes_quality = None
-    if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_nodes_quality_delta")
-        if quality is not None:
-            nodes_quality = _parse_table(quality)
+    nodes_quality = _parse_quality_report(
+        pipeline_outputs,
+        include_quality=request.include_quality,
+        key="write_cpg_nodes_quality_delta",
+    )
+    props_quality = _parse_quality_report(
+        pipeline_outputs,
+        include_quality=request.include_quality,
+        key="write_cpg_props_quality_delta",
+    )
+    manifest_path, manifest_run_id = _parse_manifest_details(
+        pipeline_outputs,
+        include_manifest=request.include_manifest,
+    )
+    run_bundle_dir, run_id = _parse_run_bundle(
+        pipeline_outputs,
+        include_run_bundle=request.include_run_bundle,
+    )
+    if run_id is None:
+        run_id = manifest_run_id
+    if run_id is None and run_bundle_dir is not None:
+        run_id = run_bundle_dir.name
 
-    props_quality = None
-    if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_props_quality_delta")
-        if quality is not None:
-            props_quality = _parse_table(quality)
-
-    manifest_path = None
-    if request.include_manifest:
-        manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
-        if manifest is not None and manifest.get("path"):
-            manifest_path = Path(cast("str", manifest["path"]))
-
-    run_bundle_dir = None
-    if request.include_run_bundle:
-        bundle = _optional(pipeline_outputs, "write_run_bundle_dir")
-        if bundle is not None and bundle.get("bundle_dir"):
-            run_bundle_dir = Path(cast("str", bundle["bundle_dir"]))
-    run_id = run_bundle_dir.name if run_bundle_dir is not None else None
-
-    extract_errors = None
-    if request.include_extract_errors:
-        extract_errors = _optional(pipeline_outputs, "write_extract_error_artifacts_delta")
+    extract_errors = (
+        _optional(pipeline_outputs, "write_extract_error_artifacts_delta")
+        if request.include_extract_errors
+        else None
+    )
 
     return GraphProductBuildResult(
         product=request.product,
@@ -309,6 +397,9 @@ def _parse_result(
         cpg_nodes=nodes_report,
         cpg_edges=edges_report,
         cpg_props=props_report,
+        cpg_props_map=props_map_report,
+        cpg_edges_by_src=edges_by_src_report,
+        cpg_edges_by_dst=edges_by_dst_report,
         cpg_nodes_quality=nodes_quality,
         cpg_props_quality=props_quality,
         extract_error_artifacts=extract_errors,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
@@ -27,6 +26,7 @@ from hamilton_pipeline.lifecycle import (
     set_hamilton_diagnostics_collector,
 )
 from hamilton_pipeline.modules.execution_plan import build_execution_plan_module
+from hamilton_pipeline.pipeline_types import ExecutionMode, ExecutorConfig, ExecutorKind
 from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
@@ -87,6 +87,8 @@ def driver_cache_key(
     config: Mapping[str, JsonValue],
     *,
     plan_signature: str,
+    execution_mode: ExecutionMode,
+    executor_config: ExecutorConfig | None,
 ) -> str:
     """Compute a plan-aware driver cache key.
 
@@ -95,9 +97,12 @@ def driver_cache_key(
     str
         SHA-256 fingerprint for the config and plan signature.
     """
+    executor_payload = _executor_config_payload(executor_config)
     payload = {
-        "version": 2,
+        "version": 3,
         "plan_signature": plan_signature,
+        "execution_mode": execution_mode.value,
+        "executor_config": executor_payload,
         "config": dict(config),
     }
     table = pa.Table.from_pylist([payload])
@@ -141,6 +146,20 @@ def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | 
         "best_effort": DeterminismTier.BEST_EFFORT,
     }
     return mapping.get(tier)
+
+
+def _executor_config_payload(
+    executor_config: ExecutorConfig | None,
+) -> dict[str, object]:
+    if executor_config is None:
+        return {}
+    return {
+        "kind": executor_config.kind,
+        "max_tasks": executor_config.max_tasks,
+        "remote_kind": executor_config.remote_kind,
+        "remote_max_tasks": executor_config.remote_max_tasks,
+        "cost_threshold": executor_config.cost_threshold,
+    }
 
 
 @dataclass(frozen=True)
@@ -441,105 +460,90 @@ def _with_graph_tags(
     return config_payload
 
 
+def _executor_from_kind(
+    kind: ExecutorKind,
+    *,
+    max_tasks: int,
+) -> executors.TaskExecutor:
+    if max_tasks <= 0:
+        msg = "Executor max_tasks must be a positive integer."
+        raise ValueError(msg)
+    if kind == "multiprocessing":
+        return executors.MultiProcessingExecutor(max_tasks=max_tasks)
+    if kind == "threadpool":
+        return executors.MultiThreadingExecutor(max_tasks=max_tasks)
+    msg = f"Executor kind {kind!r} is not supported in dynamic execution."
+    raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class DynamicExecutionOptions:
+    """Inputs required to configure dynamic plan execution."""
+
+    config: Mapping[str, JsonValue]
+    plan: ExecutionPlan
+    diagnostics: DiagnosticsCollector
+    execution_mode: ExecutionMode
+    executor_config: ExecutorConfig | None = None
+
+
 def _apply_dynamic_execution(
     builder: driver.Builder,
     *,
-    config: Mapping[str, JsonValue],
-    plan: ExecutionPlan,
-    diagnostics: DiagnosticsCollector,
+    options: DynamicExecutionOptions,
 ) -> driver.Builder:
-    if not bool(config.get("enable_dynamic_execution", False)):
+    if options.execution_mode == ExecutionMode.DETERMINISTIC_SERIAL:
         return builder
-    max_tasks_value = config.get("max_tasks")
-    max_tasks = 4
-    if isinstance(max_tasks_value, int) and not isinstance(max_tasks_value, bool):
-        max_tasks = max_tasks_value
+    resolved_config = options.executor_config or ExecutorConfig()
     from hamilton_pipeline.scheduling_hooks import (
         plan_grouping_strategy,
         plan_task_grouping_hook,
         plan_task_submission_hook,
     )
 
-    enable_submission_hook = bool(config.get("enable_plan_task_submission_hook", True))
-    enable_grouping_hook = bool(config.get("enable_plan_task_grouping_hook", True))
-    enforce_submission = bool(config.get("enforce_plan_task_submission", True))
+    enable_submission_hook = bool(options.config.get("enable_plan_task_submission_hook", True))
+    enable_grouping_hook = bool(options.config.get("enable_plan_task_grouping_hook", True))
+    enforce_submission = bool(options.config.get("enforce_plan_task_submission", True))
     local_executor = executors.SynchronousLocalTaskExecutor()
-    remote_executor = executors.MultiProcessingExecutor(max_tasks=max_tasks)
+    remote_kind = resolved_config.remote_kind or resolved_config.kind
+    remote_max_tasks = resolved_config.remote_max_tasks or resolved_config.max_tasks
+    remote_executor = _executor_from_kind(remote_kind, max_tasks=remote_max_tasks)
+    cost_threshold = (
+        resolved_config.cost_threshold
+        if options.execution_mode == ExecutionMode.PLAN_PARALLEL_REMOTE
+        else None
+    )
     execution_manager = PlanExecutionManager(
         local_executor=local_executor,
         remote_executor=remote_executor,
+        cost_threshold=cost_threshold,
+        diagnostics=options.diagnostics,
     )
 
     dynamic_builder = (
         builder.enable_dynamic_execution(allow_experimental_mode=True)
         .with_execution_manager(execution_manager)
-        .with_grouping_strategy(plan_grouping_strategy(plan))
+        .with_grouping_strategy(plan_grouping_strategy(options.plan))
     )
     if enable_submission_hook:
         dynamic_builder = dynamic_builder.with_adapters(
             plan_task_submission_hook(
-                plan,
-                diagnostics,
+                options.plan,
+                options.diagnostics,
                 enforce_active=enforce_submission,
             )
         )
     if enable_grouping_hook:
-        dynamic_builder = dynamic_builder.with_adapters(plan_task_grouping_hook(plan, diagnostics))
+        dynamic_builder = dynamic_builder.with_adapters(
+            plan_task_grouping_hook(options.plan, options.diagnostics)
+        )
     return dynamic_builder
 
 
-@lru_cache(maxsize=1)
-def _ensure_materializer_registry() -> None:
-    from hamilton.io.default_data_loaders import DATA_ADAPTERS
-    from hamilton.registry import register_adapter
-
-    for adapter in DATA_ADAPTERS:
-        register_adapter(adapter)
-
-
-def _materializer_base_dir(config: Mapping[str, JsonValue]) -> Path | None:
-    for key in ("materializer_output_dir", "output_dir", "work_dir"):
-        value = config.get(key)
-        if isinstance(value, str) and value.strip():
-            return Path(value).expanduser()
-    return None
-
-
 def _build_materializers(
-    config: Mapping[str, JsonValue],
+    _config: Mapping[str, JsonValue],
 ) -> list[MaterializerFactory]:
-    if not bool(config.get("enable_materializers", False)):
-        return []
-    base_dir = _materializer_base_dir(config)
-    if base_dir is None:
-        return []
-    base_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_materializer_registry()
-    from hamilton.io import materialization
-
-    materializers: list[MaterializerFactory] = [
-        materialization.to.json(
-            id="materialize_run_manifest",
-            dependencies=["write_run_manifest_delta"],
-            path=str(base_dir / "run_manifest.json"),
-        ),
-        materialization.to.json(
-            id="materialize_extract_errors",
-            dependencies=["write_extract_error_artifacts_delta"],
-            path=str(base_dir / "extract_errors.json"),
-        ),
-        materialization.to.json(
-            id="materialize_normalize_outputs",
-            dependencies=["write_normalize_outputs_delta"],
-            path=str(base_dir / "normalize_outputs.json"),
-        ),
-        materialization.to.json(
-            id="materialize_run_bundle",
-            dependencies=["write_run_bundle_dir"],
-            path=str(base_dir / "run_bundle.json"),
-        ),
-    ]
-    return materializers
+    return []
 
 
 def _apply_materializers(
@@ -671,17 +675,22 @@ def _apply_adapters(
     return builder
 
 
-def build_driver(
-    *,
-    config: Mapping[str, JsonValue],
-    modules: Sequence[ModuleType] | None = None,
-    view_ctx: ViewGraphContext | None = None,
-    plan: ExecutionPlan | None = None,
-) -> driver.Driver:
+@dataclass(frozen=True)
+class DriverBuildRequest:
+    """Inputs required to assemble a Hamilton driver."""
+
+    config: Mapping[str, JsonValue]
+    modules: Sequence[ModuleType] | None = None
+    view_ctx: ViewGraphContext | None = None
+    plan: ExecutionPlan | None = None
+    execution_mode: ExecutionMode | None = None
+    executor_config: ExecutorConfig | None = None
+
+
+def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
     """Build a Hamilton Driver for the pipeline.
 
     Key knobs supported via config:
-      - enable_dynamic_execution: bool (optional)
       - cache_path: str | None
       - cache_opt_in: bool (if True, default_behavior="disable")
       - enable_hamilton_tracker and tracker config keys
@@ -691,17 +700,17 @@ def build_driver(
     driver.Driver
         Built Hamilton driver instance.
     """
-    modules = list(modules) if modules is not None else default_modules()
-    resolved_view_ctx = view_ctx or _view_graph_context(config)
-    resolved_plan = plan or _compile_plan(
+    modules = list(request.modules) if request.modules is not None else default_modules()
+    resolved_view_ctx = request.view_ctx or _view_graph_context(request.config)
+    resolved_plan = request.plan or _compile_plan(
         resolved_view_ctx,
-        config,
+        request.config,
     )
-    if plan is None:
+    if request.plan is None:
         resolved_plan = _plan_with_incremental_pruning(
             view_ctx=resolved_view_ctx,
             plan=resolved_plan,
-            config=config,
+            config=request.config,
         )
     modules.append(build_execution_plan_module(resolved_plan))
     modules.append(
@@ -711,17 +720,22 @@ def build_driver(
         )
     )
 
-    config_payload = _with_graph_tags(config, plan=resolved_plan)
+    config_payload = _with_graph_tags(request.config, plan=resolved_plan)
     config_payload.setdefault(
         "runtime_profile_name_override",
-        _runtime_profile_name(config),
+        _runtime_profile_name(request.config),
     )
-    determinism_override = _determinism_override(config)
+    determinism_override = _determinism_override(request.config)
     if determinism_override is not None:
         config_payload.setdefault(
             "determinism_override_override",
             determinism_override.value,
         )
+    config_payload.setdefault(
+        "enable_dynamic_scan_units",
+        (request.execution_mode or ExecutionMode.PLAN_PARALLEL)
+        != ExecutionMode.DETERMINISTIC_SERIAL,
+    )
 
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
@@ -730,9 +744,13 @@ def build_driver(
     builder = builder.with_modules(*modules).with_config(config_payload)
     builder = _apply_dynamic_execution(
         builder,
-        config=config_payload,
-        plan=resolved_plan,
-        diagnostics=diagnostics,
+        options=DynamicExecutionOptions(
+            config=config_payload,
+            plan=resolved_plan,
+            diagnostics=diagnostics,
+            execution_mode=request.execution_mode or ExecutionMode.PLAN_PARALLEL,
+            executor_config=request.executor_config,
+        ),
     )
     builder = _apply_cache(builder, config=config_payload)
     builder = _apply_materializers(builder, config=config_payload)
@@ -797,7 +815,13 @@ class DriverFactory:
     # fingerprint -> driver.Driver
     _cache: dict[str, driver.Driver] = field(default_factory=dict)
 
-    def get(self, config: Mapping[str, JsonValue]) -> driver.Driver:
+    def get(
+        self,
+        config: Mapping[str, JsonValue],
+        *,
+        execution_mode: ExecutionMode | None = None,
+        executor_config: ExecutorConfig | None = None,
+    ) -> driver.Driver:
         """Return a cached driver for the given config.
 
         Returns
@@ -805,6 +829,7 @@ class DriverFactory:
         driver.Driver
             Cached or newly built Hamilton driver.
         """
+        resolved_mode = execution_mode or ExecutionMode.PLAN_PARALLEL
         view_ctx = _view_graph_context(config)
         plan = _compile_plan(view_ctx, config)
         plan = _plan_with_incremental_pruning(
@@ -815,14 +840,20 @@ class DriverFactory:
         key = driver_cache_key(
             config,
             plan_signature=plan.plan_signature,
+            execution_mode=resolved_mode,
+            executor_config=executor_config,
         )
         cached = self._cache.get(key)
         if cached is None:
             cached = build_driver(
-                config=config,
-                modules=self.modules,
-                view_ctx=view_ctx,
-                plan=plan,
+                request=DriverBuildRequest(
+                    config=config,
+                    modules=self.modules,
+                    view_ctx=view_ctx,
+                    plan=plan,
+                    execution_mode=resolved_mode,
+                    executor_config=executor_config,
+                )
             )
             self._cache[key] = cached
         return cached

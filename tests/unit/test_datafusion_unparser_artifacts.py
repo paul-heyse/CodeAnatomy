@@ -5,6 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
@@ -16,9 +17,10 @@ def test_datafusion_unparser_payload_is_deterministic() -> None:
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     df = ctx.sql("SELECT id, label FROM events")
     first = build_plan_bundle(
@@ -39,9 +41,10 @@ def test_plan_bundle_includes_fingerprint() -> None:
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     df = ctx.sql("SELECT events.id FROM events WHERE events.id = 1")
     bundle = build_plan_bundle(
@@ -57,9 +60,10 @@ def test_plan_bundle_projection_is_deterministic() -> None:
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     df = ctx.sql("SELECT events.id FROM events WHERE events.id = 1")
     bundle = build_plan_bundle(
@@ -76,9 +80,10 @@ def test_plan_bundle_graphviz_is_optional() -> None:
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     df = ctx.sql("SELECT id FROM events")
     bundle = build_plan_bundle(

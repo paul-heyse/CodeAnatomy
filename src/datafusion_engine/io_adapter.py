@@ -220,38 +220,6 @@ class DataFusionIOAdapter:
         self.ctx.register_table(name, table_to_register)
         invalidate_introspection_cache(self.ctx)
 
-    def register_record_batches(
-        self,
-        name: str,
-        batches: list[list[pa.RecordBatch]],
-        *,
-        overwrite: bool = False,
-    ) -> None:
-        """Register record batches as a DataFusion table.
-
-        Parameters
-        ----------
-        name
-            Table name for registration.
-        batches
-            Nested list of record batches (partitioned batches).
-        overwrite
-            If True, deregister existing table with the same name before
-            registering. Defaults to False.
-        """
-        register = getattr(self.ctx, "register_record_batches", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_record_batches."
-            raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        register(name, batches)
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(
-            name=name,
-            registration_type="table",
-        )
-
     def register_table_provider(
         self,
         name: str,

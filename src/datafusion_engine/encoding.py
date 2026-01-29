@@ -57,21 +57,19 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     """
     if not policy.dictionary_cols:
         return table
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from datafusion_engine.ingest import datafusion_from_arrow
 
     df_ctx = _datafusion_context()
     resolved = _ensure_table(table)
     table_name = f"_encoding_{uuid.uuid4().hex}"
-    adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
-    adapter.register_record_batches(table_name, [resolved.to_batches()])
+    df = datafusion_from_arrow(df_ctx, name=table_name, value=resolved)
     try:
         selections = _encoding_select_expr(
             schema=resolved.schema,
             policy=policy,
             ctx=df_ctx,
         )
-        df = df_ctx.table(table_name).select(*selections)
-        return df.to_arrow_table()
+        return df.select(*selections).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -141,12 +139,11 @@ def _ensure_table(value: TableLike) -> pa.Table:
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from datafusion_engine.ingest import datafusion_from_arrow
 
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(temp_name, [list(table.to_batches())])
+    df = datafusion_from_arrow(ctx, name=temp_name, value=table)
     try:
-        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
+        df = df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
         value = df.to_arrow_table()["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)

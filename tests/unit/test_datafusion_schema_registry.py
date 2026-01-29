@@ -11,7 +11,7 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
-    DATAFUSION_HAMILTON_EVENTS_SCHEMA,
+    DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA,
     HAMILTON_PLAN_DRIFT_SCHEMA,
     HAMILTON_TASK_EXPANSION_SCHEMA,
     HAMILTON_TASK_GROUPING_SCHEMA,
@@ -134,13 +134,13 @@ def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
         "missing_generations",
         "submission_event_count",
     }.issubset(drift_fields)
-    events_fields = set(DATAFUSION_HAMILTON_EVENTS_SCHEMA.names)
+    events_fields = set(DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA.names)
     assert {
         "event_time_unix_ms",
         "run_id",
         "event_name",
         "plan_signature",
         "reduced_plan_signature",
-        "event_payload_json",
+        "event_payload_msgpack",
         "event_payload_hash",
     }.issubset(events_fields)

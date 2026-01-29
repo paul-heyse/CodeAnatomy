@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
-from datafusion_engine.dataset_registry import DatasetLocation
+if TYPE_CHECKING:
+    from datafusion_engine.dataset_registry import DatasetLocation
 
 
 @dataclass(frozen=True)
@@ -70,28 +72,10 @@ def apply_delta_store_policy(
         storage_options=location.storage_options,
         log_storage_options=location.delta_log_storage_options,
     )
-    return DatasetLocation(
-        path=location.path,
-        format=location.format,
-        partitioning=location.partitioning,
-        read_options=location.read_options,
+    return replace(
+        location,
         storage_options=storage,
         delta_log_storage_options=log_storage,
-        delta_scan=location.delta_scan,
-        delta_cdf_options=location.delta_cdf_options,
-        delta_cdf_policy=location.delta_cdf_policy,
-        delta_write_policy=location.delta_write_policy,
-        delta_schema_policy=location.delta_schema_policy,
-        delta_feature_gate=location.delta_feature_gate,
-        delta_constraints=location.delta_constraints,
-        filesystem=location.filesystem,
-        files=location.files,
-        table_spec=location.table_spec,
-        dataset_spec=location.dataset_spec,
-        datafusion_scan=location.datafusion_scan,
-        datafusion_provider=location.datafusion_provider,
-        delta_version=location.delta_version,
-        delta_timestamp=location.delta_timestamp,
     )
 
 

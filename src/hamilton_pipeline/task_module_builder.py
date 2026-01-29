@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal
@@ -27,6 +27,62 @@ class TaskExecutionModuleOptions:
     module_name: str = "hamilton_pipeline.generated_tasks"
 
 
+@dataclass(frozen=True)
+class _PlanTaskContext:
+    dependency_map: Mapping[str, tuple[str, ...]]
+    plan_fingerprints: Mapping[str, str]
+    plan_task_signatures: Mapping[str, str]
+    schedule_metadata: Mapping[str, TaskScheduleMetadata]
+    task_costs: Mapping[str, float]
+    bottom_level_costs: Mapping[str, float]
+    slack_by_task: Mapping[str, float]
+    critical_path_tasks: frozenset[str]
+    plan_signature: str
+
+    @classmethod
+    def from_plan(cls, plan: ExecutionPlan) -> _PlanTaskContext:
+        return cls(
+            dependency_map=plan.dependency_map,
+            plan_fingerprints=plan.plan_fingerprints,
+            plan_task_signatures=plan.plan_task_signatures,
+            schedule_metadata=plan.schedule_metadata,
+            task_costs=plan.task_costs,
+            bottom_level_costs=plan.bottom_level_costs,
+            slack_by_task=plan.slack_by_task,
+            critical_path_tasks=frozenset(plan.critical_path_task_names),
+            plan_signature=plan.plan_signature,
+        )
+
+    def build_context(
+        self,
+        *,
+        task: TaskNodeSpec,
+        output_name: str,
+        dependency_key: str,
+        scan_unit_key: str | None,
+    ) -> TaskNodeContext:
+        plan_fingerprint = self.plan_fingerprints.get(task.name, "")
+        plan_task_signature = self.plan_task_signatures.get(task.name, plan_fingerprint)
+        task_cost = float(self.task_costs.get(task.name, task.priority))
+        bottom_cost = float(self.bottom_level_costs.get(task.name, task_cost))
+        slack = float(self.slack_by_task.get(task.name, 0.0))
+        on_critical_path = task.name in self.critical_path_tasks
+        return TaskNodeContext(
+            task=task,
+            output_name=output_name,
+            dependencies=tuple(self.dependency_map.get(dependency_key, ())),
+            plan_fingerprint=plan_fingerprint,
+            plan_task_signature=plan_task_signature,
+            plan_signature=self.plan_signature,
+            schedule_metadata=self.schedule_metadata.get(task.name),
+            scan_unit_key=scan_unit_key,
+            task_cost=task_cost,
+            bottom_level_cost=bottom_cost,
+            slack=slack,
+            on_critical_path=on_critical_path,
+        )
+
+
 def build_task_execution_module(
     *,
     plan: ExecutionPlan,
@@ -44,16 +100,11 @@ def build_task_execution_module(
     sys.modules[resolved.module_name] = module
     all_names: list[str] = []
     module.__dict__["__all__"] = all_names
-    dependency_map = plan.dependency_map
+    plan_context = _PlanTaskContext.from_plan(plan)
     outputs = {node.name: node for node in plan.view_nodes}
     scan_units_by_task = dict(plan.scan_task_units_by_name)
-    plan_fingerprints = dict(plan.plan_fingerprints)
-    plan_task_signatures = dict(plan.plan_task_signatures)
-    schedule_metadata = dict(plan.schedule_metadata)
     for scan_task_name in sorted(scan_units_by_task):
         scan_unit = scan_units_by_task[scan_task_name]
-        plan_fingerprint = plan_fingerprints.get(scan_task_name, "")
-        plan_task_signature = plan_task_signatures.get(scan_task_name, plan_fingerprint)
         task_spec = TaskNodeSpec(
             name=scan_task_name,
             output=scan_task_name,
@@ -62,14 +113,10 @@ def build_task_execution_module(
             cache_policy="none",
         )
         task_node = _build_task_node(
-            TaskNodeContext(
+            plan_context.build_context(
                 task=task_spec,
                 output_name=scan_task_name,
-                dependencies=tuple(dependency_map.get(scan_task_name, ())),
-                plan_fingerprint=plan_fingerprint,
-                plan_task_signature=plan_task_signature,
-                plan_signature=plan.plan_signature,
-                schedule_metadata=schedule_metadata.get(scan_task_name),
+                dependency_key=scan_task_name,
                 scan_unit_key=scan_unit.key,
             )
         )
@@ -78,17 +125,11 @@ def build_task_execution_module(
         all_names.append(scan_task_name)
     for output_name, view_node in outputs.items():
         spec = _task_spec_from_view_node(view_node)
-        plan_fingerprint = plan_fingerprints.get(spec.name, "")
-        plan_task_signature = plan_task_signatures.get(spec.name, plan_fingerprint)
         task_node = _build_task_node(
-            TaskNodeContext(
+            plan_context.build_context(
                 task=spec,
                 output_name=output_name,
-                dependencies=tuple(dependency_map.get(output_name, ())),
-                plan_fingerprint=plan_fingerprint,
-                plan_task_signature=plan_task_signature,
-                plan_signature=plan.plan_signature,
-                schedule_metadata=schedule_metadata.get(spec.name),
+                dependency_key=output_name,
                 scan_unit_key=None,
             )
         )
@@ -110,6 +151,10 @@ class TaskNodeContext:
     plan_signature: str
     schedule_metadata: TaskScheduleMetadata | None
     scan_unit_key: str | None
+    task_cost: float
+    bottom_level_cost: float
+    slack: float
+    on_critical_path: bool
 
 
 def _build_task_node(context: TaskNodeContext) -> Callable[..., TableLike]:
@@ -207,6 +252,10 @@ def _decorate_task_node(
             task_kind=task.kind,
             cache_policy=task.cache_policy,
             priority=str(task.priority),
+            task_cost=str(context.task_cost),
+            bottom_level_cost=str(context.bottom_level_cost),
+            slack=str(context.slack),
+            on_critical_path=str(context.on_critical_path),
             plan_signature=context.plan_signature,
             plan_fingerprint=context.plan_fingerprint,
             plan_task_signature=context.plan_task_signature,
@@ -224,6 +273,10 @@ def _decorate_task_node(
         task_kind=task.kind,
         cache_policy=task.cache_policy,
         priority=str(task.priority),
+        task_cost=str(context.task_cost),
+        bottom_level_cost=str(context.bottom_level_cost),
+        slack=str(context.slack),
+        on_critical_path=str(context.on_critical_path),
         plan_signature=context.plan_signature,
         plan_fingerprint=context.plan_fingerprint,
         plan_task_signature=context.plan_task_signature,

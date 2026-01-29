@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_catalog import rewrite_tag_index
@@ -51,9 +52,10 @@ def test_plan_bundle_captures_udf_planner_snapshot() -> None:
         udf_rewrite_tags=rewrite_tags,
         domain_planner_names=planner_names,
     )
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     df = ctx.sql("SELECT id FROM events")
     bundle = build_plan_bundle(

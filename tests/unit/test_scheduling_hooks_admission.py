@@ -135,6 +135,7 @@ def _plan_for_tests() -> ExecutionPlan:
         critical_path_task_names=("task_b",),
         critical_path_length_weighted=2.0,
         bottom_level_costs={"task_a": 1.0, "task_b": 3.0},
+        slack_by_task={"task_a": 0.0, "task_b": 0.0},
         task_plan_metrics={},
         task_costs={},
         dependency_map={"task_a": (), "task_b": ("task_a",)},

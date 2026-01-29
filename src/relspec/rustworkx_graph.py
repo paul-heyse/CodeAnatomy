@@ -779,7 +779,11 @@ def task_dependency_signature(snapshot: TaskDependencySnapshot) -> str:
     return payload_hash(payload, _TASK_DEPENDENCY_SCHEMA)
 
 
-def task_dependency_critical_path(graph: rx.PyDiGraph) -> tuple[int, ...]:
+def task_dependency_critical_path(
+    graph: rx.PyDiGraph,
+    *,
+    task_costs: Mapping[str, float] | None = None,
+) -> tuple[int, ...]:
     """Return the weighted critical path node indices for a dependency graph.
 
     Returns
@@ -789,12 +793,16 @@ def task_dependency_critical_path(graph: rx.PyDiGraph) -> tuple[int, ...]:
     """
 
     def _edge_weight(_source: int, target: int, _edge: object) -> float:
-        return _task_node_weight(graph[target])
+        return _task_node_cost(graph[target], task_costs=task_costs)
 
     return tuple(rx.dag_weighted_longest_path(graph, _edge_weight))
 
 
-def task_dependency_critical_path_length(graph: rx.PyDiGraph) -> float:
+def task_dependency_critical_path_length(
+    graph: rx.PyDiGraph,
+    *,
+    task_costs: Mapping[str, float] | None = None,
+) -> float:
     """Return the weighted critical path length for a dependency graph.
 
     Returns
@@ -804,13 +812,17 @@ def task_dependency_critical_path_length(graph: rx.PyDiGraph) -> float:
     """
 
     def _edge_weight(_source: int, target: int, _edge: object) -> float:
-        return _task_node_weight(graph[target])
+        return _task_node_cost(graph[target], task_costs=task_costs)
 
     length = rx.dag_weighted_longest_path_length(graph, _edge_weight)
     return float(length)
 
 
-def task_dependency_critical_path_tasks(graph: rx.PyDiGraph) -> tuple[str, ...]:
+def task_dependency_critical_path_tasks(
+    graph: rx.PyDiGraph,
+    *,
+    task_costs: Mapping[str, float] | None = None,
+) -> tuple[str, ...]:
     """Return the critical path as task names.
 
     Returns
@@ -819,7 +831,7 @@ def task_dependency_critical_path_tasks(graph: rx.PyDiGraph) -> tuple[str, ...]:
         Task names along the critical path.
     """
     names: list[str] = []
-    for node_idx in task_dependency_critical_path(graph):
+    for node_idx in task_dependency_critical_path(graph, task_costs=task_costs):
         node = graph[node_idx]
         if isinstance(node, TaskNode):
             names.append(node.name)
@@ -971,6 +983,26 @@ def _task_node_weight(node: object) -> float:
     if isinstance(priority, int):
         return float(max(priority, 1))
     return 1.0
+
+
+def _task_node_name(node: object) -> str | None:
+    if isinstance(node, TaskNode):
+        return node.name
+    payload = getattr(node, "payload", None)
+    name = getattr(payload, "name", None)
+    return name if isinstance(name, str) else None
+
+
+def _task_node_cost(
+    node: object,
+    *,
+    task_costs: Mapping[str, float] | None,
+) -> float:
+    if task_costs:
+        name = _task_node_name(node)
+        if name is not None and name in task_costs:
+            return float(max(task_costs[name], 1.0))
+    return _task_node_weight(node)
 
 
 def _build_task_graph_inferred(

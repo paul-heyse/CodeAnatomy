@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
 import pyarrow as pa
 
 from datafusion_engine.write_pipeline import WriteMode
@@ -16,6 +17,8 @@ from incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
     write_delta_table_via_pipeline,
 )
+from serde_artifacts import ViewArtifactPayload
+from serde_msgspec import convert, validation_error_payload
 from storage.deltalake import delta_table_version
 from storage.ipc_utils import payload_hash
 
@@ -294,14 +297,18 @@ def _plan_fingerprints_from_artifacts(
 ) -> dict[str, PlanFingerprint]:
     resolved: dict[str, PlanFingerprint] = {}
     for payload in artifacts:
-        name = payload.get("name")
-        plan_fingerprint = payload.get("plan_fingerprint")
-        plan_task_signature = payload.get("plan_task_signature")
-        if not name or not plan_fingerprint:
-            continue
-        signature_value = str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
-        resolved[str(name)] = PlanFingerprint(
-            plan_fingerprint=str(plan_fingerprint),
+        payload_raw = dict(payload)
+        if not payload_raw.get("plan_task_signature") and payload_raw.get("plan_fingerprint"):
+            payload_raw["plan_task_signature"] = payload_raw["plan_fingerprint"]
+        try:
+            artifact = convert(payload_raw, target_type=ViewArtifactPayload, strict=True)
+        except msgspec.ValidationError as exc:
+            details = validation_error_payload(exc)
+            msg = f"View artifact payload validation failed: {details}"
+            raise ValueError(msg) from exc
+        signature_value = artifact.plan_task_signature or artifact.plan_fingerprint
+        resolved[artifact.name] = PlanFingerprint(
+            plan_fingerprint=artifact.plan_fingerprint,
             plan_task_signature=signature_value,
         )
     return resolved

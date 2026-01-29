@@ -7,12 +7,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from hamilton.function_modifiers import pipe_input, source, step, tag
+from hamilton.function_modifiers import config, pipe_input, source, step, tag
+from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
 from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.arrow_schema.build import empty_table
+from datafusion_engine.arrow_schema.semantic_types import (
+    edge_id_metadata,
+    node_id_metadata,
+    span_id_metadata,
+)
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import Contract, FinalizeOptions, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
@@ -45,6 +51,8 @@ class TaskExecutionInputs:
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_units_by_task_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_unit_results_by_key: Mapping[str, TableLike]
     scan_units_hash: str | None
 
 
@@ -55,6 +63,7 @@ class PlanScanInputs:
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_units_by_task_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
     scan_units_hash: str | None
 
 
@@ -90,7 +99,7 @@ def _finalize_cpg_table(
     if not schema_names:
         return empty_table(table.schema)
     contract = Contract(name=name, schema=table.schema)
-    return normalize_only(
+    normalized = normalize_only(
         cast("ArrowTableLike", table),
         contract=contract,
         options=FinalizeOptions(
@@ -98,6 +107,53 @@ def _finalize_cpg_table(
             determinism_tier=runtime_profile_spec.determinism_tier,
         ),
     )
+    field_metadata = _semantic_field_metadata_for_cpg(name)
+    return _apply_field_metadata(normalized, field_metadata=field_metadata)
+
+
+def _semantic_field_metadata_for_cpg(name: str) -> dict[str, dict[bytes, bytes]]:
+    if name == "cpg_nodes_v1":
+        return {"node_id": node_id_metadata()}
+    if name == "cpg_edges_v1":
+        return {
+            "edge_id": edge_id_metadata(),
+            "src_node_id": node_id_metadata(),
+            "dst_node_id": node_id_metadata(),
+            "span_id": span_id_metadata(),
+        }
+    return {}
+
+
+def _apply_field_metadata(
+    table: TableLike,
+    *,
+    field_metadata: Mapping[str, Mapping[bytes, bytes]],
+) -> TableLike:
+    if not field_metadata:
+        return table
+    if not isinstance(table, pa.Table):
+        return table
+    table_value = cast("pa.Table", table)
+    schema = table_value.schema
+    fields: list[pa.Field] = []
+    for field in schema:
+        metadata = dict(field.metadata or {})
+        extra = field_metadata.get(field.name)
+        if extra:
+            metadata.update(extra)
+        fields.append(
+            pa.field(
+                field.name,
+                field.type,
+                nullable=field.nullable,
+                metadata=metadata or None,
+            )
+        )
+    updated_schema = pa.schema(fields, metadata=schema.metadata)
+    try:
+        return table_value.cast(updated_schema, safe=False)
+    except (pa.ArrowInvalid, TypeError, ValueError):
+        return table_value
 
 
 @tag(layer="execution", artifact="cpg_nodes_finalize", kind="stage")
@@ -208,12 +264,83 @@ def plan_scan_inputs(
         from datafusion_engine.scan_overrides import scan_units_hash
 
         scan_hash = scan_units_hash(units)
+    scan_task_name_by_key = {unit.key: name for name, unit in plan_scan_units_by_task_name.items()}
     return PlanScanInputs(
         scan_units=units,
         scan_keys_by_task=plan_scan_keys_by_task,
         scan_units_by_task_name=dict(plan_scan_units_by_task_name),
+        scan_task_name_by_key=scan_task_name_by_key,
         scan_units_hash=scan_hash,
     )
+
+
+@config.when(enable_dynamic_scan_units=True)
+@tag(layer="execution", artifact="scan_unit_stream", kind="dynamic")
+def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[ScanUnit]:
+    """Yield scan units for dynamic parallel execution.
+
+    Yields
+    ------
+    ScanUnit
+        Scan unit payloads for dynamic execution.
+    """
+    yield from plan_scan_units
+
+
+@config.when(enable_dynamic_scan_units=True)
+@tag(layer="execution", artifact="scan_unit_execution", kind="dynamic")
+def scan_unit_execution(
+    scan_unit_stream: ScanUnit,
+    runtime_artifacts: RuntimeArtifacts,
+    plan_scan_inputs: PlanScanInputs,
+) -> tuple[str, TableLike]:
+    """Execute a single scan unit and return its table keyed by scan unit.
+
+    Returns
+    -------
+    tuple[str, TableLike]
+        Scan unit key and corresponding table.
+    """
+    scan_task_name = plan_scan_inputs.scan_task_name_by_key.get(
+        scan_unit_stream.key,
+        scan_unit_stream.key,
+    )
+    result = _execute_scan_task(
+        runtime_artifacts,
+        scan_task_name=scan_task_name,
+        scan_unit=scan_unit_stream,
+        scan_context=plan_scan_inputs,
+    )
+    return scan_unit_stream.key, result.require_table()
+
+
+@config.when(name="scan_unit_results_by_key", enable_dynamic_scan_units=True)
+@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+def scan_unit_results_by_key__dynamic(
+    scan_unit_execution: Collect[tuple[str, TableLike]],
+) -> Mapping[str, TableLike]:
+    """Collect scan unit results into a mapping.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Mapping of scan unit keys to executed tables.
+    """
+    items = sorted(scan_unit_execution, key=lambda item: item[0])
+    return dict(items)
+
+
+@config.when_not(name="scan_unit_results_by_key", enable_dynamic_scan_units=True)
+@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
+    """Return an empty mapping when dynamic scan units are disabled.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Empty mapping placeholder.
+    """
+    return {}
 
 
 @tag(layer="execution", artifact="task_execution_inputs", kind="context")
@@ -221,6 +348,7 @@ def task_execution_inputs(
     runtime_artifacts: RuntimeArtifacts,
     evidence_catalog: EvidenceCatalog,
     plan_context: PlanExecutionContext,
+    scan_unit_results_by_key: Mapping[str, TableLike],
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
 
@@ -232,6 +360,8 @@ def task_execution_inputs(
         Evidence catalog used for scheduling and contract validation.
     plan_context
         Execution-plan context for signatures, tasks, and scan inputs.
+    scan_unit_results_by_key
+        Mapping of scan unit keys to their executed tables.
 
     Returns
     -------
@@ -247,6 +377,8 @@ def task_execution_inputs(
         scan_units=plan_context.plan_scan_inputs.scan_units,
         scan_keys_by_task=plan_context.plan_scan_inputs.scan_keys_by_task,
         scan_units_by_task_name=plan_context.plan_scan_inputs.scan_units_by_task_name,
+        scan_task_name_by_key=plan_context.plan_scan_inputs.scan_task_name_by_key,
+        scan_unit_results_by_key=scan_unit_results_by_key,
         scan_units_hash=plan_context.plan_scan_inputs.scan_units_hash,
     )
 
@@ -403,6 +535,7 @@ def _execute_and_record(
         scan_units=inputs.scan_units,
         scan_keys_by_task=inputs.scan_keys_by_task,
         scan_units_by_task_name=inputs.scan_units_by_task_name,
+        scan_task_name_by_key=inputs.scan_task_name_by_key,
         scan_units_hash=inputs.scan_units_hash,
     )
     if spec.task_kind == "scan":
@@ -410,6 +543,15 @@ def _execute_and_record(
         if scan_unit is None:
             msg = f"Scan task {spec.task_name!r} is missing a scan unit mapping."
             raise ValueError(msg)
+        precomputed = inputs.scan_unit_results_by_key.get(scan_unit.key)
+        if precomputed is not None:
+            _record_output(
+                inputs=inputs,
+                spec=spec,
+                plan_signature=plan_signature,
+                table=precomputed,
+            )
+            return precomputed
         result = _execute_scan_task(
             runtime,
             scan_task_name=spec.task_name,

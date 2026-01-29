@@ -28,18 +28,11 @@ if TYPE_CHECKING:
         DeltaCdfProviderBundle,
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
-        DeltaFeatureGate,
     )
+    from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
-
-DEFAULT_DELTA_FEATURE_PROPERTIES: dict[str, str] = {
-    "delta.enableChangeDataFeed": "true",
-    "delta.enableRowTracking": "true",
-    "delta.enableDeletionVectors": "true",
-    "delta.enableInCommitTimestamps": "true",
-}
 
 
 @dataclass(frozen=True)
@@ -154,11 +147,11 @@ def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
 
 def _register_temp_table(ctx: SessionContext, table: pa.Table) -> str:
     name = f"__delta_temp_{uuid.uuid4().hex}"
-    batches = table.to_batches()
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(name, [batches])
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if not callable(from_arrow):
+        msg = "SessionContext does not support from_arrow ingestion."
+        raise NotImplementedError(msg)
+    from_arrow(table, name=name)
     return name
 
 
@@ -543,7 +536,7 @@ def delta_protocol_snapshot(
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
     gate: DeltaFeatureGate | None = None,
-) -> dict[str, object] | None:
+) -> DeltaProtocolSnapshot | None:
     """Return Delta protocol versions and active feature flags.
 
     Returns
@@ -561,12 +554,43 @@ def delta_protocol_snapshot(
     )
     if snapshot is None:
         return None
-    return {
-        "min_reader_version": snapshot.get("min_reader_version"),
-        "min_writer_version": snapshot.get("min_writer_version"),
-        "reader_features": snapshot.get("reader_features"),
-        "writer_features": snapshot.get("writer_features"),
-    }
+    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
+
+    payload = DeltaProtocolSnapshot(
+        min_reader_version=_coerce_int(snapshot.get("min_reader_version")),
+        min_writer_version=_coerce_int(snapshot.get("min_writer_version")),
+        reader_features=tuple(_coerce_str_list(snapshot.get("reader_features"))),
+        writer_features=tuple(_coerce_str_list(snapshot.get("writer_features"))),
+    )
+    if (
+        payload.min_reader_version is None
+        and payload.min_writer_version is None
+        and not payload.reader_features
+        and not payload.writer_features
+    ):
+        return None
+    return payload
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_str_list(value: object) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [str(item) for item in value if str(item)]
+    return []
 
 
 def enable_delta_features(
@@ -596,7 +620,7 @@ def enable_delta_features(
         is None
     ):
         return {}
-    resolved = features or DEFAULT_DELTA_FEATURE_PROPERTIES
+    resolved = features or {}
     properties = {key: str(value) for key, value in resolved.items() if value is not None}
     if not properties:
         return {}
@@ -616,6 +640,7 @@ def enable_delta_features(
                 version=None,
                 timestamp=None,
                 properties=properties,
+                gate=options.gate,
                 commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
             ),
         )
@@ -1994,17 +2019,6 @@ def write_delta_table(
     storage = dict(resolved.storage_options or {})
     if resolved.log_storage_options is not None:
         storage.update(dict(resolved.log_storage_options))
-    if isinstance(data, RecordBatchReaderLike):
-        table = cast("pa.Table", data.read_all())
-    else:
-        table = cast("pa.Table", data)
-    data_ipc = ipc_bytes(table)
-    ctx = _runtime_ctx(ctx)
-    try:
-        from datafusion_engine.delta_control_plane import DeltaWriteRequest, delta_write_ipc
-    except ImportError as exc:
-        msg = "Rust Delta control-plane adapters are required for Delta writes."
-        raise RuntimeError(msg) from exc
     commit_properties = resolved.commit_properties or build_commit_properties(
         app_id=resolved.app_id,
         version=resolved.version,
@@ -2016,6 +2030,61 @@ def write_delta_table(
         app_id=resolved.app_id,
         app_version=resolved.version,
     )
+    if resolved.writer_properties is not None:
+        if resolved.extra_constraints:
+            msg = "Delta writer_properties are not supported with extra_constraints."
+            raise ValueError(msg)
+        from deltalake import writer as delta_writer
+
+        if isinstance(data, RecordBatchReaderLike):
+            table = cast("pa.Table", data.read_all())
+        else:
+            table = cast("pa.Table", data)
+        partition_by = list(resolved.partition_by or []) or None
+        if resolved.mode == "overwrite":
+            delta_writer.write_deltalake(
+                path,
+                table,
+                partition_by=partition_by,
+                mode="overwrite",
+                configuration=resolved.configuration,
+                schema_mode=resolved.schema_mode,
+                storage_options=storage or None,
+                predicate=resolved.predicate,
+                target_file_size=resolved.target_file_size,
+                writer_properties=resolved.writer_properties,
+                commit_properties=commit_properties,
+            )
+        else:
+            delta_writer.write_deltalake(
+                path,
+                table,
+                partition_by=partition_by,
+                mode=resolved.mode,
+                configuration=resolved.configuration,
+                schema_mode=resolved.schema_mode,
+                storage_options=storage or None,
+                target_file_size=resolved.target_file_size,
+                writer_properties=resolved.writer_properties,
+                commit_properties=commit_properties,
+            )
+        version = delta_table_version(
+            path,
+            storage_options=resolved.storage_options,
+            log_storage_options=resolved.log_storage_options,
+        )
+        return DeltaWriteResult(path=path, version=version, report=None)
+    if isinstance(data, RecordBatchReaderLike):
+        table = cast("pa.Table", data.read_all())
+    else:
+        table = cast("pa.Table", data)
+    data_ipc = ipc_bytes(table)
+    ctx = _runtime_ctx(ctx)
+    try:
+        from datafusion_engine.delta_control_plane import DeltaWriteRequest, delta_write_ipc
+    except ImportError as exc:
+        msg = "Rust Delta control-plane adapters are required for Delta writes."
+        raise RuntimeError(msg) from exc
     report = delta_write_ipc(
         ctx,
         request=DeltaWriteRequest(
@@ -2578,7 +2647,6 @@ def _delta_cdf_table_provider(
 
 
 __all__ = [
-    "DEFAULT_DELTA_FEATURE_PROPERTIES",
     "DeltaCdfOptions",
     "DeltaDataCheckRequest",
     "DeltaDeleteWhereRequest",

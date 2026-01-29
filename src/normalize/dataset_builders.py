@@ -14,7 +14,11 @@ from datafusion_engine.arrow_schema.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.arrow_schema.semantic_types import SPAN_STORAGE
+from datafusion_engine.arrow_schema.semantic_types import (
+    SPAN_STORAGE,
+    edge_id_metadata,
+    span_id_metadata,
+)
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import ContractRow, DatasetRow
@@ -44,13 +48,19 @@ def _spec(
     dtype: pa.DataType,
     *,
     nullable: bool = True,
-    metadata: Mapping[str, str] | None = None,
+    metadata: Mapping[str, str] | Mapping[bytes, bytes] | None = None,
 ) -> ArrowFieldSpec:
+    resolved_metadata: dict[str, str] = {}
+    if metadata is not None:
+        for key, value in metadata.items():
+            decoded_key = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+            decoded_value = value.decode("utf-8") if isinstance(value, bytes) else str(value)
+            resolved_metadata[decoded_key] = decoded_value
     return ArrowFieldSpec(
         name=name,
         dtype=dtype,
         nullable=nullable,
-        metadata=dict(metadata or {}),
+        metadata=resolved_metadata,
     )
 
 
@@ -64,7 +74,7 @@ _FIELD_SPECS: dict[str, ArrowFieldSpec] = {
     "line_base": _spec("line_base", pa.int32()),
     "col_unit": _spec("col_unit", pa.string()),
     "end_exclusive": _spec("end_exclusive", pa.bool_()),
-    "span_id": _spec("span_id", pa.string()),
+    "span_id": _spec("span_id", pa.string(), metadata=span_id_metadata()),
     "span": _spec("span", SPAN_STORAGE),
     "bstart": _spec("bstart", pa.int64()),
     "bend": _spec("bend", pa.int64()),
@@ -89,7 +99,7 @@ _FIELD_SPECS: dict[str, ArrowFieldSpec] = {
     "start_offset": _spec("start_offset", pa.int32()),
     "end_offset": _spec("end_offset", pa.int32()),
     "kind": _dict("kind"),
-    "edge_id": _spec("edge_id", pa.string()),
+    "edge_id": _spec("edge_id", pa.string(), metadata=edge_id_metadata()),
     "src_block_id": _spec("src_block_id", pa.string()),
     "dst_block_id": _spec("dst_block_id", pa.string()),
     "cond_instr_id": _spec("cond_instr_id", pa.string()),

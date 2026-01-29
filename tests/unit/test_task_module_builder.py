@@ -99,23 +99,43 @@ def _plan_for_module(
     from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
 
-    resolved_view_nodes = cast("tuple[RegistryViewNode, ...]", view_nodes)
-    plan_fingerprints = {node.name: f"{node.name}_fingerprint" for node in view_nodes}
-    plan_task_signatures = {name: f"{name}_signature" for name in plan_fingerprints}
-    plan_snapshots = {
-        name: PlanFingerprintSnapshot(
-            plan_fingerprint=plan_fingerprints[name],
-            plan_task_signature=plan_task_signatures[name],
+    @dataclass(frozen=True)
+    class _PlanSnapshotBundle:
+        plan_fingerprints: dict[str, str]
+        plan_task_signatures: dict[str, str]
+        plan_snapshots: dict[str, PlanFingerprintSnapshot]
+        ordered_tasks: tuple[str, ...]
+        task_schedule: TaskSchedule
+        schedule_metadata: dict[str, TaskScheduleMetadata]
+
+    def _plan_snapshot_bundle() -> _PlanSnapshotBundle:
+        plan_fingerprints = {node.name: f"{node.name}_fingerprint" for node in view_nodes}
+        plan_task_signatures = {name: f"{name}_signature" for name in plan_fingerprints}
+        plan_snapshots = {
+            name: PlanFingerprintSnapshot(
+                plan_fingerprint=plan_fingerprints[name],
+                plan_task_signature=plan_task_signatures[name],
+            )
+            for name in plan_fingerprints
+        }
+        ordered_tasks = tuple(sorted(plan_fingerprints))
+        task_schedule = TaskSchedule(ordered_tasks=ordered_tasks, generations=(ordered_tasks,))
+        resolved_metadata = (
+            schedule_metadata
+            if schedule_metadata is not None
+            else task_schedule_metadata(task_schedule)
         )
-        for name in plan_fingerprints
-    }
-    ordered_tasks = tuple(sorted(plan_fingerprints))
-    task_schedule = TaskSchedule(ordered_tasks=ordered_tasks, generations=(ordered_tasks,))
-    resolved_metadata: dict[str, TaskScheduleMetadata]
-    if schedule_metadata is not None:
-        resolved_metadata = schedule_metadata
-    else:
-        resolved_metadata = task_schedule_metadata(task_schedule)
+        return _PlanSnapshotBundle(
+            plan_fingerprints=plan_fingerprints,
+            plan_task_signatures=plan_task_signatures,
+            plan_snapshots=plan_snapshots,
+            ordered_tasks=ordered_tasks,
+            task_schedule=task_schedule,
+            schedule_metadata=resolved_metadata,
+        )
+
+    resolved_view_nodes = cast("tuple[RegistryViewNode, ...]", view_nodes)
+    bundle = _plan_snapshot_bundle()
     evidence_idx: dict[str, int] = {}
     task_idx: dict[str, int] = {}
     task_graph = TaskGraph(
@@ -126,7 +146,8 @@ def _plan_for_module(
     )
     task_dependency_graph = rx.PyDiGraph(multigraph=False, check_cycle=False)
     reduced_task_dependency_graph = rx.PyDiGraph(multigraph=False, check_cycle=False)
-    bottom_level_costs = dict.fromkeys(ordered_tasks, 1.0)
+    bottom_level_costs = dict.fromkeys(bundle.ordered_tasks, 1.0)
+    slack_by_task = dict.fromkeys(bundle.ordered_tasks, 0.0)
     dataset_specs: dict[str, DatasetSpec] = {}
     output_contracts: dict[str, object] = {}
     return ExecutionPlan(
@@ -135,11 +156,11 @@ def _plan_for_module(
         task_dependency_graph=task_dependency_graph,
         reduced_task_dependency_graph=reduced_task_dependency_graph,
         evidence=EvidenceCatalog(),
-        task_schedule=task_schedule,
-        schedule_metadata=resolved_metadata,
-        plan_fingerprints=plan_fingerprints,
-        plan_task_signatures=plan_task_signatures,
-        plan_snapshots=plan_snapshots,
+        task_schedule=bundle.task_schedule,
+        schedule_metadata=bundle.schedule_metadata,
+        plan_fingerprints=bundle.plan_fingerprints,
+        plan_task_signatures=bundle.plan_task_signatures,
+        plan_snapshots=bundle.plan_snapshots,
         output_contracts=output_contracts,
         plan_signature="plan:test",
         task_dependency_signature="task_dep:test",
@@ -151,11 +172,12 @@ def _plan_for_module(
         critical_path_task_names=(),
         critical_path_length_weighted=0.0,
         bottom_level_costs=bottom_level_costs,
+        slack_by_task=slack_by_task,
         task_plan_metrics={},
         task_costs={},
         dependency_map=dependency_map,
         dataset_specs=dataset_specs,
-        active_tasks=frozenset(plan_fingerprints),
+        active_tasks=frozenset(bundle.plan_fingerprints),
     )
 
 

@@ -1,0 +1,145 @@
+{
+  "$defs": {
+    "Click": {
+      "additionalProperties": false,
+      "description": "Sample tagged union member.",
+      "properties": {
+        "page": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "click"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "ts",
+        "page"
+      ],
+      "title": "Click",
+      "type": "object"
+    },
+    "Envelope": {
+      "additionalProperties": false,
+      "description": "Sample envelope with nested models.",
+      "properties": {
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Click"
+            },
+            {
+              "$ref": "#/$defs/Purchase"
+            }
+          ],
+          "discriminator": {
+            "mapping": {
+              "click": "#/$defs/Click",
+              "purchase": "#/$defs/Purchase"
+            },
+            "propertyName": "type"
+          }
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "user": {
+          "$ref": "#/$defs/User"
+        }
+      },
+      "required": [
+        "user",
+        "event"
+      ],
+      "title": "Envelope",
+      "type": "object"
+    },
+    "Purchase": {
+      "additionalProperties": false,
+      "description": "Sample tagged union member.",
+      "properties": {
+        "amount_cents": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "EUR",
+            "USD"
+          ]
+        },
+        "ts": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "purchase"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "ts",
+        "amount_cents",
+        "currency"
+      ],
+      "title": "Purchase",
+      "type": "object"
+    },
+    "User": {
+      "additionalProperties": false,
+      "description": "Sample user model for contract testing.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "is_active": {
+          "default": true,
+          "type": "boolean"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "created_at"
+      ],
+      "title": "User",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/Envelope"
+}

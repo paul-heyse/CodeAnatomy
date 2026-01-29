@@ -33,25 +33,29 @@ import hashlib
 import json
 import shutil
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions
+from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions, col
 from datafusion.dataframe import DataFrame
+from datafusion.expr import SortExpr
 
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_constraints,
+    resolve_delta_feature_gate,
     resolve_delta_maintenance_policy,
     resolve_delta_schema_policy,
     resolve_delta_write_policy,
 )
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.sql_options import sql_options_for_profile
+from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
+from serde_msgspec import convert
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -59,18 +63,31 @@ from storage.deltalake import (
     idempotent_commit_properties,
     write_delta_table,
 )
-from storage.deltalake.config import delta_schema_configuration, delta_write_configuration
+from storage.deltalake.config import (
+    DeltaSchemaPolicy,
+    DeltaWritePolicy,
+    StatsColumnsInputs,
+    delta_schema_configuration,
+    delta_write_configuration,
+    resolve_stats_columns,
+)
 from storage.deltalake.delta import (
-    DEFAULT_DELTA_FEATURE_PROPERTIES,
     DeltaFeatureMutationOptions,
     IdempotentWriteOptions,
+    enable_delta_change_data_feed,
+    enable_delta_column_mapping,
+    enable_delta_deletion_vectors,
     enable_delta_features,
+    enable_delta_in_commit_timestamps,
+    enable_delta_row_tracking,
+    enable_delta_v2_checkpoints,
 )
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
-    from deltalake import CommitProperties
+    from deltalake import CommitProperties, WriterProperties
 
+    from datafusion_engine.delta_protocol import DeltaFeatureGate
     from datafusion_engine.diagnostics import DiagnosticsRecorder
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.streaming_executor import StreamingExecutionResult
@@ -146,8 +163,14 @@ def _storage_options_hash(
 
 @dataclass(frozen=True)
 class _DeltaPolicyContext:
+    write_policy: DeltaWritePolicy | None
+    schema_policy: DeltaSchemaPolicy | None
     table_properties: dict[str, str]
     target_file_size: int | None
+    partition_by: tuple[str, ...]
+    zorder_by: tuple[str, ...]
+    enable_features: tuple[str, ...]
+    writer_properties: WriterProperties | None
     storage_options: dict[str, str] | None
     log_storage_options: dict[str, str] | None
 
@@ -160,34 +183,98 @@ class _DeltaCommitContext:
     dataset_location: DatasetLocation | None = None
 
 
+@dataclass(frozen=True)
+class _DeltaWriteSpecInputs:
+    """Inputs used to build a Delta write specification."""
+
+    dataset_name: str | None
+    dataset_location: DatasetLocation | None
+    schema_columns: tuple[str, ...] | None = None
+    lineage_columns: tuple[str, ...] | None = None
+
+
 def _delta_policy_context(
     *,
     options: Mapping[str, object],
     dataset_location: DatasetLocation | None,
+    request_partition_by: tuple[str, ...] | None,
+    schema_columns: tuple[str, ...] | None = None,
+    lineage_columns: tuple[str, ...] | None = None,
 ) -> _DeltaPolicyContext:
-    write_policy = resolve_delta_write_policy(dataset_location) if dataset_location else None
-    schema_policy = resolve_delta_schema_policy(dataset_location) if dataset_location else None
+    write_policy = _delta_write_policy_override(options)
+    if write_policy is None:
+        write_policy = resolve_delta_write_policy(dataset_location) if dataset_location else None
+    schema_policy = _delta_schema_policy_override(options)
+    if schema_policy is None:
+        schema_policy = resolve_delta_schema_policy(dataset_location) if dataset_location else None
     table_properties = _delta_table_properties(options)
-    policy_props = delta_write_configuration(write_policy)
-    if policy_props:
-        table_properties.update(policy_props)
-    schema_props = delta_schema_configuration(schema_policy)
-    if schema_props:
-        table_properties.update(schema_props)
-    policy_target_file_size = write_policy.target_file_size if write_policy is not None else None
+    policy_partition_by = write_policy.partition_by if write_policy is not None else ()
+    partition_by = request_partition_by if request_partition_by is not None else policy_partition_by
+    zorder_by = _delta_zorder_by(options) or (
+        write_policy.zorder_by if write_policy is not None else ()
+    )
+    enable_features = _delta_enable_features(options) or (
+        write_policy.enable_features if write_policy is not None else ()
+    )
+    table_properties.update(delta_write_configuration(write_policy) or {})
+    table_properties.update(delta_schema_configuration(schema_policy) or {})
+    resolved_stats = resolve_stats_columns(
+        StatsColumnsInputs(
+            policy=write_policy,
+            partition_by=partition_by,
+            zorder_by=zorder_by,
+            extra_candidates=lineage_columns or (),
+            schema_columns=schema_columns,
+            override=_delta_stats_columns_override(options),
+        )
+    )
+    if resolved_stats:
+        table_properties["delta.dataSkippingStatsColumns"] = ",".join(resolved_stats)
+    writer_properties = _delta_writer_properties(options, write_policy=write_policy)
     target_file_size = _delta_target_file_size(
         options,
-        fallback=policy_target_file_size,
+        fallback=write_policy.target_file_size if write_policy is not None else None,
     )
     storage_options, log_storage_options = _delta_storage_options(
         options,
         dataset_location=dataset_location,
     )
     return _DeltaPolicyContext(
+        write_policy=write_policy,
+        schema_policy=schema_policy,
         table_properties=table_properties,
         target_file_size=target_file_size,
+        partition_by=tuple(partition_by),
+        zorder_by=tuple(zorder_by),
+        enable_features=tuple(str(value) for value in enable_features),
+        writer_properties=writer_properties,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
+    )
+
+
+def _stats_decision_from_policy(
+    *,
+    dataset_name: str,
+    policy_ctx: _DeltaPolicyContext,
+    lineage_columns: tuple[str, ...] | None,
+) -> DeltaStatsDecision:
+    write_policy = policy_ctx.write_policy
+    stats_policy = write_policy.stats_policy if write_policy is not None else "off"
+    stats_cols_raw = policy_ctx.table_properties.get("delta.dataSkippingStatsColumns")
+    stats_columns = (
+        tuple(value.strip() for value in stats_cols_raw.split(",") if value.strip())
+        if stats_cols_raw
+        else None
+    )
+    return DeltaStatsDecision(
+        dataset_name=dataset_name,
+        stats_policy=stats_policy,
+        stats_columns=stats_columns,
+        lineage_columns=lineage_columns or (),
+        partition_by=policy_ctx.partition_by,
+        zorder_by=policy_ctx.zorder_by,
+        stats_max_columns=(write_policy.stats_max_columns if write_policy is not None else None),
     )
 
 
@@ -214,6 +301,14 @@ class WriteRequest:
         Format-specific COPY/streaming options for the underlying writer.
     single_file_output
         Hint to prefer single-file output when supported.
+    plan_fingerprint
+        Optional plan fingerprint for commit metadata linkage.
+    plan_identity_hash
+        Optional plan identity hash for artifact linkage.
+    run_id
+        Optional run identifier for commit metadata linkage.
+    delta_inputs
+        Optional Delta input pins or descriptors to include in commit metadata.
 
     Examples
     --------
@@ -235,6 +330,10 @@ class WriteRequest:
     single_file_output: bool | None = None
     table_name: str | None = None
     constraints: tuple[str, ...] = ()
+    plan_fingerprint: str | None = None
+    plan_identity_hash: str | None = None
+    run_id: str | None = None
+    delta_inputs: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -299,10 +398,17 @@ class DeltaWriteSpec:
     commit_metadata: Mapping[str, str]
     commit_key: str
     dataset_location: DatasetLocation | None = None
+    write_policy: DeltaWritePolicy | None = None
+    schema_policy: DeltaSchemaPolicy | None = None
     partition_by: tuple[str, ...] = ()
+    zorder_by: tuple[str, ...] = ()
+    enable_features: tuple[str, ...] = ()
+    feature_gate: DeltaFeatureGate | None = None
     table_properties: Mapping[str, str] = field(default_factory=dict)
     target_file_size: int | None = None
     schema_mode: Literal["merge", "overwrite"] | None = None
+    writer_properties: WriterProperties | None = None
+    stats_decision: DeltaStatsDecision | None = None
     commit_app_id: str | None = None
     commit_version: int | None = None
     commit_run: DataFusionRun | None = None
@@ -319,6 +425,115 @@ class DeltaWriteOutcome:
     enabled_features: Mapping[str, str]
     commit_app_id: str | None = None
     commit_version: int | None = None
+
+
+def _apply_zorder_sort(
+    df: DataFrame,
+    *,
+    request: WriteRequest,
+    dataset_location: DatasetLocation | None,
+    schema_columns: tuple[str, ...] | None,
+    lineage_columns: tuple[str, ...] | None,
+) -> DataFrame:
+    """Apply z-order sort for overwrite Delta writes when configured.
+
+    Parameters
+    ----------
+    df
+        DataFusion DataFrame to sort.
+    request
+        Write request with Delta write options.
+    dataset_location
+        Optional dataset location for policy resolution.
+    schema_columns
+        Schema columns for stats/policy evaluation.
+    lineage_columns
+        Lineage-derived columns used for policy evaluation.
+
+    Returns
+    -------
+    DataFrame
+        Sorted DataFrame when z-order is configured, otherwise input.
+    """
+    if request.format != WriteFormat.DELTA or request.mode != WriteMode.OVERWRITE:
+        return df
+    policy_ctx = _delta_policy_context(
+        options=request.format_options or {},
+        dataset_location=dataset_location,
+        request_partition_by=request.partition_by,
+        schema_columns=schema_columns,
+        lineage_columns=lineage_columns,
+    )
+    if not policy_ctx.zorder_by:
+        return df
+    sort_cols = list(dict.fromkeys([*policy_ctx.partition_by, *policy_ctx.zorder_by]))
+    order_exprs = [SortExpr(col(name), ascending=True, nulls_first=False) for name in sort_cols]
+    return df.sort(*order_exprs)
+
+
+def _delta_feature_mutation_options(
+    spec: DeltaWriteSpec,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DeltaFeatureMutationOptions:
+    """Build Delta feature mutation options from a write spec.
+
+    Parameters
+    ----------
+    spec
+        Delta write specification for the mutation.
+    runtime_profile
+        Optional runtime profile for feature gate enforcement.
+
+    Returns
+    -------
+    DeltaFeatureMutationOptions
+        Options used by feature mutation routines.
+    """
+    return DeltaFeatureMutationOptions(
+        path=spec.table_uri,
+        storage_options=spec.storage_options,
+        log_storage_options=spec.log_storage_options,
+        commit_metadata=spec.commit_metadata,
+        runtime_profile=runtime_profile,
+        dataset_name=spec.commit_key,
+        gate=spec.feature_gate,
+    )
+
+
+def _apply_explicit_delta_features(
+    *,
+    spec: DeltaWriteSpec,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    """Enable explicitly requested Delta features.
+
+    Parameters
+    ----------
+    spec
+        Delta write specification with feature enablement settings.
+    runtime_profile
+        Optional runtime profile for feature gate enforcement.
+    """
+    if not spec.enable_features:
+        return
+    options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
+    for feature in spec.enable_features:
+        if feature == "change_data_feed":
+            enable_delta_change_data_feed(options)
+        elif feature == "deletion_vectors":
+            enable_delta_deletion_vectors(options)
+        elif feature == "row_tracking":
+            enable_delta_row_tracking(options)
+        elif feature == "in_commit_timestamps":
+            enable_delta_in_commit_timestamps(options)
+        elif feature == "column_mapping":
+            enable_delta_column_mapping(
+                options,
+                mode=spec.table_properties.get("delta.columnMapping.mode", "name"),
+            )
+        elif feature == "v2_checkpoints":
+            enable_delta_v2_checkpoints(options)
 
 
 class WritePipeline:
@@ -429,6 +644,27 @@ class WritePipeline:
                     return name, loc
         return None
 
+    def _dataset_binding(
+        self,
+        destination: str,
+    ) -> tuple[str | None, DatasetLocation | None]:
+        """Resolve dataset name and location for a destination.
+
+        Parameters
+        ----------
+        destination
+            Target destination path or table name.
+
+        Returns
+        -------
+        tuple[str | None, DatasetLocation | None]
+            Dataset name and location, or (None, None) when unavailable.
+        """
+        binding = self._dataset_location_for_destination(destination)
+        if binding is None:
+            return None, None
+        return binding
+
     def write_via_streaming(
         self,
         request: WriteRequest,
@@ -463,9 +699,16 @@ class WritePipeline:
 
         start = time.perf_counter()
         df = self._source_df(request)
-        dataset_binding = self._dataset_location_for_destination(request.destination)
-        dataset_name = dataset_binding[0] if dataset_binding is not None else None
-        dataset_location = dataset_binding[1] if dataset_binding is not None else None
+        dataset_name, dataset_location = self._dataset_binding(request.destination)
+        schema_columns = _schema_columns(df)
+        lineage_columns = _delta_lineage_columns(df)
+        df = _apply_zorder_sort(
+            df,
+            request=request,
+            dataset_location=dataset_location,
+            schema_columns=schema_columns,
+            lineage_columns=lineage_columns,
+        )
         result = StreamingExecutionResult(df=df)
 
         table_target = self._table_target(request)
@@ -482,13 +725,17 @@ class WritePipeline:
             return write_result
 
         # Write based on format
+        delta_outcome: DeltaWriteOutcome | None = None
         if request.format == WriteFormat.DELTA:
-            delta_outcome: DeltaWriteOutcome | None
             streaming_spec = self._delta_write_spec(
                 request,
                 method_label="delta_writer",
-                dataset_name=dataset_name,
-                dataset_location=dataset_location,
+                inputs=_DeltaWriteSpecInputs(
+                    dataset_name=dataset_name,
+                    dataset_location=dataset_location,
+                    schema_columns=schema_columns,
+                    lineage_columns=lineage_columns,
+                ),
             )
             delta_outcome = self._write_delta(
                 result,
@@ -662,13 +909,60 @@ class WritePipeline:
             write_options=DataFrameWriteOptions(insert_operation=insert_op),
         )
 
+    def _prepare_commit_metadata(
+        self,
+        *,
+        commit_key: str,
+        commit_metadata: dict[str, str],
+        method_label: str,
+        mode: Literal["append", "overwrite"],
+        options: Mapping[str, object],
+    ) -> tuple[dict[str, str], IdempotentWriteOptions | None, DataFusionRun | None]:
+        """Finalize commit metadata with idempotent and runtime commit context.
+
+        Parameters
+        ----------
+        commit_key
+            Commit key used for idempotent reservation.
+        commit_metadata
+            Base commit metadata entries to extend.
+        method_label
+            Method label used for commit metadata.
+        mode
+            Delta write mode string.
+        options
+            Format options used to resolve idempotent settings.
+
+        Returns
+        -------
+        tuple[dict[str, str], IdempotentWriteOptions | None, DataFusionRun | None]
+            Updated metadata, idempotent options, and reserved commit run.
+        """
+        metadata = dict(commit_metadata)
+        commit_run: DataFusionRun | None = None
+        idempotent = _delta_idempotent_options(options)
+        if idempotent is None:
+            reserved = self._reserve_runtime_commit(
+                commit_key=commit_key,
+                commit_metadata=metadata,
+                method_label=method_label,
+                mode=mode,
+            )
+            if reserved is not None:
+                idempotent, commit_run = reserved
+        if idempotent is not None:
+            metadata["commit_app_id"] = idempotent.app_id
+            metadata["commit_version"] = str(idempotent.version)
+        if commit_run is not None:
+            metadata["commit_run_id"] = commit_run.run_id
+        return metadata, idempotent, commit_run
+
     def _delta_write_spec(
         self,
         request: WriteRequest,
         *,
         method_label: str,
-        dataset_name: str | None = None,
-        dataset_location: DatasetLocation | None = None,
+        inputs: _DeltaWriteSpecInputs,
     ) -> DeltaWriteSpec:
         """Build a deterministic Delta write specification for a request.
 
@@ -678,10 +972,8 @@ class WritePipeline:
             Write request for a Delta destination.
         method_label
             Write method label used for commit metadata.
-        dataset_name
-            Optional dataset name for commit metadata and keying.
-        dataset_location
-            Optional dataset location for policy-derived defaults.
+        inputs
+            Input context for policy resolution and lineage-derived settings.
 
         Returns
         -------
@@ -690,12 +982,24 @@ class WritePipeline:
         """
         options = request.format_options or {}
         mode = _delta_mode(request.mode)
+        schema_policy = _resolve_delta_schema_policy(
+            options,
+            dataset_location=inputs.dataset_location,
+        )
         policy_ctx = _delta_policy_context(
             options=options,
-            dataset_location=dataset_location,
+            dataset_location=inputs.dataset_location,
+            request_partition_by=request.partition_by,
+            schema_columns=inputs.schema_columns,
+            lineage_columns=inputs.lineage_columns,
+        )
+        stats_decision = _stats_decision_from_policy(
+            dataset_name=inputs.dataset_name or request.destination,
+            policy_ctx=policy_ctx,
+            lineage_columns=inputs.lineage_columns,
         )
         dataset_constraints = (
-            resolve_delta_constraints(dataset_location) if dataset_location else ()
+            resolve_delta_constraints(inputs.dataset_location) if inputs.dataset_location else ()
         )
         extra_constraints = _merge_constraints(request.constraints, dataset_constraints)
         commit_metadata = _delta_commit_metadata(
@@ -704,29 +1008,23 @@ class WritePipeline:
             context=_DeltaCommitContext(
                 method_label=method_label,
                 mode=mode,
-                dataset_name=dataset_name,
-                dataset_location=dataset_location,
+                dataset_name=inputs.dataset_name,
+                dataset_location=inputs.dataset_location,
             ),
         )
-        if extra_constraints:
-            commit_metadata["delta_constraints"] = " AND ".join(extra_constraints)
-        commit_key = dataset_name or request.destination
-        commit_run: DataFusionRun | None = None
-        idempotent = _delta_idempotent_options(options)
-        if idempotent is None:
-            reserved = self._reserve_runtime_commit(
-                commit_key=commit_key,
-                commit_metadata=commit_metadata,
-                method_label=method_label,
-                mode=mode,
-            )
-            if reserved is not None:
-                idempotent, commit_run = reserved
-        if idempotent is not None:
-            commit_metadata["commit_app_id"] = idempotent.app_id
-            commit_metadata["commit_version"] = str(idempotent.version)
-        if commit_run is not None:
-            commit_metadata["commit_run_id"] = commit_run.run_id
+        commit_metadata = _apply_policy_commit_metadata(
+            commit_metadata,
+            policy_ctx=policy_ctx,
+            extra_constraints=extra_constraints,
+        )
+        commit_key = inputs.dataset_name or request.destination
+        commit_metadata, idempotent, commit_run = self._prepare_commit_metadata(
+            commit_key=commit_key,
+            commit_metadata=commit_metadata,
+            method_label=method_label,
+            mode=mode,
+            options=options,
+        )
         commit_properties = idempotent_commit_properties(
             operation="write_pipeline",
             mode=mode,
@@ -743,11 +1041,23 @@ class WritePipeline:
             commit_properties=commit_properties,
             commit_metadata=commit_metadata,
             commit_key=commit_key,
-            dataset_location=dataset_location,
-            partition_by=request.partition_by,
+            dataset_location=inputs.dataset_location,
+            write_policy=policy_ctx.write_policy,
+            schema_policy=policy_ctx.schema_policy,
+            partition_by=policy_ctx.partition_by,
+            zorder_by=policy_ctx.zorder_by,
+            enable_features=policy_ctx.enable_features,
+            feature_gate=resolve_delta_feature_gate(inputs.dataset_location)
+            if inputs.dataset_location is not None
+            else None,
             table_properties=policy_ctx.table_properties,
             target_file_size=policy_ctx.target_file_size,
-            schema_mode=_delta_schema_mode(options),
+            schema_mode=_delta_schema_mode(
+                options,
+                schema_policy=schema_policy,
+            ),
+            writer_properties=policy_ctx.writer_properties,
+            stats_decision=stats_decision,
             commit_app_id=commit_app_id,
             commit_version=commit_version,
             commit_run=commit_run,
@@ -843,14 +1153,33 @@ class WritePipeline:
                 commit_app_id=spec.commit_app_id,
                 commit_version=spec.commit_version,
                 commit_run_id=commit_run_id,
+                delta_write_policy=spec.write_policy,
+                delta_schema_policy=spec.schema_policy,
                 partition_by=spec.partition_by,
                 table_properties=dict(spec.table_properties),
                 commit_metadata=dict(spec.commit_metadata),
+                stats_decision=spec.stats_decision,
                 duration_ms=context.duration_ms,
                 row_count=context.row_count,
                 status=context.status,
                 error=context.error,
             ),
+        )
+        if spec.stats_decision is None:
+            return
+        from datafusion_engine.diagnostics import record_artifact
+        from serde_msgspec import to_builtins
+
+        envelope = DeltaStatsDecisionEnvelope(payload=spec.stats_decision)
+        validated = convert(
+            to_builtins(envelope, str_keys=True),
+            target_type=DeltaStatsDecisionEnvelope,
+            strict=True,
+        )
+        record_artifact(
+            self.runtime_profile,
+            "delta_stats_decision_v1",
+            cast("dict[str, object]", to_builtins(validated, str_keys=True)),
         )
 
     def _record_delta_mutation(
@@ -923,6 +1252,9 @@ class WritePipeline:
             spec.log_storage_options,
         )
         if policy.optimize_on_write:
+            z_order_cols: tuple[str, ...] | None = None
+            if policy.z_order_cols and policy.z_order_when != "never":
+                z_order_cols = policy.z_order_cols
             report = delta_optimize_compact(
                 self.ctx,
                 request=DeltaOptimizeRequest(
@@ -931,6 +1263,8 @@ class WritePipeline:
                     version=delta_version,
                     timestamp=None,
                     target_size=policy.optimize_target_size,
+                    z_order_cols=z_order_cols,
+                    gate=spec.feature_gate,
                     commit_options=DeltaCommitOptions(metadata={"operation": "optimize"}),
                 ),
             )
@@ -964,6 +1298,7 @@ class WritePipeline:
                     retention_hours=retention_hours,
                     dry_run=policy.vacuum_dry_run,
                     enforce_retention_duration=policy.enforce_retention_duration,
+                    gate=spec.feature_gate,
                     commit_options=DeltaCommitOptions(metadata={"operation": "vacuum"}),
                 ),
             )
@@ -1021,6 +1356,13 @@ class WritePipeline:
         ):
             msg = f"Delta destination already exists: {spec.table_uri}"
             raise ValueError(msg)
+        _validate_delta_protocol_support(
+            runtime_profile=self.runtime_profile,
+            table_uri=spec.table_uri,
+            storage_options=spec.storage_options,
+            log_storage_options=spec.log_storage_options,
+            gate=spec.feature_gate,
+        )
         delta_options = DeltaWriteOptions(
             mode=spec.mode,
             schema_mode=spec.schema_mode,
@@ -1029,6 +1371,7 @@ class WritePipeline:
             commit_properties=spec.commit_properties,
             commit_metadata=spec.commit_metadata,
             target_file_size=spec.target_file_size,
+            writer_properties=spec.writer_properties,
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
             extra_constraints=spec.extra_constraints,
@@ -1053,8 +1396,13 @@ class WritePipeline:
                 commit_metadata=spec.commit_metadata,
                 runtime_profile=self.runtime_profile,
                 dataset_name=spec.commit_key,
+                gate=spec.feature_gate,
             ),
             features=spec.table_properties,
+        )
+        _apply_explicit_delta_features(
+            spec=spec,
+            runtime_profile=self.runtime_profile,
         )
         if not enabled_features:
             enabled_features = dict(spec.table_properties)
@@ -1163,17 +1511,209 @@ class WritePipeline:
 def _delta_table_properties(options: Mapping[str, object]) -> dict[str, str]:
     properties: dict[str, str] = {}
     table_props = _string_mapping(options.get("table_properties"))
-    if table_props is None:
-        table_props = _string_mapping(options.get("delta_table_properties"))
     if table_props:
         properties.update(table_props)
-    for key, value in options.items():
-        key_str = str(key)
-        if not key_str.startswith("delta.") or value is None:
-            continue
-        properties[key_str] = str(value)
-    properties.update(DEFAULT_DELTA_FEATURE_PROPERTIES)
     return properties
+
+
+def _schema_columns(df: DataFrame) -> tuple[str, ...] | None:
+    try:
+        names = df.schema().names
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+    return tuple(str(name) for name in names)
+
+
+def _strip_qualifier(name: str) -> str:
+    if "." not in name:
+        return name
+    return name.rsplit(".", maxsplit=1)[-1]
+
+
+def _delta_lineage_columns(df: DataFrame) -> tuple[str, ...]:
+    plan = _safe_optimized_plan(df)
+    if plan is None:
+        return ()
+    try:
+        from datafusion_engine.lineage_datafusion import extract_lineage
+    except ImportError:
+        return ()
+    try:
+        lineage = extract_lineage(plan)
+    except (RuntimeError, TypeError, ValueError):
+        return ()
+    columns: set[str] = set()
+    for expr in lineage.exprs:
+        for _, column in expr.referenced_columns:
+            if column:
+                columns.add(column)
+    for join in lineage.joins:
+        for name in (*join.left_keys, *join.right_keys):
+            if name:
+                columns.add(_strip_qualifier(name))
+    return tuple(sorted(columns))
+
+
+def _safe_optimized_plan(df: DataFrame) -> object | None:
+    method = getattr(df, "optimized_logical_plan", None)
+    if not callable(method):
+        return None
+    try:
+        return method()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _validate_delta_protocol_support(
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    log_storage_options: Mapping[str, str] | None,
+    gate: DeltaFeatureGate | None,
+) -> None:
+    if runtime_profile is None or runtime_profile.delta_protocol_support is None:
+        return
+    from datafusion_engine.delta_protocol import delta_protocol_compatibility
+    from serde_msgspec import to_builtins
+    from storage.deltalake.delta import delta_protocol_snapshot
+
+    snapshot = delta_protocol_snapshot(
+        table_uri,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+        gate=gate,
+    )
+    compatibility = delta_protocol_compatibility(snapshot, runtime_profile.delta_protocol_support)
+    compatibility_payload = cast(
+        "dict[str, object]",
+        to_builtins(compatibility, str_keys=True),
+    )
+    compatible = compatibility.compatible
+    if compatible is True or runtime_profile.delta_protocol_mode == "ignore":
+        return
+    if runtime_profile.delta_protocol_mode == "warn":
+        from datafusion_engine.diagnostics import record_artifact
+
+        record_artifact(
+            runtime_profile,
+            "delta_protocol_compatibility_v1",
+            compatibility_payload,
+        )
+        return
+    msg = f"Delta protocol compatibility failed for {table_uri}: {compatibility_payload}"
+    raise ValueError(msg)
+
+
+def _delta_stats_columns_override(options: Mapping[str, object]) -> tuple[str, ...] | None:
+    raw = options.get("stats_columns")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        values = tuple(value.strip() for value in raw.split(",") if value.strip())
+        return values or None
+    if isinstance(raw, Sequence):
+        normalized = tuple(str(value).strip() for value in raw if str(value).strip())
+        return normalized or None
+    return None
+
+
+def _delta_zorder_by(options: Mapping[str, object]) -> tuple[str, ...]:
+    raw = options.get("zorder_by")
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return tuple(value.strip() for value in raw.split(",") if value.strip())
+    if isinstance(raw, Sequence):
+        return tuple(str(value).strip() for value in raw if str(value).strip())
+    return ()
+
+
+def _delta_enable_features(options: Mapping[str, object]) -> tuple[str, ...]:
+    raw = options.get("enable_features")
+    features: list[str] = []
+    if isinstance(raw, str):
+        features.extend(value.strip() for value in raw.split(",") if value.strip())
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        features.extend(str(value).strip() for value in raw if str(value).strip())
+    return tuple(dict.fromkeys(features))
+
+
+def _delta_write_policy_override(options: Mapping[str, object]) -> DeltaWritePolicy | None:
+    raw = options.get("delta_write_policy")
+    if raw is None:
+        raw = options.get("write_policy")
+    if isinstance(raw, DeltaWritePolicy):
+        return raw
+    if isinstance(raw, Mapping):
+        payload = dict(raw)
+        return convert(payload, target_type=DeltaWritePolicy, strict=True)
+    return None
+
+
+def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaPolicy | None:
+    raw = options.get("delta_schema_policy")
+    if raw is None:
+        raw = options.get("schema_policy")
+    if isinstance(raw, DeltaSchemaPolicy):
+        return raw
+    if isinstance(raw, Mapping):
+        return convert(dict(raw), target_type=DeltaSchemaPolicy, strict=True)
+    return None
+
+
+def _delta_writer_properties(
+    options: Mapping[str, object],
+    *,
+    write_policy: object | None,
+) -> WriterProperties | None:
+    from deltalake import WriterProperties
+
+    explicit = options.get("writer_properties")
+    if explicit is not None:
+        if isinstance(explicit, WriterProperties):
+            return explicit
+        msg = "writer_properties must be a deltalake.WriterProperties instance."
+        raise TypeError(msg)
+    policy = getattr(write_policy, "parquet_writer_policy", None)
+    if policy is None:
+        return None
+    return _writer_properties_from_policy(policy)
+
+
+def _writer_properties_from_policy(policy: object) -> WriterProperties | None:
+    from deltalake import BloomFilterProperties, ColumnProperties, WriterProperties
+
+    stats_level = getattr(policy, "statistics_level", "page")
+    stats_map = {"none": "NONE", "chunk": "CHUNK", "page": "PAGE"}
+    stats_value = cast(
+        "Literal['NONE', 'CHUNK', 'PAGE']",
+        stats_map.get(str(stats_level).lower(), "PAGE"),
+    )
+    stats_cols = set(getattr(policy, "statistics_enabled", ()))
+    bloom_cols = set(getattr(policy, "bloom_filter_enabled", ()))
+    dict_cols = set(getattr(policy, "dictionary_enabled", ()))
+    all_cols = sorted(stats_cols | bloom_cols | dict_cols)
+    if not all_cols:
+        return None
+    column_properties: dict[str, ColumnProperties] = {}
+    fpp = getattr(policy, "bloom_filter_fpp", None)
+    ndv = getattr(policy, "bloom_filter_ndv", None)
+    for col_name in all_cols:
+        bloom_props = None
+        if col_name in bloom_cols:
+            bloom_props = BloomFilterProperties(
+                set_bloom_filter_enabled=True,
+                fpp=fpp,
+                ndv=ndv,
+            )
+        col_props = ColumnProperties(
+            dictionary_enabled=True if col_name in dict_cols else None,
+            statistics_enabled=stats_value if col_name in stats_cols else None,
+            bloom_filter_properties=bloom_props,
+        )
+        column_properties[str(col_name)] = col_props
+    return WriterProperties(column_properties=column_properties)
 
 
 def _delta_target_file_size(
@@ -1184,18 +1724,46 @@ def _delta_target_file_size(
     value = options.get("target_file_size")
     if isinstance(value, int) and value > 0:
         return value
-    alt_value = options.get("delta_target_file_size")
-    if isinstance(alt_value, int) and alt_value > 0:
-        return alt_value
     if isinstance(fallback, int) and fallback > 0:
         return fallback
     return None
 
 
-def _delta_schema_mode(options: Mapping[str, object]) -> Literal["merge", "overwrite"] | None:
+def _resolve_delta_schema_policy(
+    options: Mapping[str, object],
+    *,
+    dataset_location: DatasetLocation | None,
+) -> object | None:
+    """Resolve Delta schema policy with override precedence.
+
+    Parameters
+    ----------
+    options
+        Format options to inspect for overrides.
+    dataset_location
+        Dataset location for default policy lookup.
+
+    Returns
+    -------
+    object | None
+        Resolved schema policy instance when available.
+    """
+    schema_policy = _delta_schema_policy_override(options)
+    if schema_policy is not None:
+        return schema_policy
+    if dataset_location is None:
+        return None
+    return resolve_delta_schema_policy(dataset_location)
+
+
+def _delta_schema_mode(
+    options: Mapping[str, object],
+    *,
+    schema_policy: object | None = None,
+) -> Literal["merge", "overwrite"] | None:
     value = options.get("schema_mode")
-    if value is None:
-        value = options.get("delta_schema_mode")
+    if value is None and schema_policy is not None:
+        value = getattr(schema_policy, "schema_mode", None)
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized == "merge":
@@ -1230,13 +1798,22 @@ def _delta_storage_options(
     return storage_options or None, log_storage_options or None
 
 
-def _delta_commit_metadata(
-    request: WriteRequest,
-    options: Mapping[str, object],
-    *,
-    context: _DeltaCommitContext,
-) -> dict[str, str]:
-    metadata: dict[str, str] = {
+def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:
+    """Build base Delta commit metadata shared across policies.
+
+    Parameters
+    ----------
+    request
+        Write request associated with the commit.
+    context
+        Commit context describing method and mode.
+
+    Returns
+    -------
+    dict[str, str]
+        Base metadata entries for the commit.
+    """
+    return {
         "engine": "datafusion",
         "operation": "write_pipeline",
         "method": context.method_label,
@@ -1244,21 +1821,116 @@ def _delta_commit_metadata(
         "format": request.format.name.lower(),
         "destination": request.destination,
     }
-    if context.dataset_name:
-        metadata["dataset_name"] = context.dataset_name
-    if context.dataset_location is not None:
-        metadata["dataset_path"] = str(context.dataset_location.path)
-        if context.dataset_location.delta_version is not None:
-            metadata["delta_version_pin"] = str(context.dataset_location.delta_version)
-        if context.dataset_location.delta_timestamp is not None:
-            metadata["delta_timestamp_pin"] = context.dataset_location.delta_timestamp
-    if request.partition_by:
-        metadata["partition_by"] = ",".join(request.partition_by)
+
+
+def _dataset_location_commit_metadata(
+    dataset_location: DatasetLocation | None,
+) -> dict[str, str]:
+    """Build commit metadata derived from dataset location pins.
+
+    Parameters
+    ----------
+    dataset_location
+        Dataset location with optional version pins.
+
+    Returns
+    -------
+    dict[str, str]
+        Metadata entries derived from the dataset location.
+    """
+    if dataset_location is None:
+        return {}
+    metadata: dict[str, str] = {"dataset_path": str(dataset_location.path)}
+    if dataset_location.delta_version is not None:
+        metadata["delta_version_pin"] = str(dataset_location.delta_version)
+    if dataset_location.delta_timestamp is not None:
+        metadata["delta_timestamp_pin"] = dataset_location.delta_timestamp
+    return metadata
+
+
+def _optional_commit_metadata(
+    request: WriteRequest,
+    *,
+    context: _DeltaCommitContext,
+) -> dict[str, str | None]:
+    """Return optional commit metadata values that may be omitted.
+
+    Parameters
+    ----------
+    request
+        Write request containing optional metadata fields.
+    context
+        Commit context with optional dataset details.
+
+    Returns
+    -------
+    dict[str, str | None]
+        Optional metadata keys with values or None when absent.
+    """
+    delta_inputs = json.dumps(list(request.delta_inputs)) if request.delta_inputs else None
+    partition_by = ",".join(request.partition_by) if request.partition_by else None
+    return {
+        "dataset_name": context.dataset_name,
+        "partition_by": partition_by,
+        "plan_fingerprint": request.plan_fingerprint,
+        "plan_identity_hash": request.plan_identity_hash,
+        "run_id": request.run_id,
+        "delta_inputs": delta_inputs,
+    }
+
+
+def _delta_commit_metadata(
+    request: WriteRequest,
+    options: Mapping[str, object],
+    *,
+    context: _DeltaCommitContext,
+) -> dict[str, str]:
+    metadata = _base_commit_metadata(request, context=context)
+    metadata.update(_dataset_location_commit_metadata(context.dataset_location))
+    optional = _optional_commit_metadata(request, context=context)
+    metadata.update({key: value for key, value in optional.items() if value is not None})
     user_meta = _string_mapping(options.get("commit_metadata"))
     if user_meta is None:
         user_meta = _string_mapping(options.get("delta_commit_metadata"))
     if user_meta:
         metadata.update(user_meta)
+    return metadata
+
+
+def _apply_policy_commit_metadata(
+    commit_metadata: dict[str, str],
+    *,
+    policy_ctx: _DeltaPolicyContext,
+    extra_constraints: tuple[str, ...],
+) -> dict[str, str]:
+    """Apply policy-derived metadata to commit metadata.
+
+    Parameters
+    ----------
+    commit_metadata
+        Base commit metadata entries to extend.
+    policy_ctx
+        Resolved Delta policy context.
+    extra_constraints
+        Additional constraints to persist in metadata.
+
+    Returns
+    -------
+    dict[str, str]
+        Commit metadata augmented with policy fields.
+    """
+    metadata = dict(commit_metadata)
+    if policy_ctx.partition_by:
+        metadata["partition_by"] = ",".join(policy_ctx.partition_by)
+    if policy_ctx.zorder_by:
+        metadata["zorder_by"] = ",".join(policy_ctx.zorder_by)
+    if policy_ctx.enable_features:
+        metadata["delta_enable_features"] = ",".join(policy_ctx.enable_features)
+    stats_cols = policy_ctx.table_properties.get("delta.dataSkippingStatsColumns")
+    if stats_cols:
+        metadata["delta_stats_columns"] = stats_cols
+    if extra_constraints:
+        metadata["delta_constraints"] = " AND ".join(extra_constraints)
     return metadata
 
 

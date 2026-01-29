@@ -14,7 +14,6 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, cast
 
 import datafusion
-import msgspec
 import pyarrow as pa
 from datafusion import (
     RuntimeEnvBuilder,
@@ -94,7 +93,7 @@ from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
-from serde_msgspec import StructBase
+from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
 from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
@@ -140,7 +139,7 @@ SqlIngestHook = Callable[[Mapping[str, object]], None]
 CacheEventHook = Callable[[DataFusionCacheEvent], None]
 SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
 
-_TELEMETRY_MSGPACK_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+_TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
 
 
 def _encode_telemetry_msgpack(payload: object) -> bytes:
@@ -563,7 +562,7 @@ class SchemaHardeningProfile:
 
 
 class FeatureStateSnapshot(
-    StructBase,
+    StructBaseCompat,
     array_like=True,
     gc=False,
     cache_hash=True,
@@ -1670,7 +1669,7 @@ def record_view_definition(
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
     payload = artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000))
-    record_artifact(profile, "datafusion_view_artifacts_v3", payload)
+    record_artifact(profile, "datafusion_view_artifacts_v4", payload)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -1967,7 +1966,7 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v6", normalized)
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v8", normalized)
 
     return _hook
 
@@ -6020,10 +6019,11 @@ def align_table_to_schema(
         resolved_table = cast("pa.Table", resolved)
     session = ctx or DataFusionRuntimeProfile().session_context()
     temp_name = f"__schema_align_{uuid.uuid4().hex}"
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-    adapter = DataFusionIOAdapter(ctx=session, profile=None)
-    adapter.register_record_batches(temp_name, resolved_table.to_batches())
+    from_arrow = getattr(session, "from_arrow", None)
+    if not callable(from_arrow):
+        msg = "SessionContext does not support from_arrow ingestion."
+        raise NotImplementedError(msg)
+    from_arrow(resolved_table, name=temp_name)
     try:
         selections = _align_projection_exprs(
             schema=resolved_schema,
@@ -6033,7 +6033,9 @@ def align_table_to_schema(
         aligned = session.table(temp_name).select(*selections).to_arrow_table()
     finally:
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(temp_name)
+            deregister = getattr(session, "deregister_table", None)
+            if callable(deregister):
+                deregister(temp_name)
     return _apply_table_schema_metadata(
         aligned,
         schema=resolved_schema,

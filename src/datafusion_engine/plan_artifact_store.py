@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import hashlib
 import time
@@ -11,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
 import pyarrow as pa
 
 from datafusion_engine.dataset_registry import (
@@ -19,7 +19,16 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_scan_options,
 )
 from datafusion_engine.diagnostics import record_artifact
-from serde_msgspec import dumps_json, to_builtins
+from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
+from serde_msgspec import (
+    StructBaseCompat,
+    convert,
+    dumps_msgpack,
+    encode_json_into,
+    to_builtins,
+    validation_error_payload,
+)
+from serde_msgspec_ext import SubstraitBytes
 from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
@@ -30,10 +39,11 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
+    from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v6"
-WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v1"
-HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v1"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v8"
+WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v2"
+HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v2"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
 _WRITE_ARTIFACTS_DIRNAME = WRITE_ARTIFACTS_TABLE_NAME
 _HAMILTON_EVENTS_DIRNAME = HAMILTON_EVENTS_TABLE_NAME
@@ -45,103 +55,6 @@ try:
     _DEFAULT_ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / ".artifacts"
 except IndexError:
     _DEFAULT_ARTIFACTS_ROOT = Path.cwd() / ".artifacts"
-
-
-@dataclass(frozen=True)
-class PlanArtifactRow:
-    """Serializable plan artifact row persisted to the Delta store."""
-
-    event_time_unix_ms: int
-    profile_name: str | None
-    event_kind: str
-    view_name: str
-    plan_fingerprint: str
-    plan_identity_hash: str
-    udf_snapshot_hash: str
-    function_registry_hash: str
-    required_udfs_json: str
-    required_rewrite_tags_json: str
-    domain_planner_names_json: str
-    delta_inputs_json: str
-    df_settings_json: str
-    planning_env_json: str
-    planning_env_hash: str
-    rulepack_json: str | None
-    rulepack_hash: str | None
-    information_schema_json: str
-    information_schema_hash: str
-    substrait_b64: str | None
-    logical_plan_proto_b64: str | None
-    optimized_plan_proto_b64: str | None
-    execution_plan_proto_b64: str | None
-    explain_tree_rows_json: str | None
-    explain_verbose_rows_json: str | None
-    explain_analyze_duration_ms: float | None
-    explain_analyze_output_rows: int | None
-    substrait_validation_json: str | None
-    lineage_json: str
-    scan_units_json: str
-    scan_keys_json: str
-    plan_details_json: str
-    function_registry_snapshot_json: str
-    udf_snapshot_json: str
-    udf_planner_snapshot_json: str | None
-    udf_compatibility_ok: bool
-    udf_compatibility_detail_json: str
-    execution_duration_ms: float | None = None
-    execution_status: str | None = None
-    execution_error: str | None = None
-
-    def to_row(self) -> dict[str, object]:
-        """Return a JSON-ready row mapping.
-
-        Returns
-        -------
-        dict[str, object]
-            JSON-ready row payload.
-        """
-        return {
-            "event_time_unix_ms": self.event_time_unix_ms,
-            "profile_name": self.profile_name,
-            "event_kind": self.event_kind,
-            "view_name": self.view_name,
-            "plan_fingerprint": self.plan_fingerprint,
-            "plan_identity_hash": self.plan_identity_hash,
-            "udf_snapshot_hash": self.udf_snapshot_hash,
-            "function_registry_hash": self.function_registry_hash,
-            "required_udfs_json": self.required_udfs_json,
-            "required_rewrite_tags_json": self.required_rewrite_tags_json,
-            "domain_planner_names_json": self.domain_planner_names_json,
-            "delta_inputs_json": self.delta_inputs_json,
-            "df_settings_json": self.df_settings_json,
-            "planning_env_json": self.planning_env_json,
-            "planning_env_hash": self.planning_env_hash,
-            "rulepack_json": self.rulepack_json,
-            "rulepack_hash": self.rulepack_hash,
-            "information_schema_json": self.information_schema_json,
-            "information_schema_hash": self.information_schema_hash,
-            "substrait_b64": self.substrait_b64,
-            "logical_plan_proto_b64": self.logical_plan_proto_b64,
-            "optimized_plan_proto_b64": self.optimized_plan_proto_b64,
-            "execution_plan_proto_b64": self.execution_plan_proto_b64,
-            "explain_tree_rows_json": self.explain_tree_rows_json,
-            "explain_verbose_rows_json": self.explain_verbose_rows_json,
-            "explain_analyze_duration_ms": self.explain_analyze_duration_ms,
-            "explain_analyze_output_rows": self.explain_analyze_output_rows,
-            "substrait_validation_json": self.substrait_validation_json,
-            "lineage_json": self.lineage_json,
-            "scan_units_json": self.scan_units_json,
-            "scan_keys_json": self.scan_keys_json,
-            "plan_details_json": self.plan_details_json,
-            "function_registry_snapshot_json": self.function_registry_snapshot_json,
-            "udf_snapshot_json": self.udf_snapshot_json,
-            "udf_planner_snapshot_json": self.udf_planner_snapshot_json,
-            "udf_compatibility_ok": self.udf_compatibility_ok,
-            "udf_compatibility_detail_json": self.udf_compatibility_detail_json,
-            "execution_duration_ms": self.execution_duration_ms,
-            "execution_status": self.execution_status,
-            "execution_error": self.execution_error,
-        }
 
 
 @dataclass(frozen=True)
@@ -177,59 +90,11 @@ class DeterminismValidationResult:
         }
 
 
-@dataclass(frozen=True)
-class WriteArtifactRow:
-    """Serializable write artifact row persisted to the Delta store."""
+class _DeterminismRow(StructBaseCompat, frozen=True):
+    """Typed determinism query row for plan artifacts."""
 
-    event_time_unix_ms: int
-    profile_name: str | None
-    event_kind: str
-    destination: str
-    format: str
-    mode: str
-    method: str
-    table_uri: str
-    delta_version: int | None
-    commit_app_id: str | None
-    commit_version: int | None
-    commit_run_id: str | None
-    partition_by_json: str
-    table_properties_json: str
-    commit_metadata_json: str
-    duration_ms: float | None
-    row_count: int | None
-    status: str | None
-    error: str | None
-
-    def to_row(self) -> dict[str, object]:
-        """Return a JSON-ready row mapping.
-
-        Returns
-        -------
-        dict[str, object]
-            JSON-ready row payload.
-        """
-        return {
-            "event_time_unix_ms": self.event_time_unix_ms,
-            "profile_name": self.profile_name,
-            "event_kind": self.event_kind,
-            "destination": self.destination,
-            "format": self.format,
-            "mode": self.mode,
-            "method": self.method,
-            "table_uri": self.table_uri,
-            "delta_version": self.delta_version,
-            "commit_app_id": self.commit_app_id,
-            "commit_version": self.commit_version,
-            "commit_run_id": self.commit_run_id,
-            "partition_by_json": self.partition_by_json,
-            "table_properties_json": self.table_properties_json,
-            "commit_metadata_json": self.commit_metadata_json,
-            "duration_ms": self.duration_ms,
-            "row_count": self.row_count,
-            "status": self.status,
-            "error": self.error,
-        }
+    plan_fingerprint: str | None = None
+    plan_identity_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -242,16 +107,16 @@ class HamiltonEventRow:
     event_name: str
     plan_signature: str
     reduced_plan_signature: str
-    event_payload_json: str
+    event_payload_msgpack: bytes
     event_payload_hash: str
 
     def to_row(self) -> dict[str, object]:
-        """Return a JSON-ready row mapping.
+        """Return a row mapping ready for Arrow/Delta ingestion.
 
         Returns
         -------
         dict[str, object]
-            JSON-ready row payload.
+            Row payload for ingestion.
         """
         return {
             "event_time_unix_ms": self.event_time_unix_ms,
@@ -260,7 +125,7 @@ class HamiltonEventRow:
             "event_name": self.event_name,
             "plan_signature": self.plan_signature,
             "reduced_plan_signature": self.reduced_plan_signature,
-            "event_payload_json": self.event_payload_json,
+            "event_payload_msgpack": self.event_payload_msgpack,
             "event_payload_hash": self.event_payload_hash,
         }
 
@@ -326,7 +191,7 @@ class HamiltonEventsRequest:
     run_id: str
     plan_signature: str
     reduced_plan_signature: str
-    events_snapshot: Mapping[str, Sequence[Mapping[str, object]]]
+    events_snapshot: Mapping[str, Sequence[object]]
     event_names: Sequence[str] | None = None
 
 
@@ -495,12 +360,16 @@ def _determinism_sets(
     for batch in results:
         for row in batch.to_pylist():
             row_count += 1
-            fp = row.get("plan_fingerprint")
-            if fp is not None:
-                fingerprints.add(str(fp))
-            identity = row.get("plan_identity_hash")
-            if identity is not None:
-                identities.add(str(identity))
+            try:
+                payload = convert(row, target_type=_DeterminismRow, strict=True)
+            except msgspec.ValidationError as exc:
+                details = validation_error_payload(exc)
+                msg = f"Determinism row validation failed: {details}"
+                raise ValueError(msg) from exc
+            if payload.plan_fingerprint is not None:
+                fingerprints.add(str(payload.plan_fingerprint))
+            if payload.plan_identity_hash is not None:
+                identities.add(str(payload.plan_identity_hash))
     return row_count, fingerprints, identities
 
 
@@ -602,9 +471,12 @@ class WriteArtifactRequest:
     commit_app_id: str | None = None
     commit_version: int | None = None
     commit_run_id: str | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
     partition_by: Sequence[str] = ()
     table_properties: Mapping[str, str] | None = None
     commit_metadata: Mapping[str, str] | None = None
+    stats_decision: DeltaStatsDecision | None = None
     duration_ms: float | None = None
     row_count: int | None = None
     status: str | None = None
@@ -643,19 +515,24 @@ def persist_write_artifact(
         commit_app_id=request.commit_app_id,
         commit_version=request.commit_version,
         commit_run_id=request.commit_run_id,
-        partition_by_json=_json_text(list(request.partition_by)),
-        table_properties_json=_json_text(
-            dict(request.table_properties) if request.table_properties else {}
+        delta_write_policy_msgpack=_msgpack_payload(
+            request.delta_write_policy if request.delta_write_policy is not None else {}
         ),
-        commit_metadata_json=_json_text(
-            dict(request.commit_metadata) if request.commit_metadata else {}
+        delta_schema_policy_msgpack=_msgpack_payload(
+            request.delta_schema_policy if request.delta_schema_policy is not None else {}
+        ),
+        partition_by=tuple(request.partition_by),
+        table_properties=dict(request.table_properties) if request.table_properties else {},
+        commit_metadata=dict(request.commit_metadata) if request.commit_metadata else {},
+        delta_stats_decision_msgpack=_msgpack_payload(
+            request.stats_decision if request.stats_decision is not None else {}
         ),
         duration_ms=request.duration_ms,
         row_count=request.row_count,
         status=request.status,
         error=request.error,
     )
-    record_artifact(profile, "write_artifact_v1", row.to_row())
+    record_artifact(profile, "write_artifact_v2", row.to_row())
     return row
 
 
@@ -802,16 +679,10 @@ def persist_hamilton_events(
         if not rows_for_event:
             continue
         for payload in rows_for_event:
-            normalized = {str(key): value for key, value in payload.items()}
+            normalized = _normalized_event_payload(payload)
             event_time_unix_ms = _event_time_unix_ms(normalized)
-            payload_hash = _payload_hash(
-                {
-                    "event_name": event_name,
-                    "plan_signature": request.plan_signature,
-                    "reduced_plan_signature": request.reduced_plan_signature,
-                    "payload": normalized,
-                }
-            )
+            payload_msgpack = _event_payload_msgpack(normalized)
+            payload_hash = _payload_hash_bytes(payload_msgpack)
             rows.append(
                 HamiltonEventRow(
                     event_time_unix_ms=event_time_unix_ms,
@@ -820,7 +691,7 @@ def persist_hamilton_events(
                     event_name=event_name,
                     plan_signature=request.plan_signature,
                     reduced_plan_signature=request.reduced_plan_signature,
-                    event_payload_json=_json_text(normalized),
+                    event_payload_msgpack=payload_msgpack,
                     event_payload_hash=payload_hash,
                 )
             )
@@ -920,57 +791,45 @@ def build_plan_artifact_row(
         plan_identity_hash=plan_identity_hash,
         udf_snapshot_hash=request.bundle.artifacts.udf_snapshot_hash,
         function_registry_hash=request.bundle.artifacts.function_registry_hash,
-        required_udfs_json=_json_text(request.bundle.required_udfs),
-        required_rewrite_tags_json=_json_text(request.bundle.required_rewrite_tags),
-        domain_planner_names_json=_json_text(request.bundle.artifacts.domain_planner_names),
-        delta_inputs_json=_json_text(delta_inputs_payload),
-        df_settings_json=_json_text(request.bundle.artifacts.df_settings),
-        planning_env_json=_json_text(request.bundle.artifacts.planning_env_snapshot),
+        required_udfs=tuple(request.bundle.required_udfs),
+        required_rewrite_tags=tuple(request.bundle.required_rewrite_tags),
+        domain_planner_names=tuple(request.bundle.artifacts.domain_planner_names),
+        delta_inputs_msgpack=_msgpack_payload(delta_inputs_payload),
+        df_settings=dict(request.bundle.artifacts.df_settings),
+        planning_env_msgpack=_msgpack_payload(request.bundle.artifacts.planning_env_snapshot),
         planning_env_hash=request.bundle.artifacts.planning_env_hash,
-        rulepack_json=(
-            _json_text(request.bundle.artifacts.rulepack_snapshot)
-            if request.bundle.artifacts.rulepack_snapshot is not None
-            else None
-        ),
+        rulepack_msgpack=_msgpack_or_none(request.bundle.artifacts.rulepack_snapshot),
         rulepack_hash=request.bundle.artifacts.rulepack_hash,
-        information_schema_json=_json_text(request.bundle.artifacts.information_schema_snapshot),
-        information_schema_hash=request.bundle.artifacts.information_schema_hash,
-        substrait_b64=_substrait_b64(request.bundle.substrait_bytes),
-        logical_plan_proto_b64=_substrait_b64(request.bundle.artifacts.logical_plan_proto),
-        optimized_plan_proto_b64=_substrait_b64(request.bundle.artifacts.optimized_plan_proto),
-        execution_plan_proto_b64=_substrait_b64(request.bundle.artifacts.execution_plan_proto),
-        explain_tree_rows_json=(
-            _json_text(request.bundle.artifacts.explain_tree_rows)
-            if request.bundle.artifacts.explain_tree_rows is not None
-            else None
+        information_schema_msgpack=_msgpack_payload(
+            request.bundle.artifacts.information_schema_snapshot
         ),
-        explain_verbose_rows_json=(
-            _json_text(request.bundle.artifacts.explain_verbose_rows)
-            if request.bundle.artifacts.explain_verbose_rows is not None
-            else None
+        information_schema_hash=request.bundle.artifacts.information_schema_hash,
+        substrait_msgpack=_substrait_msgpack(request.bundle.substrait_bytes),
+        logical_plan_proto_msgpack=_proto_msgpack(request.bundle.artifacts.logical_plan_proto),
+        optimized_plan_proto_msgpack=_proto_msgpack(request.bundle.artifacts.optimized_plan_proto),
+        execution_plan_proto_msgpack=_proto_msgpack(request.bundle.artifacts.execution_plan_proto),
+        explain_tree_rows_msgpack=_msgpack_or_none(request.bundle.artifacts.explain_tree_rows),
+        explain_verbose_rows_msgpack=_msgpack_or_none(
+            request.bundle.artifacts.explain_verbose_rows
         ),
         explain_analyze_duration_ms=request.bundle.artifacts.explain_analyze_duration_ms,
         explain_analyze_output_rows=request.bundle.artifacts.explain_analyze_output_rows,
-        substrait_validation_json=(
-            _json_text(request.bundle.artifacts.substrait_validation)
-            if request.bundle.artifacts.substrait_validation is not None
-            else None
+        substrait_validation_msgpack=_msgpack_or_none(
+            request.bundle.artifacts.substrait_validation
         ),
-        lineage_json=_json_text(_lineage_payload(resolved_lineage)),
-        scan_units_json=_json_text(scan_payload),
-        scan_keys_json=_json_text(scan_keys_payload),
-        plan_details_json=_json_text(plan_details_payload),
-        function_registry_snapshot_json=_json_text(
+        lineage_msgpack=_msgpack_payload(_lineage_payload(resolved_lineage)),
+        scan_units_msgpack=_msgpack_payload(scan_payload),
+        scan_keys=scan_keys_payload,
+        plan_details_msgpack=_msgpack_payload(plan_details_payload),
+        function_registry_snapshot_msgpack=_msgpack_payload(
             request.bundle.artifacts.function_registry_snapshot
         ),
-        udf_snapshot_json=_json_text(request.bundle.artifacts.udf_snapshot),
-        udf_planner_snapshot_json=(
-            _json_text(request.bundle.artifacts.udf_planner_snapshot)
-            if request.bundle.artifacts.udf_planner_snapshot is not None
-            else None
+        udf_snapshot_msgpack=_msgpack_payload(request.bundle.artifacts.udf_snapshot),
+        udf_planner_snapshot_msgpack=_msgpack_or_none(
+            request.bundle.artifacts.udf_planner_snapshot
         ),
         udf_compatibility_ok=udf_ok,
-        udf_compatibility_detail_json=_json_text(udf_detail),
+        udf_compatibility_detail_msgpack=_msgpack_payload(udf_detail),
         execution_duration_ms=request.execution_duration_ms,
         execution_status=request.execution_status,
         execution_error=request.execution_error,
@@ -1052,13 +911,16 @@ def _bootstrap_plan_artifacts_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     table_path: Path,
+    *,
+    schema: pa.Schema | None = None,
+    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
-    schema = _plan_artifacts_schema()
-    empty_table = pa.Table.from_pylist([], schema=schema)
+    resolved_schema = schema or _plan_artifacts_schema()
+    empty_table = pa.Table.from_pylist([], schema=resolved_schema)
     commit_metadata = {
         "operation": "plan_artifacts_bootstrap",
         "mode": "overwrite",
-        "table": PLAN_ARTIFACTS_TABLE_NAME,
+        "table": table_name,
     }
     _write_artifact_table(
         ctx,
@@ -1078,18 +940,20 @@ def _refresh_plan_artifacts_registration(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     location: DatasetLocation,
+    *,
+    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.io_adapter import DataFusionIOAdapter
     from datafusion_engine.registry_bridge import DataFusionCachePolicy
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    if ctx.table_exist(PLAN_ARTIFACTS_TABLE_NAME):
+    if ctx.table_exist(table_name):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(PLAN_ARTIFACTS_TABLE_NAME)
+            adapter.deregister_table(table_name)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
     facade.register_dataset(
-        name=PLAN_ARTIFACTS_TABLE_NAME,
+        name=table_name,
         location=location,
         cache_policy=DataFusionCachePolicy(enabled=False, max_columns=None),
     )
@@ -1101,25 +965,26 @@ def _record_plan_artifact_summary(
     rows: Sequence[PlanArtifactRow],
     path: str,
     version: int,
+    table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
     kinds = sorted({row.event_kind for row in rows})
     payload = {
-        "table": PLAN_ARTIFACTS_TABLE_NAME,
+        "table": table_name,
         "path": path,
         "row_count": len(rows),
         "event_kinds": kinds,
         "view_names": sorted({row.view_name for row in rows}),
         "delta_version": version,
     }
-    record_artifact(profile, "plan_artifacts_store_v1", payload)
+    record_artifact(profile, "plan_artifacts_store_v2", payload)
     for row in rows:
-        record_artifact(profile, PLAN_ARTIFACTS_TABLE_NAME, row.to_row())
+        record_artifact(profile, table_name, row.to_row())
 
 
 def _hamilton_events_schema() -> pa.Schema:
-    from datafusion_engine.schema_registry import DATAFUSION_HAMILTON_EVENTS_SCHEMA
+    from datafusion_engine.schema_registry import DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA
 
-    schema = DATAFUSION_HAMILTON_EVENTS_SCHEMA
+    schema = DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA
     if isinstance(schema, pa.Schema):
         return schema
     return pa.schema(schema)
@@ -1187,7 +1052,7 @@ def _record_hamilton_events_summary(
         "run_ids": sorted({row.run_id for row in rows}),
         "delta_version": version,
     }
-    record_artifact(profile, "hamilton_events_store_v1", payload)
+    record_artifact(profile, "hamilton_events_store_v2", payload)
     for row in rows:
         record_artifact(profile, HAMILTON_EVENTS_TABLE_NAME, row.to_row())
 
@@ -1224,13 +1089,28 @@ def _commit_metadata_for_hamilton_events(rows: Sequence[HamiltonEventRow]) -> di
     return metadata
 
 
-def _event_time_unix_ms(payload: Mapping[str, object]) -> int:
-    value = payload.get("event_time_unix_ms")
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
+def _normalized_event_payload(payload: object) -> object:
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
+    return payload
+
+
+def _event_time_unix_ms(payload: object) -> int:
+    if isinstance(payload, Mapping):
+        value = payload.get("event_time_unix_ms")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
     return int(time.time() * 1000)
+
+
+def _event_payload_msgpack(payload: object) -> bytes:
+    if isinstance(payload, msgspec.Struct):
+        return dumps_msgpack(payload)
+    if isinstance(payload, Mapping):
+        return dumps_msgpack(to_builtins(payload, str_keys=True))
+    return dumps_msgpack(to_builtins(payload, str_keys=True))
 
 
 def _lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
@@ -1306,13 +1186,23 @@ def _scan_units_payload(
                 "delta_timestamp": unit.delta_timestamp,
                 "snapshot_timestamp": unit.snapshot_timestamp,
                 "delta_feature_gate": _delta_gate_payload(unit.delta_feature_gate),
-                "delta_protocol": unit.delta_protocol,
+                "delta_protocol": (
+                    to_builtins(unit.delta_protocol) if unit.delta_protocol is not None else None
+                ),
                 "storage_options_hash": unit.storage_options_hash,
-                "delta_scan_config": unit.delta_scan_config,
+                "delta_scan_config": (
+                    to_builtins(unit.delta_scan_config)
+                    if unit.delta_scan_config is not None
+                    else None
+                ),
                 "delta_scan_config_hash": unit.delta_scan_config_hash,
                 "datafusion_provider": unit.datafusion_provider,
                 "protocol_compatible": unit.protocol_compatible,
-                "protocol_compatibility": unit.protocol_compatibility,
+                "protocol_compatibility": (
+                    to_builtins(unit.protocol_compatibility)
+                    if unit.protocol_compatibility is not None
+                    else None
+                ),
                 "total_files": unit.total_files,
                 "candidate_file_count": unit.candidate_file_count,
                 "pruned_file_count": unit.pruned_file_count,
@@ -1332,13 +1222,21 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "version": pin.version,
             "timestamp": pin.timestamp,
             "feature_gate": _delta_gate_payload(pin.feature_gate),
-            "protocol": _delta_protocol_payload(pin.protocol),
+            "protocol": (
+                to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
+            ),
             "storage_options_hash": pin.storage_options_hash,
-            "delta_scan_config": pin.delta_scan_config,
+            "delta_scan_config": (
+                to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
+            ),
             "delta_scan_config_hash": pin.delta_scan_config_hash,
             "datafusion_provider": pin.datafusion_provider,
             "protocol_compatible": pin.protocol_compatible,
-            "protocol_compatibility": pin.protocol_compatibility,
+            "protocol_compatibility": (
+                to_builtins(pin.protocol_compatibility)
+                if pin.protocol_compatibility is not None
+                else None
+            ),
         }
         for pin in bundle.delta_inputs
     ]
@@ -1362,18 +1260,16 @@ def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
 
 
 def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None:
-    if not isinstance(protocol, Mapping):
+    if protocol is None:
         return None
-    payload: dict[str, object] = {}
-    for key, value in protocol.items():
-        if isinstance(value, (str, int, float)) or value is None:
-            payload[str(key)] = value
-            continue
-        if isinstance(value, (list, tuple)):
-            payload[str(key)] = [str(item) for item in value]
-            continue
-        payload[str(key)] = str(value)
-    return payload or None
+    if isinstance(protocol, Mapping):
+        payload = {str(key): value for key, value in protocol.items()}
+        return payload or None
+    if isinstance(protocol, msgspec.Struct):
+        resolved = to_builtins(protocol, str_keys=True)
+        if isinstance(resolved, Mapping):
+            return {str(key): value for key, value in resolved.items()} or None
+    return None
 
 
 def _plan_identity_payload(
@@ -1423,8 +1319,13 @@ def _plan_details_payload(
 
 
 def _payload_hash(payload: object) -> str:
-    raw = dumps_json(to_builtins(payload))
-    return hashlib.sha256(raw).hexdigest()
+    buffer = bytearray()
+    encode_json_into(to_builtins(payload), buffer)
+    return hashlib.sha256(buffer).hexdigest()
+
+
+def _payload_hash_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _udf_compatibility(
@@ -1455,22 +1356,26 @@ def _udf_compatibility(
     return compatibility_ok, detail
 
 
-def _substrait_b64(payload: bytes | None) -> str | None:
+def _substrait_msgpack(payload: bytes | None) -> bytes | None:
     if payload is None:
         return None
-    return base64.b64encode(payload).decode("ascii")
+    return dumps_msgpack(SubstraitBytes(payload))
 
 
-def _json_text(payload: object) -> str:
-    try:
-        raw = dumps_json(to_builtins(payload))
-        return raw.decode("utf-8")
-    except (TypeError, ValueError) as exc:
-        fallback = {
-            "error": type(exc).__name__,
-            "repr": repr(payload),
-        }
-        return dumps_json(fallback).decode("utf-8")
+def _proto_msgpack(payload: object | None) -> bytes | None:
+    if payload is None:
+        return None
+    return dumps_msgpack(payload)
+
+
+def _msgpack_payload(payload: object) -> bytes:
+    return dumps_msgpack(to_builtins(payload, str_keys=True))
+
+
+def _msgpack_or_none(payload: object | None) -> bytes | None:
+    if payload is None:
+        return None
+    return _msgpack_payload(payload)
 
 
 __all__ = [

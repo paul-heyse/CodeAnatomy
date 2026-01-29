@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from hamilton_pipeline.plan_artifacts import PlanArtifactBundle
     from relspec.execution_plan import ExecutionPlan
 
 _DIAGNOSTICS_STATE: dict[str, DiagnosticsCollector | None] = {"collector": None}
@@ -97,79 +98,10 @@ class DiagnosticsNodeHook(lifecycle_api.NodeExecutionHook):
         self.collector.record_events("hamilton_node_finish_v1", [payload])
 
 
-def _plan_diagnostics_payload(
-    plan: ExecutionPlan,
-    *,
-    run_id: str,
-) -> dict[str, object]:
-    diagnostics = plan.diagnostics
-    from relspec.rustworkx_graph import task_graph_node_label
-
-    def _labels(node_ids: tuple[int, ...]) -> tuple[str, ...]:
-        labels = [task_graph_node_label(plan.task_graph, node_id) for node_id in node_ids]
-        return tuple(labels)
-
-    critical_path = _labels(diagnostics.critical_path or ())
-    critical_path_task_names = tuple(plan.critical_path_task_names)
-    weak_components = tuple(
-        tuple(sorted(task_graph_node_label(plan.task_graph, node_id) for node_id in component))
-        for component in diagnostics.weak_components
-    )
-    reduction_node_map = {
-        str(key): value
-        for key, value in sorted(
-            plan.reduction_node_map.items(),
-            key=lambda item: item[0],
-        )
-    }
-    reduced_edge_delta = plan.reduction_edge_count - plan.reduction_removed_edge_count
-    reduced_edge_count = max(reduced_edge_delta, 0)
-    schedule_metadata = [
-        {
-            "task_name": name,
-            "schedule_index": meta.schedule_index,
-            "generation_index": meta.generation_index,
-            "generation_order": meta.generation_order,
-            "generation_size": meta.generation_size,
-        }
-        for name, meta in sorted(plan.schedule_metadata.items())
-    ]
-    plan_fingerprints = {
-        name: plan.plan_fingerprints[name] for name in sorted(plan.plan_fingerprints)
-    }
-    plan_task_signatures = {
-        name: plan.plan_task_signatures[name] for name in sorted(plan.plan_task_signatures)
-    }
-    bottom_level_costs = {
-        name: plan.bottom_level_costs[name] for name in sorted(plan.bottom_level_costs)
-    }
-    return {
-        "run_id": run_id,
-        "plan_signature": plan.plan_signature,
-        "task_dependency_signature": plan.task_dependency_signature,
-        "reduced_task_dependency_signature": plan.reduced_task_dependency_signature,
-        "task_count": len(plan.task_schedule.ordered_tasks),
-        "generation_count": len(plan.task_schedule.generations),
-        "missing_tasks": list(plan.task_schedule.missing_tasks),
-        "schedule_metadata": schedule_metadata,
-        "critical_path": list(critical_path),
-        "critical_path_length": diagnostics.critical_path_length,
-        "critical_path_task_names": list(critical_path_task_names),
-        "critical_path_length_weighted": plan.critical_path_length_weighted,
-        "weak_components": [list(component) for component in weak_components],
-        "isolates": list(diagnostics.isolate_labels),
-        "reduction_node_map": reduction_node_map,
-        "reduction_edge_count": plan.reduction_edge_count,
-        "reduction_removed_edge_count": plan.reduction_removed_edge_count,
-        "reduction_reduced_edge_count": reduced_edge_count,
-        "dot": diagnostics.dot,
-        "node_link_json": diagnostics.node_link_json,
-        "active_tasks": sorted(plan.active_tasks),
-        "plan_fingerprints": plan_fingerprints,
-        "plan_task_signatures": plan_task_signatures,
-        "session_runtime_hash": plan.session_runtime_hash,
-        "bottom_level_costs": bottom_level_costs,
-    }
+def _artifact_payload(payload: object) -> Mapping[str, object]:
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
+    return {"payload": payload}
 
 
 @dataclass
@@ -179,6 +111,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
     plan: ExecutionPlan
     profile: DataFusionRuntimeProfile
     collector: DiagnosticsCollector | None = None
+    plan_artifact_bundle: PlanArtifactBundle | None = None
 
     def run_before_graph_execution(
         self,
@@ -189,11 +122,20 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         """Record plan diagnostics before graph execution."""
         _ = kwargs
         from datafusion_engine.diagnostics import record_artifact
+        from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
+        from serde_msgspec import to_builtins
 
+        bundle = build_plan_artifact_bundle(plan=self.plan, run_id=run_id)
+        self.plan_artifact_bundle = bundle
         record_artifact(
             self.profile,
-            "task_graph_diagnostics_v2",
-            _plan_diagnostics_payload(self.plan, run_id=run_id),
+            "plan_schedule_v1",
+            _artifact_payload(to_builtins(bundle.schedule_envelope, str_keys=True)),
+        )
+        record_artifact(
+            self.profile,
+            "plan_validation_v1",
+            _artifact_payload(to_builtins(bundle.validation_envelope, str_keys=True)),
         )
 
     def run_after_graph_execution(
@@ -209,6 +151,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
             profile=self.profile,
             collector=self.collector,
             run_id=run_id,
+            plan_artifact_bundle=self.plan_artifact_bundle,
         )
 
 
@@ -218,6 +161,7 @@ def _flush_plan_events(
     profile: DataFusionRuntimeProfile,
     collector: DiagnosticsCollector | None,
     run_id: str,
+    plan_artifact_bundle: PlanArtifactBundle | None,
 ) -> None:
     if collector is None:
         return
@@ -227,6 +171,7 @@ def _flush_plan_events(
         "hamilton_task_submission_v1",
         "hamilton_task_grouping_v1",
         "hamilton_task_expansion_v1",
+        "hamilton_task_routing_v1",
     )
     events_snapshot = collector.events_snapshot()
     event_counts: dict[str, int] = {}
@@ -237,6 +182,9 @@ def _flush_plan_events(
             continue
         normalized_rows = [{str(key): value for key, value in row.items()} for row in rows]
         record_events(profile, name, normalized_rows)
+    if plan_artifact_bundle is not None:
+        event_counts["plan_schedule_v1"] = 1
+        event_counts["plan_validation_v1"] = 1
     plan_drift = _plan_drift_payload(
         plan,
         events_snapshot=events_snapshot,
@@ -247,9 +195,19 @@ def _flush_plan_events(
         "hamilton_plan_drift_v1",
         plan_drift,
     )
-    events_for_persistence = dict(events_snapshot)
+    events_for_persistence: dict[str, Sequence[object]] = dict(events_snapshot)
     events_for_persistence["hamilton_plan_drift_v1"] = [plan_drift]
-    persisted_event_names = (*plan_event_names, "hamilton_plan_drift_v1")
+    if plan_artifact_bundle is not None:
+        events_for_persistence["plan_schedule_v1"] = [plan_artifact_bundle.schedule_envelope]
+        events_for_persistence["plan_validation_v1"] = [plan_artifact_bundle.validation_envelope]
+        persisted_event_names = (
+            *plan_event_names,
+            "hamilton_plan_drift_v1",
+            "plan_schedule_v1",
+            "plan_validation_v1",
+        )
+    else:
+        persisted_event_names = (*plan_event_names, "hamilton_plan_drift_v1")
     try:
         from datafusion_engine.plan_artifact_store import (
             HamiltonEventsRequest,
@@ -272,7 +230,7 @@ def _flush_plan_events(
     except (RuntimeError, ValueError, TypeError, OSError, KeyError, ImportError) as exc:
         record_artifact(
             profile,
-            "hamilton_events_store_failed_v1",
+            "hamilton_events_store_failed_v2",
             {
                 "run_id": run_id,
                 "plan_signature": plan.plan_signature,

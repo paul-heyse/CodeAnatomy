@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import rustworkx as rx
 
+from relspec import graph_edge_validation
 from relspec.errors import RelspecValidationError
 from relspec.evidence import EvidenceCatalog
-from relspec.graph_edge_validation import validate_edge_requirements
 from relspec.rustworkx_graph import (
     EvidenceNode,
     TaskGraph,
@@ -31,16 +31,35 @@ class TaskSchedule:
     ordered_tasks: tuple[str, ...]
     generations: tuple[tuple[str, ...], ...]
     missing_tasks: tuple[str, ...] = ()
+    validation_summary: graph_edge_validation.GraphValidationSummary | None = None
+
+
+@dataclass(frozen=True)
+class ScheduleCostContext:
+    """Schedule ordering inputs derived from cost modeling."""
+
+    task_costs: Mapping[str, float] | None = None
+    bottom_level_costs: Mapping[str, float] | None = None
+    slack_by_task: Mapping[str, float] | None = None
+
+
+@dataclass(frozen=True)
+class ScheduleOptions:
+    """Scheduling options for plan compilation."""
+
+    output_schema_for: (
+        Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None] | None
+    ) = None
+    allow_partial: bool = False
+    reduced_dependency_graph: rx.PyDiGraph | None = None
+    cost_context: ScheduleCostContext = field(default_factory=ScheduleCostContext)
 
 
 def schedule_tasks(
     graph: TaskGraph,
     *,
     evidence: EvidenceCatalog,
-    output_schema_for: Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None]
-    | None = None,
-    allow_partial: bool = False,
-    reduced_dependency_graph: rx.PyDiGraph | None = None,
+    options: ScheduleOptions | None = None,
 ) -> TaskSchedule:
     """Return a deterministic task schedule driven by a task graph.
 
@@ -55,22 +74,30 @@ def schedule_tasks(
         Raised when evidence requirements cannot be satisfied.
     """
     working = evidence.clone()
-    seed_nodes = _seed_nodes(graph, working.sources)
-    sorter = _make_sorter(graph, seed_nodes=seed_nodes)
+    resolved_options = options or ScheduleOptions()
+    sorter = _make_sorter(graph, seed_nodes=_seed_nodes(graph, working.sources))
     ordered: list[str] = []
     visited_tasks: set[str] = set()
     while sorter.is_active():
         ready = list(sorter.get_ready())
         if not ready:
             break
-        ready_tasks = _sorted_ready_tasks(graph, ready)
+        ready_tasks = _sorted_ready_tasks(
+            graph,
+            ready,
+            cost_context=resolved_options.cost_context,
+        )
         ready_evidence = _ready_evidence_nodes(graph, ready)
         valid_tasks: list[TaskNode] = []
         for task in ready_tasks:
             task_idx = graph.task_idx.get(task.name)
             if task_idx is None:
                 continue
-            if not validate_edge_requirements(graph, task_idx, catalog=working):
+            if not graph_edge_validation.validate_edge_requirements(
+                graph,
+                task_idx,
+                catalog=working,
+            ):
                 continue
             ordered.append(task.name)
             visited_tasks.add(task.name)
@@ -79,22 +106,28 @@ def schedule_tasks(
             graph,
             ready_evidence,
             evidence=working,
-            output_schema_for=output_schema_for,
+            output_schema_for=resolved_options.output_schema_for,
         )
         sorter.done([*ready_evidence, *[graph.task_idx[task.name] for task in valid_tasks]])
     missing = tuple(sorted(set(graph.task_idx) - visited_tasks))
-    if missing and not allow_partial:
-        msg = f"Task graph cannot resolve evidence for: {list(missing)}."
+    validation_summary = graph_edge_validation.validate_graph_edges(graph, catalog=working)
+    if missing and not resolved_options.allow_partial:
+        msg = (
+            "Task graph cannot resolve evidence for: "
+            f"{list(missing)}. Invalid edges: {validation_summary.invalid_edges}."
+        )
         raise RelspecValidationError(msg)
     generations = _task_generations(
         graph,
         visited_tasks=visited_tasks,
-        reduced_dependency_graph=reduced_dependency_graph,
+        reduced_dependency_graph=resolved_options.reduced_dependency_graph,
+        cost_context=resolved_options.cost_context,
     )
     return TaskSchedule(
         ordered_tasks=tuple(ordered),
         generations=tuple(generations),
         missing_tasks=missing,
+        validation_summary=validation_summary,
     )
 
 
@@ -202,7 +235,12 @@ def _make_sorter(graph: TaskGraph, *, seed_nodes: list[int]) -> rx.TopologicalSo
         raise RelspecValidationError(msg) from exc
 
 
-def _sorted_ready_tasks(graph: TaskGraph, ready: Iterable[int]) -> list[TaskNode]:
+def _sorted_ready_tasks(
+    graph: TaskGraph,
+    ready: Iterable[int],
+    *,
+    cost_context: ScheduleCostContext,
+) -> list[TaskNode]:
     tasks: list[TaskNode] = []
     for idx in ready:
         node = graph.graph[idx]
@@ -213,7 +251,12 @@ def _sorted_ready_tasks(graph: TaskGraph, ready: Iterable[int]) -> list[TaskNode
             msg = "Expected TaskNode payload for task graph node."
             raise TypeError(msg)
         tasks.append(payload)
-    tasks.sort(key=lambda task: (task.priority, task.name))
+    tasks.sort(
+        key=lambda task: _task_sort_key(
+            task,
+            cost_context=cost_context,
+        )
+    )
     return tasks
 
 
@@ -282,6 +325,7 @@ def _task_generations(
     *,
     visited_tasks: set[str],
     reduced_dependency_graph: rx.PyDiGraph | None,
+    cost_context: ScheduleCostContext,
 ) -> tuple[tuple[str, ...], ...]:
     dependency_graph = (
         reduced_dependency_graph
@@ -301,13 +345,46 @@ def _task_generations(
             if node.name not in visited_tasks:
                 continue
             payloads.append(node)
-        payloads.sort(key=lambda task: (task.priority, task.name))
+        payloads.sort(
+            key=lambda task: _task_sort_key(
+                task,
+                cost_context=cost_context,
+            )
+        )
         if payloads:
             output.append(tuple(task.name for task in payloads))
     return tuple(output)
 
 
+def _task_cost_value(task: TaskNode, *, cost_context: ScheduleCostContext) -> float:
+    task_costs = cost_context.task_costs
+    if task_costs is not None and task.name in task_costs:
+        return float(max(task_costs[task.name], 1.0))
+    return float(max(task.priority, 1))
+
+
+def _task_sort_key(
+    task: TaskNode,
+    *,
+    cost_context: ScheduleCostContext,
+) -> tuple[float, float, str]:
+    base_cost = _task_cost_value(task, cost_context=cost_context)
+    bottom_cost = (
+        cost_context.bottom_level_costs.get(task.name, base_cost)
+        if cost_context.bottom_level_costs is not None
+        else base_cost
+    )
+    slack = (
+        cost_context.slack_by_task.get(task.name, 0.0)
+        if cost_context.slack_by_task is not None
+        else 0.0
+    )
+    return (-float(bottom_cost), float(slack), task.name)
+
+
 __all__ = [
+    "ScheduleCostContext",
+    "ScheduleOptions",
     "TaskSchedule",
     "impacted_tasks",
     "impacted_tasks_for_evidence",

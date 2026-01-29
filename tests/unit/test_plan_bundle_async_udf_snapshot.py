@@ -19,6 +19,7 @@ def test_plan_bundle_captures_async_udf_settings() -> None:
     except ImportError:
         pytest.skip("datafusion_ext is required for plan bundle construction.")
 
+    from datafusion_engine.ingest import datafusion_from_arrow
     from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
@@ -31,10 +32,7 @@ def test_plan_bundle_captures_async_udf_settings() -> None:
     )
     runtime = profile.session_runtime()
     ctx = runtime.ctx
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2]}).to_batches()[0]],
-    )
+    datafusion_from_arrow(ctx, name="events", value=pa.table({"id": [1, 2]}))
     df = ctx.sql("SELECT id FROM events")
     bundle = build_plan_bundle(
         ctx,

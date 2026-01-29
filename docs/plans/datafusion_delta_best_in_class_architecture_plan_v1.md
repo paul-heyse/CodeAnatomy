@@ -669,16 +669,16 @@ class PlanArtifactRow:
     plan_fingerprint: str
     udf_snapshot_hash: str
     function_registry_hash: str
-    required_udfs_json: str
-    required_rewrite_tags_json: str
-    domain_planner_names_json: str
-    delta_inputs_json: str
-    df_settings_json: str
+    required_udfs: tuple[str, ...]
+    required_rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
+    delta_inputs_msgpack: bytes
+    df_settings: Mapping[str, str]
     optimized_plan_pgjson: str | None
     optimized_plan_graphviz: str | None
-    lineage_json: str
-    scan_units_json: str
-    plan_details_json: str
+    lineage_msgpack: bytes
+    scan_units_msgpack: bytes
+    plan_details_msgpack: bytes
     udf_compatibility_ok: bool
 ```
 

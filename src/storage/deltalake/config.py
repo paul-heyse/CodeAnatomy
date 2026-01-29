@@ -2,24 +2,82 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Sequence
+from typing import Annotated, Literal
+
+import msgspec
+
+from serde_msgspec import StructBaseStrict
+
+NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
+PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+PositiveFloat = Annotated[float, msgspec.Meta(gt=0)]
+NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
+ColumnName = Annotated[str, msgspec.Meta(min_length=1)]
+StatsPolicy = Annotated[
+    Literal["off", "explicit", "auto"],
+    msgspec.Meta(description="Stats collection policy for Delta writes."),
+]
+SchemaMode = Annotated[
+    Literal["merge", "overwrite"],
+    msgspec.Meta(description="Schema evolution mode for Delta writes."),
+]
+ColumnMappingMode = Annotated[
+    Literal["id", "name"],
+    msgspec.Meta(description="Delta column mapping mode."),
+]
 
 
-@dataclass(frozen=True)
-class DeltaWritePolicy:
+class DeltaWritePolicy(StructBaseStrict, frozen=True):
     """Configuration for Delta write behavior."""
 
-    target_file_size: int | None = None
-    stats_columns: tuple[str, ...] | None = None
+    target_file_size: PositiveInt | None = 96 * 1024 * 1024
+    partition_by: tuple[ColumnName, ...] = ()
+    zorder_by: tuple[ColumnName, ...] = ()
+    stats_policy: StatsPolicy = "auto"
+    stats_columns: tuple[ColumnName, ...] | None = None
+    stats_max_columns: NonNegInt = 32
+    parquet_writer_policy: ParquetWriterPolicy | None = None
+    enable_features: tuple[
+        Literal[
+            "change_data_feed",
+            "deletion_vectors",
+            "row_tracking",
+            "in_commit_timestamps",
+            "column_mapping",
+            "v2_checkpoints",
+        ],
+        ...,
+    ] = ()
 
 
-@dataclass(frozen=True)
-class DeltaSchemaPolicy:
+class ParquetWriterPolicy(StructBaseStrict, frozen=True):
+    """Per-column Parquet writer settings for Delta writes."""
+
+    statistics_enabled: tuple[ColumnName, ...] = ()
+    statistics_level: Literal["none", "chunk", "page"] = "page"
+    bloom_filter_enabled: tuple[ColumnName, ...] = ()
+    bloom_filter_fpp: PositiveFloat | None = None
+    bloom_filter_ndv: NonNegInt | None = None
+    dictionary_enabled: tuple[ColumnName, ...] = ()
+
+
+class DeltaSchemaPolicy(StructBaseStrict, frozen=True):
     """Schema evolution and column mapping policy for Delta."""
 
-    schema_mode: Literal["merge", "overwrite"] | None = None
-    column_mapping_mode: Literal["id", "name"] | None = None
+    schema_mode: SchemaMode | None = None
+    column_mapping_mode: ColumnMappingMode | None = None
+
+
+class StatsColumnsInputs(StructBaseStrict, frozen=True):
+    """Inputs for resolving Delta stats columns."""
+
+    policy: DeltaWritePolicy | None
+    partition_by: Sequence[ColumnName] = ()
+    zorder_by: Sequence[ColumnName] = ()
+    extra_candidates: Sequence[ColumnName] = ()
+    schema_columns: Sequence[ColumnName] | None = None
+    override: Sequence[ColumnName] | None = None
 
 
 def delta_write_configuration(policy: DeltaWritePolicy | None) -> dict[str, str] | None:
@@ -35,9 +93,35 @@ def delta_write_configuration(policy: DeltaWritePolicy | None) -> dict[str, str]
     config: dict[str, str] = {}
     if policy.target_file_size is not None:
         config["delta.targetFileSize"] = str(policy.target_file_size)
-    if policy.stats_columns:
-        config["delta.dataSkippingStatsColumns"] = ",".join(policy.stats_columns)
     return config or None
+
+
+def resolve_stats_columns(inputs: StatsColumnsInputs) -> tuple[str, ...] | None:
+    """Resolve Delta stats columns based on policy and schema.
+
+    Returns
+    -------
+    tuple[str, ...] | None
+        Resolved stats columns, or ``None`` when disabled.
+    """
+    if inputs.override is not None:
+        cols = list(dict.fromkeys(inputs.override))
+    elif inputs.policy is None or inputs.policy.stats_policy == "off":
+        return None
+    elif inputs.policy.stats_policy == "explicit":
+        if inputs.policy.stats_columns is None:
+            return None
+        cols = list(dict.fromkeys(inputs.policy.stats_columns))
+    else:
+        cols = list(
+            dict.fromkeys([*inputs.partition_by, *inputs.zorder_by, *inputs.extra_candidates])
+        )
+        cols = cols[: inputs.policy.stats_max_columns]
+
+    if inputs.schema_columns is not None:
+        schema_set = set(inputs.schema_columns)
+        cols = [col for col in cols if col in schema_set]
+    return tuple(cols)
 
 
 def delta_schema_configuration(policy: DeltaSchemaPolicy | None) -> dict[str, str] | None:
@@ -59,6 +143,9 @@ def delta_schema_configuration(policy: DeltaSchemaPolicy | None) -> dict[str, st
 __all__ = [
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
+    "ParquetWriterPolicy",
+    "StatsColumnsInputs",
     "delta_schema_configuration",
     "delta_write_configuration",
+    "resolve_stats_columns",
 ]

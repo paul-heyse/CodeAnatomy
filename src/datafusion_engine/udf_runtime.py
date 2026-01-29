@@ -398,9 +398,9 @@ def register_rust_udfs(
         return _validated_snapshot(ctx)
     datafusion_ext.register_udfs(
         ctx,
-        enable_async,
-        async_udf_timeout_ms,
-        async_udf_batch_size,
+        enable_async=enable_async,
+        async_udf_timeout_ms=async_udf_timeout_ms,
+        async_udf_batch_size=async_udf_batch_size,
     )
     _RUST_UDF_CONTEXTS.add(ctx)
     _RUST_UDF_POLICIES[ctx] = policy

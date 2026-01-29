@@ -52,22 +52,28 @@ def _assert_cpg_outputs(results: Mapping[str, object], output_dir: Path) -> None
     assert (output_dir / "cpg_nodes").exists()
     assert (output_dir / "cpg_edges").exists()
     assert (output_dir / "cpg_props").exists()
+    for key, dirname in (
+        ("write_cpg_props_map_delta", "cpg_props_map"),
+        ("write_cpg_edges_by_src_delta", "cpg_edges_by_src"),
+        ("write_cpg_edges_by_dst_delta", "cpg_edges_by_dst"),
+    ):
+        report = cast("dict[str, object] | None", results.get(key))
+        assert report is not None
+        path = Path(cast("str", report.get("path")))
+        assert path.exists()
+        assert (output_dir / dirname).exists()
 
 
 def _assert_extract_errors(results: Mapping[str, object]) -> None:
     report = cast("dict[str, object] | None", results.get("write_extract_error_artifacts_delta"))
     assert report is not None
-    base_dir = Path(cast("str", report.get("base_dir")))
-    assert base_dir.exists()
-    datasets = cast("dict[str, dict[str, object]]", report.get("datasets"))
-    for payload in datasets.values():
-        paths = cast("dict[str, str]", payload.get("paths"))
-        for path in paths.values():
-            assert Path(path).exists()
+    path = Path(cast("str", report.get("path")))
+    assert path.exists()
+    assert report.get("rows") == 1
 
 
 def _assert_manifest_and_bundle(results: Mapping[str, object]) -> None:
-    manifest = cast("dict[str, object] | None", results.get("write_run_manifest_json"))
+    manifest = cast("dict[str, object] | None", results.get("write_run_manifest_delta"))
     assert manifest is not None
     manifest_path = Path(cast("str", manifest.get("path")))
     assert manifest_path.exists()
@@ -76,8 +82,8 @@ def _assert_manifest_and_bundle(results: Mapping[str, object]) -> None:
     assert bundle is not None
     bundle_dir = Path(cast("str", bundle.get("bundle_dir")))
     assert bundle_dir.exists()
-    files_written = cast("list[str]", bundle.get("files_written"))
-    assert files_written
+    run_id = cast("str | None", bundle.get("run_id"))
+    assert run_id
 
 
 def _assert_scip_index(repo_root: Path) -> None:

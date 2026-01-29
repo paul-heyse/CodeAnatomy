@@ -49,9 +49,9 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 │  Stage 4: CPG BUILD                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
 │  │  build_cpg_nodes_df() → build_cpg_edges_df() → build_cpg_props_df()     │   │
-│  │  → Delta Lake writes                                                     │   │
+│  │  → cpg_props_map/edges_by_* → Delta Lake writes                          │   │
 │  │                                                                          │   │
-│  │  Output: cpg_nodes, cpg_edges, cpg_props (Delta Lake tables)            │   │
+│  │  Output: cpg_nodes, cpg_edges, cpg_props, accelerators (Delta Lake)     │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -159,6 +159,9 @@ result = build_graph_product(
 print(f"Nodes: {result.cpg_nodes.paths.data} ({result.cpg_nodes.rows} rows)")
 print(f"Edges: {result.cpg_edges.paths.data} ({result.cpg_edges.rows} rows)")
 print(f"Props: {result.cpg_props.paths.data} ({result.cpg_props.rows} rows)")
+print(f"Props map: {result.cpg_props_map.path} ({result.cpg_props_map.rows} rows)")
+print(f"Edges by src: {result.cpg_edges_by_src.path} ({result.cpg_edges_by_src.rows} rows)")
+print(f"Edges by dst: {result.cpg_edges_by_dst.path} ({result.cpg_edges_by_dst.rows} rows)")
 ```
 
 ---
@@ -261,7 +264,7 @@ The Normalization and Scheduling subsystem transforms raw extraction outputs int
 - **InferredDeps**: Dependency record with inputs, required_columns, required_types
 - **Bipartite Task Graph**: Evidence nodes (datasets) + Task nodes (computations)
 - **Generation-Based Scheduling**: Parallelizable execution waves
-- **Column-Level Validation**: Edge requirements checked at schedule time
+- **Column-Level Validation**: Edge requirements checked at schedule time with summary artifacts
 
 ### Critical Data Structures
 
@@ -282,6 +285,7 @@ class TaskSchedule:
     ordered_tasks: tuple[str, ...]
     generations: tuple[tuple[str, ...], ...]
     missing_tasks: tuple[str, ...] = ()
+    validation_summary: GraphValidationSummary | None = None
 ```
 
 ### Critical Files
@@ -361,6 +365,8 @@ The CPG Build subsystem transforms normalized evidence into a queryable Code Pro
 - **Property Catalog**: 200+ property specs with types and enum constraints
 - **Entity Family Specs**: Declarative node/property emission rules
 - **Hamilton DAG**: Dynamic module generation for task execution
+- **Execution Modes**: Explicit orchestration config via `ExecutionMode` + `ExecutorConfig`
+- **Plan Artifacts**: Schedule/validation msgspec envelopes linked in the run manifest
 
 ### CPG Output Schema
 
@@ -438,6 +444,7 @@ Repository Files
 ┌──────────────────────────────────────────────────────────────┐
 │                      CPG EMISSION                             │
 │  build_cpg_nodes_df() → build_cpg_edges_df() → props         │
+│  → props_map / edges_by_src / edges_by_dst                   │
 │  Entity family specs → Delta Lake writes                     │
 └────────────────────────┬─────────────────────────────────────┘
                          │
@@ -445,6 +452,7 @@ Repository Files
 ┌──────────────────────────────────────────────────────────────┐
 │                     OUTPUT (Delta Lake)                       │
 │    cpg_nodes    │    cpg_edges    │    cpg_props             │
+│  cpg_props_map  │ cpg_edges_by_src │ cpg_edges_by_dst        │
 └──────────────────────────────────────────────────────────────┘
 ```
 

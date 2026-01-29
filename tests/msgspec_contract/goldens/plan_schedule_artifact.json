@@ -1,0 +1,40 @@
+{
+  "run_id": "run-1",
+  "plan_signature": "sig-1",
+  "reduced_plan_signature": "sig-1:reduced",
+  "task_count": 3,
+  "ordered_tasks": [
+    "task_a",
+    "task_b",
+    "task_c"
+  ],
+  "generations": [
+    [
+      "task_a"
+    ],
+    [
+      "task_b",
+      "task_c"
+    ]
+  ],
+  "critical_path_tasks": [
+    "task_a",
+    "task_c"
+  ],
+  "critical_path_length_weighted": 3.5,
+  "task_costs": {
+    "task_a": 1.0,
+    "task_b": 1.5,
+    "task_c": 2.0
+  },
+  "bottom_level_costs": {
+    "task_a": 3.5,
+    "task_b": 1.5,
+    "task_c": 2.0
+  },
+  "slack_by_task": {
+    "task_a": 0.0,
+    "task_b": 1.0,
+    "task_c": 0.0
+  }
+}

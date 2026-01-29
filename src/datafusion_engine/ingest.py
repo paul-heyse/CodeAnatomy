@@ -87,20 +87,13 @@ def _ingest_pydict(
         )
         return df
     table = pa.Table.from_pydict(dict(pydict))
-    batches = _record_batches(table, batch_size=batch_size)
-    df = _register_record_batches(ctx, name=name, batches=batches)
-    _emit_arrow_ingest(
-        ingest_hook,
-        ArrowIngestEvent(
-            name=name,
-            method="record_batches",
-            partitioning="record_batches",
-            batch_size=batch_size,
-            batch_count=len(batches),
-            row_count=table.num_rows,
-        ),
+    return _ingest_table(
+        ctx,
+        name=name,
+        table=table,
+        batch_size=batch_size,
+        ingest_hook=ingest_hook,
     )
-    return df
 
 
 def _ingest_table(
@@ -112,65 +105,55 @@ def _ingest_table(
     ingest_hook: Callable[[Mapping[str, object]], None] | None,
 ) -> DataFrame:
     from_arrow = getattr(ctx, "from_arrow", None)
-    if callable(from_arrow) and batch_size is None:
-        try:
-            df = cast("DataFrame", from_arrow(table, name=name))
-        except (RuntimeError, TypeError, ValueError):
-            df = None
-        else:
-            if df is not None:
-                _emit_arrow_ingest(
-                    ingest_hook,
-                    ArrowIngestEvent(
-                        name=name,
-                        method="from_arrow",
-                        partitioning="datafusion_native",
-                        batch_size=None,
-                        batch_count=None,
-                        row_count=None,
-                    ),
-                )
-                return df
+    if not callable(from_arrow):
+        msg = "SessionContext does not support from_arrow ingestion."
+        raise NotImplementedError(msg)
     if isinstance(table, RecordBatchReaderLike):
-        table = table.read_all()
+        df = cast("DataFrame", from_arrow(table, name=name))
+        _emit_arrow_ingest(
+            ingest_hook,
+            ArrowIngestEvent(
+                name=name,
+                method="from_arrow",
+                partitioning="record_batch_reader",
+                batch_size=batch_size,
+                batch_count=None,
+                row_count=None,
+            ),
+        )
+        return df
     if not isinstance(table, pa.Table):
         msg = "Unsupported Arrow input for DataFusion ingestion."
         raise TypeError(msg)
-    table_obj = cast("pa.Table", table)
-    batches = _record_batches(table_obj, batch_size=batch_size)
-    df = _register_record_batches(ctx, name=name, batches=batches)
+    if batch_size is None or batch_size <= 0:
+        df = cast("DataFrame", from_arrow(table, name=name))
+        _emit_arrow_ingest(
+            ingest_hook,
+            ArrowIngestEvent(
+                name=name,
+                method="from_arrow",
+                partitioning="datafusion_native",
+                batch_size=None,
+                batch_count=None,
+                row_count=table.num_rows,
+            ),
+        )
+        return df
+    batches = table.to_batches(max_chunksize=batch_size)
+    reader = pa.RecordBatchReader.from_batches(table.schema, batches)
+    df = cast("DataFrame", from_arrow(reader, name=name))
     _emit_arrow_ingest(
         ingest_hook,
         ArrowIngestEvent(
             name=name,
-            method="record_batches",
-            partitioning="record_batches",
+            method="from_arrow",
+            partitioning="record_batch_reader",
             batch_size=batch_size,
             batch_count=len(batches),
-            row_count=table_obj.num_rows,
+            row_count=table.num_rows,
         ),
     )
     return df
-
-
-def _register_record_batches(
-    ctx: SessionContext,
-    *,
-    name: str,
-    batches: list[list[pa.RecordBatch]],
-) -> DataFrame:
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(name, batches)
-    return ctx.table(name)
-
-
-def _record_batches(table: pa.Table, *, batch_size: int | None) -> list[list[pa.RecordBatch]]:
-    if batch_size is None or batch_size <= 0:
-        return [table.to_batches()]
-    batches = table.to_batches(max_chunksize=batch_size)
-    return [batches]
 
 
 def _is_pydict_input(value: object) -> bool:

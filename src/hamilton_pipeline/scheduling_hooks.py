@@ -40,6 +40,7 @@ class PlanSchedulingContext:
 
     schedule_metadata: Mapping[str, TaskScheduleMetadata]
     bottom_level_costs: Mapping[str, float]
+    slack_by_task: Mapping[str, float]
     active_tasks: frozenset[str]
     critical_path_tasks: tuple[str, ...]
     plan_signature: str
@@ -57,6 +58,7 @@ class PlanSchedulingContext:
         return cls(
             schedule_metadata=plan.schedule_metadata,
             bottom_level_costs=plan.bottom_level_costs,
+            slack_by_task=plan.slack_by_task,
             active_tasks=plan.active_tasks,
             critical_path_tasks=plan.critical_path_task_names,
             plan_signature=plan.plan_signature,
@@ -71,6 +73,7 @@ class PlanGroupingStrategy(grouping.GroupingStrategy):
         ctx = PlanSchedulingContext.from_plan(plan)
         self._schedule_metadata = dict(ctx.schedule_metadata)
         self._bottom_level_costs = dict(ctx.bottom_level_costs)
+        self._slack_by_task = dict(ctx.slack_by_task)
         self._active_tasks = set(ctx.active_tasks)
         self._critical_path_tasks = set(ctx.critical_path_tasks)
         self._fallback = grouping.GroupNodesByLevel()
@@ -108,10 +111,11 @@ class PlanGroupingStrategy(grouping.GroupingStrategy):
             )
         return groups
 
-    def _generation_sort_key(self, node_: hamilton_node.Node) -> tuple[float, str]:
+    def _generation_sort_key(self, node_: hamilton_node.Node) -> tuple[float, float, str]:
         bottom_cost = self._bottom_level_costs.get(node_.name, 0.0)
         critical_boost = 1.0 if node_.name in self._critical_path_tasks else 0.0
-        return (-(bottom_cost + critical_boost), node_.name)
+        slack = self._slack_by_task.get(node_.name, 0.0)
+        return (-(bottom_cost + critical_boost), float(slack), node_.name)
 
 
 def plan_grouping_strategy(plan: ExecutionPlan) -> grouping.GroupingStrategy:
@@ -322,6 +326,7 @@ def _task_fact(plan: ExecutionPlan, name: str) -> dict[str, object]:
     return {
         "task_name": name,
         "bottom_level_cost": plan.bottom_level_costs.get(name, 0.0),
+        "slack": plan.slack_by_task.get(name, 0.0),
         "on_critical_path": name in set(plan.critical_path_task_names),
         "generation_index": (schedule_meta.generation_index if schedule_meta is not None else None),
         "schedule_index": (schedule_meta.schedule_index if schedule_meta is not None else None),

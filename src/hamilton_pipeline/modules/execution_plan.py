@@ -12,6 +12,7 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.modules import task_execution
+from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import (
     ExecutionPlan,
@@ -109,6 +110,7 @@ def _plan_node_functions(
         ("task_graph", _task_graph_node()),
         ("evidence_catalog", _evidence_catalog_node(options)),
         ("plan_artifacts", _plan_artifacts_node()),
+        ("plan_artifact_ids", _plan_artifact_ids_node()),
         ("plan_signature_value", _plan_signature_value_node(plan.plan_signature)),
         ("plan_signature", _plan_signature_node()),
         ("task_schedule", _task_schedule_node()),
@@ -302,6 +304,20 @@ def _plan_artifacts_node() -> object:
         }
 
     return plan_artifacts
+
+
+def _plan_artifact_ids_node() -> object:
+    @tag(layer="plan", artifact="plan_artifact_ids", kind="mapping")
+    def plan_artifact_ids(
+        execution_plan: ExecutionPlan,
+        run_id: str | None = None,
+    ) -> Mapping[str, str]:
+        if run_id is None or not run_id:
+            return {}
+        bundle = build_plan_artifact_bundle(plan=execution_plan, run_id=run_id)
+        return bundle.artifact_ids()
+
+    return plan_artifact_ids
 
 
 def _task_schedule_node() -> object:

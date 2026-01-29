@@ -35,6 +35,8 @@ from relspec.rustworkx_graph import (
     task_graph_subgraph,
 )
 from relspec.rustworkx_schedule import (
+    ScheduleCostContext,
+    ScheduleOptions,
     TaskSchedule,
     schedule_tasks,
     task_schedule_metadata,
@@ -49,12 +51,13 @@ from relspec.view_defs import (
     REL_NAME_SYMBOL_OUTPUT,
     RELATION_OUTPUT_NAME,
 )
-from serde_msgspec import dumps_msgpack
+from serde_msgspec import dumps_msgpack, to_builtins
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
     from datafusion_engine.lineage_datafusion import LineageReport
     from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
@@ -104,6 +107,7 @@ class ExecutionPlan:
     critical_path_task_names: tuple[str, ...]
     critical_path_length_weighted: float | None
     bottom_level_costs: Mapping[str, float]
+    slack_by_task: Mapping[str, float]
     task_plan_metrics: Mapping[str, TaskPlanMetrics]
     task_costs: Mapping[str, float]
     dependency_map: Mapping[str, tuple[str, ...]]
@@ -224,6 +228,7 @@ class _PlanAssembly:
     signature: str
     diagnostics: GraphDiagnostics
     bottom_costs: Mapping[str, float]
+    slack_by_task: Mapping[str, float]
     dependency_map: Mapping[str, tuple[str, ...]]
     scan_delta_pins: Mapping[str, tuple[int | None, str | None]]
     session_runtime_hash: str | None
@@ -347,14 +352,6 @@ def _assemble_plan_components(
         Plan components used to build the final execution plan.
     """
     output_schema_for = _output_schema_lookup(context.output_contracts)
-    schedule = schedule_tasks(
-        context.task_graph,
-        evidence=context.evidence,
-        output_schema_for=output_schema_for,
-        allow_partial=request.allow_partial,
-        reduced_dependency_graph=reduction.reduced_graph,
-    )
-    schedule_meta = task_schedule_metadata(schedule)
     plan_snapshots = _plan_snapshot_map(
         context.view_nodes,
         plan_fingerprints,
@@ -369,12 +366,32 @@ def _assemble_plan_components(
     else:
         plan_metrics: dict[str, TaskPlanMetrics] = {}
         task_costs: dict[str, float] = {}
+    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=task_costs)
+    slack_by_task = task_slack_by_task(
+        reduction.reduced_graph,
+        task_costs=task_costs,
+    )
+    schedule = schedule_tasks(
+        context.task_graph,
+        evidence=context.evidence,
+        options=ScheduleOptions(
+            output_schema_for=output_schema_for,
+            allow_partial=request.allow_partial,
+            reduced_dependency_graph=reduction.reduced_graph,
+            cost_context=ScheduleCostContext(
+                task_costs=task_costs,
+                bottom_level_costs=bottom_costs,
+                slack_by_task=slack_by_task,
+            ),
+        ),
+    )
+    schedule_meta = task_schedule_metadata(schedule)
     signature, diagnostics = _plan_signature_and_diagnostics(
         context.task_graph,
         plan_task_signatures,
         reduction=reduction,
+        task_costs=task_costs,
     )
-    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=task_costs)
     dependency_map = dependency_map_from_inferred(
         context.inferred,
         active_tasks=context.active_tasks,
@@ -391,6 +408,7 @@ def _assemble_plan_components(
         signature=signature,
         diagnostics=diagnostics,
         bottom_costs=bottom_costs,
+        slack_by_task=slack_by_task,
         dependency_map=dependency_map,
         scan_delta_pins=scan_delta_pins,
         session_runtime_hash=session_runtime_hash,
@@ -453,6 +471,7 @@ def compile_execution_plan(
         critical_path_task_names=assembly.diagnostics.critical_path_task_names,
         critical_path_length_weighted=assembly.diagnostics.critical_path_length_weighted,
         bottom_level_costs=assembly.bottom_costs,
+        slack_by_task=assembly.slack_by_task,
         task_plan_metrics=assembly.task_plan_metrics,
         task_costs=assembly.task_costs,
         dependency_map=assembly.dependency_map,
@@ -782,6 +801,7 @@ def _plan_signature_and_diagnostics(
     plan_task_signatures: Mapping[str, str],
     *,
     reduction: TaskDependencyReduction,
+    task_costs: Mapping[str, float] | None,
 ) -> tuple[str, GraphDiagnostics]:
     snapshot_payload = task_graph_snapshot(
         graph,
@@ -790,9 +810,15 @@ def _plan_signature_and_diagnostics(
     )
     signature = task_graph_signature(snapshot_payload)
     diagnostics = task_graph_diagnostics(graph, include_node_link=True)
-    critical_path_task_names = task_dependency_critical_path_tasks(reduction.reduced_graph)
+    critical_path_task_names = task_dependency_critical_path_tasks(
+        reduction.reduced_graph,
+        task_costs=task_costs,
+    )
     critical_path_length_weighted = (
-        task_dependency_critical_path_length(reduction.reduced_graph)
+        task_dependency_critical_path_length(
+            reduction.reduced_graph,
+            task_costs=task_costs,
+        )
         if reduction.reduced_graph.num_nodes() > 0
         else None
     )
@@ -875,6 +901,106 @@ def bottom_level_costs(
         if task_name is not None:
             out[task_name] = score
     return out
+
+
+def task_slack_by_task(
+    graph: rx.PyDiGraph,
+    *,
+    task_costs: Mapping[str, float] | None = None,
+) -> dict[str, float]:
+    """Return per-task slack values based on weighted scheduling costs.
+
+    Returns
+    -------
+    dict[str, float]
+        Mapping of task name to slack (latest start - earliest start).
+    """
+    topo = list(rx.topological_sort(graph))
+    if not topo:
+        return {}
+    node_costs = _node_costs_from_topo(graph, topo, task_costs=task_costs)
+    earliest_start, earliest_finish = _earliest_times(graph, topo, node_costs=node_costs)
+    critical_length = max(earliest_finish.values(), default=0.0)
+    latest_start = _latest_start_times(
+        graph,
+        topo,
+        node_costs=node_costs,
+        critical_length=critical_length,
+    )
+    return _slack_by_task_mapping(
+        graph,
+        earliest_start=earliest_start,
+        latest_start=latest_start,
+    )
+
+
+def _node_costs_from_topo(
+    graph: rx.PyDiGraph,
+    topo: Sequence[int],
+    *,
+    task_costs: Mapping[str, float] | None,
+) -> dict[int, float]:
+    costs = dict(task_costs or {})
+    node_costs: dict[int, float] = {}
+    for node_idx in topo:
+        node = graph[node_idx]
+        task_name, priority = _task_name_priority(node)
+        if task_name is not None and task_name in costs:
+            node_costs[node_idx] = float(max(costs[task_name], 1.0))
+        else:
+            node_costs[node_idx] = float(max(priority, 1))
+    return node_costs
+
+
+def _earliest_times(
+    graph: rx.PyDiGraph,
+    topo: Sequence[int],
+    *,
+    node_costs: Mapping[int, float],
+) -> tuple[dict[int, float], dict[int, float]]:
+    earliest_start: dict[int, float] = {}
+    earliest_finish: dict[int, float] = {}
+    for node_idx in topo:
+        preds = graph.predecessor_indices(node_idx)
+        start = max((earliest_finish[pred] for pred in preds), default=0.0)
+        earliest_start[node_idx] = start
+        earliest_finish[node_idx] = start + node_costs[node_idx]
+    return earliest_start, earliest_finish
+
+
+def _latest_start_times(
+    graph: rx.PyDiGraph,
+    topo: Sequence[int],
+    *,
+    node_costs: Mapping[int, float],
+    critical_length: float,
+) -> dict[int, float]:
+    latest_start: dict[int, float] = {}
+    for node_idx in reversed(topo):
+        succs = graph.successor_indices(node_idx)
+        finish = (
+            min((latest_start[succ] for succ in succs), default=critical_length)
+            if succs
+            else critical_length
+        )
+        latest_start[node_idx] = finish - node_costs[node_idx]
+    return latest_start
+
+
+def _slack_by_task_mapping(
+    graph: rx.PyDiGraph,
+    *,
+    earliest_start: Mapping[int, float],
+    latest_start: Mapping[int, float],
+) -> dict[str, float]:
+    slack_by_task: dict[str, float] = {}
+    for node_idx, start in earliest_start.items():
+        task_name, _priority = _task_name_priority(graph[node_idx])
+        if task_name is None:
+            continue
+        slack_value = latest_start.get(node_idx, start) - start
+        slack_by_task[task_name] = float(max(slack_value, 0.0))
+    return slack_by_task
 
 
 def _task_name_priority(node: object) -> tuple[str | None, int]:
@@ -1133,12 +1259,16 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
 
 
 def _protocol_payload(
-    protocol: Mapping[str, object] | None,
+    protocol: DeltaProtocolSnapshot | Mapping[str, object] | None,
 ) -> tuple[tuple[str, object], ...] | None:
-    if not isinstance(protocol, Mapping):
+    if protocol is None:
         return None
+    payload = protocol if isinstance(protocol, Mapping) else to_builtins(protocol, str_keys=True)
+    if not isinstance(payload, Mapping):
+        return None
+    normalized = cast("Mapping[str, object]", payload)
     items: list[tuple[str, object]] = []
-    for key, value in protocol.items():
+    for key, value in normalized.items():
         if isinstance(value, (str, int, float)) or value is None:
             items.append((str(key), value))
             continue
@@ -1708,20 +1838,32 @@ def prune_execution_plan(
     )
     output_schema_for = _output_schema_lookup(components.output_contracts)
     evidence_for_schedule = plan.evidence.clone()
+    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=components.task_costs)
+    slack_by_task = task_slack_by_task(
+        reduction.reduced_graph,
+        task_costs=components.task_costs,
+    )
     schedule = schedule_tasks(
         components.task_graph,
         evidence=evidence_for_schedule,
-        output_schema_for=output_schema_for,
-        allow_partial=plan.allow_partial if allow_partial is None else allow_partial,
-        reduced_dependency_graph=reduction.reduced_graph,
+        options=ScheduleOptions(
+            output_schema_for=output_schema_for,
+            allow_partial=plan.allow_partial if allow_partial is None else allow_partial,
+            reduced_dependency_graph=reduction.reduced_graph,
+            cost_context=ScheduleCostContext(
+                task_costs=components.task_costs,
+                bottom_level_costs=bottom_costs,
+                slack_by_task=slack_by_task,
+            ),
+        ),
     )
     schedule_meta = task_schedule_metadata(schedule)
     signature, diagnostics = _plan_signature_and_diagnostics(
         components.task_graph,
         components.plan_task_signatures,
         reduction=reduction,
+        task_costs=components.task_costs,
     )
-    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=components.task_costs)
     scan_delta_pins = _scan_unit_delta_pins(components.scan_units)
     return ExecutionPlan(
         view_nodes=components.view_nodes,
@@ -1745,6 +1887,7 @@ def prune_execution_plan(
         critical_path_task_names=diagnostics.critical_path_task_names,
         critical_path_length_weighted=diagnostics.critical_path_length_weighted,
         bottom_level_costs=bottom_costs,
+        slack_by_task=slack_by_task,
         task_plan_metrics=components.task_plan_metrics,
         task_costs=components.task_costs,
         dependency_map=components.dependency_map,
@@ -1802,5 +1945,6 @@ __all__ = [
     "downstream_task_closure",
     "priority_for_task",
     "prune_execution_plan",
+    "task_slack_by_task",
     "upstream_task_closure",
 ]

@@ -181,6 +181,7 @@ class DeltaOptimizeRequest:
     version: int | None
     timestamp: str | None
     target_size: int | None
+    z_order_cols: Sequence[str] | None = None
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
@@ -1123,6 +1124,7 @@ def delta_optimize_compact(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = _gate_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
+    z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
     response = optimize_fn(
         ctx,
         request.table_uri,
@@ -1130,7 +1132,7 @@ def delta_optimize_compact(
         request.version,
         request.timestamp,
         request.target_size,
-        None,
+        z_order_payload,
         gate_payload[0],
         gate_payload[1],
         gate_payload[2],

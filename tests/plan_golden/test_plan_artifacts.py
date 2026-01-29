@@ -5,23 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.sql_options import planning_sql_options
-from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-from serde_msgspec import dumps_msgpack
+from test_support import datafusion_ext_stub
+
+sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
 datafusion = pytest.importorskip("datafusion")
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from datafusion import SessionContext
+
+    from datafusion_engine.runtime import SessionRuntime
 
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -41,7 +42,7 @@ def _normalize_text(value: str) -> str:
 
 
 def _normalize_rows(
-    rows: list[dict[str, object]],
+    rows: Sequence[Mapping[str, object]],
     *,
     sort_rows: bool,
 ) -> list[dict[str, object]]:
@@ -103,6 +104,8 @@ def _information_schema_rows(ctx: SessionContext, *, table: str) -> list[dict[st
     list[dict[str, object]]
         Rows from the selected information_schema table.
     """
+    from datafusion_engine.sql_options import planning_sql_options
+
     df = ctx.sql_with_options(
         f"SELECT * FROM information_schema.{table}",
         planning_sql_options(None),
@@ -140,6 +143,8 @@ def _info_schema_hash(snapshot: Mapping[str, object]) -> str:
     str
         Hex digest of the snapshot payload.
     """
+    from serde_msgspec import dumps_msgpack
+
     payload = dumps_msgpack(snapshot)
     return hashlib.sha256(payload).hexdigest()
 
@@ -157,7 +162,11 @@ def _explain_rows(ctx: SessionContext, *, prefix: str, sql: str) -> list[dict[st
     return table.to_pylist()
 
 
-def _fixture_payload(ctx: SessionContext, *, session_runtime: SessionRuntime) -> dict[str, object]:
+def _fixture_payload(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime,
+) -> dict[str, object]:
     """Generate the golden fixture payload for the simple query.
 
     Returns
@@ -170,6 +179,8 @@ def _fixture_payload(ctx: SessionContext, *, session_runtime: SessionRuntime) ->
     info_snapshot = _information_schema_snapshot(ctx)
     info_hash = _info_schema_hash(info_snapshot)
     df = ctx.sql(_SQL)
+    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+
     bundle = build_plan_bundle(
         ctx,
         df,
@@ -225,12 +236,20 @@ def _write_golden(path: Path, payload: Mapping[str, object]) -> None:
 
 def test_plan_artifact_golden_fixture() -> None:
     """Compare plan artifacts to the golden fixture for regressions."""
-    profile = DataFusionRuntimeProfile()
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    profile = DataFusionRuntimeProfile(
+        enable_schema_registry=False,
+        enable_schema_evolution_adapter=False,
+    )
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_record_batches(
-        "events",
-        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    from datafusion_engine.ingest import datafusion_from_arrow
+
+    datafusion_from_arrow(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
     payload = _fixture_payload(ctx, session_runtime=session_runtime)
     if os.environ.get("CODEANATOMY_UPDATE_GOLDEN") == "1":

@@ -180,12 +180,10 @@ def evaluate_filters_against_index(
     # Register the index as a temporary table
     temp_table_name = f"__file_index_{uuid.uuid4().hex}"
     try:
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
+        from datafusion_engine.ingest import datafusion_from_arrow
 
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-        adapter.register_record_batches(temp_table_name, [list(index.to_batches())])
-
-        df = ctx.table(temp_table_name).filter(predicate)
+        df = datafusion_from_arrow(ctx, name=temp_table_name, value=index)
+        df = df.filter(predicate)
         return df.to_arrow_table()
     finally:
         # Deregister temporary table

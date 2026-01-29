@@ -19,7 +19,9 @@ def test_substrait_cross_validation_match() -> None:
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     table = pa.table({"id": [1, 2, 3], "label": ["alpha", "beta", "gamma"]})
-    ctx.register_record_batches("input_table", [table.to_batches()])
+    from datafusion_engine.ingest import datafusion_from_arrow
+
+    datafusion_from_arrow(ctx, name="input_table", value=table)
     sql = "SELECT * FROM input_table"
     df = ctx.sql(sql)
     bundle = build_plan_bundle(

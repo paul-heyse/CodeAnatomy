@@ -892,6 +892,31 @@ fn scalar_argument_string(
     })
 }
 
+fn semantic_type_from_prefix(prefix: &str) -> Option<&'static str> {
+    let normalized = prefix.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "node" | "node_id" | "nodeid" => Some("NodeId"),
+        "edge" | "edge_id" | "edgeid" => Some("EdgeId"),
+        "span" | "span_id" | "spanid" => Some("SpanId"),
+        _ => None,
+    }
+}
+
+fn normalize_semantic_type(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    let canonical = match normalized.as_str() {
+        "node" | "node_id" | "nodeid" => "NodeId",
+        "edge" | "edge_id" | "edgeid" => "EdgeId",
+        "span" | "span_id" | "spanid" => "SpanId",
+        _ => trimmed,
+    };
+    Some(canonical.to_string())
+}
+
 fn scalar_columnar_value(value: &ColumnarValue, context: &str) -> Result<ScalarValue> {
     match value {
         ColumnarValue::Scalar(v) => Ok(v.clone()),
@@ -1343,6 +1368,16 @@ pub fn span_id_udf() -> ScalarUDF {
     }))
 }
 
+pub fn semantic_tag_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(vec![TypeSignature::Any(2)], Volatility::Immutable),
+        &["semantic_type", "value"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(SemanticTagUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
 pub fn utf8_normalize_udf() -> ScalarUDF {
     let signature = variadic_any_signature(1, 4, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
@@ -1485,6 +1520,13 @@ pub fn prefixed_hash64(prefix: &str, value: PyExpr) -> PyExpr {
 #[pyfunction]
 pub fn stable_id(prefix: &str, value: PyExpr) -> PyExpr {
     stable_id_udf().call(vec![lit(prefix), value.into()]).into()
+}
+
+#[pyfunction]
+pub fn semantic_tag(semantic_type: &str, value: PyExpr) -> PyExpr {
+    semantic_tag_udf()
+        .call(vec![lit(semantic_type), value.into()])
+        .into()
 }
 
 fn push_optional_expr(args: &mut Vec<Expr>, value: Option<PyExpr>) {
@@ -1874,7 +1916,15 @@ impl ScalarUDFImpl for StableHash128Udf {
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+        let mut field = Field::new(self.name(), DataType::Utf8, nullable);
+        if let Some(prefix) = scalar_argument_string(&args, 0, "stable_id_parts")? {
+            if let Some(semantic_type) = semantic_type_from_prefix(&prefix) {
+                let mut metadata = HashMap::new();
+                metadata.insert("semantic_type".to_string(), semantic_type.to_string());
+                field = field.with_metadata(metadata);
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -2106,12 +2156,12 @@ impl ScalarUDFImpl for StableIdUdf {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if !(4..=5).contains(&arg_types.len()) {
+        if arg_types.len() != 2 {
             return Err(DataFusionError::Plan(
-                "span_id expects four or five arguments".into(),
+                "stable_id expects two arguments".into(),
             ));
         }
-        Ok(vec![DataType::Utf8; arg_types.len()])
+        Ok(vec![DataType::Utf8, DataType::Utf8])
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -2125,7 +2175,15 @@ impl ScalarUDFImpl for StableIdUdf {
                 .get(1)
                 .map(|field| field.is_nullable())
                 .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+        let mut field = Field::new(self.name(), DataType::Utf8, nullable);
+        if let Some(prefix) = scalar_argument_string(&args, 0, "stable_id")? {
+            if let Some(semantic_type) = semantic_type_from_prefix(&prefix) {
+                let mut metadata = HashMap::new();
+                metadata.insert("semantic_type".to_string(), semantic_type.to_string());
+                field = field.with_metadata(metadata);
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -2262,7 +2320,16 @@ impl ScalarUDFImpl for StableIdPartsUdf {
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+        let prefix = scalar_argument_string(&args, 0, "span_id")?;
+        let semantic_type = prefix
+            .as_deref()
+            .and_then(semantic_type_from_prefix)
+            .unwrap_or("SpanId");
+        let mut metadata = HashMap::new();
+        metadata.insert("semantic_type".to_string(), semantic_type.to_string());
+        Ok(Arc::new(
+            Field::new(self.name(), DataType::Utf8, nullable).with_metadata(metadata),
+        ))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3227,6 +3294,94 @@ impl ScalarUDFImpl for SpanIdUdf {
             builder.append_value(stable_id_value(prefix, &joined));
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Metadata Functions"),
+    description = "Attach semantic type metadata to an expression.",
+    syntax_example = "semantic_tag(semantic_type, value)",
+    argument(
+        name = "semantic_type",
+        description = "Semantic type label (for example: NodeId, EdgeId, SpanId)."
+    ),
+    argument(name = "value", description = "Expression to tag.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SemanticTagUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SemanticTagUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "semantic_tag"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "semantic_tag expects two arguments".into(),
+            ));
+        }
+        Ok(vec![DataType::Utf8, arg_types[1].clone()])
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "semantic_tag expects two arguments".into(),
+            ));
+        }
+        let semantic = scalar_argument_string(&args, 0, "semantic_tag")?
+            .and_then(|value| normalize_semantic_type(&value))
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "semantic_tag requires a non-empty semantic_type literal".into(),
+                )
+            })?;
+        let base_field = &args.arg_fields[1];
+        let mut field = Field::new(
+            self.name(),
+            base_field.data_type().clone(),
+            base_field.is_nullable(),
+        );
+        let mut metadata = base_field.metadata().clone();
+        metadata.insert("semantic_type".to_string(), semantic);
+        field = field.with_metadata(metadata);
+        Ok(Arc::new(field))
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "semantic_tag expects two arguments".into(),
+            ));
+        }
+        Ok(arg_types[1].clone())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "semantic_tag expects two arguments".into(),
+            ));
+        }
+        match &args.args[1] {
+            ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(value.clone())),
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
+        }
     }
 }
 

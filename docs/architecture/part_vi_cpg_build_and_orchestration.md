@@ -10,6 +10,39 @@ The public API (`src/graph/product_build.py`) provides the sole entry point for 
 
 ---
 
+## Execution Modes and Plan-Aware Orchestration
+
+Hamilton orchestration is explicitly configured via the public execution surface rather than hidden config flags. Callers select an `ExecutionMode` and optional `ExecutorConfig` in `GraphProductBuildRequest`, which are threaded into `hamilton_pipeline` driver construction. Parallel plan execution is the default for production builds, with deterministic serial execution reserved for reproducibility audits and debugging.
+
+**Execution Modes (File: `src/hamilton_pipeline/pipeline_types.py`)**
+- `deterministic_serial`: no dynamic execution; single executor for fully deterministic runs.
+- `plan_parallel`: dynamic execution enabled; scan-unit parallelism via Hamilton `Parallelizable/Collect`.
+- `plan_parallel_remote`: dynamic execution plus remote executor routing for scan/high-cost tasks.
+
+**Executor Configuration (File: `src/hamilton_pipeline/pipeline_types.py`)**
+```python
+@dataclass(frozen=True)
+class ExecutorConfig:
+    kind: Literal["threadpool", "multiprocessing", "dask", "ray"] = "multiprocessing"
+    max_tasks: int = 4
+    remote_kind: Literal["threadpool", "multiprocessing", "dask", "ray"] | None = None
+    remote_max_tasks: int | None = None
+    cost_threshold: float | None = None
+```
+
+Execution routing uses plan-aware tags (task cost, slack, critical-path membership) to steer high-cost or scan workloads to remote executors (`src/hamilton_pipeline/execution_manager.py`). Dynamic scan units are enabled when the execution mode is parallel, and the scan-unit result mapping is ordered deterministically for stable downstream behavior (`src/hamilton_pipeline/modules/task_execution.py`).
+
+### Plan Schedule + Validation Artifacts
+
+Scheduling and edge validation diagnostics are emitted as msgspec envelopes and persisted to the Hamilton events v2 table (msgspec bytes). The run manifest stays lean and links to these artifacts by ID.
+
+- **PlanScheduleArtifact** + **PlanValidationArtifact**: `src/serde_artifacts.py`
+- **Artifact emission**: `src/hamilton_pipeline/lifecycle.py`
+- **Hamilton events v2 storage**: `src/datafusion_engine/plan_artifact_store.py`
+- **Artifact links in manifest**: `src/hamilton_pipeline/modules/outputs.py`
+
+---
+
 ## CPG Schema Catalog
 
 ### Node and Edge Kind Definitions
@@ -1070,6 +1103,9 @@ class GraphProductBuildResult:
     cpg_nodes: FinalizeDeltaReport
     cpg_edges: FinalizeDeltaReport
     cpg_props: FinalizeDeltaReport
+    cpg_props_map: TableDeltaReport
+    cpg_edges_by_src: TableDeltaReport
+    cpg_edges_by_dst: TableDeltaReport
 
     cpg_nodes_quality: TableDeltaReport | None = None
     cpg_props_quality: TableDeltaReport | None = None
@@ -1111,6 +1147,10 @@ Each CPG output (`cpg_nodes`, `cpg_edges`, `cpg_props`) reports:
 - **paths.alignment**: Alignment metadata file
 - **rows**: Valid row count
 - **error_rows**: Validation error row count
+
+Adjacency/accelerator outputs (`cpg_props_map`, `cpg_edges_by_src`, `cpg_edges_by_dst`) report:
+- **path**: Delta Lake table path for the accelerator table
+- **rows**: Row count
 
 ### Build Graph Product Entry Point
 
@@ -1169,6 +1209,9 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
         "write_cpg_nodes_delta",
         "write_cpg_edges_delta",
         "write_cpg_props_delta",
+        "write_cpg_props_map_delta",
+        "write_cpg_edges_by_src_delta",
+        "write_cpg_edges_by_dst_delta",
     ]
     if request.include_quality:
         outputs.extend([
@@ -1197,6 +1240,9 @@ def _parse_result(
 
     edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_delta"))
     props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_delta"))
+    props_map_report = _parse_table(_require(pipeline_outputs, "write_cpg_props_map_delta"))
+    edges_by_src_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_src_delta"))
+    edges_by_dst_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_dst_delta"))
 
     nodes_quality = None
     if request.include_quality:
@@ -1211,17 +1257,27 @@ def _parse_result(
             props_quality = _parse_table(quality)
 
     manifest_path = None
+    manifest_run_id = None
     if request.include_manifest:
         manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
         if manifest is not None and manifest.get("path"):
             manifest_path = Path(cast("str", manifest["path"]))
+        if manifest is not None and manifest.get("manifest"):
+            manifest_payload = cast("dict[str, object]", manifest["manifest"])
+            manifest_run_id = cast("str | None", manifest_payload.get("run_id"))
 
     run_bundle_dir = None
+    run_id = None
     if request.include_run_bundle:
         bundle = _optional(pipeline_outputs, "write_run_bundle_dir")
         if bundle is not None and bundle.get("bundle_dir"):
             run_bundle_dir = Path(cast("str", bundle["bundle_dir"]))
-    run_id = run_bundle_dir.name if run_bundle_dir is not None else None
+        if bundle is not None and bundle.get("run_id"):
+            run_id = cast("str", bundle["run_id"])
+    if run_id is None:
+        run_id = manifest_run_id
+    if run_id is None and run_bundle_dir is not None:
+        run_id = run_bundle_dir.name
 
     extract_errors = None
     if request.include_extract_errors:
@@ -1237,6 +1293,9 @@ def _parse_result(
         cpg_nodes=nodes_report,
         cpg_edges=edges_report,
         cpg_props=props_report,
+        cpg_props_map=props_map_report,
+        cpg_edges_by_src=edges_by_src_report,
+        cpg_edges_by_dst=edges_by_dst_report,
         cpg_nodes_quality=nodes_quality,
         cpg_props_quality=props_quality,
         extract_error_artifacts=extract_errors,
@@ -1270,9 +1329,18 @@ flowchart TD
     L --> O[write_cpg_nodes_delta]
     M --> P[write_cpg_edges_delta]
     N --> Q[write_cpg_props_delta]
+    N --> Q1[build_cpg_props_map_df]
+    M --> Q2[build_cpg_edges_by_src_df]
+    M --> Q3[build_cpg_edges_by_dst_df]
+    Q1 --> Q4[write_cpg_props_map_delta]
+    Q2 --> Q5[write_cpg_edges_by_src_delta]
+    Q3 --> Q6[write_cpg_edges_by_dst_delta]
     O --> R[FinalizeDeltaReport]
     P --> R
     Q --> R
+    Q4 --> R
+    Q5 --> R
+    Q6 --> R
     R --> S[GraphProductBuildResult]
     S --> T[Return to Caller]
 ```

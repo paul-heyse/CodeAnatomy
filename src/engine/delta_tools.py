@@ -22,6 +22,7 @@ from storage.deltalake import (
 _DELTA_MIN_RETENTION_HOURS = 168
 
 if TYPE_CHECKING:
+    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
@@ -32,7 +33,7 @@ class DeltaHistorySnapshot:
     path: str
     version: int | None
     history: Mapping[str, object] | None
-    protocol: Mapping[str, object] | None
+    protocol: DeltaProtocolSnapshot | None
 
 
 @dataclass(frozen=True)

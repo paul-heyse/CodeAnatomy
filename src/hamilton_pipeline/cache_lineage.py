@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +13,7 @@ from hamilton.lifecycle import api as lifecycle_api
 from core_types import JsonValue
 
 _NODE_KEY_LEN = 2
+_CACHE_LINEAGE_DIRNAME = "cache_lineage"
 
 if TYPE_CHECKING:
     from hamilton import driver as hamilton_driver
@@ -34,21 +34,21 @@ class CacheLineageSummary:
     rows: tuple[dict[str, object], ...]
 
 
-def export_cache_lineage_jsonl(
+def export_cache_lineage_artifacts(
     *,
     driver: hamilton_driver.Driver,
     run_id: str,
-    out_path: Path,
+    out_dir: Path,
     plan_signature: str | None = None,
 ) -> CacheLineageSummary:
-    """Export cache lineage details for a run into JSONL format.
+    """Export cache lineage details for a run into artifacts.
 
     Returns
     -------
     CacheLineageSummary
         Summary of records written and errors encountered.
     """
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     cache = driver.cache
     logs_by_node = cache.logs(run_id=run_id, level="debug")
     log_rows, log_errors = _lineage_rows_from_logs(
@@ -65,12 +65,8 @@ def export_cache_lineage_jsonl(
     merged_rows = _merge_lineage_rows(log_rows=log_rows, metadata_rows=metadata_rows)
     record_count = len(merged_rows)
     error_count = log_errors + metadata_errors
-    with out_path.open("w", encoding="utf-8") as handle:
-        for record in merged_rows:
-            handle.write(json.dumps(record, sort_keys=True))
-            handle.write("\n")
     return CacheLineageSummary(
-        path=out_path,
+        path=out_dir,
         run_id=run_id,
         record_count=record_count,
         error_count=error_count,
@@ -120,10 +116,10 @@ class CacheLineageHook(lifecycle_api.GraphExecutionHook):
         if not bool(self.config.get("enable_cache_lineage", True)):
             return
         out_path = _lineage_path(self.config, run_id=run_id)
-        summary = export_cache_lineage_jsonl(
+        summary = export_cache_lineage_artifacts(
             driver=driver,
             run_id=run_id,
-            out_path=out_path,
+            out_dir=out_path,
             plan_signature=self.plan_signature,
         )
         from datafusion_engine.diagnostics import record_cache_lineage
@@ -149,9 +145,9 @@ def _lineage_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
         return Path(explicit).expanduser()
     cache_path = config.get("cache_path")
     if not isinstance(cache_path, str) or not cache_path:
-        return Path("build") / "cache_lineage" / f"{run_id}.jsonl"
+        return Path("build") / _CACHE_LINEAGE_DIRNAME / run_id
     base = Path(cache_path).expanduser()
-    return base / "lineage" / f"{run_id}.jsonl"
+    return base / "lineage" / run_id
 
 
 def _node_and_task_id(node_key: object) -> tuple[str, str | None]:
@@ -397,5 +393,5 @@ def _merge_lineage_rows(
 __all__ = [
     "CacheLineageHook",
     "CacheLineageSummary",
-    "export_cache_lineage_jsonl",
+    "export_cache_lineage_artifacts",
 ]

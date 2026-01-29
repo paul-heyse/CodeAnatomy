@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
@@ -12,17 +12,19 @@ from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import (
-    DataFusionScanOptions,
-    DatasetSpec,
-    DeltaCdfPolicy,
-    DeltaMaintenancePolicy,
-    DeltaScanOptions,
-    DeltaSchemaPolicy,
-    DeltaWritePolicy,
-)
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.scan_profile import build_delta_scan_config
+
+if TYPE_CHECKING:
+    from schema_spec.system import (
+        DataFusionScanOptions,
+        DatasetSpec,
+        DeltaCdfPolicy,
+        DeltaMaintenancePolicy,
+        DeltaScanOptions,
+        DeltaSchemaPolicy,
+        DeltaWritePolicy,
+    )
 
 type DatasetFormat = str
 type DataFusionProvider = Literal["listing", "delta_cdf"]
@@ -185,13 +187,35 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
             }
         delta_write_policy = None
         if loc.delta_write_policy is not None:
+            parquet_writer_policy = None
+            if loc.delta_write_policy.parquet_writer_policy is not None:
+                parquet_writer_policy = {
+                    "statistics_enabled": list(
+                        loc.delta_write_policy.parquet_writer_policy.statistics_enabled
+                    ),
+                    "statistics_level": loc.delta_write_policy.parquet_writer_policy.statistics_level,
+                    "bloom_filter_enabled": list(
+                        loc.delta_write_policy.parquet_writer_policy.bloom_filter_enabled
+                    ),
+                    "bloom_filter_fpp": loc.delta_write_policy.parquet_writer_policy.bloom_filter_fpp,
+                    "bloom_filter_ndv": loc.delta_write_policy.parquet_writer_policy.bloom_filter_ndv,
+                    "dictionary_enabled": list(
+                        loc.delta_write_policy.parquet_writer_policy.dictionary_enabled
+                    ),
+                }
             delta_write_policy = {
                 "target_file_size": loc.delta_write_policy.target_file_size,
+                "partition_by": list(loc.delta_write_policy.partition_by),
+                "zorder_by": list(loc.delta_write_policy.zorder_by),
+                "stats_policy": loc.delta_write_policy.stats_policy,
                 "stats_columns": (
                     list(loc.delta_write_policy.stats_columns)
                     if loc.delta_write_policy.stats_columns is not None
                     else None
                 ),
+                "stats_max_columns": loc.delta_write_policy.stats_max_columns,
+                "parquet_writer_policy": parquet_writer_policy,
+                "enable_features": list(loc.delta_write_policy.enable_features),
             }
         delta_schema_policy = None
         if loc.delta_schema_policy is not None:
@@ -465,3 +489,20 @@ __all__ = [
     "resolve_delta_schema_policy",
     "resolve_delta_write_policy",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name in {
+        "DataFusionScanOptions",
+        "DatasetSpec",
+        "DeltaCdfPolicy",
+        "DeltaMaintenancePolicy",
+        "DeltaScanOptions",
+        "DeltaSchemaPolicy",
+        "DeltaWritePolicy",
+    }:
+        from schema_spec import system as schema_system
+
+        return getattr(schema_system, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)

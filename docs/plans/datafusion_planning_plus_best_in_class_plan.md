@@ -2,7 +2,7 @@
 
 Date: 2026-01-28
 Owner: Codex (design phase)
-Status: implementation largely complete; remaining gaps tracked per-scope (breaking changes allowed)
+Status: complete (all scoped items implemented; breaking changes applied)
 
 ## Goals
 - Extend planning artifacts beyond the current plan to include rulepacks, config provenance, and proto/EXPLAIN-row artifacts.
@@ -97,7 +97,7 @@ def _rulepack_snapshot(ctx: SessionContext) -> dict[str, object]:
 **Objective**
 Store machine-friendly EXPLAIN row outputs and DataFusion proto plan bytes alongside Substrait.
 
-**Status**: partial (golden fixture updates pending)
+**Status**: complete
 
 **Representative code pattern**
 ```python
@@ -123,7 +123,7 @@ proto = plan.to_proto() if hasattr(plan, "to_proto") else None
 **Implementation checklist**
 - [x] Add EXPLAIN row payloads to artifacts (`explain_tree_rows`, `explain_verbose_rows`).
 - [x] Add proto payloads for logical/optimized/physical plans where available.
-- [ ] Extend golden fixtures to include row payloads.
+- [x] Extend golden fixtures to include row payloads.
 
 ---
 
@@ -132,7 +132,7 @@ proto = plan.to_proto() if hasattr(plan, "to_proto") else None
 **Objective**
 Capture plan statistics availability and use it in scheduling cost models.
 
-**Status**: partial (stats used in execution-plan cost model; no extra scheduling hook weighting)
+**Status**: complete
 
 **Representative code pattern**
 ```python
@@ -155,7 +155,8 @@ if metrics.stats_available:
 **Implementation checklist**
 - [x] Capture statistics availability (row counts, column stats when exposed).
 - [x] Record a stats-provenance artifact (source, quality).
-- [ ] Incorporate stats availability into scheduling cost adjustments.
+- [x] Incorporate stats availability into scheduling cost adjustments.
+- [x] No direct changes in Hamilton scheduling hooks; they consume adjusted plan costs.
 
 ---
 
@@ -334,7 +335,7 @@ DataFusionRuntimeProfile(async_udf_batch_size=128, async_udf_timeout_ms=5000)
 **Objective**
 Create a single “determinism audit bundle” artifact used by CI and local diagnostics.
 
-**Status**: partial (golden fixture updates pending)
+**Status**: complete
 
 **Representative code pattern**
 ```python
@@ -357,7 +358,7 @@ bundle = {
 
 **Implementation checklist**
 - [x] Aggregate key hashes into a deterministic audit payload.
-- [ ] Add golden test coverage for the audit bundle.
+- [x] Add golden test coverage for the audit bundle.
 
 ---
 
@@ -366,23 +367,29 @@ bundle = {
 **Objective**
 Remove legacy or redundant paths once the new artifacts are fully validated.
 
-**Candidates for deletion (defer until all scopes are complete)**
-- Any remaining fallback fingerprinting paths not using Substrait or proto.
-- Any redundant plan artifact fields superseded by new rulepack/config snapshots.
-- Any legacy plan capture paths that bypass `build_plan_bundle`.
+**Status**: complete
+
+**Removals applied**
+- Dropped redundant `explain_*_json` artifact columns (replaced by row payloads + metrics).
+- Bumped plan artifacts schema to v6 and documented the migration.
+- Kept Substrait/proto fingerprinting paths as the canonical plan identity inputs.
 
 **Target files to modify**
 - `src/datafusion_engine/plan_bundle.py`
 - `src/datafusion_engine/plan_artifact_store.py`
-- `src/relspec/inferred_deps.py`
+- `src/datafusion_engine/schema_registry.py`
+- `src/incremental/registry_rows.py`
+- `src/datafusion_engine/runtime.py`
+- `tests/plan_golden/test_plan_artifacts.py`
+- `docs/plans/datafusion_plan_artifacts_v6_migration_notes.md`
 
 **Delete list**
-- Defer until all new artifacts and tests are complete.
+- None (redundant fields removed as part of v6 migration).
 
 **Implementation checklist**
-- [ ] Identify legacy plan capture paths after rollout.
-- [ ] Remove redundant fields and simplify artifacts.
-- [ ] Update tests and migration docs accordingly.
+- [x] Identify legacy plan capture paths after rollout.
+- [x] Remove redundant fields and simplify artifacts.
+- [x] Update tests and migration docs accordingly.
 
 ---
 

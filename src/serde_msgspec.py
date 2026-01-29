@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 import msgspec
 
-from serde_msgspec_ext import SCHEMA_EXT_CODE
+from serde_msgspec_ext import (
+    EXECUTION_PLAN_PROTO_EXT_CODE,
+    LOGICAL_PLAN_PROTO_EXT_CODE,
+    OPTIMIZED_PLAN_PROTO_EXT_CODE,
+    SCHEMA_EXT_CODE,
+    SUBSTRAIT_EXT_CODE,
+    ExecutionPlanProtoBytes,
+    LogicalPlanProtoBytes,
+    OptimizedPlanProtoBytes,
+    SubstraitBytes,
+)
 
 
-class StructBase(
+class StructBaseStrict(
     msgspec.Struct,
     frozen=True,
     kw_only=True,
@@ -18,10 +29,26 @@ class StructBase(
     repr_omit_defaults=True,
     forbid_unknown_fields=True,
 ):
-    """Base struct for internal artifacts."""
+    """Base struct for strict contracts."""
+
+
+class StructBaseCompat(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    omit_defaults=True,
+    repr_omit_defaults=True,
+    forbid_unknown_fields=False,
+):
+    """Base struct for forward-compatible persisted artifacts."""
+
+
+StructBase = StructBaseStrict
 
 
 _DEFAULT_ORDER: Literal["deterministic"] = "deterministic"
+
+_VALIDATION_RE = re.compile(r"^(?P<summary>.*?)(?:\\s+-\\s+at\\s+`(?P<path>[^`]+)`)?$")
 
 
 class _MsgpackBuffer(Protocol):
@@ -39,6 +66,16 @@ class _ArrowSchema(Protocol):
 def _json_enc_hook(obj: object) -> object:
     if isinstance(obj, Path):
         return str(obj)
+    if isinstance(
+        obj,
+        (
+            SubstraitBytes,
+            LogicalPlanProtoBytes,
+            OptimizedPlanProtoBytes,
+            ExecutionPlanProtoBytes,
+        ),
+    ):
+        return obj.data.hex()
     if isinstance(obj, (bytes, bytearray, memoryview)):
         return bytes(obj).hex()
     raise TypeError
@@ -57,12 +94,28 @@ def _msgpack_enc_hook(obj: object) -> object:
             SCHEMA_EXT_CODE,
             schema.serialize().to_pybytes(),
         )
+    if isinstance(obj, SubstraitBytes):
+        return msgspec.msgpack.Ext(SUBSTRAIT_EXT_CODE, obj.data)
+    if isinstance(obj, LogicalPlanProtoBytes):
+        return msgspec.msgpack.Ext(LOGICAL_PLAN_PROTO_EXT_CODE, obj.data)
+    if isinstance(obj, OptimizedPlanProtoBytes):
+        return msgspec.msgpack.Ext(OPTIMIZED_PLAN_PROTO_EXT_CODE, obj.data)
+    if isinstance(obj, ExecutionPlanProtoBytes):
+        return msgspec.msgpack.Ext(EXECUTION_PLAN_PROTO_EXT_CODE, obj.data)
     raise TypeError
 
 
 def _dec_hook(type_hint: Any, obj: object) -> object:
     if type_hint is Path and isinstance(obj, str):
         return Path(obj)
+    if type_hint is SubstraitBytes and isinstance(obj, str):
+        return SubstraitBytes(bytes.fromhex(obj))
+    if type_hint is LogicalPlanProtoBytes and isinstance(obj, str):
+        return LogicalPlanProtoBytes(bytes.fromhex(obj))
+    if type_hint is OptimizedPlanProtoBytes and isinstance(obj, str):
+        return OptimizedPlanProtoBytes(bytes.fromhex(obj))
+    if type_hint is ExecutionPlanProtoBytes and isinstance(obj, str):
+        return ExecutionPlanProtoBytes(bytes.fromhex(obj))
     return obj
 
 
@@ -73,11 +126,30 @@ def _msgpack_ext_hook(code: int, data: memoryview) -> object:
         except ImportError:
             return msgspec.msgpack.Ext(code, data.tobytes())
         return pa.ipc.read_schema(data)
-    return msgspec.msgpack.Ext(code, data.tobytes())
+    handler_map = {
+        SUBSTRAIT_EXT_CODE: SubstraitBytes,
+        LOGICAL_PLAN_PROTO_EXT_CODE: LogicalPlanProtoBytes,
+        OPTIMIZED_PLAN_PROTO_EXT_CODE: OptimizedPlanProtoBytes,
+        EXECUTION_PLAN_PROTO_EXT_CODE: ExecutionPlanProtoBytes,
+    }
+    handler = handler_map.get(code)
+    if handler is None:
+        return msgspec.msgpack.Ext(code, data.tobytes())
+    return handler(data.tobytes())
 
 
-JSON_ENCODER = msgspec.json.Encoder(enc_hook=_json_enc_hook, order=_DEFAULT_ORDER)
-MSGPACK_ENCODER = msgspec.msgpack.Encoder(enc_hook=_msgpack_enc_hook, order=_DEFAULT_ORDER)
+JSON_ENCODER = msgspec.json.Encoder(
+    enc_hook=_json_enc_hook,
+    order=_DEFAULT_ORDER,
+    decimal_format="string",
+    uuid_format="canonical",
+)
+MSGPACK_ENCODER = msgspec.msgpack.Encoder(
+    enc_hook=_msgpack_enc_hook,
+    order=_DEFAULT_ORDER,
+    decimal_format="string",
+    uuid_format="canonical",
+)
 
 
 def json_default(obj: object) -> object:
@@ -96,6 +168,34 @@ def json_default(obj: object) -> object:
     if isinstance(obj, msgspec.Struct):
         return msgspec.to_builtins(obj)
     return _json_enc_hook(obj)
+
+
+def validation_error_payload(exc: msgspec.ValidationError) -> dict[str, str]:
+    """Normalize a msgspec ValidationError for diagnostics.
+
+    Parameters
+    ----------
+    exc
+        ValidationError raised by msgspec decoding/conversion.
+
+    Returns
+    -------
+    dict[str, str]
+        Normalized error payload containing type, summary, and optional path.
+    """
+    message = str(exc).strip()
+    match = _VALIDATION_RE.match(message)
+    payload: dict[str, str] = {"type": exc.__class__.__name__}
+    if match:
+        summary = (match.group("summary") or "").strip()
+        if summary:
+            payload["summary"] = summary
+        path = match.group("path")
+        if path:
+            payload["path"] = path
+        return payload
+    payload["summary"] = message
+    return payload
 
 
 def dumps_json(obj: object, *, pretty: bool = False) -> bytes:

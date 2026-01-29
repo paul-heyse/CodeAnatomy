@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import tempfile
+import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_contracts import (
     SchemaContract,
@@ -28,6 +32,8 @@ from datafusion_engine.view_artifacts import (
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
+from serde_artifacts import ViewCacheArtifact, ViewCacheArtifactEnvelope
+from serde_msgspec import convert, to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage_datafusion import LineageReport
@@ -54,6 +60,8 @@ class ViewNode:
         Required UDF names for this view.
     plan_bundle : DataFusionPlanBundle | None
         DataFusion plan bundle (preferred source of truth for lineage).
+    cache_policy : Literal["none", "memory", "delta_staging"]
+        Cache policy for view materialization.
     """
 
     name: str
@@ -62,6 +70,7 @@ class ViewNode:
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
     plan_bundle: DataFusionPlanBundle | None = None
+    cache_policy: Literal["none", "memory", "delta_staging"] = "none"
 
 
 class SchemaContractViolationError(ValueError):
@@ -98,6 +107,14 @@ class ViewGraphRuntimeOptions:
 
     runtime_profile: DataFusionRuntimeProfile | None = None
     require_artifacts: bool = False
+
+
+@dataclass(frozen=True)
+class ViewCacheContext:
+    """Context for view cache materialization."""
+
+    runtime: ViewGraphRuntimeOptions
+    options: ViewGraphOptions
 
 
 def register_view_graph(
@@ -149,21 +166,14 @@ def register_view_graph(
                     runtime_profile=runtime.runtime_profile,
                 )
         df = node.builder(ctx)
-        if resolved.temporary:
-            adapter.register_view(
-                node.name,
-                df,
-                overwrite=resolved.overwrite,
-                temporary=resolved.temporary,
-            )
-        else:
-            adapter.register_view(
-                node.name,
-                df,
-                overwrite=resolved.overwrite,
-                temporary=False,
-            )
-        schema = _schema_from_df(df)
+        registered = _register_view_with_cache(
+            ctx,
+            adapter=adapter,
+            node=node,
+            df=df,
+            cache=ViewCacheContext(runtime=runtime, options=resolved),
+        )
+        schema = _schema_from_df(registered)
         if resolved.validate_schema and node.contract_builder is not None:
             contract = node.contract_builder(schema)
             _validate_schema_contract(ctx, contract, schema=schema)
@@ -187,6 +197,119 @@ def register_view_graph(
                 ),
             )
             record_view_definition(runtime.runtime_profile, artifact=artifact)
+
+
+def _record_cache_artifact(
+    cache: ViewCacheContext,
+    *,
+    node: ViewNode,
+    cache_path: str | None,
+    status: str,
+    hit: bool | None = None,
+) -> None:
+    profile = cache.runtime.runtime_profile
+    if profile is None:
+        return
+    artifact = ViewCacheArtifact(
+        view_name=node.name,
+        cache_policy=node.cache_policy,
+        cache_path=cache_path,
+        plan_fingerprint=node.plan_bundle.plan_fingerprint if node.plan_bundle else None,
+        status=status,
+        hit=hit,
+    )
+    envelope = ViewCacheArtifactEnvelope(payload=artifact)
+    validated = convert(
+        to_builtins(envelope, str_keys=True),
+        target_type=ViewCacheArtifactEnvelope,
+        strict=True,
+    )
+    payload = to_builtins(validated, str_keys=True)
+    record_artifact(
+        profile,
+        "view_cache_artifacts_v1",
+        cast("Mapping[str, object]", payload),
+    )
+
+
+def _register_view_with_cache(
+    ctx: SessionContext,
+    *,
+    adapter: DataFusionIOAdapter,
+    node: ViewNode,
+    df: DataFrame,
+    cache: ViewCacheContext,
+) -> DataFrame:
+    if node.cache_policy == "memory":
+        cached = df.cache()
+        adapter.register_view(
+            node.name,
+            cached,
+            overwrite=cache.options.overwrite,
+            temporary=cache.options.temporary,
+        )
+        _record_cache_artifact(cache, node=node, cache_path=None, status="cached", hit=None)
+        return cached
+    if node.cache_policy == "delta_staging":
+        if cache.runtime.runtime_profile is None:
+            msg = "Delta staging cache requires a runtime profile."
+            raise ValueError(msg)
+        staging_path = _delta_staging_path(node)
+        from datafusion_engine.dataset_registry import DatasetLocation
+        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.write_pipeline import (
+            WriteFormat,
+            WriteMode,
+            WritePipeline,
+            WriteRequest,
+        )
+
+        pipeline = WritePipeline(ctx, runtime_profile=cache.runtime.runtime_profile)
+        plan_fingerprint = (
+            node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else None
+        )
+        pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=staging_path,
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                plan_fingerprint=plan_fingerprint,
+            )
+        )
+        register_dataset_df(
+            ctx,
+            name=node.name,
+            location=DatasetLocation(path=staging_path, format="delta"),
+            runtime_profile=cache.runtime.runtime_profile,
+        )
+        _record_cache_artifact(
+            cache,
+            node=node,
+            cache_path=staging_path,
+            status="cached",
+            hit=None,
+        )
+        return ctx.table(node.name)
+    adapter.register_view(
+        node.name,
+        df,
+        overwrite=cache.options.overwrite,
+        temporary=cache.options.temporary,
+    )
+    return df
+
+
+def _delta_staging_path(
+    node: ViewNode,
+) -> str:
+    cache_root = Path(tempfile.gettempdir()) / "datafusion_view_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    fingerprint = (
+        node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else uuid.uuid4().hex
+    )
+    safe_name = node.name.replace("/", "_").replace(":", "_")
+    return str(cache_root / f"{safe_name}__{fingerprint}")
 
 
 def _validate_deps(

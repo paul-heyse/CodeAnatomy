@@ -12,7 +12,6 @@ import pyarrow.ipc as pa_ipc
 
 from core_types import JsonDict, PathLike, ensure_path
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from engine.plan_product import PlanProduct
 
 type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
@@ -126,6 +125,12 @@ def ipc_hash(table: pa.Table) -> str:
     return hashlib.sha256(ipc_bytes(table)).hexdigest()
 
 
+def _apply_schema_metadata(schema: pa.Schema, metadata: dict[bytes, bytes]) -> pa.Schema:
+    from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+
+    return SchemaMetadataSpec(schema_metadata=metadata).apply(schema)
+
+
 def payload_ipc_bytes(payload: Mapping[str, object], schema: pa.Schema) -> bytes:
     """Return IPC stream bytes for a payload.
 
@@ -222,7 +227,7 @@ def write_table_ipc_file(
     data = _coerce_plan_product(table)
     schema = data.schema
     if schema_metadata:
-        schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
+        schema = _apply_schema_metadata(schema, schema_metadata)
 
     options = ipc_write_options_factory(config)
     with (
@@ -261,7 +266,7 @@ def write_table_ipc_stream(
     data = _coerce_plan_product(table)
     schema = data.schema
     if schema_metadata:
-        schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
+        schema = _apply_schema_metadata(schema, schema_metadata)
 
     options = ipc_write_options_factory(config)
     with (

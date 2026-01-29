@@ -1,0 +1,53 @@
+{
+  "run_id": "run-1",
+  "plan_signature": "sig-1",
+  "reduced_plan_signature": "sig-1:reduced",
+  "total_tasks": 2,
+  "valid_tasks": 1,
+  "invalid_tasks": 1,
+  "total_edges": 2,
+  "valid_edges": 1,
+  "invalid_edges": 1,
+  "task_results": [
+    {
+      "contract_violations": [],
+      "edge_results": [],
+      "is_valid": true,
+      "task_name": "task_a",
+      "unsatisfied_edges": []
+    },
+    {
+      "contract_violations": [
+        "violation"
+      ],
+      "edge_results": [
+        {
+          "available_columns": [],
+          "available_metadata": [],
+          "available_types": [],
+          "contract_violations": [
+            "violation"
+          ],
+          "is_valid": false,
+          "missing_columns": [
+            "col_x"
+          ],
+          "missing_metadata": [],
+          "missing_types": [
+            {
+              "column": "col_x",
+              "dtype": "Utf8"
+            }
+          ],
+          "source_name": "input_x",
+          "target_task": "task_b"
+        }
+      ],
+      "is_valid": false,
+      "task_name": "task_b",
+      "unsatisfied_edges": [
+        "input_x"
+      ]
+    }
+  ]
+}

@@ -70,7 +70,7 @@ What is already landed and still relevant under the pivot:
 - [x] Cache-lineage metadata export now handles list-shaped
       `metadata_store.get_run()` payloads and is covered by deterministic tests.
 - [x] View artifacts now emit a runtime-aware `plan_task_signature`
-      under `datafusion_view_artifacts_v3`.
+      under `datafusion_view_artifacts_v4`.
 
 Pivot-critical gaps previously identified (now resolved):
 

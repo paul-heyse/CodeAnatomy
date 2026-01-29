@@ -21,10 +21,13 @@ from datafusion_engine.dataset_registry import (
 from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
 from datafusion_engine.delta_protocol import (
     DeltaFeatureGate,
+    DeltaProtocolCompatibility,
+    DeltaProtocolSnapshot,
     delta_protocol_compatibility,
 )
 from datafusion_engine.lineage_datafusion import ScanLineage
-from serde_msgspec import dumps_msgpack
+from serde_artifacts import DeltaScanConfigSnapshot
+from serde_msgspec import dumps_msgpack, to_builtins
 from storage.deltalake import build_delta_file_index_from_add_actions
 from storage.deltalake.file_pruning import (
     FilePruningPolicy,
@@ -61,7 +64,7 @@ class _ScanUnitKeyRequest:
     delta_version: int | None
     delta_timestamp: str | None
     delta_feature_gate: DeltaFeatureGate | None
-    delta_protocol: Mapping[str, object] | None
+    delta_protocol: DeltaProtocolSnapshot | None
     storage_options_hash: str | None
     delta_scan_config_hash: str | None
     datafusion_provider: str | None
@@ -102,13 +105,13 @@ class ScanUnit:
     delta_timestamp: str | None
     snapshot_timestamp: int | None
     delta_feature_gate: DeltaFeatureGate | None
-    delta_protocol: Mapping[str, object] | None
+    delta_protocol: DeltaProtocolSnapshot | None
     storage_options_hash: str | None
-    delta_scan_config: Mapping[str, object] | None
+    delta_scan_config: DeltaScanConfigSnapshot | None
     delta_scan_config_hash: str | None
     datafusion_provider: str | None
     protocol_compatible: bool | None
-    protocol_compatibility: Mapping[str, object] | None
+    protocol_compatibility: DeltaProtocolCompatibility | None
     total_files: int
     candidate_file_count: int
     pruned_file_count: int
@@ -137,11 +140,11 @@ class _DeltaScanResolution:
     delta_version: int | None
     delta_timestamp: str | None
     snapshot_timestamp: int | None
-    delta_protocol: Mapping[str, object] | None
+    delta_protocol: DeltaProtocolSnapshot | None
     total_files: int
     candidate_file_count: int
     pruned_file_count: int
-    protocol_compatibility: Mapping[str, object] | None
+    protocol_compatibility: DeltaProtocolCompatibility | None
     protocol_compatible: bool | None
 
 
@@ -327,16 +330,17 @@ def _delta_scan_candidates(
     tuple[Path, ...],
     int | None,
     int | None,
-    Mapping[str, object] | None,
+    DeltaProtocolSnapshot | None,
     int,
     int,
     int,
 ]:
     request = _delta_snapshot_request(location)
     payload = _delta_add_actions_payload(request=request)
+    empty_candidates: tuple[Path, ...] = ()
     if not payload.add_actions:
         return (
-            (),
+            empty_candidates,
             payload.delta_version,
             payload.snapshot_timestamp,
             payload.delta_protocol,
@@ -377,7 +381,7 @@ class _DeltaAddActionsPayload:
 
     delta_version: int | None
     snapshot_timestamp: int | None
-    delta_protocol: Mapping[str, object] | None
+    delta_protocol: DeltaProtocolSnapshot | None
     add_actions: tuple[Mapping[str, object], ...]
 
 
@@ -492,11 +496,11 @@ def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
     return None
 
 
-def _delta_protocol_payload(snapshot: Mapping[str, object]) -> dict[str, object] | None:
+def _delta_protocol_payload(snapshot: Mapping[str, object]) -> DeltaProtocolSnapshot | None:
     min_reader_version = _coerce_int(snapshot.get("min_reader_version"))
     min_writer_version = _coerce_int(snapshot.get("min_writer_version"))
-    reader_features = _coerce_str_list(snapshot.get("reader_features"))
-    writer_features = _coerce_str_list(snapshot.get("writer_features"))
+    reader_features = tuple(_coerce_str_list(snapshot.get("reader_features")))
+    writer_features = tuple(_coerce_str_list(snapshot.get("writer_features")))
     if (
         min_reader_version is None
         and min_writer_version is None
@@ -504,32 +508,34 @@ def _delta_protocol_payload(snapshot: Mapping[str, object]) -> dict[str, object]
         and not writer_features
     ):
         return None
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "reader_features": reader_features,
-        "writer_features": writer_features,
-    }
+    return DeltaProtocolSnapshot(
+        min_reader_version=min_reader_version,
+        min_writer_version=min_writer_version,
+        reader_features=reader_features,
+        writer_features=writer_features,
+    )
 
 
-def _delta_scan_config_snapshot(location: DatasetLocation | None) -> Mapping[str, object] | None:
+def _delta_scan_config_snapshot(
+    location: DatasetLocation | None,
+) -> DeltaScanConfigSnapshot | None:
     if location is None:
         return None
     options = resolve_delta_scan_options(location)
     if options is None:
         return None
     schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
-    return {
-        "file_column_name": options.file_column_name,
-        "enable_parquet_pushdown": options.enable_parquet_pushdown,
-        "schema_force_view_types": options.schema_force_view_types,
-        "wrap_partition_values": options.wrap_partition_values,
-        "schema": schema_payload,
-    }
+    return DeltaScanConfigSnapshot(
+        file_column_name=options.file_column_name,
+        enable_parquet_pushdown=options.enable_parquet_pushdown,
+        schema_force_view_types=options.schema_force_view_types,
+        wrap_partition_values=options.wrap_partition_values,
+        schema=dict(schema_payload) if schema_payload is not None else None,
+    )
 
 
-def _delta_scan_config_hash(snapshot: Mapping[str, object] | None) -> str | None:
-    if not snapshot:
+def _delta_scan_config_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | None:
+    if snapshot is None:
         return None
     payload = dumps_msgpack(snapshot)
     return hashlib.sha256(payload).hexdigest()
@@ -554,22 +560,19 @@ def _provider_marker(
 
 
 def _delta_protocol_compatibility(
-    protocol: Mapping[str, object] | None,
+    protocol: DeltaProtocolSnapshot | None,
     runtime_profile: DataFusionRuntimeProfile | None,
-) -> Mapping[str, object] | None:
+) -> DeltaProtocolCompatibility | None:
     if runtime_profile is None:
         return None
     support = runtime_profile.delta_protocol_support
     return delta_protocol_compatibility(protocol, support)
 
 
-def _compatibility_flag(payload: Mapping[str, object] | None) -> bool | None:
-    if not payload:
+def _compatibility_flag(payload: DeltaProtocolCompatibility | None) -> bool | None:
+    if payload is None:
         return None
-    value = payload.get("compatible")
-    if isinstance(value, bool):
-        return value
-    return None
+    return payload.compatible
 
 
 def _enforce_protocol_compatibility(
@@ -577,16 +580,21 @@ def _enforce_protocol_compatibility(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
     protocol_compatible: bool | None,
-    protocol_compatibility: Mapping[str, object] | None,
+    protocol_compatibility: DeltaProtocolCompatibility | None,
 ) -> None:
     if runtime_profile is None or protocol_compatible is not False:
         return
     mode = runtime_profile.delta_protocol_mode
     if mode == "ignore":
         return
+    compatibility_payload: dict[str, object]
+    if protocol_compatibility is None:
+        compatibility_payload = {}
+    else:
+        compatibility_payload = cast("dict[str, object]", to_builtins(protocol_compatibility))
     payload = {
         "dataset_name": dataset_name,
-        "compatibility": protocol_compatibility or {},
+        "compatibility": compatibility_payload,
         "mode": mode,
     }
     if mode == "warn":

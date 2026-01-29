@@ -1,0 +1,14 @@
+{
+  "statistics_enabled": [
+    "node_id",
+    "path"
+  ],
+  "bloom_filter_enabled": [
+    "node_id"
+  ],
+  "bloom_filter_fpp": 0.01,
+  "bloom_filter_ndv": 1000,
+  "dictionary_enabled": [
+    "node_kind"
+  ]
+}

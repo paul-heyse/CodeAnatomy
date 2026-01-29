@@ -6,7 +6,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypedDict, cast
 
-import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -30,6 +29,7 @@ from datafusion_engine.arrow_schema.build import (
 )
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import NormalizePolicy
+from serde_msgspec import MSGPACK_ENCODER
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
@@ -71,10 +71,10 @@ SCAN_TELEMETRY_SCHEMA = pa.schema(
         ("partition_expressions", pa.list_(pa.string())),
         ("required_columns", pa.list_(pa.string())),
         ("scan_columns", pa.list_(pa.string())),
-        ("dataset_schema_json", pa.string()),
-        ("projected_schema_json", pa.string()),
-        ("discovery_policy_json", pa.string()),
-        ("scan_profile_json", pa.string()),
+        ("dataset_schema_msgpack", pa.binary()),
+        ("projected_schema_msgpack", pa.binary()),
+        ("discovery_policy_msgpack", pa.binary()),
+        ("scan_profile_msgpack", pa.binary()),
     ]
 )
 
@@ -191,10 +191,57 @@ def scan_telemetry_table(rows: Sequence[Mapping[str, object]]) -> TableLike:
     TableLike
         Scan telemetry table.
     """
-    return rows_to_table(list(rows), SCAN_TELEMETRY_SCHEMA)
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        payload = dict(row)
+        normalized.append(
+            {
+                "dataset": payload.get("dataset"),
+                "fragment_count": payload.get("fragment_count"),
+                "row_group_count": payload.get("row_group_count"),
+                "count_rows": payload.get("count_rows"),
+                "estimated_rows": payload.get("estimated_rows"),
+                "file_hints": payload.get("file_hints"),
+                "fragment_paths": payload.get("fragment_paths"),
+                "partition_expressions": payload.get("partition_expressions"),
+                "required_columns": payload.get("required_columns"),
+                "scan_columns": payload.get("scan_columns"),
+                "dataset_schema_msgpack": _scan_payload_bytes(
+                    payload,
+                    primary="dataset_schema_msgpack",
+                    fallback="dataset_schema_json",
+                ),
+                "projected_schema_msgpack": _scan_payload_bytes(
+                    payload,
+                    primary="projected_schema_msgpack",
+                    fallback="projected_schema_json",
+                ),
+                "discovery_policy_msgpack": _scan_payload_bytes(
+                    payload,
+                    primary="discovery_policy_msgpack",
+                    fallback="discovery_policy_json",
+                ),
+                "scan_profile_msgpack": _scan_payload_bytes(
+                    payload,
+                    primary="scan_profile_msgpack",
+                    fallback="scan_profile_json",
+                ),
+            }
+        )
+    return rows_to_table(normalized, SCAN_TELEMETRY_SCHEMA)
 
 
-_SCAN_TELEMETRY_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+_SCAN_TELEMETRY_ENCODER = MSGPACK_ENCODER
+
+
+def _scan_payload_bytes(payload: Mapping[str, object], *, primary: str, fallback: str) -> bytes:
+    value = payload.get(primary)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    legacy = payload.get(fallback)
+    if legacy is not None:
+        return MSGPACK_ENCODER.encode(legacy)
+    return MSGPACK_ENCODER.encode({})
 
 
 def encode_scan_telemetry_rows(rows: Sequence[Mapping[str, object]]) -> bytes:

@@ -198,6 +198,62 @@ def validate_delta_gate(
             raise ValueError(msg)
 
 
+def delta_feature_gate_payload(
+    gate: object | None,
+) -> dict[str, object] | None:
+    """Return a JSON-ready payload for a Delta feature gate.
+
+    Returns
+    -------
+    dict[str, object] | None
+        JSON-ready Delta feature gate payload, or ``None`` when unavailable.
+    """
+    normalized = _delta_gate_values(gate)
+    if normalized is None:
+        return None
+    min_reader, min_writer, reader_features, writer_features = normalized
+    return {
+        "min_reader_version": min_reader,
+        "min_writer_version": min_writer,
+        "required_reader_features": list(reader_features),
+        "required_writer_features": list(writer_features),
+    }
+
+
+def delta_feature_gate_tuple(
+    gate: object | None,
+) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
+    """Return a tuple payload for Delta feature gates.
+
+    Returns
+    -------
+    tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None
+        Canonical tuple payload for feature gates, or ``None`` when unavailable.
+    """
+    return _delta_gate_values(gate)
+
+
+def delta_feature_gate_rust_payload(
+    gate: DeltaFeatureGate | None,
+) -> tuple[int | None, int | None, list[str] | None, list[str] | None]:
+    """Return a Rust-compatible Delta feature gate payload.
+
+    Returns
+    -------
+    tuple[int | None, int | None, list[str] | None, list[str] | None]
+        Rust-compatible gate payload with optional feature lists.
+    """
+    if gate is None:
+        return None, None, None, None
+    normalized = _delta_gate_values(gate)
+    if normalized is None:
+        return None, None, None, None
+    min_reader, min_writer, reader_features, writer_features = normalized
+    reader_list = list(reader_features) or None
+    writer_list = list(writer_features) or None
+    return min_reader, min_writer, reader_list, writer_list
+
+
 def _protocol_snapshot(
     snapshot: DeltaProtocolSnapshot | Mapping[str, object] | None,
 ) -> DeltaProtocolSnapshot | None:
@@ -257,11 +313,52 @@ def _feature_set(value: object) -> set[str]:
     return set()
 
 
+def _feature_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value)
+    return ()
+
+
+def _delta_gate_values(
+    gate: object | None,
+) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
+    if gate is None:
+        return None
+    if isinstance(gate, Mapping):
+        min_reader_version = _coerce_int(gate.get("min_reader_version"))
+        min_writer_version = _coerce_int(gate.get("min_writer_version"))
+        required_reader_features = _feature_tuple(gate.get("required_reader_features"))
+        required_writer_features = _feature_tuple(gate.get("required_writer_features"))
+        return (
+            min_reader_version,
+            min_writer_version,
+            required_reader_features,
+            required_writer_features,
+        )
+    min_reader_version = _coerce_int(getattr(gate, "min_reader_version", None))
+    min_writer_version = _coerce_int(getattr(gate, "min_writer_version", None))
+    required_reader_features = _feature_tuple(
+        getattr(gate, "required_reader_features", ())
+    )
+    required_writer_features = _feature_tuple(
+        getattr(gate, "required_writer_features", ())
+    )
+    return (
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    )
+
+
 __all__ = [
     "DeltaFeatureGate",
     "DeltaProtocolCompatibility",
     "DeltaProtocolSnapshot",
     "DeltaProtocolSupport",
+    "delta_feature_gate_payload",
+    "delta_feature_gate_rust_payload",
+    "delta_feature_gate_tuple",
     "delta_protocol_compatibility",
     "validate_delta_gate",
 ]

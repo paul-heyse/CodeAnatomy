@@ -16,6 +16,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
+from utils.env_utils import env_int, env_value
 
 if TYPE_CHECKING:
     from datafusion_engine.udf_runtime import RustUdfSnapshot
@@ -86,21 +87,6 @@ def _settings_int(value: str | None) -> int | None:
         return None
 
 
-def _env_value(name: str) -> str | None:
-    value = os.environ.get(name, "").strip()
-    return value if value else None
-
-
-def _env_int(name: str) -> int | None:
-    raw = _env_value(name)
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
-
-
 @dataclass(frozen=True)
 class HamiltonTrackerConfig:
     """Tracker configuration sourced from runtime profile or environment."""
@@ -118,15 +104,15 @@ class HamiltonTrackerConfig:
 
 
 def _tracker_config_from_env() -> HamiltonTrackerConfig | None:
-    project_id = _env_int("CODEANATOMY_HAMILTON_PROJECT_ID")
+    project_id = env_int("CODEANATOMY_HAMILTON_PROJECT_ID")
     if project_id is None:
-        project_id = _env_int("HAMILTON_PROJECT_ID")
-    username = _env_value("CODEANATOMY_HAMILTON_USERNAME")
+        project_id = env_int("HAMILTON_PROJECT_ID")
+    username = env_value("CODEANATOMY_HAMILTON_USERNAME")
     if username is None:
-        username = _env_value("HAMILTON_USERNAME")
-    dag_name = _env_value("CODEANATOMY_HAMILTON_DAG_NAME") or _env_value("HAMILTON_DAG_NAME")
-    api_url = _env_value("CODEANATOMY_HAMILTON_API_URL") or _env_value("HAMILTON_API_URL")
-    ui_url = _env_value("CODEANATOMY_HAMILTON_UI_URL") or _env_value("HAMILTON_UI_URL")
+        username = env_value("HAMILTON_USERNAME")
+    dag_name = env_value("CODEANATOMY_HAMILTON_DAG_NAME") or env_value("HAMILTON_DAG_NAME")
+    api_url = env_value("CODEANATOMY_HAMILTON_API_URL") or env_value("HAMILTON_API_URL")
+    ui_url = env_value("CODEANATOMY_HAMILTON_UI_URL") or env_value("HAMILTON_UI_URL")
     if (
         project_id is None
         and username is None
@@ -320,13 +306,13 @@ def _apply_memory_overrides(
 
 
 def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
-    policy_override = _env_value("CODEANATOMY_DATAFUSION_POLICY")
+    policy_override = env_value("CODEANATOMY_DATAFUSION_POLICY")
     if policy_override is not None:
         profile = replace(profile, config_policy_name=policy_override)
-    catalog_location = _env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
+    catalog_location = env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
     if catalog_location is not None:
         profile = replace(profile, catalog_auto_load_location=catalog_location)
-    catalog_format = _env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
+    catalog_format = env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
     if catalog_format is not None:
         profile = replace(profile, catalog_auto_load_format=catalog_format)
     return profile

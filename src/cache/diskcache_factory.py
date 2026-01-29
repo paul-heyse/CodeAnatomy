@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cache
@@ -12,7 +10,9 @@ from typing import Literal, TypedDict, cast
 
 from diskcache import Cache, Deque, FanoutCache, Index
 
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import to_builtins
+from utils.env_utils import env_value
+from utils.hashing import hash_msgpack_canonical
 
 type DiskCacheKind = Literal[
     "plan",
@@ -27,15 +27,14 @@ type DiskCacheKind = Literal[
 
 
 def _default_cache_root() -> Path:
-    env_value = os.environ.get("CODEANATOMY_DISKCACHE_DIR", "").strip()
-    if env_value:
-        return Path(env_value).expanduser()
+    root = env_value("CODEANATOMY_DISKCACHE_DIR")
+    if root:
+        return Path(root).expanduser()
     return Path.home() / ".cache" / "codeanatomy" / "diskcache"
 
 
 def _hash_payload(payload: object) -> str:
-    raw = dumps_msgpack(to_builtins(payload))
-    return hashlib.sha256(raw).hexdigest()
+    return hash_msgpack_canonical(to_builtins(payload))
 
 
 @dataclass(frozen=True)

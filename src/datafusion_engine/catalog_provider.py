@@ -26,11 +26,13 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
     table_provider_metadata,
 )
+from utils.storage_options import merged_storage_options
 
 if TYPE_CHECKING:
     from datafusion.context import TableProviderExportable
@@ -62,24 +64,10 @@ def _table_from_dataset(dataset: object) -> Table:
 
 
 def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
-    storage: dict[str, str] = {
-        str(key): str(value) for key, value in dict(location.storage_options).items()
-    }
-    log_storage_options = resolve_delta_log_storage_options(location)
-    if log_storage_options:
-        storage.update({str(key): str(value) for key, value in log_storage_options.items()})
-    return storage or None
-
-
-def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    return {
-        "min_reader_version": getattr(gate, "min_reader_version", None),
-        "min_writer_version": getattr(gate, "min_writer_version", None),
-        "required_reader_features": list(getattr(gate, "required_reader_features", ())),
-        "required_writer_features": list(getattr(gate, "required_writer_features", ())),
-    }
+    return merged_storage_options(
+        location.storage_options,
+        resolve_delta_log_storage_options(location),
+    )
 
 
 def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] | None:
@@ -105,8 +93,7 @@ def _requires_delta_cdf(location: DatasetLocation) -> bool:
     if cdf_policy is not None and cdf_policy.required:
         return True
     return bool(
-        location.dataset_spec is not None
-        and location.dataset_spec.dataset_kind == "delta_cdf"
+        location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf"
     )
 
 
@@ -172,7 +159,7 @@ def _dataset_from_location(
             msg = "Delta dataset open requires either delta_version or delta_timestamp."
             raise ValueError(msg)
         storage_options = _delta_storage_options(location)
-        gate_payload = _delta_gate_payload(resolve_delta_feature_gate(location))
+        gate_payload = delta_feature_gate_payload(resolve_delta_feature_gate(location))
         delta_scan = resolve_delta_scan_options(location)
         if _requires_delta_cdf(location):
             options = _delta_cdf_provider_options(

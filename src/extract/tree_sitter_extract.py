@@ -25,6 +25,7 @@ from tree_sitter import (
     TreeCursor,
 )
 
+from core_types import RowPermissive as Row
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.id_utils import span_id
@@ -46,15 +47,15 @@ from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
-from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.scope_manifest import ScopeManifest
     from extract.session import ExtractSession
 
-type Row = dict[str, object]
 type SourceBuffer = bytes | bytearray | memoryview
 
 PY_LANGUAGE = Language(tree_sitter_python.language())
@@ -75,7 +76,7 @@ class TreeSitterExtractOptions:
     include_imports: bool = True
     include_docstrings: bool = True
     include_stats: bool = True
-    extensions: tuple[str, ...] = (".py", ".pyi")
+    extensions: tuple[str, ...] | None = None
     parser_timeout_micros: int | None = None
     query_match_limit: int = 10_000
     query_timeout_micros: int | None = None
@@ -361,6 +362,8 @@ def _worker_state(options: TreeSitterExtractOptions) -> _TsWorkerState:
 def _should_parse(file_ctx: FileContext, options: TreeSitterExtractOptions) -> bool:
     if not file_ctx.path:
         return False
+    if options.extensions is None:
+        return True
     path = file_ctx.path.lower()
     return any(path.endswith(ext) for ext in options.extensions)
 
@@ -981,21 +984,17 @@ def extract_ts_plans(
     rows: list[Row] | None = None
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
     batch_size = _resolve_batch_size(normalized_options)
+    request = _TsRowRequest(
+        repo_files=repo_files,
+        options=normalized_options,
+        file_contexts=exec_context.file_contexts,
+        scope_manifest=exec_context.scope_manifest,
+        runtime_profile=runtime_profile,
+    )
     if batch_size is None:
-        rows = _collect_ts_rows(
-            repo_files,
-            options=normalized_options,
-            file_contexts=exec_context.file_contexts,
-            runtime_profile=runtime_profile,
-        )
+        rows = _collect_ts_rows(request)
     else:
-        row_batches = _iter_ts_row_batches(
-            repo_files,
-            options=normalized_options,
-            file_contexts=exec_context.file_contexts,
-            runtime_profile=runtime_profile,
-            batch_size=batch_size,
-        )
+        row_batches = _iter_ts_row_batches(request, batch_size=batch_size)
     evidence_plan = exec_context.evidence_plan
     plan_context = _TreeSitterPlanContext(
         normalize=normalize,
@@ -1012,33 +1011,39 @@ def extract_ts_plans(
     }
 
 
-def _collect_ts_rows(
-    repo_files: TableLike,
-    *,
-    options: TreeSitterExtractOptions,
-    file_contexts: Iterable[FileContext] | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> list[Row]:
+@dataclass(frozen=True)
+class _TsRowRequest:
+    repo_files: TableLike
+    options: TreeSitterExtractOptions
+    file_contexts: Iterable[FileContext] | None
+    scope_manifest: ScopeManifest | None
+    runtime_profile: DataFusionRuntimeProfile | None
+
+
+def _collect_ts_rows(request: _TsRowRequest) -> list[Row]:
     rows: list[Row] = []
     contexts = list(
         iter_worklist_contexts(
-            repo_files,
-            output_table="tree_sitter_files_v1",
-            runtime_profile=runtime_profile,
-            file_contexts=file_contexts,
-            queue_name=(
-                worklist_queue_name(
-                    output_table="tree_sitter_files_v1",
-                    repo_id=options.repo_id,
-                )
-                if options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=request.repo_files,
+                output_table="tree_sitter_files_v1",
+                runtime_profile=request.runtime_profile,
+                file_contexts=request.file_contexts,
+                queue_name=(
+                    worklist_queue_name(
+                        output_table="tree_sitter_files_v1",
+                        repo_id=request.options.repo_id,
+                    )
+                    if request.options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=request.scope_manifest,
+            )
         )
     )
     if not contexts:
         return rows
-    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options))
+    rows.extend(_iter_ts_rows_for_contexts(contexts, options=request.options))
     return rows
 
 
@@ -1061,33 +1066,33 @@ def _iter_ts_rows_for_contexts(
 
 
 def _iter_ts_row_batches(
-    repo_files: TableLike,
+    request: _TsRowRequest,
     *,
-    options: TreeSitterExtractOptions,
-    file_contexts: Iterable[FileContext] | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
     batch_size: int,
 ) -> Iterable[Sequence[Mapping[str, object]]]:
     batch: list[Row] = []
     contexts = list(
         iter_worklist_contexts(
-            repo_files,
-            output_table="tree_sitter_files_v1",
-            runtime_profile=runtime_profile,
-            file_contexts=file_contexts,
-            queue_name=(
-                worklist_queue_name(
-                    output_table="tree_sitter_files_v1",
-                    repo_id=options.repo_id,
-                )
-                if options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=request.repo_files,
+                output_table="tree_sitter_files_v1",
+                runtime_profile=request.runtime_profile,
+                file_contexts=request.file_contexts,
+                queue_name=(
+                    worklist_queue_name(
+                        output_table="tree_sitter_files_v1",
+                        repo_id=request.options.repo_id,
+                    )
+                    if request.options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=request.scope_manifest,
+            )
         )
     )
     if not contexts:
         return
-    for row in _iter_ts_rows_for_contexts(contexts, options=options):
+    for row in _iter_ts_rows_for_contexts(contexts, options=request.options):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch
@@ -1470,6 +1475,7 @@ class _TreeSitterTablesKwargs(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1481,6 +1487,7 @@ class _TreeSitterTablesKwargsTable(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1492,6 +1499,7 @@ class _TreeSitterTablesKwargsReader(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1544,6 +1552,7 @@ def extract_ts_tables(
             context = ExtractExecutionContext(
                 file_contexts=kwargs.get("file_contexts"),
                 evidence_plan=kwargs.get("evidence_plan"),
+                scope_manifest=kwargs.get("scope_manifest"),
                 session=kwargs.get("session"),
                 profile=kwargs.get("profile", "default"),
             )

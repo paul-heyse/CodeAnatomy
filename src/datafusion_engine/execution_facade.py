@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from datafusion import DataFrame, SessionContext
+from opentelemetry.semconv.attributes import db_attributes
 
 from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
 from datafusion_engine.execution_helpers import replay_substrait_bytes
@@ -423,6 +424,8 @@ class DataFusionExecutionFacade:
             "datafusion.plan.compile",
             attributes=span_attributes(
                 attrs={
+                    db_attributes.DB_SYSTEM_NAME: "datafusion",
+                    db_attributes.DB_OPERATION_NAME: "plan.compile",
                     "plan_kind": "compile",
                     "compute_execution_plan": compute_execution_plan,
                 }
@@ -441,26 +444,26 @@ class DataFusionExecutionFacade:
                 )
             except Exception as exc:
                 record_exception(span, exc)
-                duration_ms = (time.perf_counter() - start) * 1000.0
+                duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)
-                record_datafusion_duration(duration_ms, status="error", plan_kind="compile")
+                record_datafusion_duration(duration_s, status="error", plan_kind="compile")
                 set_span_attributes(
                     span,
                     {
-                        "duration_ms": duration_ms,
+                        "duration_s": duration_s,
                         "status": "error",
                         "plan_kind": "compile",
                     },
                 )
                 raise
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            record_datafusion_duration(duration_ms, status="ok", plan_kind="compile")
+            duration_s = time.perf_counter() - start
+            record_datafusion_duration(duration_s, status="ok", plan_kind="compile")
             set_span_attributes(
                 span,
                 {
                     "plan_fingerprint": bundle.plan_fingerprint,
                     "plan_identity_hash": bundle.plan_identity_hash,
-                    "duration_ms": duration_ms,
+                    "duration_s": duration_s,
                 },
             )
             return bundle
@@ -500,6 +503,8 @@ class DataFusionExecutionFacade:
             "datafusion.execute",
             attributes=span_attributes(
                 attrs={
+                    db_attributes.DB_SYSTEM_NAME: "datafusion",
+                    db_attributes.DB_OPERATION_NAME: "execute",
                     "view_name": view_name,
                     "plan_fingerprint": bundle.plan_fingerprint,
                     "plan_identity_hash": bundle.plan_identity_hash,
@@ -518,14 +523,15 @@ class DataFusionExecutionFacade:
                     )
                 result = ExecutionResult.from_dataframe(df, plan_bundle=bundle)
             except (RuntimeError, ValueError, TypeError) as exc:
-                duration_ms = (time.perf_counter() - start) * 1000.0
+                duration_s = time.perf_counter() - start
+                duration_ms = duration_s * 1000.0
                 record_exception(span, exc)
                 record_error("datafusion", type(exc).__name__)
-                record_datafusion_duration(duration_ms, status="error", plan_kind=plan_kind)
+                record_datafusion_duration(duration_s, status="error", plan_kind=plan_kind)
                 set_span_attributes(
                     span,
                     {
-                        "duration_ms": duration_ms,
+                        "duration_s": duration_s,
                         "status": "error",
                         "plan_kind": plan_kind,
                     },
@@ -542,8 +548,9 @@ class DataFusionExecutionFacade:
                     )
                 )
                 raise
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            record_datafusion_duration(duration_ms, status="ok", plan_kind=plan_kind)
+            duration_s = time.perf_counter() - start
+            duration_ms = duration_s * 1000.0
+            record_datafusion_duration(duration_s, status="ok", plan_kind=plan_kind)
             self._record_execution_artifact(
                 _ExecutionArtifactRequest(
                     bundle=bundle,
@@ -558,7 +565,7 @@ class DataFusionExecutionFacade:
             set_span_attributes(
                 span,
                 {
-                    "duration_ms": duration_ms,
+                    "duration_s": duration_s,
                     "plan_kind": plan_kind,
                     "status": "ok",
                 },
@@ -764,6 +771,8 @@ class DataFusionExecutionFacade:
             "datafusion.write",
             attributes=span_attributes(
                 attrs={
+                    db_attributes.DB_SYSTEM_NAME: "datafusion",
+                    db_attributes.DB_OPERATION_NAME: "write",
                     "destination": request.destination,
                     "mode": request.mode,
                     "format": request.format,
@@ -775,22 +784,22 @@ class DataFusionExecutionFacade:
                 result = pipeline.write(request)
             except Exception as exc:
                 record_exception(span, exc)
-                duration_ms = (time.perf_counter() - start) * 1000.0
+                duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)
                 record_write_duration(
-                    duration_ms,
+                    duration_s,
                     status="error",
                     destination=request.destination,
                 )
-                set_span_attributes(span, {"duration_ms": duration_ms, "status": "error"})
+                set_span_attributes(span, {"duration_s": duration_s, "status": "error"})
                 raise
-            duration_ms = (time.perf_counter() - start) * 1000.0
+            duration_s = time.perf_counter() - start
             record_write_duration(
-                duration_ms,
+                duration_s,
                 status="ok",
                 destination=request.destination,
             )
-            set_span_attributes(span, {"duration_ms": duration_ms, "status": "ok"})
+            set_span_attributes(span, {"duration_s": duration_s, "status": "ok"})
             return ExecutionResult.from_write(result)
 
     def write_view(
@@ -819,6 +828,8 @@ class DataFusionExecutionFacade:
             "datafusion.write_view",
             attributes=span_attributes(
                 attrs={
+                    db_attributes.DB_SYSTEM_NAME: "datafusion",
+                    db_attributes.DB_OPERATION_NAME: "write_view",
                     "destination": request.destination,
                     "view_name": request.view_name,
                     "mode": request.mode,
@@ -830,22 +841,22 @@ class DataFusionExecutionFacade:
                 result = pipeline.write_view(request, prefer_streaming=prefer_streaming)
             except Exception as exc:
                 record_exception(span, exc)
-                duration_ms = (time.perf_counter() - start) * 1000.0
+                duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)
                 record_write_duration(
-                    duration_ms,
+                    duration_s,
                     status="error",
                     destination=request.destination,
                 )
-                set_span_attributes(span, {"duration_ms": duration_ms, "status": "error"})
+                set_span_attributes(span, {"duration_s": duration_s, "status": "error"})
                 raise
-            duration_ms = (time.perf_counter() - start) * 1000.0
+            duration_s = time.perf_counter() - start
             record_write_duration(
-                duration_ms,
+                duration_s,
                 status="ok",
                 destination=request.destination,
             )
-            set_span_attributes(span, {"duration_ms": duration_ms, "status": "ok"})
+            set_span_attributes(span, {"duration_s": duration_s, "status": "ok"})
             return ExecutionResult.from_write(result)
 
     def ensure_view_graph(

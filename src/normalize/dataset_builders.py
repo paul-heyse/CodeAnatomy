@@ -24,9 +24,10 @@ from datafusion_engine.arrow_schema.semantic_types import (
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
-from normalize.dataset_rows import ContractRow, DatasetRow
+from normalize.dataset_rows import DatasetRow
 from normalize.dataset_templates import template
 from normalize.diagnostic_types import DIAG_DETAILS_TYPE
+from schema_spec.contract_row import ContractRow
 from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, dict_field
 from schema_spec.system import (

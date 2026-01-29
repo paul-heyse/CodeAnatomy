@@ -16,7 +16,7 @@ from opentelemetry.trace import Link, Span
 from obs.otel.attributes import normalize_attributes
 from obs.otel.metrics import record_error, record_stage_duration, record_task_duration
 from obs.otel.scopes import scope_for_layer
-from obs.otel.tracing import root_span_link, set_span_attributes
+from obs.otel.tracing import get_tracer, root_span_link, set_span_attributes
 
 
 @dataclass
@@ -46,7 +46,7 @@ class OtelNodeHook(lifecycle_api.NodeExecutionHook):
         key = (run_id, node_name, task_id)
         layer = _tag_str(node_tags, "layer")
         kind = _tag_str(node_tags, "kind")
-        tracer = trace.get_tracer(scope_for_layer(layer))
+        tracer = get_tracer(scope_for_layer(layer))
         span_name = _span_name(kind)
         attributes = _span_attributes(
             node_name=node_name,
@@ -62,6 +62,10 @@ class OtelNodeHook(lifecycle_api.NodeExecutionHook):
             span_name,
             attributes=normalize_attributes(attributes),
             links=links or None,
+        )
+        span.add_event(
+            "stage.start",
+            attributes=normalize_attributes({"stage": layer or "hamilton", "node_name": node_name}),
         )
         token = context.attach(trace.set_span_in_context(span))
         self._spans[key] = _SpanState(span=span, token=token, start=time.monotonic())
@@ -82,21 +86,31 @@ class OtelNodeHook(lifecycle_api.NodeExecutionHook):
         if state is None:
             return
         context.detach(state.token)
-        duration_ms = (time.monotonic() - state.start) * 1000.0
+        duration_s = time.monotonic() - state.start
         layer = _tag_str(node_tags, "layer")
         kind = _tag_str(node_tags, "kind")
         task_kind = _tag_str(node_tags, "task_kind")
         status = "ok" if success else "error"
         if kind == "task" and task_kind is not None:
-            record_task_duration(task_kind, duration_ms, status=status)
+            record_task_duration(task_kind, duration_s, status=status)
         else:
-            record_stage_duration(layer or "hamilton", duration_ms, status=status)
+            record_stage_duration(layer or "hamilton", duration_s, status=status)
         error = kwargs.get("error")
         if error is not None:
             record_error(layer or "hamilton", type(error).__name__)
             if isinstance(error, Exception):
                 state.span.record_exception(error)
-        set_span_attributes(state.span, {"duration_ms": duration_ms, "status": status})
+        set_span_attributes(state.span, {"duration_s": duration_s, "status": status})
+        state.span.add_event(
+            "stage.end",
+            attributes=normalize_attributes(
+                {
+                    "stage": layer or "hamilton",
+                    "status": status,
+                    "duration_s": duration_s,
+                }
+            ),
+        )
         if not success:
             state.span.set_status(trace.Status(trace.StatusCode.ERROR))
         state.span.end()
@@ -112,7 +126,7 @@ class OtelPlanHook(lifecycle_api.GraphExecutionHook):
     def run_before_graph_execution(self, *, run_id: str, **kwargs: object) -> None:
         """Start a graph execution span for the Hamilton run."""
         _ = kwargs
-        tracer = trace.get_tracer(scope_for_layer("execution"))
+        tracer = get_tracer(scope_for_layer("execution"))
         span = tracer.start_span(
             "hamilton.graph",
             attributes=normalize_attributes({"run_id": run_id}),

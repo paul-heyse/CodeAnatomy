@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +12,7 @@ import pyarrow.ipc as pa_ipc
 from core_types import JsonDict, PathLike, ensure_path
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from engine.plan_product import PlanProduct
+from utils.hashing import hash_sha256_hex
 
 type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
 
@@ -122,7 +122,7 @@ def ipc_hash(table: pa.Table) -> str:
     str
         SHA-256 hex digest of the IPC bytes.
     """
-    return hashlib.sha256(ipc_bytes(table)).hexdigest()
+    return hash_sha256_hex(ipc_bytes(table))
 
 
 def _apply_schema_metadata(schema: pa.Schema, metadata: dict[bytes, bytes]) -> pa.Schema:

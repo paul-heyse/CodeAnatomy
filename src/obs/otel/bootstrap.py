@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
@@ -22,6 +23,7 @@ from opentelemetry.sdk._logs.export import (
     SimpleLogRecordProcessor,
 )
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics._internal.aggregation import Aggregation, AggregationTemporality
 from opentelemetry.sdk.metrics.export import (
     InMemoryMetricReader,
     MetricExporter,
@@ -35,18 +37,57 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 
 from obs.otel.config import resolve_otel_config
 from obs.otel.metrics import metric_views, reset_metrics_registry
-from obs.otel.resources import build_resource, resolve_service_name
+from obs.otel.resource_detectors import (
+    build_detected_resource,
+    merge_resource_overrides,
+    resolve_service_instance_id,
+)
+from obs.otel.resources import ResourceOptions, build_resource, resolve_service_name
+from utils.env_utils import env_value
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import ExemplarFilter
+    from opentelemetry.sdk.metrics.export import MetricReader
+    from opentelemetry.sdk.metrics.view import View
+
     from obs.otel.config import OtelConfig
+
+
+class _Instrumentor(Protocol):
+    def instrument(self, *args: object, **kwargs: object) -> None: ...
+
 
 _LOGGER = logging.getLogger(__name__)
 
 
+class ConfiguredMeterProvider(MeterProvider):
+    """MeterProvider subclass that exposes the configured exemplar filter."""
+
+    exemplar_filter: ExemplarFilter | None
+
+    def __init__(
+        self,
+        metric_readers: Sequence[MetricReader] = (),
+        resource: Resource | None = None,
+        *,
+        exemplar_filter: ExemplarFilter | None = None,
+        shutdown_on_exit: bool = True,
+        views: Sequence[View] = (),
+    ) -> None:
+        super().__init__(
+            metric_readers=metric_readers,
+            resource=resource,
+            exemplar_filter=exemplar_filter,
+            shutdown_on_exit=shutdown_on_exit,
+            views=views,
+        )
+        self.exemplar_filter = exemplar_filter
+
+
 def _resolve_service_version() -> str | None:
-    env_version = os.environ.get("CODEANATOMY_SERVICE_VERSION")
+    env_version = env_value("CODEANATOMY_SERVICE_VERSION")
     if env_version:
-        return env_version.strip()
+        return env_version
     for package in ("codeanatomy", "codeanatomy-engine"):
         try:
             return version(package)
@@ -56,16 +97,18 @@ def _resolve_service_version() -> str | None:
 
 
 def _resolve_service_namespace() -> str | None:
-    env_namespace = os.environ.get("CODEANATOMY_SERVICE_NAMESPACE")
-    return env_namespace.strip() if env_namespace else None
+    return env_value("CODEANATOMY_SERVICE_NAMESPACE")
 
 
 def _resolve_environment() -> str | None:
-    env_value = os.environ.get("CODEANATOMY_ENVIRONMENT")
-    if env_value:
-        return env_value.strip()
-    alt = os.environ.get("DEPLOYMENT_ENVIRONMENT")
-    return alt.strip() if alt else None
+    env_current = env_value("CODEANATOMY_ENVIRONMENT")
+    if env_current:
+        return env_current
+    return env_value("DEPLOYMENT_ENVIRONMENT")
+
+
+def _resolve_sampling_rule() -> str:
+    return env_value("CODEANATOMY_OTEL_SAMPLING_RULE") or "codeanatomy.default"
 
 
 @dataclass(frozen=True)
@@ -147,15 +190,51 @@ def _build_span_exporter() -> SpanExporter:
     return OTLPSpanExporter()
 
 
-def _build_metric_exporter() -> MetricExporter:
+def _metric_export_preferences(
+    config: OtelConfig,
+) -> tuple[
+    dict[type, AggregationTemporality] | None,
+    dict[type, Aggregation] | None,
+]:
+    preferred_temporality: dict[type, AggregationTemporality] | None = None
+    preferred_aggregation: dict[type, Aggregation] | None = None
+    if config.metrics_temporality_preference is not None:
+        from opentelemetry.sdk.metrics._internal import instrument
+
+        preferred_temporality = {
+            instrument.Counter: config.metrics_temporality_preference,
+            instrument.UpDownCounter: config.metrics_temporality_preference,
+            instrument.Histogram: config.metrics_temporality_preference,
+            instrument.ObservableCounter: config.metrics_temporality_preference,
+            instrument.ObservableUpDownCounter: config.metrics_temporality_preference,
+            instrument.ObservableGauge: config.metrics_temporality_preference,
+            instrument.Gauge: config.metrics_temporality_preference,
+        }
+    if config.metrics_histogram_aggregation is not None:
+        from opentelemetry.sdk.metrics._internal import instrument
+
+        preferred_aggregation = {
+            instrument.Histogram: config.metrics_histogram_aggregation,
+        }
+    return preferred_temporality, preferred_aggregation
+
+
+def _build_metric_exporter(config: OtelConfig) -> MetricExporter:
     protocol = _resolve_protocol("metrics")
+    preferred_temporality, preferred_aggregation = _metric_export_preferences(config)
     if protocol.startswith("http"):
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 
-        return OTLPMetricExporter()
+        return OTLPMetricExporter(
+            preferred_temporality=preferred_temporality,
+            preferred_aggregation=preferred_aggregation,
+        )
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 
-    return OTLPMetricExporter()
+    return OTLPMetricExporter(
+        preferred_temporality=preferred_temporality,
+        preferred_aggregation=preferred_aggregation,
+    )
 
 
 def _build_log_exporter() -> LogRecordExporter:
@@ -169,7 +248,35 @@ def _build_log_exporter() -> LogRecordExporter:
     return OTLPLogExporter()
 
 
+def _configure_otel_log_level(level: int | None) -> None:
+    if level is None:
+        return
+    logging.getLogger("opentelemetry").setLevel(level)
+    logging.getLogger("opentelemetry.sdk").setLevel(level)
+
+
+def _logging_auto_instrumentation_enabled() -> bool:
+    raw = os.environ.get("OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED")
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    if not value:
+        return False
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    _LOGGER.warning(
+        "Invalid OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: %r",
+        raw,
+    )
+    return False
+
+
 def _install_logging_handler(logger_provider: LoggerProvider) -> None:
+    if _logging_auto_instrumentation_enabled():
+        _LOGGER.info("Skipping LoggingHandler; auto-instrumentation logging is enabled.")
+        return
     root = logging.getLogger()
     for handler in root.handlers:
         if isinstance(handler, LoggingHandler):
@@ -191,9 +298,9 @@ def _providers_from_globals(resource: Resource) -> OtelProviders | None:
     tracer_provider = trace.get_tracer_provider()
     meter_provider = metrics.get_meter_provider()
     logger_provider = get_logger_provider()
-    tracer = None if tracer_provider.__class__.__name__ == "ProxyTracerProvider" else tracer_provider
-    meter = None if meter_provider.__class__.__name__ == "_ProxyMeterProvider" else meter_provider
-    logger = None if logger_provider.__class__.__name__ == "ProxyLoggerProvider" else logger_provider
+    tracer = tracer_provider if isinstance(tracer_provider, TracerProvider) else None
+    meter = meter_provider if isinstance(meter_provider, MeterProvider) else None
+    logger = logger_provider if isinstance(logger_provider, LoggerProvider) else None
     if tracer is None and meter is None and logger is None:
         return None
     return OtelProviders(
@@ -211,12 +318,19 @@ def _resolve_bootstrap_state(
     config = resolve_otel_config()
     resolved_service_name = service_name or resolve_service_name()
     overrides = options or OtelBootstrapOptions()
-    resource = build_resource(
-        service_name=resolved_service_name,
-        service_version=overrides.service_version or _resolve_service_version(),
-        service_namespace=overrides.service_namespace or _resolve_service_namespace(),
-        environment=overrides.environment or _resolve_environment(),
-        attributes=overrides.resource_overrides,
+    base_resource = build_resource(
+        resolved_service_name,
+        ResourceOptions(
+            service_version=overrides.service_version or _resolve_service_version(),
+            service_namespace=overrides.service_namespace or _resolve_service_namespace(),
+            environment=overrides.environment or _resolve_environment(),
+            instance_id=resolve_service_instance_id(),
+            attributes=None,
+        ),
+    )
+    resource = merge_resource_overrides(
+        build_detected_resource(base_resource),
+        overrides.resource_overrides,
     )
     traces_enabled = (
         config.enable_traces if overrides.enable_traces is None else overrides.enable_traces
@@ -271,11 +385,18 @@ def _build_tracer_provider(
         max_event_attributes=config.span_event_attribute_count_limit,
         max_link_attributes=config.span_link_attribute_count_limit,
     )
+    from obs.otel.sampling import wrap_sampler
+
+    sampler = wrap_sampler(config.sampler, rule=_resolve_sampling_rule())
     tracer_provider = TracerProvider(
         resource=resource,
-        sampler=config.sampler,
+        sampler=sampler,
+        id_generator=config.id_generator,
         span_limits=span_limits,
     )
+    from obs.otel.processors import RunIdSpanProcessor
+
+    tracer_provider.add_span_processor(RunIdSpanProcessor())
     if use_test_mode:
         tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
     else:
@@ -301,17 +422,43 @@ def _build_meter_provider(
         reader = InMemoryMetricReader()
     else:
         reader = PeriodicExportingMetricReader(
-            _build_metric_exporter(),
+            _build_metric_exporter(config),
             export_interval_millis=config.metric_export_interval_ms,
             export_timeout_millis=config.metric_export_timeout_ms,
         )
-    meter_provider = MeterProvider(
+    meter_provider = ConfiguredMeterProvider(
         resource=resource,
         metric_readers=[reader],
+        exemplar_filter=config.metrics_exemplar_filter,
         views=metric_views(),
     )
     reset_metrics_registry()
     return meter_provider
+
+
+def build_meter_provider(
+    config: OtelConfig,
+    resource: Resource,
+    *,
+    use_test_mode: bool,
+) -> MeterProvider:
+    """Build a ``MeterProvider`` from the resolved OpenTelemetry configuration.
+
+    Parameters
+    ----------
+    config
+        Resolved OpenTelemetry configuration.
+    resource
+        Resource describing the service instance.
+    use_test_mode
+        Whether to use test-mode exporters/processors.
+
+    Returns
+    -------
+    MeterProvider
+        Configured meter provider.
+    """
+    return _build_meter_provider(config, resource, use_test_mode=use_test_mode)
 
 
 def _build_logger_provider(
@@ -322,6 +469,9 @@ def _build_logger_provider(
     log_correlation: bool,
 ) -> LoggerProvider:
     logger_provider = LoggerProvider(resource=resource)
+    from obs.otel.processors import RunIdLogRecordProcessor
+
+    logger_provider.add_log_record_processor(RunIdLogRecordProcessor())
     if use_test_mode:
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(InMemoryLogRecordExporter())
@@ -353,21 +503,31 @@ def _enable_auto_instrumentation() -> None:
 
 def _enable_log_correlation() -> None:
     try:
-        from opentelemetry.instrumentation.logging import LoggingInstrumentor
+        module = importlib.import_module("opentelemetry.instrumentation.logging")
     except ImportError:
         _LOGGER.warning("OpenTelemetry logging instrumentation is unavailable.")
-    else:
-        LoggingInstrumentor().instrument(set_logging_format=False)
-        _LOGGER.info("OpenTelemetry log correlation enabled")
+        return
+    instrumentor = getattr(module, "LoggingInstrumentor", None)
+    if instrumentor is None:
+        _LOGGER.warning("OpenTelemetry logging instrumentation is unavailable.")
+        return
+    instrumentor_type = cast("type[_Instrumentor]", instrumentor)
+    instrumentor_type().instrument(set_logging_format=False)
+    _LOGGER.info("OpenTelemetry log correlation enabled")
 
 
 def _enable_system_metrics() -> None:
     try:
-        from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
+        module = importlib.import_module("opentelemetry.instrumentation.system_metrics")
     except ImportError:
         _LOGGER.warning("OpenTelemetry system metrics instrumentation is unavailable.")
-    else:
-        SystemMetricsInstrumentor().instrument()
+        return
+    instrumentor = getattr(module, "SystemMetricsInstrumentor", None)
+    if instrumentor is None:
+        _LOGGER.warning("OpenTelemetry system metrics instrumentation is unavailable.")
+        return
+    instrumentor_type = cast("type[_Instrumentor]", instrumentor)
+    instrumentor_type().instrument()
 
 
 def configure_otel(
@@ -376,6 +536,11 @@ def configure_otel(
     options: OtelBootstrapOptions | None = None,
 ) -> OtelProviders:
     """Configure OpenTelemetry providers for the current process.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when OTEL_EXPERIMENTAL_CONFIG_FILE is set but does not configure providers.
 
     Returns
     -------
@@ -386,6 +551,9 @@ def configure_otel(
         return _STATE["providers"]
     _set_propagators()
     state = _resolve_bootstrap_state(service_name, options)
+    _configure_otel_log_level(state.config.otel_log_level)
+    if state.config.python_context:
+        _LOGGER.info("OTEL_PYTHON_CONTEXT=%s", state.config.python_context)
     if state.config.config_file:
         existing = _providers_from_globals(state.resource)
         if existing is not None:
@@ -394,9 +562,11 @@ def configure_otel(
                 "OpenTelemetry providers already configured; honoring OTEL_EXPERIMENTAL_CONFIG_FILE."
             )
             return existing
-        _LOGGER.warning(
-            "OTEL_EXPERIMENTAL_CONFIG_FILE is set but no providers were configured; continuing with CodeAnatomy bootstrap."
+        msg = (
+            "OTEL_EXPERIMENTAL_CONFIG_FILE is set but no providers were configured. "
+            "Configure providers via the OpenTelemetry configuration file or unset the variable."
         )
+        raise RuntimeError(msg)
     tracer_provider = (
         _build_tracer_provider(state.config, state.resource, use_test_mode=state.use_test_mode)
         if state.traces_enabled
@@ -418,8 +588,13 @@ def configure_otel(
         else None
     )
     if state.enable_auto:
+        os.environ.setdefault(
+            "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS",
+            "urllib,urllib3",
+        )
+        os.environ.setdefault("OTEL_PYTHON_EXCLUDED_URLS", ".*health.*")
         if os.environ.get("OTEL_SEMCONV_STABILITY_OPT_IN") is None:
-            os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "http"
+            os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "http,db"
         _enable_auto_instrumentation()
 
     providers = OtelProviders(
@@ -436,4 +611,10 @@ def configure_otel(
     return providers
 
 
-__all__ = ["OtelBootstrapOptions", "OtelProviders", "configure_otel"]
+__all__ = [
+    "ConfiguredMeterProvider",
+    "OtelBootstrapOptions",
+    "OtelProviders",
+    "build_meter_provider",
+    "configure_otel",
+]

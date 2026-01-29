@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +16,8 @@ from storage.deltalake import (
     delta_table_version,
     vacuum_delta,
 )
+from utils.hashing import hash_storage_options
+from utils.storage_options import normalize_storage_options
 
 _DELTA_MIN_RETENTION_HOURS = 168
 
@@ -112,15 +112,17 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         history=history,
         protocol=protocol,
     )
+    storage_options, log_storage_options = normalize_storage_options(
+        request.storage_options,
+        request.log_storage_options,
+    )
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_delta_snapshot_table(
         request.runtime_profile,
         table_uri=request.path,
         snapshot=history or {},
         dataset_name=request.dataset,
-        storage_hash=_storage_options_hash(
-            request.storage_options,
-            request.log_storage_options,
-        ),
+        storage_hash=storage_hash,
     )
     _record_maintenance(
         request.runtime_profile,
@@ -171,6 +173,11 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
         dry_run=resolved.dry_run,
         retention_hours=resolved.retention_hours,
     )
+    storage_options, log_storage_options = normalize_storage_options(
+        request.storage_options,
+        request.log_storage_options,
+    )
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_delta_maintenance_table(
         _DeltaMaintenanceRecordRequest(
             profile=request.runtime_profile,
@@ -180,10 +187,7 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             dataset_name=request.dataset,
             retention_hours=resolved.retention_hours,
             dry_run=resolved.dry_run,
-            storage_hash=_storage_options_hash(
-                request.storage_options,
-                request.log_storage_options,
-            ),
+            storage_hash=storage_hash,
         )
     )
     _record_maintenance(
@@ -302,19 +306,6 @@ def _record_delta_query(
     from datafusion_engine.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "delta_query_v1", payload)
-
-
-def _storage_options_hash(
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
-) -> str | None:
-    storage = dict(storage_options or {})
-    if log_storage_options:
-        storage.update({str(key): str(value) for key, value in log_storage_options.items()})
-    if not storage:
-        return None
-    payload = json.dumps(sorted(storage.items()), sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _record_delta_snapshot_table(

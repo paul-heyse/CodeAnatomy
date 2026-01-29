@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -15,12 +14,14 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
-from serde_msgspec import dumps_msgpack
 from storage.deltalake.delta import delta_table_version
+from utils.hashing import hash_msgpack_canonical
+from utils.storage_options import merged_storage_options
 
 _MIN_QUALIFIED_PARTS = 2
 
@@ -245,7 +246,7 @@ def _delta_table_provider_with_files(
         "wrap_partition_values": delta_scan.wrap_partition_values if delta_scan else None,
         "files": list(scan_files),
     }
-    gate_payload = _gate_payload(gate)
+    gate_payload = delta_feature_gate_payload(gate)
     if gate_payload is not None:
         options.update(gate_payload)
     return manager.create_table_provider(provider_name="delta", options=options)
@@ -266,15 +267,10 @@ def _plugin_manager_for_profile(
 
 
 def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
-    storage: dict[str, str] = {
-        key: str(value) for key, value in dict(location.storage_options).items()
-    }
-    log_storage = resolve_delta_log_storage_options(location)
-    if log_storage:
-        storage.update({key: str(value) for key, value in log_storage.items()})
-    if not storage:
-        return None
-    return storage
+    return merged_storage_options(
+        location.storage_options,
+        resolve_delta_log_storage_options(location),
+    )
 
 
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:
@@ -305,31 +301,15 @@ def _record_override_artifact(
         "dataset_name": request.dataset_name,
         "pinned_version": request.pinned_version,
         "pinned_timestamp": request.pinned_timestamp,
-        "delta_feature_gate": _gate_payload(request.gate),
+        "delta_feature_gate": delta_feature_gate_payload(request.gate),
         "scan_file_count": len(request.scan_files),
         "scan_files_hash": scan_files_hash,
     }
     record_artifact(runtime_profile, "scan_unit_overrides_v1", payload)
 
 
-def _gate_payload(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
-
-
 def _hash_payload(payload: object) -> str:
-    digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()
-    return digest[:16]
+    return hash_msgpack_canonical(payload)[:16]
 
 
 if TYPE_CHECKING:

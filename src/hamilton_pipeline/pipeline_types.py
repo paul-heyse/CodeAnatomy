@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from core_types import JsonValue
     from datafusion_engine.arrow_interop import TableLike
-    from datafusion_engine.nested_tables import ViewReference
+    from datafusion_engine.nested_tables import SimpleViewRef
     from engine.plan_policy import WriterStrategy
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
     from storage.ipc_utils import IpcWriteConfig
@@ -44,12 +44,25 @@ class ScipIndexSettings:
 
 
 @dataclass(frozen=True)
+class RepoScopeConfig:
+    """Configuration for repository scope rules."""
+
+    include_untracked: bool = True
+    python_extensions: tuple[str, ...] = ()
+    include_globs: tuple[str, ...] = ()
+    exclude_globs: tuple[str, ...] = ()
+    include_submodules: bool = False
+    include_worktrees: bool = False
+    follow_symlinks: bool = False
+    external_interface_depth: Literal["metadata", "full"] = "metadata"
+
+
+@dataclass(frozen=True)
 class RepoScanConfig:
     """Configuration for repository scanning."""
 
     repo_root: str
-    include_globs: tuple[str, ...]
-    exclude_globs: tuple[str, ...]
+    scope_config: RepoScopeConfig
     max_files: int
     diff_base_ref: str | None = None
     diff_head_ref: str | None = None
@@ -208,10 +221,10 @@ class ScipIndexInputs:
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
-    cst_refs: TableLike | ViewReference
-    cst_imports_norm: TableLike | ViewReference
-    cst_callsites: TableLike | ViewReference
-    cst_defs_norm: TableLike | ViewReference
+    cst_refs: TableLike | SimpleViewRef
+    cst_imports_norm: TableLike | SimpleViewRef
+    cst_callsites: TableLike | SimpleViewRef
+    cst_defs_norm: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
@@ -242,42 +255,42 @@ class ScipIdentityOverrides:
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
-    cst_refs: TableLike | ViewReference
-    cst_imports_norm: TableLike | ViewReference
-    cst_callsites: TableLike | ViewReference
-    cst_defs_norm: TableLike | ViewReference
+    cst_refs: TableLike | SimpleViewRef
+    cst_imports_norm: TableLike | SimpleViewRef
+    cst_callsites: TableLike | SimpleViewRef
+    cst_defs_norm: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class ScipBuildInputs:
     """SCIP inputs required for CPG node/property building."""
 
-    scip_symbol_information: TableLike | ViewReference
-    scip_occurrences_norm: TableLike | ViewReference
-    scip_symbol_relationships: TableLike | ViewReference
-    scip_external_symbol_information: TableLike | ViewReference
+    scip_symbol_information: TableLike | SimpleViewRef
+    scip_occurrences_norm: TableLike | SimpleViewRef
+    scip_symbol_relationships: TableLike | SimpleViewRef
+    scip_external_symbol_information: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class SymtableBuildInputs:
     """Symtable inputs required for CPG node/property building."""
 
-    symtable_scopes: TableLike | ViewReference
-    symtable_symbols: TableLike | ViewReference
-    symtable_scope_edges: TableLike | ViewReference
-    symtable_bindings: TableLike | ViewReference
-    symtable_def_sites: TableLike | ViewReference
-    symtable_use_sites: TableLike | ViewReference
-    symtable_type_params: TableLike | ViewReference
-    symtable_type_param_edges: TableLike | ViewReference
+    symtable_scopes: TableLike | SimpleViewRef
+    symtable_symbols: TableLike | SimpleViewRef
+    symtable_scope_edges: TableLike | SimpleViewRef
+    symtable_bindings: TableLike | SimpleViewRef
+    symtable_def_sites: TableLike | SimpleViewRef
+    symtable_use_sites: TableLike | SimpleViewRef
+    symtable_type_params: TableLike | SimpleViewRef
+    symtable_type_param_edges: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class CpgBaseInputs:
     """Shared inputs for CPG nodes and properties."""
 
-    repo_files: TableLike | ViewReference
-    dim_qualified_names: TableLike | ViewReference
+    repo_files: TableLike | SimpleViewRef
+    dim_qualified_names: TableLike | SimpleViewRef
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
     symtable_build_inputs: SymtableBuildInputs
@@ -287,36 +300,36 @@ class CpgBaseInputs:
 class TreeSitterInputs:
     """Tree-sitter tables used in CPG build steps."""
 
-    ts_nodes: TableLike | ViewReference
-    ts_errors: TableLike | ViewReference
-    ts_missing: TableLike | ViewReference
+    ts_nodes: TableLike | SimpleViewRef
+    ts_errors: TableLike | SimpleViewRef
+    ts_missing: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class TypeInputs:
     """Type tables used in CPG build steps."""
 
-    type_exprs_norm: TableLike | ViewReference
-    types_norm: TableLike | ViewReference
+    type_exprs_norm: TableLike | SimpleViewRef
+    types_norm: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class DiagnosticsInputs:
     """Diagnostics tables used in CPG build steps."""
 
-    diagnostics_norm: TableLike | ViewReference
+    diagnostics_norm: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)
 class CpgExtraInputs:
     """Optional inputs for CPG nodes/props/edges."""
 
-    ts_nodes: TableLike | ViewReference
-    ts_errors: TableLike | ViewReference
-    ts_missing: TableLike | ViewReference
-    type_exprs_norm: TableLike | ViewReference
-    types_norm: TableLike | ViewReference
-    diagnostics_norm: TableLike | ViewReference
+    ts_nodes: TableLike | SimpleViewRef
+    ts_errors: TableLike | SimpleViewRef
+    ts_missing: TableLike | SimpleViewRef
+    type_exprs_norm: TableLike | SimpleViewRef
+    types_norm: TableLike | SimpleViewRef
+    diagnostics_norm: TableLike | SimpleViewRef
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,6 +22,7 @@ from datafusion_engine.delta_protocol import (
     DeltaFeatureGate,
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
+    delta_feature_gate_tuple,
     delta_protocol_compatibility,
 )
 from datafusion_engine.lineage_datafusion import ScanLineage
@@ -37,6 +37,8 @@ from storage.deltalake.file_pruning import (
     StatsFilter,
     evaluate_and_select_files,
 )
+from utils.hashing import hash_msgpack_canonical, hash_sha256_hex, hash_storage_options
+from utils.storage_options import merged_storage_options, normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -79,7 +81,7 @@ def _scan_unit_key(request: _ScanUnitKeyRequest) -> str:
         "dataset_name": request.dataset_name,
         "delta_version": request.delta_version,
         "delta_timestamp": request.delta_timestamp,
-        "delta_feature_gate": _gate_payload(request.delta_feature_gate),
+        "delta_feature_gate": delta_feature_gate_tuple(request.delta_feature_gate),
         "delta_protocol": request.delta_protocol,
         "storage_options_hash": request.storage_options_hash,
         "delta_scan_config_hash": request.delta_scan_config_hash,
@@ -87,7 +89,7 @@ def _scan_unit_key(request: _ScanUnitKeyRequest) -> str:
         "projected_columns": request.projected_columns,
         "pushed_filters": request.pushed_filters,
     }
-    digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()[:16]
+    digest = hash_msgpack_canonical(payload)[:16]
     if request.delta_version is not None:
         version_token = str(request.delta_version)
     elif request.delta_timestamp:
@@ -415,19 +417,6 @@ def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
     )
 
 
-def _gate_payload(
-    gate: DeltaFeatureGate | None,
-) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
-    if gate is None:
-        return None
-    return (
-        gate.min_reader_version,
-        gate.min_writer_version,
-        tuple(gate.required_reader_features),
-        tuple(gate.required_writer_features),
-    )
-
-
 def _delta_add_actions_payload(
     *,
     request: DeltaSnapshotRequest,
@@ -549,7 +538,7 @@ def _delta_scan_config_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | N
     if snapshot is None:
         return None
     payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_sha256_hex(payload)
 
 
 def _provider_marker(
@@ -658,32 +647,20 @@ def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | Non
     Mapping[str, str] | None
         Combined storage options, or ``None`` when no options are provided.
     """
-    storage_options = {key: str(value) for key, value in dict(location.storage_options).items()}
-    log_storage_options = {
-        key: str(value) for key, value in dict(location.delta_log_storage_options).items()
-    }
-    if log_storage_options:
-        storage_options.update(log_storage_options)
-    if not storage_options:
-        return None
-    return storage_options
+    return merged_storage_options(
+        location.storage_options,
+        location.delta_log_storage_options,
+    )
 
 
 def _storage_options_hash(location: DatasetLocation | None) -> str | None:
     if location is None:
         return None
-    storage_options = {
-        str(key): str(value) for key, value in dict(location.storage_options).items()
-    }
-    log_storage = {
-        str(key): str(value) for key, value in dict(location.delta_log_storage_options).items()
-    }
-    if log_storage:
-        storage_options.update(log_storage)
-    if not storage_options:
-        return None
-    payload = tuple(sorted(storage_options.items()))
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    storage_options, log_storage_options = normalize_storage_options(
+        location.storage_options,
+        location.delta_log_storage_options,
+    )
+    return hash_storage_options(storage_options, log_storage_options)
 
 
 def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:

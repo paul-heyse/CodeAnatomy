@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 
-import opentelemetry.semconv._incubating.attributes.deployment_attributes as inc_deployment_attributes
 import opentelemetry.semconv._incubating.attributes.service_attributes as inc_service_attributes
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.attributes import service_attributes
 
+from utils.env_utils import env_value
+
 _DEFAULT_SERVICE_NAME = "codeanatomy"
+_DEPLOYMENT_ENVIRONMENT_NAME = "deployment.environment.name"
 
 
-def _env_value(name: str) -> str | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
+@dataclass(frozen=True)
+class ResourceOptions:
+    """Optional resource attributes for OpenTelemetry resources."""
+
+    service_version: str | None = None
+    service_namespace: str | None = None
+    environment: str | None = None
+    instance_id: str | None = None
+    attributes: Mapping[str, str] | None = None
 
 
 def resolve_service_name(default: str = _DEFAULT_SERVICE_NAME) -> str:
@@ -34,47 +39,38 @@ def resolve_service_name(default: str = _DEFAULT_SERVICE_NAME) -> str:
     str
         Resolved service name.
     """
-    return _env_value("OTEL_SERVICE_NAME") or default
+    return env_value("OTEL_SERVICE_NAME") or default
 
 
-def build_resource(
-    *,
-    service_name: str,
-    service_version: str | None = None,
-    service_namespace: str | None = None,
-    environment: str | None = None,
-    attributes: Mapping[str, str] | None = None,
-) -> Resource:
+def build_resource(service_name: str, options: ResourceOptions | None = None) -> Resource:
     """Build a Resource with standard service identity attributes.
 
     Parameters
     ----------
     service_name
         Service name to record.
-    service_version
-        Optional service version.
-    service_namespace
-        Optional service namespace.
-    environment
-        Optional deployment environment name.
-    attributes
-        Extra resource attributes to merge.
+    options
+        Optional resource settings, including version, namespace, environment,
+        instance ID, and additional attributes.
 
     Returns
     -------
     Resource
         OpenTelemetry resource with merged attributes.
     """
+    resolved = options or ResourceOptions()
     payload: dict[str, str] = {service_attributes.SERVICE_NAME: service_name}
-    if service_version:
-        payload[service_attributes.SERVICE_VERSION] = service_version
-    if service_namespace:
-        payload[inc_service_attributes.SERVICE_NAMESPACE] = service_namespace
-    if environment:
-        payload[inc_deployment_attributes.DEPLOYMENT_ENVIRONMENT] = environment
-    if attributes:
-        payload.update({str(key): str(value) for key, value in attributes.items()})
+    if resolved.service_version:
+        payload[service_attributes.SERVICE_VERSION] = resolved.service_version
+    if resolved.service_namespace:
+        payload[inc_service_attributes.SERVICE_NAMESPACE] = resolved.service_namespace
+    if resolved.environment:
+        payload[_DEPLOYMENT_ENVIRONMENT_NAME] = resolved.environment
+    if resolved.instance_id:
+        payload[inc_service_attributes.SERVICE_INSTANCE_ID] = resolved.instance_id
+    if resolved.attributes:
+        payload.update({str(key): str(value) for key, value in resolved.attributes.items()})
     return Resource.create(payload)
 
 
-__all__ = ["build_resource", "resolve_service_name"]
+__all__ = ["ResourceOptions", "build_resource", "resolve_service_name"]

@@ -6,11 +6,12 @@ managing UDF dependencies, and tracking registration metadata.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -317,7 +318,7 @@ def _compute_snapshot_hash(snapshot: Mapping[str, object]) -> str:
     from serde_msgspec import dumps_json, to_builtins
 
     raw = dumps_json(to_builtins(snapshot))
-    return hashlib.sha256(raw).hexdigest()[:16]
+    return hash_sha256_hex(raw, length=16)
 
 
 __all__ = [

@@ -44,7 +44,7 @@ from extract.helpers import (
 )
 from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
-from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 
@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 
     from cache.diskcache_factory import DiskCacheProfile
     from extract.evidence_plan import EvidencePlan
+    from extract.scope_manifest import ScopeManifest
     from extract.session import ExtractSession
 
 
@@ -1042,21 +1043,23 @@ def extract_ast_plans(
     batch_size = _resolve_batch_size(normalized_options)
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
     rows: list[dict[str, object]] | None = None
+    request = _AstRowRequest(
+        repo_files=repo_files,
+        file_contexts=exec_context.file_contexts,
+        scope_manifest=exec_context.scope_manifest,
+        options=normalized_options,
+        runtime_profile=runtime_profile,
+    )
     if batch_size is None:
         rows = _collect_ast_rows(
             repo_files,
             file_contexts=exec_context.file_contexts,
+            scope_manifest=exec_context.scope_manifest,
             options=normalized_options,
             runtime_profile=runtime_profile,
         )
     else:
-        row_batches = _iter_ast_row_batches(
-            repo_files,
-            file_contexts=exec_context.file_contexts,
-            options=normalized_options,
-            batch_size=batch_size,
-            runtime_profile=runtime_profile,
-        )
+        row_batches = _iter_ast_row_batches(request, batch_size=batch_size)
     evidence_plan = exec_context.evidence_plan
     plan_context = _AstPlanContext(
         normalize=normalize,
@@ -1073,38 +1076,40 @@ def extract_ast_plans(
     }
 
 
+@dataclass(frozen=True)
+class _AstRowRequest:
+    repo_files: TableLike
+    file_contexts: Iterable[FileContext] | None
+    scope_manifest: ScopeManifest | None
+    options: ASTExtractOptions
+    runtime_profile: DataFusionRuntimeProfile | None
+
+
 def _collect_ast_rows(
     repo_files: TableLike,
     *,
     file_contexts: Iterable[FileContext] | None,
+    scope_manifest: ScopeManifest | None,
     options: ASTExtractOptions,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
-    return list(
-        _iter_ast_rows(
-            repo_files,
-            file_contexts=file_contexts,
-            options=options,
-            runtime_profile=runtime_profile,
-        )
+    request = _AstRowRequest(
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        scope_manifest=scope_manifest,
+        options=options,
+        runtime_profile=runtime_profile,
     )
+    return list(_iter_ast_rows(request))
 
 
 def _iter_ast_row_batches(
-    repo_files: TableLike,
+    request: _AstRowRequest,
     *,
-    file_contexts: Iterable[FileContext] | None,
-    options: ASTExtractOptions,
     batch_size: int,
-    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Iterable[list[dict[str, object]]]:
     batch: list[dict[str, object]] = []
-    for row in _iter_ast_rows(
-        repo_files,
-        file_contexts=file_contexts,
-        options=options,
-        runtime_profile=runtime_profile,
-    ):
+    for row in _iter_ast_rows(request):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch
@@ -1113,30 +1118,29 @@ def _iter_ast_row_batches(
         yield batch
 
 
-def _iter_ast_rows(
-    repo_files: TableLike,
-    *,
-    file_contexts: Iterable[FileContext] | None,
-    options: ASTExtractOptions,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> Iterable[dict[str, object]]:
+def _iter_ast_rows(request: _AstRowRequest) -> Iterable[dict[str, object]]:
     contexts = list(
         iter_worklist_contexts(
-            repo_files,
-            output_table="ast_files_v1",
-            runtime_profile=runtime_profile,
-            file_contexts=file_contexts,
-            queue_name=(
-                worklist_queue_name(output_table="ast_files_v1", repo_id=options.repo_id)
-                if options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=request.repo_files,
+                output_table="ast_files_v1",
+                runtime_profile=request.runtime_profile,
+                file_contexts=request.file_contexts,
+                queue_name=(
+                    worklist_queue_name(
+                        output_table="ast_files_v1", repo_id=request.options.repo_id
+                    )
+                    if request.options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=request.scope_manifest,
+            )
         )
     )
     if not contexts:
         return
-    resolved_options = _resolve_feature_version(options, contexts)
-    cache_profile = diskcache_profile_from_ctx(runtime_profile)
+    resolved_options = _resolve_feature_version(request.options, contexts)
+    cache_profile = diskcache_profile_from_ctx(request.runtime_profile)
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
     if not resolved_options.parallel:
         for file_ctx in contexts:
@@ -1211,6 +1215,7 @@ class _AstTablesKwargs(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: bool
@@ -1221,6 +1226,7 @@ class _AstTablesKwargsTable(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Literal[False]
@@ -1231,6 +1237,7 @@ class _AstTablesKwargsReader(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -1279,6 +1286,7 @@ def extract_ast_tables(
         exec_context = ExtractExecutionContext(
             file_contexts=file_contexts,
             evidence_plan=evidence_plan,
+            scope_manifest=kwargs.get("scope_manifest"),
             session=kwargs.get("session"),
             profile=profile,
         )

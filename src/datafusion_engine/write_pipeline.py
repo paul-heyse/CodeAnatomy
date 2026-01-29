@@ -29,7 +29,6 @@ Pattern
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import time
@@ -84,6 +83,8 @@ from storage.deltalake.delta import (
     enable_delta_row_tracking,
     enable_delta_v2_checkpoints,
 )
+from utils.hashing import hash_storage_options
+from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -148,19 +149,6 @@ def _merge_constraints(
         if normalized:
             ordered.setdefault(normalized, None)
     return tuple(ordered)
-
-
-def _storage_options_hash(
-    storage_options: Mapping[str, str] | None,
-    log_storage_options: Mapping[str, str] | None,
-) -> str | None:
-    storage = dict(storage_options or {})
-    if log_storage_options:
-        storage.update({str(key): str(value) for key, value in log_storage_options.items()})
-    if not storage:
-        return None
-    payload = json.dumps(sorted(storage.items()), sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -1236,6 +1224,11 @@ class WritePipeline:
         )
 
         commit_run_id = spec.commit_run.run_id if spec.commit_run is not None else None
+        storage_options, log_storage_options = normalize_storage_options(
+            spec.storage_options,
+            spec.log_storage_options,
+        )
+        storage_hash = hash_storage_options(storage_options, log_storage_options)
         record_delta_mutation(
             self.runtime_profile,
             artifact=DeltaMutationArtifact(
@@ -1250,10 +1243,7 @@ class WritePipeline:
                 commit_run_id=commit_run_id,
                 constraint_status=constraint_status,
                 constraint_violations=(),
-                storage_options_hash=_storage_options_hash(
-                    spec.storage_options,
-                    spec.log_storage_options,
-                ),
+                storage_options_hash=storage_hash,
             ),
         )
 
@@ -1282,10 +1272,11 @@ class WritePipeline:
             record_delta_maintenance,
         )
 
-        storage_options_hash = _storage_options_hash(
+        storage_options, log_storage_options = normalize_storage_options(
             spec.storage_options,
             spec.log_storage_options,
         )
+        storage_options_hash = hash_storage_options(storage_options, log_storage_options)
         if policy.optimize_on_write:
             z_order_cols: tuple[str, ...] | None = None
             if policy.z_order_cols and policy.z_order_when != "never":
@@ -1859,24 +1850,27 @@ def _delta_storage_options(
     *,
     dataset_location: DatasetLocation | None,
 ) -> tuple[dict[str, str] | None, dict[str, str] | None]:
-    storage_options: dict[str, str] = {}
-    log_storage_options: dict[str, str] = {}
-    if dataset_location is not None:
-        loc_storage = _string_mapping(dataset_location.storage_options)
-        if loc_storage:
-            storage_options.update(loc_storage)
-        loc_log_storage = _string_mapping(dataset_location.delta_log_storage_options)
-        if loc_log_storage:
-            log_storage_options.update(loc_log_storage)
-    option_storage = _string_mapping(options.get("storage_options"))
-    if option_storage:
-        storage_options.update(option_storage)
-    option_log_storage = _string_mapping(options.get("log_storage_options"))
-    if option_log_storage:
-        log_storage_options.update(option_log_storage)
-    if not log_storage_options and storage_options:
-        log_storage_options = dict(storage_options)
-    return storage_options or None, log_storage_options or None
+    storage_options, log_storage_options = normalize_storage_options(
+        dataset_location.storage_options if dataset_location is not None else None,
+        dataset_location.delta_log_storage_options if dataset_location is not None else None,
+    )
+    raw_storage_options = options.get("storage_options")
+    raw_log_storage_options = options.get("log_storage_options")
+    option_storage_options = (
+        raw_storage_options if isinstance(raw_storage_options, Mapping) else None
+    )
+    option_log_storage_options = (
+        raw_log_storage_options if isinstance(raw_log_storage_options, Mapping) else None
+    )
+    option_storage, option_log_storage = normalize_storage_options(
+        option_storage_options,
+        option_log_storage_options,
+    )
+    merged_storage = {**(storage_options or {}), **(option_storage or {})}
+    merged_log_storage = {**(log_storage_options or {}), **(option_log_storage or {})}
+    if not merged_log_storage and merged_storage:
+        merged_log_storage = dict(merged_storage)
+    return merged_storage or None, merged_log_storage or None
 
 
 def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 import pyarrow as pa
 
 from core_types import DeterminismTier
+from core_types import RowPermissive as Row
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.encoding import encode_table
 from datafusion_engine.extract_registry import normalize_options
@@ -60,8 +61,6 @@ ROLE_FORWARD_DEFINITION = 0x40
 SCIP_STREAMING_THRESHOLD_BYTES = 128 * 1024 * 1024
 
 LOGGER = logging.getLogger(__name__)
-
-type Row = dict[str, object]
 
 SCIP_OUTPUT_DATASETS: tuple[tuple[str, str], ...] = (("scip_index", "scip_index_v1"),)
 
@@ -311,7 +310,9 @@ def run_scip_python_index(
         if on_complete is not None:
             on_complete(report)
         if proc.returncode != 0:
-            msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
+            msg = (
+                f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
+            )
             raise RuntimeError(msg)
 
         if not out.exists():

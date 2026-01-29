@@ -7,7 +7,6 @@ and scheduling paths use.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
@@ -17,7 +16,12 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+from datafusion_engine.delta_protocol import (
+    DeltaFeatureGate,
+    DeltaProtocolSnapshot,
+    delta_feature_gate_payload,
+    delta_feature_gate_tuple,
+)
 from datafusion_engine.delta_store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
@@ -28,13 +32,14 @@ from datafusion_engine.schema_introspection import SchemaIntrospector
 from obs.otel.scopes import SCOPE_PLANNING
 from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaInputPin, JsonValue, PlanArtifacts, PlanProtoStatus
-from serde_msgspec import dumps_msgpack, encode_json_into, to_builtins
+from serde_msgspec import to_builtins
 from serde_msgspec_ext import (
     ExecutionPlanProtoBytes,
     LogicalPlanProtoBytes,
     OptimizedPlanProtoBytes,
 )
 from serde_schema_registry import schema_contract_hash
+from utils.hashing import hash_json_default, hash_msgpack_canonical, hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
@@ -652,8 +657,7 @@ def _delta_protocol_support_payload(
 
 
 def _planning_env_hash(snapshot: Mapping[str, object]) -> str:
-    payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_msgpack_canonical(snapshot)
 
 
 def _rulepack_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
@@ -725,8 +729,7 @@ def _rule_name(rule: object) -> str | None:
 def _rulepack_hash(snapshot: Mapping[str, object] | None) -> str | None:
     if not snapshot:
         return None
-    payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_msgpack_canonical(snapshot)
 
 
 def _suppress_errors() -> contextlib.AbstractContextManager[None]:
@@ -1139,21 +1142,6 @@ def _merge_delta_inputs(
     return tuple(pins[name] for name in sorted(pins))
 
 
-def _delta_gate_payload_json(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
-
-
 def _delta_inputs_payload(
     delta_inputs: Sequence[DeltaInputPin],
 ) -> tuple[dict[str, object], ...]:
@@ -1162,7 +1150,7 @@ def _delta_inputs_payload(
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": _delta_gate_payload_json(pin.feature_gate),
+            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
@@ -1195,7 +1183,7 @@ def _scan_units_payload(
             "delta_version": unit.delta_version,
             "delta_timestamp": unit.delta_timestamp,
             "snapshot_timestamp": unit.snapshot_timestamp,
-            "delta_feature_gate": _delta_gate_payload_json(unit.delta_feature_gate),
+            "delta_feature_gate": delta_feature_gate_payload(unit.delta_feature_gate),
             "delta_protocol": (
                 to_builtins(unit.delta_protocol, str_keys=True)
                 if unit.delta_protocol is not None
@@ -1262,9 +1250,8 @@ def _plan_identity_payload(inputs: _PlanIdentityInputs) -> Mapping[str, object]:
 
 
 def _payload_hash(payload: object) -> str:
-    buffer = bytearray()
-    encode_json_into(to_builtins(payload, str_keys=True), buffer)
-    return hashlib.sha256(buffer).hexdigest()
+    _ = to_builtins
+    return hash_json_default(payload, str_keys=True)
 
 
 def _safe_logical_plan(df: DataFrame) -> object | None:
@@ -1478,8 +1465,7 @@ def _information_schema_hash(snapshot: Mapping[str, object]) -> str:
     str
         SHA-256 hash of the snapshot payload.
     """
-    payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_msgpack_canonical(snapshot)
 
 
 @dataclass(frozen=True)
@@ -1518,10 +1504,10 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
         msg = "Plan fingerprinting requires Substrait bytes."
         raise ValueError(msg)
     settings_items = tuple(sorted(inputs.df_settings.items()))
-    settings_hash = hashlib.sha256(dumps_msgpack(settings_items)).hexdigest()
+    settings_hash = hash_msgpack_canonical(settings_items)
     planning_env_hash = inputs.planning_env_hash or ""
     rulepack_hash = inputs.rulepack_hash or ""
-    substrait_hash = hashlib.sha256(inputs.substrait_bytes).hexdigest()
+    substrait_hash = hash_sha256_hex(inputs.substrait_bytes)
     delta_payload = tuple(
         sorted(
             (
@@ -1529,7 +1515,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
                     pin.dataset_name,
                     pin.version,
                     pin.timestamp,
-                    _delta_gate_payload(pin.feature_gate),
+                    delta_feature_gate_tuple(pin.feature_gate),
                     _delta_protocol_payload(pin.protocol),
                     pin.storage_options_hash,
                     pin.delta_scan_config_hash,
@@ -1553,20 +1539,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
         ("delta_inputs", delta_payload),
         ("delta_store_policy_hash", inputs.delta_store_policy_hash),
     )
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
-
-
-def _delta_gate_payload(
-    gate: DeltaFeatureGate | None,
-) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
-    if gate is None:
-        return None
-    return (
-        gate.min_reader_version,
-        gate.min_writer_version,
-        tuple(gate.required_reader_features),
-        tuple(gate.required_writer_features),
-    )
+    return hash_msgpack_canonical(payload)
 
 
 def _delta_protocol_payload(
@@ -2036,7 +2009,7 @@ def _determinism_audit_bundle(
 
 def _settings_hash(df_settings: Mapping[str, str]) -> str:
     payload = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return hash_msgpack_canonical(payload)
 
 
 def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
@@ -2078,8 +2051,7 @@ def _df_settings_snapshot(
 
 
 def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
-    payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_msgpack_canonical(snapshot)
 
 
 def _function_registry_artifacts(

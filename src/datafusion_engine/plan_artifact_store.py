@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -18,6 +17,7 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.sql_options import planning_sql_options
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
@@ -26,13 +26,13 @@ from serde_msgspec import (
     convert,
     decode_json_lines,
     dumps_msgpack,
-    encode_json_into,
     ensure_raw,
     to_builtins,
     validation_error_payload,
 )
 from serde_msgspec_ext import SubstraitBytes
 from storage.deltalake import delta_table_version
+from utils.hashing import hash_json_default, hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
@@ -1218,7 +1218,7 @@ def _scan_units_payload(
                 "delta_version": unit.delta_version,
                 "delta_timestamp": unit.delta_timestamp,
                 "snapshot_timestamp": unit.snapshot_timestamp,
-                "delta_feature_gate": _delta_gate_payload(unit.delta_feature_gate),
+                "delta_feature_gate": delta_feature_gate_payload(unit.delta_feature_gate),
                 "delta_protocol": (
                     to_builtins(unit.delta_protocol) if unit.delta_protocol is not None else None
                 ),
@@ -1254,7 +1254,7 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": _delta_gate_payload(pin.feature_gate),
+            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
@@ -1275,21 +1275,6 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
     ]
     payloads.sort(key=lambda item: str(item["dataset_name"]))
     return tuple(payloads)
-
-
-def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
 
 
 def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None:
@@ -1352,13 +1337,12 @@ def _plan_details_payload(
 
 
 def _payload_hash(payload: object) -> str:
-    buffer = bytearray()
-    encode_json_into(to_builtins(payload), buffer)
-    return hashlib.sha256(buffer).hexdigest()
+    _ = to_builtins
+    return hash_json_default(payload)
 
 
 def _payload_hash_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
+    return hash_sha256_hex(payload)
 
 
 def _udf_compatibility(

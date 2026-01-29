@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+
+import pytest
+
 from obs.otel.logs import emit_diagnostics_event
 from tests.obs._support.otel_harness import get_otel_harness
 
@@ -21,3 +25,18 @@ def test_diagnostics_logs_emit() -> None:
     attributes = log_record.attributes or {}
     assert attributes.get("event.name") == "diagnostics.test"
     assert attributes.get("event.kind") == "artifact"
+
+
+def test_log_attribute_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure log attribute limits are applied during normalization."""
+    monkeypatch.setenv("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT", "1")
+    monkeypatch.setenv("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT", "4")
+    from obs.otel import attributes as otel_attributes
+
+    otel_attributes = importlib.reload(otel_attributes)
+    normalized = otel_attributes.normalize_log_attributes({"alpha": "abcdefgh", "beta": "zz"})
+    assert normalized.get("alpha") == "abcd"
+    assert len(normalized) == 1
+    monkeypatch.delenv("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT", raising=False)
+    monkeypatch.delenv("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT", raising=False)
+    importlib.reload(otel_attributes)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,7 +15,8 @@ from cache.diskcache_factory import (
     cache_for_kind,
     evict_cache_tag,
 )
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import to_builtins
+from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -25,8 +25,7 @@ if TYPE_CHECKING:
 
 
 def _hash_payload(payload: object) -> str:
-    raw = dumps_msgpack(to_builtins(payload))
-    return hashlib.sha256(raw).hexdigest()
+    return hash_msgpack_canonical(to_builtins(payload))
 
 
 CACHE_VERSION: int = 1

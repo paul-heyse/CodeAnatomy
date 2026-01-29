@@ -15,6 +15,7 @@ def test_root_span_contract() -> None:
         pass
     spans = harness.span_exporter.get_finished_spans()
     assert any(span.name == "graph_product.build" for span in spans)
+    assert any((span.attributes or {}).get("otel.sampling.rule") for span in spans)
 
 
 def test_hamilton_node_span_contract() -> None:

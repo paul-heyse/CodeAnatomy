@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
+from uuid import uuid4
 
 from core_types import DeterminismTier, JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
@@ -26,6 +27,7 @@ from hamilton_pipeline.pipeline_types import (
 )
 from incremental.types import IncrementalConfig
 from obs.otel import OtelBootstrapOptions, configure_otel
+from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
 
 GraphProduct = Literal["cpg"]
@@ -138,6 +140,10 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         overrides["determinism_override"] = request.determinism_override
     if request.writer_strategy is not None:
         overrides["writer_strategy"] = request.writer_strategy
+    run_id = overrides.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        run_id = str(uuid4())
+        overrides["run_id"] = run_id
 
     outputs = _outputs_for_request(request)
     options = PipelineExecutionOptions(
@@ -158,38 +164,38 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
 
     configure_otel(
         service_name="codeanatomy",
-        options=OtelBootstrapOptions(
-            resource_overrides=_otel_resource_overrides(repo_root_path)
-        ),
+        options=OtelBootstrapOptions(resource_overrides=_otel_resource_overrides(repo_root_path)),
     )
-    with root_span(
-        "graph_product.build",
-        attributes={
-            "codeanatomy.product": request.product,
-            "codeanatomy.execution_mode": request.execution_mode.value,
-            "codeanatomy.outputs": list(outputs),
-        },
-    ) as span:
-        try:
-            raw = execute_pipeline(repo_root=repo_root_path, options=options)
-        except Exception as exc:
-            record_exception(span, exc)
-            raise
-        result = _parse_result(
-            request=request,
-            repo_root=repo_root_path,
-            pipeline_outputs=raw,
-        )
-        set_span_attributes(
-            span,
-            {
-                "codeanatomy.product_version": result.product_version,
-                "codeanatomy.output_dir": str(result.output_dir),
-                "codeanatomy.run_id": result.run_id,
+    run_token = set_run_id(run_id)
+    try:
+        with root_span(
+            "graph_product.build",
+            attributes={
+                "codeanatomy.product": request.product,
+                "codeanatomy.execution_mode": request.execution_mode.value,
+                "codeanatomy.outputs": list(outputs),
             },
-        )
-        return result
-
+        ) as span:
+            try:
+                raw = execute_pipeline(repo_root=repo_root_path, options=options)
+            except Exception as exc:
+                record_exception(span, exc)
+                raise
+            result = _parse_result(
+                request=request,
+                repo_root=repo_root_path,
+                pipeline_outputs=raw,
+            )
+            set_span_attributes(
+                span,
+                {
+                    "codeanatomy.product_version": result.product_version,
+                    "codeanatomy.output_dir": str(result.output_dir),
+                },
+            )
+            return result
+    finally:
+        reset_run_id(run_token)
 
 
 def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:

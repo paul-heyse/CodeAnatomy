@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pyarrow.types as patypes
 
 from arrow_utils.core.array_iter import iter_array_values
-from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from core_types import JsonDict, JsonValue, PathLike, RowStrict, ensure_path
 from datafusion_engine.arrow_interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -32,8 +32,6 @@ from datafusion_engine.encoding import NormalizePolicy
 from obs.otel.metrics import set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER
 
-type RowValue = str | int
-type Row = dict[str, RowValue]
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
 DATASET_STATS_ENCODING_POLICY = EncodingPolicy(dictionary_cols=frozenset({"dataset_name"}))
@@ -127,7 +125,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     TableLike
         Dataset-level statistics table.
     """
-    rows: list[Row] = []
+    rows: list[RowStrict] = []
     for name, t in tables.items():
         if t is None:
             continue
@@ -156,7 +154,7 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     TableLike
         Column-level statistics table.
     """
-    rows: list[Row] = []
+    rows: list[RowStrict] = []
     for dname, t in tables.items():
         if t is None:
             continue

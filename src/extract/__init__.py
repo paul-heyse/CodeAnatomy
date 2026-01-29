@@ -38,6 +38,12 @@ if TYPE_CHECKING:
         extract_cst,
         extract_cst_tables,
     )
+    from extract.python_external_scope import (
+        ExternalInterfaceExtractOptions,
+        ExternalInterfaceExtractResult,
+        extract_python_external,
+        extract_python_external_tables,
+    )
     from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
     from extract.repo_scan import RepoScanOptions, scan_repo
     from extract.scip_extract import (
@@ -91,6 +97,11 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "extract_bytecode_table": ("extract.bytecode_extract", "extract_bytecode_table"),
     "extract_cst": ("extract.cst_extract", "extract_cst"),
     "extract_cst_tables": ("extract.cst_extract", "extract_cst_tables"),
+    "extract_python_external": ("extract.python_external_scope", "extract_python_external"),
+    "extract_python_external_tables": (
+        "extract.python_external_scope",
+        "extract_python_external_tables",
+    ),
     "scan_repo_blobs": ("extract.repo_blobs", "scan_repo_blobs"),
     "extract_scip_tables": ("extract.scip_extract", "extract_scip_tables"),
     "extract_symtable": ("extract.symtable_extract", "extract_symtable"),
@@ -125,6 +136,8 @@ __all__ = (
     "BytecodeExtractResult",
     "CSTExtractOptions",
     "CSTExtractResult",
+    "ExternalInterfaceExtractOptions",
+    "ExternalInterfaceExtractResult",
     "RepoBlobOptions",
     "RepoScanOptions",
     "SCIPIndexOptions",
@@ -143,6 +156,8 @@ __all__ = (
     "extract_bytecode_table",
     "extract_cst",
     "extract_cst_tables",
+    "extract_python_external",
+    "extract_python_external_tables",
     "extract_scip_tables",
     "extract_symtable",
     "extract_symtables_table",

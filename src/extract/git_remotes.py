@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import pygit2
 
+from utils.env_utils import env_bool
+
 
 @dataclass(frozen=True)
 class RemoteFeatureSet:
@@ -59,7 +61,7 @@ def remote_auth_from_env() -> RemoteAuthSpec | None:
     ssh_pubkey_path = os.getenv("CODEANATOMY_GIT_SSH_PUBKEY")
     ssh_key_path = os.getenv("CODEANATOMY_GIT_SSH_KEY")
     ssh_passphrase = os.getenv("CODEANATOMY_GIT_SSH_PASSPHRASE")
-    allow_invalid_certs = _env_bool("CODEANATOMY_GIT_ALLOW_INVALID_CERTS") or False
+    allow_invalid_certs = env_bool("CODEANATOMY_GIT_ALLOW_INVALID_CERTS") or False
     if any(
         (
             username,
@@ -208,18 +210,6 @@ def fetch_remote(
     except pygit2.GitError:
         return False
     return True
-
-
-def _env_bool(name: str) -> bool | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "y"}:
-        return True
-    if normalized in {"0", "false", "no", "n"}:
-        return False
-    return None
 
 
 def _username_from_url(url: str) -> str | None:

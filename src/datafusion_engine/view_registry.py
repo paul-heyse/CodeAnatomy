@@ -2234,6 +2234,7 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("query_capture_count").alias("query_capture_count"),
         col("match_limit_exceeded").alias("match_limit_exceeded"),
     ),
+    "python_imports": (),
 }
 
 VIEW_BASE_TABLE: Final[dict[str, str]] = {
@@ -2676,6 +2677,79 @@ def _ts_cst_docstrings_check_df(ctx: SessionContext) -> DataFrame:
     return agg.with_column("mismatch", col("mismatch_count") > lit(0))
 
 
+def _python_imports_df(ctx: SessionContext) -> DataFrame:
+    available = table_names_snapshot(ctx)
+    frames: list[DataFrame] = []
+    if "ast_files_v1" in available:
+        ast_df = _view_df(ctx, "ast_imports").select(
+            col("file_id"),
+            col("path"),
+            lit("ast").alias("source"),
+            col("kind"),
+            col("module"),
+            col("name"),
+            col("asname"),
+            _arrow_cast(col("level"), "Int32").alias("level"),
+            _arrow_cast(lit(value=False), "Boolean").alias("is_star"),
+        )
+        frames.append(ast_df)
+    if "libcst_files_v1" in available:
+        cst_df = _view_df(ctx, "cst_imports").select(
+            col("file_id"),
+            col("path"),
+            lit("cst").alias("source"),
+            col("kind"),
+            col("module"),
+            col("name"),
+            col("asname"),
+            _arrow_cast(col("relative_level"), "Int32").alias("level"),
+            _arrow_cast(col("is_star"), "Boolean").alias("is_star"),
+        )
+        frames.append(cst_df)
+    if "tree_sitter_files_v1" in available:
+        ts_df = _view_df(ctx, "ts_imports").select(
+            col("file_id"),
+            col("path"),
+            lit("tree_sitter").alias("source"),
+            col("kind"),
+            col("module"),
+            col("name"),
+            col("asname"),
+            _arrow_cast(col("level"), "Int32").alias("level"),
+            _arrow_cast(lit(value=False), "Boolean").alias("is_star"),
+        )
+        frames.append(ts_df)
+    if not frames:
+        return _empty_python_imports_df(ctx)
+    combined = frames[0]
+    for frame in frames[1:]:
+        combined = combined.union(frame)
+    return combined
+
+
+def _empty_python_imports_df(ctx: SessionContext) -> DataFrame:
+    empty_schema = pa.schema(
+        [
+            pa.field("file_id", pa.string(), nullable=False),
+            pa.field("path", pa.string(), nullable=False),
+            pa.field("source", pa.string(), nullable=True),
+            pa.field("kind", pa.string(), nullable=True),
+            pa.field("module", pa.string(), nullable=True),
+            pa.field("name", pa.string(), nullable=True),
+            pa.field("asname", pa.string(), nullable=True),
+            pa.field("level", pa.int32(), nullable=True),
+            pa.field("is_star", pa.bool_(), nullable=True),
+        ]
+    )
+    empty_table = pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in empty_schema],
+        schema=empty_schema,
+    )
+    empty_name = f"__python_imports_empty_{uuid4().hex}"
+    ctx.from_arrow(empty_table, name=empty_name)
+    return ctx.table(empty_name)
+
+
 def _view_df(ctx: SessionContext, name: str) -> DataFrame:
     builder = _CUSTOM_BUILDERS.get(name)
     if builder is not None:
@@ -2750,12 +2824,14 @@ def _register_builder_map() -> dict[str, Callable[[SessionContext], DataFrame]]:
         label="imports",
     )
     builders["ts_cst_docstrings_check"] = _ts_cst_docstrings_check_df
+    builders["python_imports"] = _python_imports_df
     return builders
 
 
 _CUSTOM_BUILDERS: Final[dict[str, Callable[[SessionContext], DataFrame]]] = _register_builder_map()
 
 _CUSTOM_VIEW_DEPENDENCIES: Final[dict[str, tuple[str, ...]]] = {
+    "python_imports": ("ast_imports", "cst_imports", "ts_imports"),
     "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
     "ts_ast_calls_check": ("ts_calls", "ast_calls"),
     "ts_ast_defs_check": ("ts_defs", "ast_defs"),
@@ -2796,7 +2872,10 @@ def _required_root_tables(name: str) -> tuple[str, ...]:
 
 
 def _required_roots_available(ctx: SessionContext, name: str) -> bool:
-    return all(ctx.table_exist(root) for root in _required_root_tables(name))
+    roots = _required_root_tables(name)
+    if name == "python_imports":
+        return any(ctx.table_exist(root) for root in roots)
+    return all(ctx.table_exist(root) for root in roots)
 
 
 def registry_view_specs(

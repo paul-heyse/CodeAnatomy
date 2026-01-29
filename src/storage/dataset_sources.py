@@ -12,15 +12,13 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
 from arrow_utils.core.streaming import to_reader
-from core_types import JsonDict
+from core_types import JsonDict, PathLike
 from datafusion_engine.arrow_interop import (
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     coerce_table_like,
 )
-
-type PathLike = str | Path
 
 
 @dataclass

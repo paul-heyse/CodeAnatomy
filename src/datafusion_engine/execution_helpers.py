@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, cast
 
@@ -15,10 +14,12 @@ from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from engine.plan_cache import PlanCacheKey
 from schema_spec.policies import DataFusionWritePolicy
-from serde_msgspec import dumps_msgpack, loads_msgpack, to_builtins
+from serde_msgspec import loads_msgpack, to_builtins
 from serde_msgspec_ext import SubstraitBytes
+from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 
 try:
     import pyarrow.substrait as pa_substrait
@@ -67,11 +68,7 @@ def plan_fingerprint_from_bundle(
         msg = "Substrait bytes are required for plan fingerprinting."
         raise ValueError(msg)
     _ = optimized
-    return hashlib.sha256(substrait_bytes).hexdigest()
-
-
-def _hash_payload(payload: object) -> str:
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return hash_sha256_hex(substrait_bytes)
 
 
 def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object]]:
@@ -80,7 +77,7 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": _delta_gate_payload(pin.feature_gate),
+            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
@@ -107,23 +104,6 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
         )
     )
     return payloads
-
-
-def _delta_gate_payload(
-    gate: object | None,
-) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
 
 
 def _delta_protocol_payload(
@@ -162,12 +142,12 @@ def plan_bundle_cache_key(
     """
     if bundle.substrait_bytes is None:
         return None
-    substrait_hash = hashlib.sha256(bundle.substrait_bytes).hexdigest()
-    required_udfs_hash = _hash_payload(tuple(sorted(bundle.required_udfs)))
-    required_tags_hash = _hash_payload(tuple(sorted(bundle.required_rewrite_tags)))
+    substrait_hash = hash_sha256_hex(bundle.substrait_bytes)
+    required_udfs_hash = hash_msgpack_canonical(tuple(sorted(bundle.required_udfs)))
+    required_tags_hash = hash_msgpack_canonical(tuple(sorted(bundle.required_rewrite_tags)))
     settings_items = tuple(sorted(bundle.artifacts.df_settings.items()))
-    settings_hash = _hash_payload(settings_items)
-    delta_inputs_hash = _hash_payload(_delta_inputs_payload(bundle))
+    settings_hash = hash_msgpack_canonical(settings_items)
+    delta_inputs_hash = hash_msgpack_canonical(_delta_inputs_payload(bundle))
     return PlanCacheKey(
         profile_hash=profile_hash,
         substrait_hash=substrait_hash,
@@ -194,7 +174,7 @@ def _fingerprint_reader(reader: pa.RecordBatchReader) -> tuple[str, int]:
             row_count += batch.num_rows
             writer.write_batch(batch)
     payload = sink.getvalue().to_pybytes()
-    return hashlib.sha256(payload).hexdigest(), row_count
+    return hash_sha256_hex(payload), row_count
 
 
 def _fingerprint_table(value: TableLike | RecordBatchReaderLike) -> tuple[str, int]:

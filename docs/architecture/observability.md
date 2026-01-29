@@ -26,10 +26,12 @@ The bootstrap reads standard `OTEL_*` env vars and respects `OTEL_SDK_DISABLED`.
 ## Resource Identity
 Resource attributes are stable and process-level:
 - `service.name`, `service.version`, `service.namespace`
-- `deployment.environment`
+- `deployment.environment.name`
 - `codeanatomy.repo_root` (entrypoint-level override)
 
 Run-specific details (plan signature, run id, dataset names) are captured at the **span** or **log** level instead of the Resource.
+
+Resource detector enrichment is controlled via `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS` (e.g., `process,os,host,container,k8s`). When unset, the default detector set is `process,os,host,container,k8s` with missing detectors ignored and logged.
 
 ---
 
@@ -62,10 +64,10 @@ Span links are used to connect task spans back to the root span when the executi
 Metrics are emitted via `src/obs/otel/metrics.py`:
 
 **Histograms**
-- `codeanatomy.stage.duration_ms`
-- `codeanatomy.task.duration_ms`
-- `codeanatomy.datafusion.execute.duration_ms`
-- `codeanatomy.datafusion.write.duration_ms`
+- `codeanatomy.stage.duration`
+- `codeanatomy.task.duration`
+- `codeanatomy.datafusion.execute.duration`
+- `codeanatomy.datafusion.write.duration`
 
 **Counters**
 - `codeanatomy.artifact.count`
@@ -122,8 +124,15 @@ Reference configuration: `tools/otel/collector.yaml`.
 - `OTEL_RESOURCE_ATTRIBUTES`
 - `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`
 - `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS`
 - `OTEL_PYTHON_LOG_CORRELATION`
+- `OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED`
 - `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_METRIC_EXPORT_TIMEOUT`
+- `OTEL_LOG_LEVEL`
+- `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`
+- `OTEL_METRICS_EXEMPLAR_FILTER`
+- `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
+- `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`
 
 ---
 

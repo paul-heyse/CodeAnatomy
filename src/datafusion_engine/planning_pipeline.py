@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -17,7 +16,7 @@ from datafusion_engine.scan_overrides import apply_scan_unit_overrides
 from datafusion_engine.scan_planner import ScanUnit, plan_scan_units
 from datafusion_engine.view_registry import ensure_view_graph
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
-from serde_msgspec import dumps_msgpack
+from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
@@ -225,7 +224,7 @@ def _scan_task_name_map(scan_units: Sequence[ScanUnit]) -> dict[str, str]:
     for unit in sorted(scan_units, key=lambda item: item.key):
         digest_len = _HASH_SLICE
         while True:
-            digest = hashlib.sha256(unit.key.encode("utf-8")).hexdigest()[:digest_len]
+            digest = hash_sha256_hex(unit.key.encode("utf-8"), length=digest_len)
             name = f"{_SCAN_TASK_PREFIX}{digest}"
             existing_key = used.get(name)
             if existing_key is None or existing_key == unit.key:
@@ -267,7 +266,7 @@ def _scan_fingerprint(unit: ScanUnit) -> str:
         "projected_columns": unit.projected_columns,
         "pushed_filters": unit.pushed_filters,
     }
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return hash_msgpack_canonical(payload)
 
 
 def _lineage_by_view(view_nodes: Sequence[ViewNode]) -> dict[str, LineageReport]:

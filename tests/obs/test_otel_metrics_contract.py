@@ -34,7 +34,7 @@ def test_metrics_catalog_emits() -> None:
     set_scan_telemetry("cpg_nodes", fragment_count=2, row_group_count=4)
     data = harness.metric_reader.get_metrics_data()
     names = _metric_names(data)
-    assert "codeanatomy.stage.duration_ms" in names
-    assert "codeanatomy.task.duration_ms" in names
+    assert "codeanatomy.stage.duration" in names
+    assert "codeanatomy.task.duration" in names
     assert "codeanatomy.dataset.rows" in names
     assert "codeanatomy.scan.row_groups" in names

@@ -13,6 +13,7 @@ from opentelemetry.util.types import AttributeValue
 
 from obs.otel.attributes import normalize_attributes
 from obs.otel.metrics import record_stage_duration
+from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_PIPELINE
 
 _ROOT_SPAN_CONTEXT: ContextVar[SpanContext | None] = ContextVar(
@@ -35,7 +36,13 @@ def get_tracer(scope_name: str) -> trace.Tracer:
     opentelemetry.trace.Tracer
         Tracer bound to the requested scope.
     """
-    return trace.get_tracer(scope_name)
+    version_value = instrumentation_version()
+    version = version_value if version_value is not None else "unknown"
+    return trace.get_tracer(
+        scope_name,
+        instrumenting_library_version=version,
+        schema_url=instrumentation_schema_url(),
+    )
 
 
 def set_root_span_context(span_context: SpanContext | None) -> None:
@@ -148,6 +155,10 @@ def stage_span(
     start = time.monotonic()
     status = "ok"
     with tracer.start_as_current_span(name, attributes=span_attributes(attrs=base_attrs)) as span:
+        span.add_event(
+            "stage.start",
+            attributes=normalize_attributes({"stage": stage}),
+        )
         try:
             yield span
         except Exception as exc:
@@ -155,9 +166,15 @@ def stage_span(
             record_exception(span, exc)
             raise
         finally:
-            duration_ms = (time.monotonic() - start) * 1000.0
-            record_stage_duration(stage, duration_ms, status=status)
-            set_span_attributes(span, {"duration_ms": duration_ms, "status": status})
+            duration_s = time.monotonic() - start
+            record_stage_duration(stage, duration_s, status=status)
+            set_span_attributes(span, {"duration_s": duration_s, "status": status})
+            span.add_event(
+                "stage.end",
+                attributes=normalize_attributes(
+                    {"stage": stage, "status": status, "duration_s": duration_s}
+                ),
+            )
 
 
 @contextmanager

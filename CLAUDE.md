@@ -38,16 +38,16 @@ uv run ruff format
 4. **CPG Build** → Node/edge/property emission → final outputs
 
 **Core Modules (`src/`):**
-- `arrowdsl/` - Arrow DSL for relational transforms → PyArrow Acero plans
 - `extract/` - Multi-source extractors (repo scan, AST, CST, symtable, bytecode, SCIP)
 - `normalize/` - Byte-span canonicalization, stable ID generation
 - `relspec/` - Task/plan catalog, inferred deps, rustworkx graph inference + scheduling
 - `cpg/` - CPG schema definitions, node/edge/property contracts
 - `engine/` - Execution runtime: sessions, plans, materialization
 - `hamilton_pipeline/` - Hamilton DAG orchestration
-- `datafusion_engine/` - DataFusion SessionContext integration
-- `ibis_engine/` - Ibis expression generation and compilation
-- `sqlglot_tools/` - SQL normalization, compilation, AST serialization
+- `datafusion_engine/` - DataFusion integration (query planning, UDFs, lineage, schema contracts)
+- `obs/` - Observability layer (diagnostics collection, metrics, scan telemetry)
+- `storage/` - Delta Lake integration with file pruning
+- `incremental/` - Incremental processing, CDF cursors, invalidation detection
 
 **Primary Entry Point:**
 ```python
@@ -60,19 +60,19 @@ result = build_graph_product(
 
 ## Calculation-Driven Scheduling
 
-Dependencies are automatically inferred from Ibis/DataFusion expressions via SQLGlot lineage analysis. No manual `inputs=` declarations required. The system:
+Dependencies are automatically inferred from DataFusion plan lineage. No manual `inputs=` declarations required. The system:
 
-1. Compiles Ibis expressions to SQLGlot AST
-2. Extracts table references via `referenced_tables()`
-3. Extracts column-level lineage via `required_columns_by_table()`
-4. Builds rustworkx graph with inferred edges via `build_rule_graph_from_inferred_deps()`
+1. Compiles view builders to DataFusion DataFrames
+2. Extracts lineage from optimized logical plans via `lineage_datafusion.py`
+3. Extracts column-level requirements via plan tree walking
+4. Builds rustworkx graph with inferred edges via `build_task_graph_from_inferred_deps()`
 5. Generates Hamilton DAGs for orchestration
 
 **Key modules:**
 - `src/relspec/task_catalog.py` - TaskSpec definitions + TaskCatalog
 - `src/relspec/plan_catalog.py` - PlanArtifact compilation + PlanCatalog
-- `src/relspec/inferred_deps.py` - Dependency inference from SQLGlot lineage
-- `src/relspec/graph_inference.py` - TaskGraph construction from inferred deps
+- `src/relspec/inferred_deps.py` - Dependency inference from DataFusion lineage
+- `src/relspec/rustworkx_graph.py` - TaskGraph construction from inferred deps
 - `src/relspec/graph_edge_validation.py` - Column-level edge validation
 - `src/relspec/rustworkx_schedule.py` - Inference-driven scheduling
 
@@ -124,4 +124,4 @@ from __future__ import annotations
 
 - **Python**: 3.13.11 (pinned)
 - **Package Manager**: uv
-- **Key Dependencies**: DataFusion 50.1+, Rustworkx 0.17+, Ibis 11.0+, SQLGlot 28.1+, Hamilton, PyArrow, LibCST, Polars
+- **Key Dependencies**: DataFusion 50.1+, Rustworkx 0.17+, Hamilton 1.89+, PyArrow, LibCST, deltalake 1.3+

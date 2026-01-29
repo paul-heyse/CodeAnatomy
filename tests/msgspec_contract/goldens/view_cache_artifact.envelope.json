@@ -1,10 +1,10 @@
 {
   "kind": "view_cache_artifact",
   "payload": {
-    "view_name": "cpg_edges_v1",
+    "cache_path": "/tmp/datafusion_view_cache/cpg_edges_v1__4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c",
     "cache_policy": "delta_staging",
-    "cache_path": "/tmp/datafusion_view_cache/cpg_edges_v1__fp-1",
-    "plan_fingerprint": "fp-1",
-    "status": "cached"
+    "plan_fingerprint": "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c",
+    "status": "cached",
+    "view_name": "cpg_edges_v1"
   }
 }

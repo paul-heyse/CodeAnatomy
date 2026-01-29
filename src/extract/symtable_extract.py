@@ -40,6 +40,8 @@ from extract.helpers import (
 from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -862,40 +864,46 @@ def extract_symtables_table(
     TableLike | RecordBatchReaderLike
         Symtable extraction output.
     """
-    repo_files = kwargs["repo_files"]
-    normalized_options = normalize_options(
-        "symtable",
-        kwargs.get("options"),
-        SymtableExtractOptions,
-    )
-    file_contexts = kwargs.get("file_contexts")
-    evidence_plan = kwargs.get("evidence_plan")
-    profile = kwargs.get("profile", "default")
-    prefer_reader = kwargs.get("prefer_reader", False)
-    exec_context = ExtractExecutionContext(
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        session=kwargs.get("session"),
-        profile=profile,
-    )
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    plans = extract_symtable_plans(
-        repo_files,
-        options=normalized_options,
-        context=exec_context,
-    )
-    return materialize_extract_plan(
-        "symtable_files_v1",
-        plans["symtable_files"],
-        runtime_profile=runtime_profile,
-        determinism_tier=determinism_tier,
-        options=ExtractMaterializeOptions(
-            normalize=normalize,
-            prefer_reader=prefer_reader,
-            apply_post_kernels=True,
-        ),
-    )
+    with stage_span(
+        "extract.symtable_table",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={"codeanatomy.extractor": "symtable"},
+    ):
+        repo_files = kwargs["repo_files"]
+        normalized_options = normalize_options(
+            "symtable",
+            kwargs.get("options"),
+            SymtableExtractOptions,
+        )
+        file_contexts = kwargs.get("file_contexts")
+        evidence_plan = kwargs.get("evidence_plan")
+        profile = kwargs.get("profile", "default")
+        prefer_reader = kwargs.get("prefer_reader", False)
+        exec_context = ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            session=kwargs.get("session"),
+            profile=profile,
+        )
+        session = exec_context.ensure_session()
+        exec_context = replace(exec_context, session=session)
+        runtime_profile = exec_context.ensure_runtime_profile()
+        determinism_tier = exec_context.determinism_tier()
+        normalize = ExtractNormalizeOptions(options=normalized_options)
+        plans = extract_symtable_plans(
+            repo_files,
+            options=normalized_options,
+            context=exec_context,
+        )
+        return materialize_extract_plan(
+            "symtable_files_v1",
+            plans["symtable_files"],
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        )

@@ -26,6 +26,8 @@ from datafusion_engine.delta_protocol import (
     delta_protocol_compatibility,
 )
 from datafusion_engine.lineage_datafusion import ScanLineage
+from obs.otel.scopes import SCOPE_SCHEDULING
+from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaScanConfigSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.deltalake import build_delta_file_index_from_add_actions
@@ -163,53 +165,62 @@ def plan_scan_unit(
     ScanUnit
         Deterministic scan unit for the dataset and lineage inputs.
     """
-    delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
-    storage_options_hash = _storage_options_hash(location)
-    delta_scan_config = _delta_scan_config_snapshot(location)
-    delta_scan_config_hash = _delta_scan_config_hash(delta_scan_config)
-    datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
-    delta_resolution = _resolve_delta_scan_resolution(
-        ctx,
-        location=location,
-        lineage=lineage,
-        dataset_name=dataset_name,
-        runtime_profile=runtime_profile,
-    )
-    key = _scan_unit_key(
-        _ScanUnitKeyRequest(
+    with stage_span(
+        "scheduling.scan_unit",
+        stage="scheduling",
+        scope_name=SCOPE_SCHEDULING,
+        attributes={
+            "codeanatomy.dataset_name": dataset_name,
+            "codeanatomy.has_location": location is not None,
+        },
+    ):
+        delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
+        storage_options_hash = _storage_options_hash(location)
+        delta_scan_config = _delta_scan_config_snapshot(location)
+        delta_scan_config_hash = _delta_scan_config_hash(delta_scan_config)
+        datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
+        delta_resolution = _resolve_delta_scan_resolution(
+            ctx,
+            location=location,
+            lineage=lineage,
+            dataset_name=dataset_name,
+            runtime_profile=runtime_profile,
+        )
+        key = _scan_unit_key(
+            _ScanUnitKeyRequest(
+                dataset_name=dataset_name,
+                delta_version=delta_resolution.delta_version,
+                delta_timestamp=delta_resolution.delta_timestamp,
+                delta_feature_gate=delta_feature_gate,
+                delta_protocol=delta_resolution.delta_protocol,
+                storage_options_hash=storage_options_hash,
+                delta_scan_config_hash=delta_scan_config_hash,
+                datafusion_provider=datafusion_provider,
+                projected_columns=lineage.projected_columns,
+                pushed_filters=lineage.pushed_filters,
+            )
+        )
+        return ScanUnit(
+            key=key,
             dataset_name=dataset_name,
             delta_version=delta_resolution.delta_version,
             delta_timestamp=delta_resolution.delta_timestamp,
+            snapshot_timestamp=delta_resolution.snapshot_timestamp,
             delta_feature_gate=delta_feature_gate,
             delta_protocol=delta_resolution.delta_protocol,
             storage_options_hash=storage_options_hash,
+            delta_scan_config=delta_scan_config,
             delta_scan_config_hash=delta_scan_config_hash,
             datafusion_provider=datafusion_provider,
-            projected_columns=lineage.projected_columns,
+            protocol_compatible=delta_resolution.protocol_compatible,
+            protocol_compatibility=delta_resolution.protocol_compatibility,
+            total_files=delta_resolution.total_files,
+            candidate_file_count=delta_resolution.candidate_file_count,
+            pruned_file_count=delta_resolution.pruned_file_count,
+            candidate_files=delta_resolution.candidate_files,
             pushed_filters=lineage.pushed_filters,
+            projected_columns=lineage.projected_columns,
         )
-    )
-    return ScanUnit(
-        key=key,
-        dataset_name=dataset_name,
-        delta_version=delta_resolution.delta_version,
-        delta_timestamp=delta_resolution.delta_timestamp,
-        snapshot_timestamp=delta_resolution.snapshot_timestamp,
-        delta_feature_gate=delta_feature_gate,
-        delta_protocol=delta_resolution.delta_protocol,
-        storage_options_hash=storage_options_hash,
-        delta_scan_config=delta_scan_config,
-        delta_scan_config_hash=delta_scan_config_hash,
-        datafusion_provider=datafusion_provider,
-        protocol_compatible=delta_resolution.protocol_compatible,
-        protocol_compatibility=delta_resolution.protocol_compatibility,
-        total_files=delta_resolution.total_files,
-        candidate_file_count=delta_resolution.candidate_file_count,
-        pruned_file_count=delta_resolution.pruned_file_count,
-        candidate_files=delta_resolution.candidate_files,
-        pushed_filters=lineage.pushed_filters,
-        projected_columns=lineage.projected_columns,
-    )
 
 
 def _resolve_delta_scan_resolution(
@@ -548,13 +559,12 @@ def _provider_marker(
 ) -> str | None:
     if location is None:
         return None
+    _ = runtime_profile
     provider = resolve_datafusion_provider(location)
     if provider is not None:
         return provider
     format_name = str(location.format or "")
     if format_name == "delta":
-        if runtime_profile is not None and runtime_profile.enable_delta_ddl_registration:
-            return "delta_ddl"
         return "delta_table_provider"
     return format_name or None
 

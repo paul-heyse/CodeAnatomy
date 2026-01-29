@@ -16,6 +16,7 @@ from engine.runtime_profile import (
 )
 from engine.session import EngineSession
 from obs.diagnostics import DiagnosticsCollector
+from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
 
@@ -33,6 +34,12 @@ def build_engine_session(
     EngineSession
         Engine session wired to the runtime surfaces.
     """
+    configure_otel(
+        service_name="codeanatomy",
+        options=OtelBootstrapOptions(
+            resource_overrides={"codeanatomy.runtime_profile": runtime_spec.name},
+        ),
+    )
     engine_runtime = build_engine_runtime(
         runtime_profile=runtime_spec.datafusion,
         diagnostics=diagnostics,

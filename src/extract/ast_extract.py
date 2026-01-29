@@ -45,6 +45,8 @@ from extract.helpers import (
 from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -1262,38 +1264,44 @@ def extract_ast_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted AST outputs keyed by name.
     """
-    repo_files = kwargs["repo_files"]
-    normalized_options = normalize_options("ast", kwargs.get("options"), ASTExtractOptions)
-    file_contexts = kwargs.get("file_contexts")
-    evidence_plan = kwargs.get("evidence_plan")
-    profile = kwargs.get("profile", "default")
-    prefer_reader = kwargs.get("prefer_reader", False)
-    exec_context = ExtractExecutionContext(
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        session=kwargs.get("session"),
-        profile=profile,
-    )
-    session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session)
-    runtime_profile = exec_context.ensure_runtime_profile()
-    determinism_tier = exec_context.determinism_tier()
-    normalize = ExtractNormalizeOptions(options=normalized_options)
-    plans = extract_ast_plans(
-        repo_files,
-        options=normalized_options,
-        context=exec_context,
-    )
-    return {
-        "ast_files": materialize_extract_plan(
-            "ast_files_v1",
-            plans["ast_files"],
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=True,
+    with stage_span(
+        "extract.ast_tables",
+        stage="extract",
+        scope_name=SCOPE_EXTRACT,
+        attributes={"codeanatomy.extractor": "ast"},
+    ):
+        repo_files = kwargs["repo_files"]
+        normalized_options = normalize_options("ast", kwargs.get("options"), ASTExtractOptions)
+        file_contexts = kwargs.get("file_contexts")
+        evidence_plan = kwargs.get("evidence_plan")
+        profile = kwargs.get("profile", "default")
+        prefer_reader = kwargs.get("prefer_reader", False)
+        exec_context = ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            session=kwargs.get("session"),
+            profile=profile,
+        )
+        session = exec_context.ensure_session()
+        exec_context = replace(exec_context, session=session)
+        runtime_profile = exec_context.ensure_runtime_profile()
+        determinism_tier = exec_context.determinism_tier()
+        normalize = ExtractNormalizeOptions(options=normalized_options)
+        plans = extract_ast_plans(
+            repo_files,
+            options=normalized_options,
+            context=exec_context,
+        )
+        return {
+            "ast_files": materialize_extract_plan(
+                "ast_files_v1",
+                plans["ast_files"],
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    prefer_reader=prefer_reader,
+                    apply_post_kernels=True,
+                ),
             ),
-        ),
-    }
+        }

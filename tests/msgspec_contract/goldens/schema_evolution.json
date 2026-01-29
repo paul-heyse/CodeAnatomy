@@ -1,0 +1,6489 @@
+{
+  "field_order": {
+    "DeltaFeatureGate": [
+      "min_reader_version",
+      "min_writer_version",
+      "required_reader_features",
+      "required_writer_features"
+    ],
+    "DeltaProtocolCompatibility": [
+      "compatible",
+      "reason",
+      "required_reader_version",
+      "required_writer_version",
+      "supported_reader_version",
+      "supported_writer_version",
+      "required_reader_features",
+      "required_writer_features",
+      "supported_reader_features",
+      "supported_writer_features",
+      "missing_reader_features",
+      "missing_writer_features",
+      "reader_version_ok",
+      "writer_version_ok",
+      "feature_support_ok"
+    ],
+    "DeltaProtocolSnapshot": [
+      "min_reader_version",
+      "min_writer_version",
+      "reader_features",
+      "writer_features"
+    ],
+    "DeltaScanConfigSnapshot": [
+      "file_column_name",
+      "enable_parquet_pushdown",
+      "schema_force_view_types",
+      "wrap_partition_values",
+      "schema"
+    ],
+    "DeltaSchemaPolicy": [
+      "schema_mode",
+      "column_mapping_mode"
+    ],
+    "DeltaStatsDecision": [
+      "dataset_name",
+      "stats_policy",
+      "stats_columns",
+      "lineage_columns",
+      "partition_by",
+      "zorder_by",
+      "stats_max_columns"
+    ],
+    "DeltaStatsDecisionEnvelope": [
+      "payload"
+    ],
+    "DeltaWritePolicy": [
+      "target_file_size",
+      "partition_by",
+      "zorder_by",
+      "stats_policy",
+      "stats_columns",
+      "stats_max_columns",
+      "parquet_writer_policy",
+      "enable_features"
+    ],
+    "ExtractErrorsArtifact": [
+      "event_time_unix_ms",
+      "run_id",
+      "output_dir",
+      "errors",
+      "error_count"
+    ],
+    "IncrementalMetadataSnapshot": [
+      "datafusion_settings_hash",
+      "runtime_profile_hash",
+      "runtime_profile"
+    ],
+    "NormalizeOutputsArtifact": [
+      "event_time_unix_ms",
+      "run_id",
+      "output_dir",
+      "outputs",
+      "row_count"
+    ],
+    "ParquetWriterPolicy": [
+      "statistics_enabled",
+      "statistics_level",
+      "bloom_filter_enabled",
+      "bloom_filter_fpp",
+      "bloom_filter_ndv",
+      "dictionary_enabled"
+    ],
+    "PlanArtifactRow": [
+      "event_time_unix_ms",
+      "profile_name",
+      "event_kind",
+      "view_name",
+      "plan_fingerprint",
+      "plan_identity_hash",
+      "udf_snapshot_hash",
+      "function_registry_hash",
+      "required_udfs",
+      "required_rewrite_tags",
+      "domain_planner_names",
+      "delta_inputs_msgpack",
+      "df_settings",
+      "planning_env_msgpack",
+      "planning_env_hash",
+      "rulepack_msgpack",
+      "rulepack_hash",
+      "information_schema_msgpack",
+      "information_schema_hash",
+      "substrait_msgpack",
+      "logical_plan_proto_msgpack",
+      "optimized_plan_proto_msgpack",
+      "execution_plan_proto_msgpack",
+      "explain_tree_rows_msgpack",
+      "explain_verbose_rows_msgpack",
+      "explain_analyze_duration_ms",
+      "explain_analyze_output_rows",
+      "substrait_validation_msgpack",
+      "lineage_msgpack",
+      "scan_units_msgpack",
+      "scan_keys",
+      "plan_details_msgpack",
+      "function_registry_snapshot_msgpack",
+      "udf_snapshot_msgpack",
+      "udf_planner_snapshot_msgpack",
+      "udf_compatibility_ok",
+      "udf_compatibility_detail_msgpack",
+      "execution_duration_ms",
+      "execution_status",
+      "execution_error"
+    ],
+    "PlanArtifacts": [
+      "explain_tree_rows",
+      "explain_verbose_rows",
+      "explain_analyze_duration_ms",
+      "explain_analyze_output_rows",
+      "df_settings",
+      "planning_env_snapshot",
+      "planning_env_hash",
+      "rulepack_snapshot",
+      "rulepack_hash",
+      "information_schema_snapshot",
+      "information_schema_hash",
+      "substrait_validation",
+      "logical_plan_proto",
+      "optimized_plan_proto",
+      "execution_plan_proto",
+      "udf_snapshot_hash",
+      "function_registry_hash",
+      "function_registry_snapshot",
+      "rewrite_tags",
+      "domain_planner_names",
+      "udf_snapshot",
+      "udf_planner_snapshot"
+    ],
+    "PlanProtoStatus": [
+      "enabled",
+      "installed",
+      "reason"
+    ],
+    "PlanScheduleArtifact": [
+      "run_id",
+      "plan_signature",
+      "reduced_plan_signature",
+      "task_count",
+      "ordered_tasks",
+      "generations",
+      "critical_path_tasks",
+      "critical_path_length_weighted",
+      "task_costs",
+      "bottom_level_costs",
+      "slack_by_task",
+      "task_centrality",
+      "task_dominators",
+      "bridge_edges",
+      "articulation_tasks"
+    ],
+    "PlanScheduleEnvelope": [
+      "payload"
+    ],
+    "PlanValidationArtifact": [
+      "run_id",
+      "plan_signature",
+      "reduced_plan_signature",
+      "total_tasks",
+      "valid_tasks",
+      "invalid_tasks",
+      "total_edges",
+      "valid_edges",
+      "invalid_edges",
+      "task_results"
+    ],
+    "PlanValidationEnvelope": [
+      "payload"
+    ],
+    "RunManifest": [
+      "run_id",
+      "status",
+      "event_time_unix_ms",
+      "plan_signature",
+      "plan_fingerprints",
+      "delta_inputs",
+      "outputs",
+      "runtime_profile_name",
+      "runtime_profile_hash",
+      "determinism_tier",
+      "output_dir",
+      "artifact_ids",
+      "cache_path",
+      "cache_log_glob",
+      "cache_policy_profile",
+      "cache_log_enabled",
+      "materialized_outputs"
+    ],
+    "RunManifestEnvelope": [
+      "payload"
+    ],
+    "RuntimeProfileSnapshot": [
+      "version",
+      "name",
+      "determinism_tier",
+      "datafusion_settings_hash",
+      "datafusion_settings",
+      "telemetry_payload",
+      "profile_hash"
+    ],
+    "SemanticValidationArtifact": [
+      "view_name",
+      "status",
+      "entries",
+      "errors"
+    ],
+    "SemanticValidationArtifactEnvelope": [
+      "payload"
+    ],
+    "SemanticValidationEntry": [
+      "column_name",
+      "expected",
+      "actual",
+      "status"
+    ],
+    "ViewArtifactPayload": [
+      "name",
+      "plan_fingerprint",
+      "plan_task_signature",
+      "schema",
+      "schema_describe",
+      "schema_provenance",
+      "required_udfs",
+      "referenced_tables"
+    ],
+    "ViewCacheArtifact": [
+      "view_name",
+      "cache_policy",
+      "cache_path",
+      "plan_fingerprint",
+      "status",
+      "hit"
+    ],
+    "ViewCacheArtifactEnvelope": [
+      "payload"
+    ],
+    "WriteArtifactRow": [
+      "event_time_unix_ms",
+      "profile_name",
+      "event_kind",
+      "destination",
+      "format",
+      "mode",
+      "method",
+      "table_uri",
+      "delta_version",
+      "commit_app_id",
+      "commit_version",
+      "commit_run_id",
+      "delta_write_policy_msgpack",
+      "delta_schema_policy_msgpack",
+      "partition_by",
+      "table_properties",
+      "commit_metadata",
+      "delta_stats_decision_msgpack",
+      "duration_ms",
+      "row_count",
+      "status",
+      "error"
+    ]
+  },
+  "type_info": [
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanArtifacts",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_tree_rows",
+          "name": "explain_tree_rows",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "item_type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {}
+                },
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_verbose_rows",
+          "name": "explain_verbose_rows",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "item_type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {}
+                },
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_analyze_duration_ms",
+          "name": "explain_analyze_duration_ms",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_analyze_output_rows",
+          "name": "explain_analyze_output_rows",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "df_settings",
+          "name": "df_settings",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "planning_env_snapshot",
+          "name": "planning_env_snapshot",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "planning_env_hash",
+          "name": "planning_env_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "rulepack_snapshot",
+          "name": "rulepack_snapshot",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {}
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "rulepack_hash",
+          "name": "rulepack_hash",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Deterministic hash value.",
+                  "examples": [
+                    "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                  ],
+                  "title": "Hash Value"
+                },
+                "type": {
+                  "max_length": null,
+                  "min_length": 1,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "information_schema_snapshot",
+          "name": "information_schema_snapshot",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "information_schema_hash",
+          "name": "information_schema_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "substrait_validation",
+          "name": "substrait_validation",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {}
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "logical_plan_proto",
+          "name": "logical_plan_proto",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "cls": "serde_msgspec_ext.LogicalPlanProtoBytes",
+                "fields": [
+                  {
+                    "default": "NODEFAULT",
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "data",
+                    "name": "data",
+                    "required": true,
+                    "type": {
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "optimized_plan_proto",
+          "name": "optimized_plan_proto",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "cls": "serde_msgspec_ext.OptimizedPlanProtoBytes",
+                "fields": [
+                  {
+                    "default": "NODEFAULT",
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "data",
+                    "name": "data",
+                    "required": true,
+                    "type": {
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "execution_plan_proto",
+          "name": "execution_plan_proto",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "cls": "serde_msgspec_ext.ExecutionPlanProtoBytes",
+                "fields": [
+                  {
+                    "default": "NODEFAULT",
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "data",
+                    "name": "data",
+                    "required": true,
+                    "type": {
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_snapshot_hash",
+          "name": "udf_snapshot_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "function_registry_hash",
+          "name": "function_registry_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "function_registry_snapshot",
+          "name": "function_registry_snapshot",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "rewrite_tags",
+          "name": "rewrite_tags",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "domain_planner_names",
+          "name": "domain_planner_names",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_snapshot",
+          "name": "udf_snapshot",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_planner_snapshot",
+          "name": "udf_planner_snapshot",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {}
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanArtifactRow",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_time_unix_ms",
+          "name": "event_time_unix_ms",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "profile_name",
+          "name": "profile_name",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Runtime profile name.",
+                  "examples": [
+                    "default",
+                    "prod_primary"
+                  ],
+                  "title": "Profile Name"
+                },
+                "type": {
+                  "max_length": 128,
+                  "min_length": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_kind",
+          "name": "event_kind",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Artifact event kind identifier.",
+              "examples": [
+                "plan",
+                "execution",
+                "write"
+              ],
+              "title": "Event Kind"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 1,
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "view_name",
+          "name": "view_name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "View name.",
+              "examples": [
+                "example_view",
+                "analytics.view_summary"
+              ],
+              "title": "View Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_fingerprint",
+          "name": "plan_fingerprint",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan fingerprint for reproducibility.",
+              "examples": [
+                "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+              ],
+              "title": "Plan Fingerprint"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 32,
+              "pattern": "^[A-Fa-f0-9]{32,128}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_identity_hash",
+          "name": "plan_identity_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan identity hash for artifact rows.",
+              "examples": [
+                "9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"
+              ],
+              "title": "Plan Identity Hash"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 32,
+              "pattern": "^[A-Fa-f0-9]{32,128}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_snapshot_hash",
+          "name": "udf_snapshot_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "function_registry_hash",
+          "name": "function_registry_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_udfs",
+          "name": "required_udfs",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_rewrite_tags",
+          "name": "required_rewrite_tags",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "domain_planner_names",
+          "name": "domain_planner_names",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_inputs_msgpack",
+          "name": "delta_inputs_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "df_settings",
+          "name": "df_settings",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "planning_env_msgpack",
+          "name": "planning_env_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "planning_env_hash",
+          "name": "planning_env_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "rulepack_msgpack",
+          "name": "rulepack_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "rulepack_hash",
+          "name": "rulepack_hash",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Deterministic hash value.",
+                  "examples": [
+                    "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                  ],
+                  "title": "Hash Value"
+                },
+                "type": {
+                  "max_length": null,
+                  "min_length": 1,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "information_schema_msgpack",
+          "name": "information_schema_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "information_schema_hash",
+          "name": "information_schema_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "substrait_msgpack",
+          "name": "substrait_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "logical_plan_proto_msgpack",
+          "name": "logical_plan_proto_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "optimized_plan_proto_msgpack",
+          "name": "optimized_plan_proto_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "execution_plan_proto_msgpack",
+          "name": "execution_plan_proto_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_tree_rows_msgpack",
+          "name": "explain_tree_rows_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_verbose_rows_msgpack",
+          "name": "explain_verbose_rows_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_analyze_duration_ms",
+          "name": "explain_analyze_duration_ms",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "explain_analyze_output_rows",
+          "name": "explain_analyze_output_rows",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "substrait_validation_msgpack",
+          "name": "substrait_validation_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "lineage_msgpack",
+          "name": "lineage_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "scan_units_msgpack",
+          "name": "scan_units_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "scan_keys",
+          "name": "scan_keys",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_details_msgpack",
+          "name": "plan_details_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "function_registry_snapshot_msgpack",
+          "name": "function_registry_snapshot_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_snapshot_msgpack",
+          "name": "udf_snapshot_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_planner_snapshot_msgpack",
+          "name": "udf_planner_snapshot_msgpack",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_compatibility_ok",
+          "name": "udf_compatibility_ok",
+          "required": true,
+          "type": {}
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "udf_compatibility_detail_msgpack",
+          "name": "udf_compatibility_detail_msgpack",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "execution_duration_ms",
+          "name": "execution_duration_ms",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "execution_status",
+          "name": "execution_status",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "execution_error",
+          "name": "execution_error",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.WriteArtifactRow",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_time_unix_ms",
+          "name": "event_time_unix_ms",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "profile_name",
+          "name": "profile_name",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Runtime profile name.",
+                  "examples": [
+                    "default",
+                    "prod_primary"
+                  ],
+                  "title": "Profile Name"
+                },
+                "type": {
+                  "max_length": 128,
+                  "min_length": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_kind",
+          "name": "event_kind",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Artifact event kind identifier.",
+              "examples": [
+                "plan",
+                "execution",
+                "write"
+              ],
+              "title": "Event Kind"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 1,
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "destination",
+          "name": "destination",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "format",
+          "name": "format",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "mode",
+          "name": "mode",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "method",
+          "name": "method",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "table_uri",
+          "name": "table_uri",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_version",
+          "name": "delta_version",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": null,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "commit_app_id",
+          "name": "commit_app_id",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "commit_version",
+          "name": "commit_version",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": null,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "commit_run_id",
+          "name": "commit_run_id",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Unique identifier for a pipeline run.",
+                  "examples": [
+                    "run_01HZX4J3C8F8M2KQ"
+                  ],
+                  "title": "Run Id"
+                },
+                "type": {
+                  "max_length": 64,
+                  "min_length": 8,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_write_policy_msgpack",
+          "name": "delta_write_policy_msgpack",
+          "required": true,
+          "type": {}
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_schema_policy_msgpack",
+          "name": "delta_schema_policy_msgpack",
+          "required": true,
+          "type": {}
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "partition_by",
+          "name": "partition_by",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "table_properties",
+          "name": "table_properties",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "commit_metadata",
+          "name": "commit_metadata",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_stats_decision_msgpack",
+          "name": "delta_stats_decision_msgpack",
+          "required": true,
+          "type": {}
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "duration_ms",
+          "name": "duration_ms",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "row_count",
+          "name": "row_count",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "status",
+          "name": "status",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "error",
+          "name": "error",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanProtoStatus",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "enabled",
+          "name": "enabled",
+          "required": true,
+          "type": {}
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "installed",
+          "name": "installed",
+          "required": true,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "reason",
+          "name": "reason",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.ViewArtifactPayload",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "name",
+          "name": "name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "View name.",
+              "examples": [
+                "example_view",
+                "analytics.view_summary"
+              ],
+              "title": "View Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_fingerprint",
+          "name": "plan_fingerprint",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan fingerprint for reproducibility.",
+              "examples": [
+                "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+              ],
+              "title": "Plan Fingerprint"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 32,
+              "pattern": "^[A-Fa-f0-9]{32,128}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_task_signature",
+          "name": "plan_task_signature",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Plan Signature"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema",
+          "name": "schema",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema_describe",
+          "name": "schema_describe",
+          "required": true,
+          "type": {
+            "item_type": {
+              "key_type": {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              "max_length": null,
+              "min_length": null,
+              "value_type": {}
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema_provenance",
+          "name": "schema_provenance",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_udfs",
+          "name": "required_udfs",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "referenced_tables",
+          "name": "referenced_tables",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.ViewCacheArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "view_name",
+          "name": "view_name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "View name.",
+              "examples": [
+                "example_view",
+                "analytics.view_summary"
+              ],
+              "title": "View Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_policy",
+          "name": "cache_policy",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Cache policy identifier.",
+              "examples": [
+                "prefer_cache"
+              ],
+              "title": "Cache Policy"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_path",
+          "name": "cache_path",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_fingerprint",
+          "name": "plan_fingerprint",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Deterministic plan fingerprint for reproducibility.",
+                  "examples": [
+                    "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+                  ],
+                  "title": "Plan Fingerprint"
+                },
+                "type": {
+                  "max_length": 128,
+                  "min_length": 32,
+                  "pattern": "^[A-Fa-f0-9]{32,128}$"
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "status",
+          "name": "status",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Artifact status value.",
+              "examples": [
+                "ok",
+                "error"
+              ],
+              "title": "Artifact Status"
+            },
+            "type": {
+              "max_length": 32,
+              "min_length": 1,
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+            }
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "hit",
+          "name": "hit",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.ViewCacheArtifactEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.ViewCacheArtifact",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "view_name",
+                "name": "view_name",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "View name.",
+                    "examples": [
+                      "example_view",
+                      "analytics.view_summary"
+                    ],
+                    "title": "View Name"
+                  },
+                  "type": {
+                    "max_length": 128,
+                    "min_length": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_policy",
+                "name": "cache_policy",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Cache policy identifier.",
+                    "examples": [
+                      "prefer_cache"
+                    ],
+                    "title": "Cache Policy"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_path",
+                "name": "cache_path",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "plan_fingerprint",
+                "name": "plan_fingerprint",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "extra": null,
+                      "extra_json_schema": {
+                        "description": "Deterministic plan fingerprint for reproducibility.",
+                        "examples": [
+                          "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+                        ],
+                        "title": "Plan Fingerprint"
+                      },
+                      "type": {
+                        "max_length": 128,
+                        "min_length": 32,
+                        "pattern": "^[A-Fa-f0-9]{32,128}$"
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "status",
+                "name": "status",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Artifact status value.",
+                    "examples": [
+                      "ok",
+                      "error"
+                    ],
+                    "title": "Artifact Status"
+                  },
+                  "type": {
+                    "max_length": 32,
+                    "min_length": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                  }
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "hit",
+                "name": "hit",
+                "required": false,
+                "type": {
+                  "types": [
+                    {},
+                    {}
+                  ]
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "view_cache_artifact",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.SemanticValidationEntry",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "column_name",
+          "name": "column_name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Non-empty string value.",
+              "examples": [
+                "value"
+              ],
+              "title": "Non-empty String"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "expected",
+          "name": "expected",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Non-empty string value.",
+              "examples": [
+                "value"
+              ],
+              "title": "Non-empty String"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "actual",
+          "name": "actual",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "status",
+          "name": "status",
+          "required": true,
+          "type": {
+            "values": [
+              "mismatch",
+              "missing",
+              "ok"
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.SemanticValidationArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "view_name",
+          "name": "view_name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "View name.",
+              "examples": [
+                "example_view",
+                "analytics.view_summary"
+              ],
+              "title": "View Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "status",
+          "name": "status",
+          "required": true,
+          "type": {
+            "values": [
+              "error",
+              "ok"
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "entries",
+          "name": "entries",
+          "required": true,
+          "type": {
+            "item_type": {
+              "array_like": false,
+              "cls": "serde_artifacts.SemanticValidationEntry",
+              "fields": [
+                {
+                  "default": "NODEFAULT",
+                  "default_factory": "NODEFAULT",
+                  "encode_name": "column_name",
+                  "name": "column_name",
+                  "required": true,
+                  "type": {
+                    "extra": null,
+                    "extra_json_schema": {
+                      "description": "Non-empty string value.",
+                      "examples": [
+                        "value"
+                      ],
+                      "title": "Non-empty String"
+                    },
+                    "type": {
+                      "max_length": null,
+                      "min_length": 1,
+                      "pattern": null
+                    }
+                  }
+                },
+                {
+                  "default": "NODEFAULT",
+                  "default_factory": "NODEFAULT",
+                  "encode_name": "expected",
+                  "name": "expected",
+                  "required": true,
+                  "type": {
+                    "extra": null,
+                    "extra_json_schema": {
+                      "description": "Non-empty string value.",
+                      "examples": [
+                        "value"
+                      ],
+                      "title": "Non-empty String"
+                    },
+                    "type": {
+                      "max_length": null,
+                      "min_length": 1,
+                      "pattern": null
+                    }
+                  }
+                },
+                {
+                  "default": "NODEFAULT",
+                  "default_factory": "NODEFAULT",
+                  "encode_name": "actual",
+                  "name": "actual",
+                  "required": true,
+                  "type": {
+                    "types": [
+                      {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      {}
+                    ]
+                  }
+                },
+                {
+                  "default": "NODEFAULT",
+                  "default_factory": "NODEFAULT",
+                  "encode_name": "status",
+                  "name": "status",
+                  "required": true,
+                  "type": {
+                    "values": [
+                      "mismatch",
+                      "missing",
+                      "ok"
+                    ]
+                  }
+                }
+              ],
+              "forbid_unknown_fields": false,
+              "tag": null,
+              "tag_field": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "errors",
+          "name": "errors",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.SemanticValidationArtifactEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.SemanticValidationArtifact",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "view_name",
+                "name": "view_name",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "View name.",
+                    "examples": [
+                      "example_view",
+                      "analytics.view_summary"
+                    ],
+                    "title": "View Name"
+                  },
+                  "type": {
+                    "max_length": 128,
+                    "min_length": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "status",
+                "name": "status",
+                "required": true,
+                "type": {
+                  "values": [
+                    "error",
+                    "ok"
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "entries",
+                "name": "entries",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "array_like": false,
+                    "cls": "serde_artifacts.SemanticValidationEntry",
+                    "fields": [
+                      {
+                        "default": "NODEFAULT",
+                        "default_factory": "NODEFAULT",
+                        "encode_name": "column_name",
+                        "name": "column_name",
+                        "required": true,
+                        "type": {
+                          "extra": null,
+                          "extra_json_schema": {
+                            "description": "Non-empty string value.",
+                            "examples": [
+                              "value"
+                            ],
+                            "title": "Non-empty String"
+                          },
+                          "type": {
+                            "max_length": null,
+                            "min_length": 1,
+                            "pattern": null
+                          }
+                        }
+                      },
+                      {
+                        "default": "NODEFAULT",
+                        "default_factory": "NODEFAULT",
+                        "encode_name": "expected",
+                        "name": "expected",
+                        "required": true,
+                        "type": {
+                          "extra": null,
+                          "extra_json_schema": {
+                            "description": "Non-empty string value.",
+                            "examples": [
+                              "value"
+                            ],
+                            "title": "Non-empty String"
+                          },
+                          "type": {
+                            "max_length": null,
+                            "min_length": 1,
+                            "pattern": null
+                          }
+                        }
+                      },
+                      {
+                        "default": "NODEFAULT",
+                        "default_factory": "NODEFAULT",
+                        "encode_name": "actual",
+                        "name": "actual",
+                        "required": true,
+                        "type": {
+                          "types": [
+                            {
+                              "max_length": null,
+                              "min_length": null,
+                              "pattern": null
+                            },
+                            {}
+                          ]
+                        }
+                      },
+                      {
+                        "default": "NODEFAULT",
+                        "default_factory": "NODEFAULT",
+                        "encode_name": "status",
+                        "name": "status",
+                        "required": true,
+                        "type": {
+                          "values": [
+                            "mismatch",
+                            "missing",
+                            "ok"
+                          ]
+                        }
+                      }
+                    ],
+                    "forbid_unknown_fields": false,
+                    "tag": null,
+                    "tag_field": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": [],
+                "default_factory": "NODEFAULT",
+                "encode_name": "errors",
+                "name": "errors",
+                "required": false,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "semantic_validation",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanScheduleArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "run_id",
+          "name": "run_id",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Run Id"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_signature",
+          "name": "plan_signature",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Plan Signature"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "reduced_plan_signature",
+          "name": "reduced_plan_signature",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Plan Signature"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "task_count",
+          "name": "task_count",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "ordered_tasks",
+          "name": "ordered_tasks",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "generations",
+          "name": "generations",
+          "required": true,
+          "type": {
+            "item_type": {
+              "item_type": {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              "max_length": null,
+              "min_length": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "critical_path_tasks",
+          "name": "critical_path_tasks",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "critical_path_length_weighted",
+          "name": "critical_path_length_weighted",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "task_costs",
+          "name": "task_costs",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "ge": 0,
+              "gt": null,
+              "le": null,
+              "lt": null,
+              "multiple_of": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "bottom_level_costs",
+          "name": "bottom_level_costs",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "ge": 0,
+              "gt": null,
+              "le": null,
+              "lt": null,
+              "multiple_of": null
+            }
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "slack_by_task",
+          "name": "slack_by_task",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "task_centrality",
+          "name": "task_centrality",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "task_dominators",
+          "name": "task_dominators",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "bridge_edges",
+          "name": "bridge_edges",
+          "required": false,
+          "type": {
+            "item_type": {
+              "item_types": [
+                {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                }
+              ]
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "articulation_tasks",
+          "name": "articulation_tasks",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanScheduleEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.PlanScheduleArtifact",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "run_id",
+                "name": "run_id",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Unique identifier for a pipeline run.",
+                    "examples": [
+                      "run_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Run Id"
+                  },
+                  "type": {
+                    "max_length": 64,
+                    "min_length": 8,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "plan_signature",
+                "name": "plan_signature",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic plan signature string.",
+                    "examples": [
+                      "sig_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Plan Signature"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "reduced_plan_signature",
+                "name": "reduced_plan_signature",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic plan signature string.",
+                    "examples": [
+                      "sig_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Plan Signature"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "task_count",
+                "name": "task_count",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "ordered_tasks",
+                "name": "ordered_tasks",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "generations",
+                "name": "generations",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "item_type": {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    "max_length": null,
+                    "min_length": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "critical_path_tasks",
+                "name": "critical_path_tasks",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "critical_path_length_weighted",
+                "name": "critical_path_length_weighted",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "ge": 0,
+                      "gt": null,
+                      "le": null,
+                      "lt": null,
+                      "multiple_of": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "task_costs",
+                "name": "task_costs",
+                "required": true,
+                "type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {
+                    "ge": 0,
+                    "gt": null,
+                    "le": null,
+                    "lt": null,
+                    "multiple_of": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "bottom_level_costs",
+                "name": "bottom_level_costs",
+                "required": true,
+                "type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {
+                    "ge": 0,
+                    "gt": null,
+                    "le": null,
+                    "lt": null,
+                    "multiple_of": null
+                  }
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "slack_by_task",
+                "name": "slack_by_task",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "key_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null,
+                      "value_type": {
+                        "ge": 0,
+                        "gt": null,
+                        "le": null,
+                        "lt": null,
+                        "multiple_of": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "task_centrality",
+                "name": "task_centrality",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "key_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null,
+                      "value_type": {
+                        "ge": 0,
+                        "gt": null,
+                        "le": null,
+                        "lt": null,
+                        "multiple_of": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "task_dominators",
+                "name": "task_dominators",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "key_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null,
+                      "value_type": {
+                        "types": [
+                          {
+                            "max_length": null,
+                            "min_length": null,
+                            "pattern": null
+                          },
+                          {}
+                        ]
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": [],
+                "default_factory": "NODEFAULT",
+                "encode_name": "bridge_edges",
+                "name": "bridge_edges",
+                "required": false,
+                "type": {
+                  "item_type": {
+                    "item_types": [
+                      {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      }
+                    ]
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": [],
+                "default_factory": "NODEFAULT",
+                "encode_name": "articulation_tasks",
+                "name": "articulation_tasks",
+                "required": false,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "plan_schedule",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanValidationArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "run_id",
+          "name": "run_id",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Run Id"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_signature",
+          "name": "plan_signature",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Plan Signature"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "reduced_plan_signature",
+          "name": "reduced_plan_signature",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Plan Signature"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "total_tasks",
+          "name": "total_tasks",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "valid_tasks",
+          "name": "valid_tasks",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "invalid_tasks",
+          "name": "invalid_tasks",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "total_edges",
+          "name": "total_edges",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "valid_edges",
+          "name": "valid_edges",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "invalid_edges",
+          "name": "invalid_edges",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "task_results",
+          "name": "task_results",
+          "required": true,
+          "type": {
+            "item_type": {
+              "key_type": {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              "max_length": null,
+              "min_length": null,
+              "value_type": {}
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.PlanValidationEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.PlanValidationArtifact",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "run_id",
+                "name": "run_id",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Unique identifier for a pipeline run.",
+                    "examples": [
+                      "run_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Run Id"
+                  },
+                  "type": {
+                    "max_length": 64,
+                    "min_length": 8,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "plan_signature",
+                "name": "plan_signature",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic plan signature string.",
+                    "examples": [
+                      "sig_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Plan Signature"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "reduced_plan_signature",
+                "name": "reduced_plan_signature",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic plan signature string.",
+                    "examples": [
+                      "sig_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Plan Signature"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "total_tasks",
+                "name": "total_tasks",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "valid_tasks",
+                "name": "valid_tasks",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "invalid_tasks",
+                "name": "invalid_tasks",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "total_edges",
+                "name": "total_edges",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "valid_edges",
+                "name": "valid_edges",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "invalid_edges",
+                "name": "invalid_edges",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "task_results",
+                "name": "task_results",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "key_type": {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    "max_length": null,
+                    "min_length": null,
+                    "value_type": {}
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "plan_validation",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.DeltaStatsDecision",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "dataset_name",
+          "name": "dataset_name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Dataset identifier.",
+              "examples": [
+                "cpg_nodes",
+                "analytics.events_v2"
+              ],
+              "title": "Dataset Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_policy",
+          "name": "stats_policy",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Delta stats policy identifier.",
+              "examples": [
+                "auto"
+              ],
+              "title": "Stats Policy"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_columns",
+          "name": "stats_columns",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "item_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "lineage_columns",
+          "name": "lineage_columns",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "partition_by",
+          "name": "partition_by",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "zorder_by",
+          "name": "zorder_by",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_max_columns",
+          "name": "stats_max_columns",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.DeltaStatsDecisionEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.DeltaStatsDecision",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "dataset_name",
+                "name": "dataset_name",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Dataset identifier.",
+                    "examples": [
+                      "cpg_nodes",
+                      "analytics.events_v2"
+                    ],
+                    "title": "Dataset Name"
+                  },
+                  "type": {
+                    "max_length": 128,
+                    "min_length": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "stats_policy",
+                "name": "stats_policy",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Delta stats policy identifier.",
+                    "examples": [
+                      "auto"
+                    ],
+                    "title": "Stats Policy"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "stats_columns",
+                "name": "stats_columns",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "item_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "lineage_columns",
+                "name": "lineage_columns",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": [],
+                "default_factory": "NODEFAULT",
+                "encode_name": "partition_by",
+                "name": "partition_by",
+                "required": false,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": [],
+                "default_factory": "NODEFAULT",
+                "encode_name": "zorder_by",
+                "name": "zorder_by",
+                "required": false,
+                "type": {
+                  "item_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "stats_max_columns",
+                "name": "stats_max_columns",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "ge": 0,
+                      "gt": null,
+                      "le": null,
+                      "lt": null,
+                      "multiple_of": null
+                    },
+                    {}
+                  ]
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "delta_stats_decision",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.NormalizeOutputsArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_time_unix_ms",
+          "name": "event_time_unix_ms",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "run_id",
+          "name": "run_id",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Run Id"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "output_dir",
+          "name": "output_dir",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "outputs",
+          "name": "outputs",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "row_count",
+          "name": "row_count",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.ExtractErrorsArtifact",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_time_unix_ms",
+          "name": "event_time_unix_ms",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "run_id",
+          "name": "run_id",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Run Id"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "output_dir",
+          "name": "output_dir",
+          "required": true,
+          "type": {
+            "max_length": null,
+            "min_length": null,
+            "pattern": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "errors",
+          "name": "errors",
+          "required": true,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "error_count",
+          "name": "error_count",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.RunManifest",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "run_id",
+          "name": "run_id",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "title": "Run Id"
+            },
+            "type": {
+              "max_length": 64,
+              "min_length": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "status",
+          "name": "status",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Artifact status value.",
+              "examples": [
+                "ok",
+                "error"
+              ],
+              "title": "Artifact Status"
+            },
+            "type": {
+              "max_length": 32,
+              "min_length": 1,
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "event_time_unix_ms",
+          "name": "event_time_unix_ms",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_signature",
+          "name": "plan_signature",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Deterministic plan signature string.",
+                  "examples": [
+                    "sig_01HZX4J3C8F8M2KQ"
+                  ],
+                  "title": "Plan Signature"
+                },
+                "type": {
+                  "max_length": null,
+                  "min_length": 1,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "plan_fingerprints",
+          "name": "plan_fingerprints",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Deterministic plan fingerprint for reproducibility.",
+                "examples": [
+                  "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+                ],
+                "title": "Plan Fingerprint"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 32,
+                "pattern": "^[A-Fa-f0-9]{32,128}$"
+              }
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "delta_inputs",
+          "name": "delta_inputs",
+          "required": true,
+          "type": {
+            "item_type": {
+              "key_type": {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              "max_length": null,
+              "min_length": null,
+              "value_type": {}
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "outputs",
+          "name": "outputs",
+          "required": true,
+          "type": {
+            "item_type": {
+              "key_type": {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              "max_length": null,
+              "min_length": null,
+              "value_type": {}
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "runtime_profile_name",
+          "name": "runtime_profile_name",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Runtime profile name.",
+                  "examples": [
+                    "default",
+                    "prod_primary"
+                  ],
+                  "title": "Profile Name"
+                },
+                "type": {
+                  "max_length": 128,
+                  "min_length": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "runtime_profile_hash",
+          "name": "runtime_profile_hash",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Deterministic hash value.",
+                  "examples": [
+                    "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                  ],
+                  "title": "Hash Value"
+                },
+                "type": {
+                  "max_length": null,
+                  "min_length": 1,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "determinism_tier",
+          "name": "determinism_tier",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Non-empty string value.",
+                  "examples": [
+                    "value"
+                  ],
+                  "title": "Non-empty String"
+                },
+                "type": {
+                  "max_length": null,
+                  "min_length": 1,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "output_dir",
+          "name": "output_dir",
+          "required": true,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "artifact_ids",
+          "name": "artifact_ids",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_path",
+          "name": "cache_path",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_log_glob",
+          "name": "cache_log_glob",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_policy_profile",
+          "name": "cache_policy_profile",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "cache_log_enabled",
+          "name": "cache_log_enabled",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "materialized_outputs",
+          "name": "materialized_outputs",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "item_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.RunManifestEnvelope",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "payload",
+          "name": "payload",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.RunManifest",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "run_id",
+                "name": "run_id",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Unique identifier for a pipeline run.",
+                    "examples": [
+                      "run_01HZX4J3C8F8M2KQ"
+                    ],
+                    "title": "Run Id"
+                  },
+                  "type": {
+                    "max_length": 64,
+                    "min_length": 8,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "status",
+                "name": "status",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Artifact status value.",
+                    "examples": [
+                      "ok",
+                      "error"
+                    ],
+                    "title": "Artifact Status"
+                  },
+                  "type": {
+                    "max_length": 32,
+                    "min_length": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "event_time_unix_ms",
+                "name": "event_time_unix_ms",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "plan_signature",
+                "name": "plan_signature",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "extra": null,
+                      "extra_json_schema": {
+                        "description": "Deterministic plan signature string.",
+                        "examples": [
+                          "sig_01HZX4J3C8F8M2KQ"
+                        ],
+                        "title": "Plan Signature"
+                      },
+                      "type": {
+                        "max_length": null,
+                        "min_length": 1,
+                        "pattern": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "plan_fingerprints",
+                "name": "plan_fingerprints",
+                "required": true,
+                "type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {
+                    "extra": null,
+                    "extra_json_schema": {
+                      "description": "Deterministic plan fingerprint for reproducibility.",
+                      "examples": [
+                        "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+                      ],
+                      "title": "Plan Fingerprint"
+                    },
+                    "type": {
+                      "max_length": 128,
+                      "min_length": 32,
+                      "pattern": "^[A-Fa-f0-9]{32,128}$"
+                    }
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "delta_inputs",
+                "name": "delta_inputs",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "key_type": {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    "max_length": null,
+                    "min_length": null,
+                    "value_type": {}
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "outputs",
+                "name": "outputs",
+                "required": true,
+                "type": {
+                  "item_type": {
+                    "key_type": {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    "max_length": null,
+                    "min_length": null,
+                    "value_type": {}
+                  },
+                  "max_length": null,
+                  "min_length": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "runtime_profile_name",
+                "name": "runtime_profile_name",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "extra": null,
+                      "extra_json_schema": {
+                        "description": "Runtime profile name.",
+                        "examples": [
+                          "default",
+                          "prod_primary"
+                        ],
+                        "title": "Profile Name"
+                      },
+                      "type": {
+                        "max_length": 128,
+                        "min_length": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "runtime_profile_hash",
+                "name": "runtime_profile_hash",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "extra": null,
+                      "extra_json_schema": {
+                        "description": "Deterministic hash value.",
+                        "examples": [
+                          "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                        ],
+                        "title": "Hash Value"
+                      },
+                      "type": {
+                        "max_length": null,
+                        "min_length": 1,
+                        "pattern": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "determinism_tier",
+                "name": "determinism_tier",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "extra": null,
+                      "extra_json_schema": {
+                        "description": "Non-empty string value.",
+                        "examples": [
+                          "value"
+                        ],
+                        "title": "Non-empty String"
+                      },
+                      "type": {
+                        "max_length": null,
+                        "min_length": 1,
+                        "pattern": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "output_dir",
+                "name": "output_dir",
+                "required": true,
+                "type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "artifact_ids",
+                "name": "artifact_ids",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "key_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null,
+                      "value_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      }
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_path",
+                "name": "cache_path",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_log_glob",
+                "name": "cache_log_glob",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_policy_profile",
+                "name": "cache_policy_profile",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "max_length": null,
+                      "min_length": null,
+                      "pattern": null
+                    },
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "cache_log_enabled",
+                "name": "cache_log_enabled",
+                "required": false,
+                "type": {
+                  "types": [
+                    {},
+                    {}
+                  ]
+                }
+              },
+              {
+                "default": null,
+                "default_factory": "NODEFAULT",
+                "encode_name": "materialized_outputs",
+                "name": "materialized_outputs",
+                "required": false,
+                "type": {
+                  "types": [
+                    {
+                      "item_type": {
+                        "max_length": null,
+                        "min_length": null,
+                        "pattern": null
+                      },
+                      "max_length": null,
+                      "min_length": null
+                    },
+                    {}
+                  ]
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": "run_manifest",
+      "tag_field": "kind"
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.RuntimeProfileSnapshot",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "version",
+          "name": "version",
+          "required": true,
+          "type": {
+            "ge": 0,
+            "gt": null,
+            "le": null,
+            "lt": null,
+            "multiple_of": null
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "name",
+          "name": "name",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Runtime profile name.",
+              "examples": [
+                "default",
+                "prod_primary"
+              ],
+              "title": "Profile Name"
+            },
+            "type": {
+              "max_length": 128,
+              "min_length": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "determinism_tier",
+          "name": "determinism_tier",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Non-empty string value.",
+              "examples": [
+                "value"
+              ],
+              "title": "Non-empty String"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "datafusion_settings_hash",
+          "name": "datafusion_settings_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "datafusion_settings",
+          "name": "datafusion_settings",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "telemetry_payload",
+          "name": "telemetry_payload",
+          "required": true,
+          "type": {
+            "key_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null,
+            "value_type": {}
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "profile_hash",
+          "name": "profile_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.IncrementalMetadataSnapshot",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "datafusion_settings_hash",
+          "name": "datafusion_settings_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "runtime_profile_hash",
+          "name": "runtime_profile_hash",
+          "required": true,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "title": "Hash Value"
+            },
+            "type": {
+              "max_length": null,
+              "min_length": 1,
+              "pattern": null
+            }
+          }
+        },
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "runtime_profile",
+          "name": "runtime_profile",
+          "required": true,
+          "type": {
+            "array_like": false,
+            "cls": "serde_artifacts.RuntimeProfileSnapshot",
+            "fields": [
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "version",
+                "name": "version",
+                "required": true,
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "name",
+                "name": "name",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Runtime profile name.",
+                    "examples": [
+                      "default",
+                      "prod_primary"
+                    ],
+                    "title": "Profile Name"
+                  },
+                  "type": {
+                    "max_length": 128,
+                    "min_length": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "determinism_tier",
+                "name": "determinism_tier",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Non-empty string value.",
+                    "examples": [
+                      "value"
+                    ],
+                    "title": "Non-empty String"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "datafusion_settings_hash",
+                "name": "datafusion_settings_hash",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic hash value.",
+                    "examples": [
+                      "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                    ],
+                    "title": "Hash Value"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "datafusion_settings",
+                "name": "datafusion_settings",
+                "required": true,
+                "type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  }
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "telemetry_payload",
+                "name": "telemetry_payload",
+                "required": true,
+                "type": {
+                  "key_type": {
+                    "max_length": null,
+                    "min_length": null,
+                    "pattern": null
+                  },
+                  "max_length": null,
+                  "min_length": null,
+                  "value_type": {}
+                }
+              },
+              {
+                "default": "NODEFAULT",
+                "default_factory": "NODEFAULT",
+                "encode_name": "profile_hash",
+                "name": "profile_hash",
+                "required": true,
+                "type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Deterministic hash value.",
+                    "examples": [
+                      "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+                    ],
+                    "title": "Hash Value"
+                  },
+                  "type": {
+                    "max_length": null,
+                    "min_length": 1,
+                    "pattern": null
+                  }
+                }
+              }
+            ],
+            "forbid_unknown_fields": false,
+            "tag": null,
+            "tag_field": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "serde_artifacts.DeltaScanConfigSnapshot",
+      "fields": [
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "file_column_name",
+          "name": "file_column_name",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": true,
+          "default_factory": "NODEFAULT",
+          "encode_name": "enable_parquet_pushdown",
+          "name": "enable_parquet_pushdown",
+          "required": false,
+          "type": {}
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema_force_view_types",
+          "name": "schema_force_view_types",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": false,
+          "default_factory": "NODEFAULT",
+          "encode_name": "wrap_partition_values",
+          "name": "wrap_partition_values",
+          "required": false,
+          "type": {}
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema",
+          "name": "schema",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "key_type": {
+                  "max_length": null,
+                  "min_length": null,
+                  "pattern": null
+                },
+                "max_length": null,
+                "min_length": null,
+                "value_type": {}
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "datafusion_engine.delta_protocol.DeltaProtocolSnapshot",
+      "fields": [
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "min_reader_version",
+          "name": "min_reader_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "min_writer_version",
+          "name": "min_writer_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "reader_features",
+          "name": "reader_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "writer_features",
+          "name": "writer_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "datafusion_engine.delta_protocol.DeltaProtocolCompatibility",
+      "fields": [
+        {
+          "default": "NODEFAULT",
+          "default_factory": "NODEFAULT",
+          "encode_name": "compatible",
+          "name": "compatible",
+          "required": true,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "reason",
+          "name": "reason",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "max_length": null,
+                "min_length": null,
+                "pattern": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_reader_version",
+          "name": "required_reader_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_writer_version",
+          "name": "required_writer_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "supported_reader_version",
+          "name": "supported_reader_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "supported_writer_version",
+          "name": "supported_writer_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_reader_features",
+          "name": "required_reader_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_writer_features",
+          "name": "required_writer_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "supported_reader_features",
+          "name": "supported_reader_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "supported_writer_features",
+          "name": "supported_writer_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "missing_reader_features",
+          "name": "missing_reader_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "missing_writer_features",
+          "name": "missing_writer_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "reader_version_ok",
+          "name": "reader_version_ok",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "writer_version_ok",
+          "name": "writer_version_ok",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "feature_support_ok",
+          "name": "feature_support_ok",
+          "required": false,
+          "type": {
+            "types": [
+              {},
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": false,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "datafusion_engine.delta_protocol.DeltaFeatureGate",
+      "fields": [
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "min_reader_version",
+          "name": "min_reader_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "min_writer_version",
+          "name": "min_writer_version",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "ge": 0,
+                "gt": null,
+                "le": null,
+                "lt": null,
+                "multiple_of": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_reader_features",
+          "name": "required_reader_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "required_writer_features",
+          "name": "required_writer_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "max_length": null,
+              "min_length": null,
+              "pattern": null
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": true,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "storage.deltalake.config.DeltaWritePolicy",
+      "fields": [
+        {
+          "default": 100663296,
+          "default_factory": "NODEFAULT",
+          "encode_name": "target_file_size",
+          "name": "target_file_size",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Positive integer value.",
+                  "examples": [
+                    1,
+                    128
+                  ],
+                  "title": "Positive Integer"
+                },
+                "type": {
+                  "ge": 1,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "partition_by",
+          "name": "partition_by",
+          "required": false,
+          "type": {
+            "item_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "title": "Column Name"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+              }
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "zorder_by",
+          "name": "zorder_by",
+          "required": false,
+          "type": {
+            "item_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "title": "Column Name"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+              }
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "auto",
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_policy",
+          "name": "stats_policy",
+          "required": false,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Stats collection policy for Delta writes.",
+              "examples": [
+                "auto"
+              ],
+              "title": "Stats Policy"
+            },
+            "type": {
+              "values": [
+                "auto",
+                "explicit",
+                "off"
+              ]
+            }
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_columns",
+          "name": "stats_columns",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "item_type": {
+                  "extra": null,
+                  "extra_json_schema": {
+                    "description": "Column identifier used in Delta and Parquet policies.",
+                    "examples": [
+                      "node_id",
+                      "repo_name"
+                    ],
+                    "title": "Column Name"
+                  },
+                  "type": {
+                    "max_length": 128,
+                    "min_length": 1,
+                    "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+                  }
+                },
+                "max_length": null,
+                "min_length": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": 32,
+          "default_factory": "NODEFAULT",
+          "encode_name": "stats_max_columns",
+          "name": "stats_max_columns",
+          "required": false,
+          "type": {
+            "extra": null,
+            "extra_json_schema": {
+              "description": "Non-negative integer value.",
+              "examples": [
+                0,
+                32
+              ],
+              "title": "Non-negative Integer"
+            },
+            "type": {
+              "ge": 0,
+              "gt": null,
+              "le": null,
+              "lt": null,
+              "multiple_of": null
+            }
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "parquet_writer_policy",
+          "name": "parquet_writer_policy",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "array_like": false,
+                "cls": "storage.deltalake.config.ParquetWriterPolicy",
+                "fields": [
+                  {
+                    "default": [],
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "statistics_enabled",
+                    "name": "statistics_enabled",
+                    "required": false,
+                    "type": {
+                      "item_type": {
+                        "extra": null,
+                        "extra_json_schema": {
+                          "description": "Column identifier used in Delta and Parquet policies.",
+                          "examples": [
+                            "node_id",
+                            "repo_name"
+                          ],
+                          "title": "Column Name"
+                        },
+                        "type": {
+                          "max_length": 128,
+                          "min_length": 1,
+                          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+                        }
+                      },
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  },
+                  {
+                    "default": "page",
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "statistics_level",
+                    "name": "statistics_level",
+                    "required": false,
+                    "type": {
+                      "values": [
+                        "chunk",
+                        "none",
+                        "page"
+                      ]
+                    }
+                  },
+                  {
+                    "default": [],
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "bloom_filter_enabled",
+                    "name": "bloom_filter_enabled",
+                    "required": false,
+                    "type": {
+                      "item_type": {
+                        "extra": null,
+                        "extra_json_schema": {
+                          "description": "Column identifier used in Delta and Parquet policies.",
+                          "examples": [
+                            "node_id",
+                            "repo_name"
+                          ],
+                          "title": "Column Name"
+                        },
+                        "type": {
+                          "max_length": 128,
+                          "min_length": 1,
+                          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+                        }
+                      },
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  },
+                  {
+                    "default": null,
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "bloom_filter_fpp",
+                    "name": "bloom_filter_fpp",
+                    "required": false,
+                    "type": {
+                      "types": [
+                        {
+                          "extra": null,
+                          "extra_json_schema": {
+                            "description": "Positive floating-point value.",
+                            "examples": [
+                              0.01,
+                              1.0
+                            ],
+                            "title": "Positive Float"
+                          },
+                          "type": {
+                            "ge": null,
+                            "gt": 0,
+                            "le": null,
+                            "lt": null,
+                            "multiple_of": null
+                          }
+                        },
+                        {}
+                      ]
+                    }
+                  },
+                  {
+                    "default": null,
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "bloom_filter_ndv",
+                    "name": "bloom_filter_ndv",
+                    "required": false,
+                    "type": {
+                      "types": [
+                        {
+                          "extra": null,
+                          "extra_json_schema": {
+                            "description": "Non-negative integer value.",
+                            "examples": [
+                              0,
+                              32
+                            ],
+                            "title": "Non-negative Integer"
+                          },
+                          "type": {
+                            "ge": 0,
+                            "gt": null,
+                            "le": null,
+                            "lt": null,
+                            "multiple_of": null
+                          }
+                        },
+                        {}
+                      ]
+                    }
+                  },
+                  {
+                    "default": [],
+                    "default_factory": "NODEFAULT",
+                    "encode_name": "dictionary_enabled",
+                    "name": "dictionary_enabled",
+                    "required": false,
+                    "type": {
+                      "item_type": {
+                        "extra": null,
+                        "extra_json_schema": {
+                          "description": "Column identifier used in Delta and Parquet policies.",
+                          "examples": [
+                            "node_id",
+                            "repo_name"
+                          ],
+                          "title": "Column Name"
+                        },
+                        "type": {
+                          "max_length": 128,
+                          "min_length": 1,
+                          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+                        }
+                      },
+                      "max_length": null,
+                      "min_length": null
+                    }
+                  }
+                ],
+                "forbid_unknown_fields": true,
+                "tag": null,
+                "tag_field": null
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "enable_features",
+          "name": "enable_features",
+          "required": false,
+          "type": {
+            "item_type": {
+              "values": [
+                "change_data_feed",
+                "column_mapping",
+                "deletion_vectors",
+                "in_commit_timestamps",
+                "row_tracking",
+                "v2_checkpoints"
+              ]
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": true,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "storage.deltalake.config.DeltaSchemaPolicy",
+      "fields": [
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "schema_mode",
+          "name": "schema_mode",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Schema evolution mode for Delta writes.",
+                  "examples": [
+                    "merge"
+                  ],
+                  "title": "Schema Mode"
+                },
+                "type": {
+                  "values": [
+                    "merge",
+                    "overwrite"
+                  ]
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "column_mapping_mode",
+          "name": "column_mapping_mode",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Delta column mapping mode.",
+                  "examples": [
+                    "name"
+                  ],
+                  "title": "Column Mapping Mode"
+                },
+                "type": {
+                  "values": [
+                    "id",
+                    "name"
+                  ]
+                }
+              },
+              {}
+            ]
+          }
+        }
+      ],
+      "forbid_unknown_fields": true,
+      "tag": null,
+      "tag_field": null
+    },
+    {
+      "array_like": false,
+      "cls": "storage.deltalake.config.ParquetWriterPolicy",
+      "fields": [
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "statistics_enabled",
+          "name": "statistics_enabled",
+          "required": false,
+          "type": {
+            "item_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "title": "Column Name"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+              }
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": "page",
+          "default_factory": "NODEFAULT",
+          "encode_name": "statistics_level",
+          "name": "statistics_level",
+          "required": false,
+          "type": {
+            "values": [
+              "chunk",
+              "none",
+              "page"
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "bloom_filter_enabled",
+          "name": "bloom_filter_enabled",
+          "required": false,
+          "type": {
+            "item_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "title": "Column Name"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+              }
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "bloom_filter_fpp",
+          "name": "bloom_filter_fpp",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Positive floating-point value.",
+                  "examples": [
+                    0.01,
+                    1.0
+                  ],
+                  "title": "Positive Float"
+                },
+                "type": {
+                  "ge": null,
+                  "gt": 0,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": null,
+          "default_factory": "NODEFAULT",
+          "encode_name": "bloom_filter_ndv",
+          "name": "bloom_filter_ndv",
+          "required": false,
+          "type": {
+            "types": [
+              {
+                "extra": null,
+                "extra_json_schema": {
+                  "description": "Non-negative integer value.",
+                  "examples": [
+                    0,
+                    32
+                  ],
+                  "title": "Non-negative Integer"
+                },
+                "type": {
+                  "ge": 0,
+                  "gt": null,
+                  "le": null,
+                  "lt": null,
+                  "multiple_of": null
+                }
+              },
+              {}
+            ]
+          }
+        },
+        {
+          "default": [],
+          "default_factory": "NODEFAULT",
+          "encode_name": "dictionary_enabled",
+          "name": "dictionary_enabled",
+          "required": false,
+          "type": {
+            "item_type": {
+              "extra": null,
+              "extra_json_schema": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "title": "Column Name"
+              },
+              "type": {
+                "max_length": 128,
+                "min_length": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+              }
+            },
+            "max_length": null,
+            "min_length": null
+          }
+        }
+      ],
+      "forbid_unknown_fields": true,
+      "tag": null,
+      "tag_field": null
+    }
+  ]
+}

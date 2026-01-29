@@ -12,6 +12,12 @@ type StrictnessMode = Literal["strict", "tolerant"]
 
 RepoId = NewType("RepoId", int)
 
+IDENTIFIER_PATTERN = "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+RUN_ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+HASH_PATTERN = "^[A-Fa-f0-9]{32,128}$"
+EVENT_KIND_PATTERN = "^[a-z][a-z0-9_]{0,63}$"
+STATUS_PATTERN = "^[a-z][a-z0-9_-]{0,31}$"
+
 type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | Mapping[str, JsonValue] | Sequence[JsonValue]
 type JsonDict = dict[str, JsonValue]

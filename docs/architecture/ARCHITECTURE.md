@@ -75,10 +75,8 @@ CodeAnatomy enforces five architectural invariants across all subsystems:
 
 | Component | Technology | Version | Purpose |
 |-----------|------------|---------|---------|
-| Query Engine | Apache DataFusion | 50.1+ | SQL execution, plan optimization |
+| Query Engine | Apache DataFusion | 50.1+ | SQL execution, plan optimization, lineage extraction |
 | Graph Engine | rustworkx | 0.17+ | Task DAG construction, scheduling |
-| Expression DSL | Ibis | 11.0+ | Relational expression building |
-| SQL Analysis | SQLGlot | 28.1+ | Lineage extraction, SQL normalization |
 | Pipeline Orchestration | Hamilton | 1.89+ | DAG execution, caching, materialization |
 | Data Format | PyArrow | - | Columnar data interchange |
 | Storage | Delta Lake (deltalake) | 1.3+ | Versioned table storage with CDF |
@@ -112,13 +110,21 @@ src/
 │   ├── rustworkx_schedule.py # Generation-based scheduling
 │   └── evidence.py          # Evidence catalog
 │
-├── datafusion_engine/ # DataFusion integration
+├── datafusion_engine/ # DataFusion integration (consolidated query engine)
 │   ├── plan_bundle.py       # Plan bundle artifacts
 │   ├── execution_facade.py  # Execution API
 │   ├── lineage_datafusion.py # Plan lineage extraction
 │   ├── schema_contracts.py  # Schema validation
 │   ├── scan_planner.py      # Delta scan planning
-│   └── udf_*.py             # UDF management
+│   ├── udf_catalog.py       # UDF metadata + builtin resolution
+│   └── udf_runtime.py       # UDF snapshot caching + validation
+│
+├── obs/               # Observability layer
+│   ├── diagnostics.py       # DiagnosticsCollector + event recording
+│   ├── metrics.py           # Dataset/column stats, quality tables
+│   ├── scan_telemetry.py    # Scan telemetry capture
+│   ├── datafusion_runs.py   # DataFusion run tracking
+│   └── otel/                # OpenTelemetry bootstrap + metrics/logs/tracing
 │
 ├── cpg/               # Stage 4: CPG schema + emission
 │   ├── kind_catalog.py      # Node/edge kinds
@@ -163,6 +169,13 @@ print(f"Props map: {result.cpg_props_map.path} ({result.cpg_props_map.rows} rows
 print(f"Edges by src: {result.cpg_edges_by_src.path} ({result.cpg_edges_by_src.rows} rows)")
 print(f"Edges by dst: {result.cpg_edges_by_dst.path} ({result.cpg_edges_by_dst.rows} rows)")
 ```
+
+### 1.7 Observability (OpenTelemetry)
+
+CodeAnatomy uses OpenTelemetry for traces, metrics, and logs. The OTel wiring lives under `src/obs/otel`, while domain signals (diagnostics, scan telemetry, dataset stats) remain in `src/obs`.
+
+See the observability reference for design details and configuration:
+* `docs/architecture/observability.md`
 
 ---
 

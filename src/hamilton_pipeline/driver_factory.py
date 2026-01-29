@@ -39,6 +39,7 @@ from hamilton_pipeline.task_module_builder import (
     build_task_execution_module,
 )
 from obs.diagnostics import DiagnosticsCollector
+from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
@@ -1185,10 +1186,14 @@ def _apply_adapters(
         builder = builder.with_adapters(FunctionInputOutputTypeChecker())
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
         builder = builder.with_adapters(DiagnosticsNodeHook(diagnostics))
+    if bool(config.get("enable_otel_node_tracing", True)):
+        builder = builder.with_adapters(OtelNodeHook())
     if bool(config.get("enable_plan_diagnostics", True)):
         builder = builder.with_adapters(
             PlanDiagnosticsHook(plan=plan, profile=profile, collector=diagnostics)
         )
+    if bool(config.get("enable_otel_plan_tracing", True)):
+        builder = builder.with_adapters(OtelPlanHook())
     return builder
 
 
@@ -1213,12 +1218,22 @@ def _apply_async_adapters(
             "async_driver.Builder",
             builder.with_adapters(DiagnosticsNodeHook(diagnostics)),
         )
+    if bool(config.get("enable_otel_node_tracing", True)):
+        builder = cast(
+            "async_driver.Builder",
+            builder.with_adapters(OtelNodeHook()),
+        )
     if bool(config.get("enable_plan_diagnostics", True)):
         builder = cast(
             "async_driver.Builder",
             builder.with_adapters(
                 PlanDiagnosticsHook(plan=plan, profile=profile, collector=diagnostics)
             ),
+        )
+    if bool(config.get("enable_otel_plan_tracing", True)):
+        builder = cast(
+            "async_driver.Builder",
+            builder.with_adapters(OtelPlanHook()),
         )
     return builder
 

@@ -10,6 +10,7 @@ from typing import Literal, cast
 from hamilton import async_driver as hamilton_async_driver
 from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
+from opentelemetry import context as otel_context
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from hamilton_pipeline.driver_factory import (
@@ -25,6 +26,8 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
 )
 from incremental.types import IncrementalConfig
+from obs.otel.scopes import SCOPE_PIPELINE
+from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
 
@@ -214,25 +217,41 @@ def execute_pipeline(
     )
     execute_overrides.setdefault("materialized_outputs", _output_names(output_nodes))
     output_names = cast("list[str]", _output_names(output_nodes))
-    if options.use_materialize:
-        _materialized, results = driver_instance.materialize(
-            additional_vars=output_nodes,
-            inputs={"repo_root": str(repo_root_path)},
-            overrides=execute_overrides,
-        )
-    elif isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
-        results = driver_instance.execute(
-            output_names,
-            inputs={"repo_root": str(repo_root_path)},
-            overrides=execute_overrides,
-        )
-    else:
-        results = driver_instance.execute(
-            output_nodes,
-            inputs={"repo_root": str(repo_root_path)},
-            overrides=execute_overrides,
-        )
-    return cast("Mapping[str, JsonDict | None]", results)
+    tracer = get_tracer(SCOPE_PIPELINE)
+    with tracer.start_as_current_span(
+        "pipeline.execute",
+        attributes=span_attributes(
+            attrs={
+                "codeanatomy.execution_mode": options.execution_mode.value,
+                "codeanatomy.output_count": len(output_names),
+                "codeanatomy.outputs": list(output_names),
+            }
+        ),
+    ) as span:
+        try:
+            if options.use_materialize:
+                _materialized, results = driver_instance.materialize(
+                    additional_vars=output_nodes,
+                    inputs={"repo_root": str(repo_root_path)},
+                    overrides=execute_overrides,
+                )
+            elif isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
+                results = driver_instance.execute(
+                    output_names,
+                    inputs={"repo_root": str(repo_root_path)},
+                    overrides=execute_overrides,
+                )
+            else:
+                results = driver_instance.execute(
+                    output_nodes,
+                    inputs={"repo_root": str(repo_root_path)},
+                    overrides=execute_overrides,
+                )
+        except Exception as exc:
+            record_exception(span, exc)
+            raise
+        set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
+        return cast("Mapping[str, JsonDict | None]", results)
 
 
 async def execute_pipeline_async(
@@ -283,12 +302,34 @@ async def execute_pipeline_async(
     if not isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
         msg = "Async pipeline execution requires an async Hamilton driver."
         raise TypeError(msg)
-    result = await driver_instance.execute(
-        cast("list[str]", _output_names(output_nodes)),
-        inputs={"repo_root": str(repo_root_path)},
-        overrides=execute_overrides,
-    )
-    return cast("Mapping[str, JsonDict | None]", result)
+    output_names = cast("list[str]", _output_names(output_nodes))
+    tracer = get_tracer(SCOPE_PIPELINE)
+    with tracer.start_as_current_span(
+        "pipeline.execute",
+        attributes=span_attributes(
+            attrs={
+                "codeanatomy.execution_mode": options.execution_mode.value,
+                "codeanatomy.output_count": len(output_names),
+                "codeanatomy.outputs": list(output_names),
+            }
+        ),
+    ) as span:
+        try:
+            current_context = otel_context.get_current()
+            token = otel_context.attach(current_context)
+            try:
+                result = await driver_instance.execute(
+                    output_names,
+                    inputs={"repo_root": str(repo_root_path)},
+                    overrides=execute_overrides,
+                )
+            finally:
+                otel_context.detach(token)
+        except Exception as exc:
+            record_exception(span, exc)
+            raise
+        set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
+        return cast("Mapping[str, JsonDict | None]", result)
 
 
 __all__ = [

@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 class _PluginExtension(Protocol):
     def load_df_plugin(self, path: str) -> object: ...
 
-    def register_df_plugin_udfs(self, ctx: SessionContext, handle: object) -> None: ...
+    def register_df_plugin_udfs(
+        self, ctx: SessionContext, handle: object, options_json: str | None
+    ) -> None: ...
 
     def register_df_plugin_table_functions(self, ctx: SessionContext, handle: object) -> None: ...
 
@@ -28,6 +30,13 @@ class _PluginExtension(Protocol):
         table_names: list[str] | None,
         options_json: dict[str, str] | None,
     ) -> None: ...
+
+    def create_df_plugin_table_provider(
+        self,
+        handle: object,
+        provider_name: str,
+        options_json: str | None,
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -56,6 +65,7 @@ class DataFusionPluginSpec:
 
     path: str
     table_providers: tuple[DataFusionPluginTableSpec, ...] = ()
+    udf_options: Mapping[str, object] = field(default_factory=dict)
     enable_udfs: bool = True
     enable_table_functions: bool = True
     enable_table_providers: bool = True
@@ -85,6 +95,18 @@ class DataFusionPluginSpec:
                 options[spec.name] = payload
         return options
 
+    def udf_options_json(self) -> str | None:
+        """Return JSON options for UDF registration.
+
+        Returns
+        -------
+        str | None
+            JSON-encoded options, or None when unset.
+        """
+        if not self.udf_options:
+            return None
+        return json.dumps(self.udf_options, sort_keys=True)
+
 
 class DataFusionPluginManager:
     """Load and register DataFusion plugin libraries."""
@@ -113,7 +135,7 @@ class DataFusionPluginManager:
         for spec in self.specs:
             handle = self._handles[spec.path]
             if spec.enable_udfs:
-                module.register_df_plugin_udfs(ctx, handle)
+                module.register_df_plugin_udfs(ctx, handle, spec.udf_options_json())
             if spec.enable_table_functions:
                 module.register_df_plugin_table_functions(ctx, handle)
             if spec.enable_table_providers:
@@ -125,6 +147,56 @@ class DataFusionPluginManager:
                     list(table_names) if table_names else None,
                     options or None,
                 )
+
+    def create_table_provider(
+        self,
+        *,
+        provider_name: str,
+        options: Mapping[str, object] | None,
+        plugin_path: str | None = None,
+    ) -> object:
+        """Create a table provider via the loaded plugin handle.
+
+        Parameters
+        ----------
+        provider_name
+            Provider name exported by the plugin (for example: "delta").
+        options
+            Provider options payload (JSON-serializable).
+        plugin_path
+            Optional plugin path selector when multiple plugins are configured.
+
+        Returns
+        -------
+        object
+            Table provider capsule created by the plugin.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when plugin configuration or handles are missing.
+        """
+        if not self.specs:
+            msg = "No DataFusion plugins are configured."
+            raise RuntimeError(msg)
+        self.load_all()
+        if plugin_path is None:
+            if len(self.specs) == 1:
+                plugin_path = self.specs[0].path
+            else:
+                msg = "Multiple plugins configured; specify plugin_path."
+                raise RuntimeError(msg)
+        handle = self._handles.get(plugin_path)
+        if handle is None:
+            msg = f"DataFusion plugin handle not loaded for {plugin_path!r}."
+            raise RuntimeError(msg)
+        module = _load_extension()
+        options_json = json.dumps(options, sort_keys=True) if options is not None else None
+        return module.create_df_plugin_table_provider(
+            handle,
+            provider_name,
+            options_json,
+        )
 
 
 def _load_extension() -> _PluginExtension:

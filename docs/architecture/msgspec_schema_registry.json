@@ -45,7 +45,8 @@
       },
       "required": [],
       "title": "DeltaFeatureGate",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
     },
     "DeltaProtocolCompatibility": {
       "description": "Compatibility evaluation for a Delta protocol snapshot.",
@@ -199,7 +200,8 @@
         "compatible"
       ],
       "title": "DeltaProtocolCompatibility",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
     },
     "DeltaProtocolSnapshot": {
       "description": "Snapshot of Delta protocol versions and feature flags.",
@@ -245,7 +247,8 @@
       },
       "required": [],
       "title": "DeltaProtocolSnapshot",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
     },
     "DeltaScanConfigSnapshot": {
       "description": "Snapshot of Delta scan configuration for artifacts.",
@@ -294,7 +297,9 @@
       },
       "required": [],
       "title": "DeltaScanConfigSnapshot",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "delta_scan_config"
     },
     "DeltaSchemaPolicy": {
       "additionalProperties": false,
@@ -307,7 +312,11 @@
               "enum": [
                 "id",
                 "name"
-              ]
+              ],
+              "examples": [
+                "name"
+              ],
+              "title": "Column Mapping Mode"
             },
             {
               "type": "null"
@@ -322,7 +331,11 @@
               "enum": [
                 "merge",
                 "overwrite"
-              ]
+              ],
+              "examples": [
+                "merge"
+              ],
+              "title": "Schema Mode"
             },
             {
               "type": "null"
@@ -333,14 +346,23 @@
       },
       "required": [],
       "title": "DeltaSchemaPolicy",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "policy",
+      "x-codeanatomy-scope": "delta"
     },
     "DeltaStatsDecision": {
       "description": "Resolved stats decision for a Delta write.",
       "properties": {
         "dataset_name": {
           "description": "Dataset identifier.",
+          "examples": [
+            "cpg_nodes",
+            "analytics.events_v2"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Dataset Name",
           "type": "string"
         },
         "lineage_columns": {
@@ -382,7 +404,12 @@
           "default": null
         },
         "stats_policy": {
+          "description": "Delta stats policy identifier.",
+          "examples": [
+            "auto"
+          ],
           "minLength": 1,
+          "title": "Stats Policy",
           "type": "string"
         },
         "zorder_by": {
@@ -400,7 +427,9 @@
         "lineage_columns"
       ],
       "title": "DeltaStatsDecision",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "delta_stats_decision"
     },
     "DeltaStatsDecisionEnvelope": {
       "description": "Envelope for Delta stats decision artifacts.",
@@ -419,7 +448,9 @@
         "payload"
       ],
       "title": "DeltaStatsDecisionEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "delta_stats_decision_envelope"
     },
     "DeltaWritePolicy": {
       "additionalProperties": false,
@@ -453,7 +484,15 @@
         "partition_by": {
           "default": [],
           "items": {
+            "description": "Column identifier used in Delta and Parquet policies.",
+            "examples": [
+              "node_id",
+              "repo_name"
+            ],
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "title": "Column Name",
             "type": "string"
           },
           "type": "array"
@@ -462,7 +501,15 @@
           "anyOf": [
             {
               "items": {
+                "description": "Column identifier used in Delta and Parquet policies.",
+                "examples": [
+                  "node_id",
+                  "repo_name"
+                ],
+                "maxLength": 128,
                 "minLength": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+                "title": "Column Name",
                 "type": "string"
               },
               "type": "array"
@@ -475,7 +522,13 @@
         },
         "stats_max_columns": {
           "default": 32,
+          "description": "Non-negative integer value.",
+          "examples": [
+            0,
+            32
+          ],
           "minimum": 0,
+          "title": "Non-negative Integer",
           "type": "integer"
         },
         "stats_policy": {
@@ -485,12 +538,22 @@
             "auto",
             "explicit",
             "off"
-          ]
+          ],
+          "examples": [
+            "auto"
+          ],
+          "title": "Stats Policy"
         },
         "target_file_size": {
           "anyOf": [
             {
+              "description": "Positive integer value.",
+              "examples": [
+                1,
+                128
+              ],
               "minimum": 1,
+              "title": "Positive Integer",
               "type": "integer"
             },
             {
@@ -502,7 +565,15 @@
         "zorder_by": {
           "default": [],
           "items": {
+            "description": "Column identifier used in Delta and Parquet policies.",
+            "examples": [
+              "node_id",
+              "repo_name"
+            ],
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "title": "Column Name",
             "type": "string"
           },
           "type": "array"
@@ -510,7 +581,9 @@
       },
       "required": [],
       "title": "DeltaWritePolicy",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "policy",
+      "x-codeanatomy-scope": "delta"
     },
     "ExecutionPlanProtoBytes": {
       "description": "Wrapper for execution plan proto bytes.",
@@ -547,8 +620,14 @@
           "type": "string"
         },
         "run_id": {
-          "description": "Unique run identifier.",
-          "minLength": 1,
+          "description": "Unique identifier for a pipeline run.",
+          "examples": [
+            "run_01HZX4J3C8F8M2KQ"
+          ],
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+          "title": "Run Id",
           "type": "string"
         }
       },
@@ -560,18 +639,32 @@
         "error_count"
       ],
       "title": "ExtractErrorsArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "extract_errors"
     },
     "IncrementalMetadataSnapshot": {
       "description": "Snapshot payload for incremental runtime metadata.",
       "properties": {
         "datafusion_settings_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "runtime_profile": {
           "$ref": "#/$defs/RuntimeProfileSnapshot"
         },
         "runtime_profile_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         }
       },
@@ -581,7 +674,9 @@
         "runtime_profile"
       ],
       "title": "IncrementalMetadataSnapshot",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "incremental_metadata"
     },
     "LogicalPlanProtoBytes": {
       "description": "Wrapper for logical plan proto bytes.",
@@ -618,8 +713,14 @@
           "type": "integer"
         },
         "run_id": {
-          "description": "Unique run identifier.",
-          "minLength": 1,
+          "description": "Unique identifier for a pipeline run.",
+          "examples": [
+            "run_01HZX4J3C8F8M2KQ"
+          ],
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+          "title": "Run Id",
           "type": "string"
         }
       },
@@ -631,7 +732,9 @@
         "row_count"
       ],
       "title": "NormalizeOutputsArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "normalize_outputs"
     },
     "OptimizedPlanProtoBytes": {
       "description": "Wrapper for optimized plan proto bytes.",
@@ -654,7 +757,15 @@
         "bloom_filter_enabled": {
           "default": [],
           "items": {
+            "description": "Column identifier used in Delta and Parquet policies.",
+            "examples": [
+              "node_id",
+              "repo_name"
+            ],
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "title": "Column Name",
             "type": "string"
           },
           "type": "array"
@@ -662,7 +773,13 @@
         "bloom_filter_fpp": {
           "anyOf": [
             {
+              "description": "Positive floating-point value.",
+              "examples": [
+                0.01,
+                1.0
+              ],
               "exclusiveMinimum": 0,
+              "title": "Positive Float",
               "type": "number"
             },
             {
@@ -674,7 +791,13 @@
         "bloom_filter_ndv": {
           "anyOf": [
             {
+              "description": "Non-negative integer value.",
+              "examples": [
+                0,
+                32
+              ],
               "minimum": 0,
+              "title": "Non-negative Integer",
               "type": "integer"
             },
             {
@@ -686,7 +809,15 @@
         "dictionary_enabled": {
           "default": [],
           "items": {
+            "description": "Column identifier used in Delta and Parquet policies.",
+            "examples": [
+              "node_id",
+              "repo_name"
+            ],
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "title": "Column Name",
             "type": "string"
           },
           "type": "array"
@@ -694,7 +825,15 @@
         "statistics_enabled": {
           "default": [],
           "items": {
+            "description": "Column identifier used in Delta and Parquet policies.",
+            "examples": [
+              "node_id",
+              "repo_name"
+            ],
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "title": "Column Name",
             "type": "string"
           },
           "type": "array"
@@ -710,7 +849,9 @@
       },
       "required": [],
       "title": "ParquetWriterPolicy",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "policy",
+      "x-codeanatomy-scope": "parquet"
     },
     "PlanArtifactRow": {
       "description": "Serializable plan artifact row persisted to the Delta store.",
@@ -733,7 +874,15 @@
         },
         "event_kind": {
           "description": "Artifact event kind identifier.",
+          "examples": [
+            "plan",
+            "execution",
+            "write"
+          ],
+          "maxLength": 64,
           "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Event Kind",
           "type": "string"
         },
         "event_time_unix_ms": {
@@ -830,6 +979,12 @@
           ]
         },
         "function_registry_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "function_registry_snapshot_msgpack": {
@@ -837,6 +992,12 @@
           "type": "string"
         },
         "information_schema_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "information_schema_msgpack": {
@@ -875,15 +1036,33 @@
         },
         "plan_fingerprint": {
           "description": "Deterministic plan fingerprint for reproducibility.",
-          "minLength": 1,
+          "examples": [
+            "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+          ],
+          "maxLength": 128,
+          "minLength": 32,
+          "pattern": "^[A-Fa-f0-9]{32,128}$",
+          "title": "Plan Fingerprint",
           "type": "string"
         },
         "plan_identity_hash": {
           "description": "Deterministic plan identity hash for artifact rows.",
-          "minLength": 1,
+          "examples": [
+            "9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"
+          ],
+          "maxLength": 128,
+          "minLength": 32,
+          "pattern": "^[A-Fa-f0-9]{32,128}$",
+          "title": "Plan Identity Hash",
           "type": "string"
         },
         "planning_env_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "planning_env_msgpack": {
@@ -894,7 +1073,14 @@
           "anyOf": [
             {
               "description": "Runtime profile name.",
+              "examples": [
+                "default",
+                "prod_primary"
+              ],
+              "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Name",
               "type": "string"
             },
             {
@@ -917,6 +1103,12 @@
         "rulepack_hash": {
           "anyOf": [
             {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "minLength": 1,
+              "title": "Hash Value",
               "type": "string"
             },
             {
@@ -986,6 +1178,12 @@
           ]
         },
         "udf_snapshot_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "udf_snapshot_msgpack": {
@@ -994,7 +1192,14 @@
         },
         "view_name": {
           "description": "View name.",
+          "examples": [
+            "example_view",
+            "analytics.view_summary"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "View Name",
           "type": "string"
         }
       },
@@ -1038,7 +1243,9 @@
         "udf_compatibility_detail_msgpack"
       ],
       "title": "PlanArtifactRow",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_row"
     },
     "PlanArtifacts": {
       "description": "Serializable plan artifacts captured during planning.",
@@ -1114,12 +1321,24 @@
           ]
         },
         "function_registry_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "function_registry_snapshot": {
           "type": "object"
         },
         "information_schema_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "information_schema_snapshot": {
@@ -1146,6 +1365,12 @@
           ]
         },
         "planning_env_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "planning_env_snapshot": {
@@ -1160,6 +1385,12 @@
         "rulepack_hash": {
           "anyOf": [
             {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "minLength": 1,
+              "title": "Hash Value",
               "type": "string"
             },
             {
@@ -1201,6 +1432,12 @@
           "type": "object"
         },
         "udf_snapshot_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         }
       },
@@ -1229,7 +1466,9 @@
         "udf_planner_snapshot"
       ],
       "title": "PlanArtifacts",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan"
     },
     "PlanProtoStatus": {
       "description": "Status payload for plan proto serialization.",
@@ -1264,17 +1503,44 @@
         "installed"
       ],
       "title": "PlanProtoStatus",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_proto_status"
     },
     "PlanScheduleArtifact": {
       "description": "Schedule artifact for deterministic plan scheduling.",
       "properties": {
+        "articulation_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "bottom_level_costs": {
           "additionalProperties": {
             "minimum": 0,
             "type": "number"
           },
           "type": "object"
+        },
+        "bridge_edges": {
+          "default": [],
+          "items": {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
         },
         "critical_path_length_weighted": {
           "anyOf": [
@@ -1309,17 +1575,50 @@
           "type": "array"
         },
         "plan_signature": {
+          "description": "Deterministic plan signature string.",
+          "examples": [
+            "sig_01HZX4J3C8F8M2KQ"
+          ],
+          "minLength": 1,
+          "title": "Plan Signature",
           "type": "string"
         },
         "reduced_plan_signature": {
+          "description": "Deterministic plan signature string.",
+          "examples": [
+            "sig_01HZX4J3C8F8M2KQ"
+          ],
+          "minLength": 1,
+          "title": "Plan Signature",
           "type": "string"
         },
         "run_id": {
-          "description": "Unique run identifier.",
-          "minLength": 1,
+          "description": "Unique identifier for a pipeline run.",
+          "examples": [
+            "run_01HZX4J3C8F8M2KQ"
+          ],
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+          "title": "Run Id",
           "type": "string"
         },
         "slack_by_task": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "task_centrality": {
           "anyOf": [
             {
               "additionalProperties": {
@@ -1344,6 +1643,27 @@
         "task_count": {
           "minimum": 0,
           "type": "integer"
+        },
+        "task_dominators": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1359,7 +1679,9 @@
         "bottom_level_costs"
       ],
       "title": "PlanScheduleArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_schedule"
     },
     "PlanScheduleEnvelope": {
       "description": "Envelope for plan schedule artifacts.",
@@ -1378,7 +1700,9 @@
         "payload"
       ],
       "title": "PlanScheduleEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_schedule_envelope"
     },
     "PlanValidationArtifact": {
       "description": "Validation artifact for plan evidence edges.",
@@ -1392,14 +1716,32 @@
           "type": "integer"
         },
         "plan_signature": {
+          "description": "Deterministic plan signature string.",
+          "examples": [
+            "sig_01HZX4J3C8F8M2KQ"
+          ],
+          "minLength": 1,
+          "title": "Plan Signature",
           "type": "string"
         },
         "reduced_plan_signature": {
+          "description": "Deterministic plan signature string.",
+          "examples": [
+            "sig_01HZX4J3C8F8M2KQ"
+          ],
+          "minLength": 1,
+          "title": "Plan Signature",
           "type": "string"
         },
         "run_id": {
-          "description": "Unique run identifier.",
-          "minLength": 1,
+          "description": "Unique identifier for a pipeline run.",
+          "examples": [
+            "run_01HZX4J3C8F8M2KQ"
+          ],
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+          "title": "Run Id",
           "type": "string"
         },
         "task_results": {
@@ -1438,7 +1780,9 @@
         "task_results"
       ],
       "title": "PlanValidationArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_validation"
     },
     "PlanValidationEnvelope": {
       "description": "Envelope for plan validation artifacts.",
@@ -1457,7 +1801,9 @@
         "payload"
       ],
       "title": "PlanValidationEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "plan_validation_envelope"
     },
     "RunManifest": {
       "description": "Canonical run manifest payload for deterministic outputs.",
@@ -1476,6 +1822,50 @@
           ],
           "default": null
         },
+        "cache_log_enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_log_glob": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_policy_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "delta_inputs": {
           "items": {
             "type": "object"
@@ -1485,6 +1875,12 @@
         "determinism_tier": {
           "anyOf": [
             {
+              "description": "Non-empty string value.",
+              "examples": [
+                "value"
+              ],
+              "minLength": 1,
+              "title": "Non-empty String",
               "type": "string"
             },
             {
@@ -1495,6 +1891,20 @@
         "event_time_unix_ms": {
           "minimum": 0,
           "type": "integer"
+        },
+        "materialized_outputs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "output_dir": {
           "anyOf": [
@@ -1514,6 +1924,14 @@
         },
         "plan_fingerprints": {
           "additionalProperties": {
+            "description": "Deterministic plan fingerprint for reproducibility.",
+            "examples": [
+              "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+            ],
+            "maxLength": 128,
+            "minLength": 32,
+            "pattern": "^[A-Fa-f0-9]{32,128}$",
+            "title": "Plan Fingerprint",
             "type": "string"
           },
           "type": "object"
@@ -1521,6 +1939,12 @@
         "plan_signature": {
           "anyOf": [
             {
+              "description": "Deterministic plan signature string.",
+              "examples": [
+                "sig_01HZX4J3C8F8M2KQ"
+              ],
+              "minLength": 1,
+              "title": "Plan Signature",
               "type": "string"
             },
             {
@@ -1529,13 +1953,25 @@
           ]
         },
         "run_id": {
-          "description": "Unique run identifier.",
-          "minLength": 1,
+          "description": "Unique identifier for a pipeline run.",
+          "examples": [
+            "run_01HZX4J3C8F8M2KQ"
+          ],
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+          "title": "Run Id",
           "type": "string"
         },
         "runtime_profile_hash": {
           "anyOf": [
             {
+              "description": "Deterministic hash value.",
+              "examples": [
+                "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+              ],
+              "minLength": 1,
+              "title": "Hash Value",
               "type": "string"
             },
             {
@@ -1547,7 +1983,14 @@
           "anyOf": [
             {
               "description": "Runtime profile name.",
+              "examples": [
+                "default",
+                "prod_primary"
+              ],
+              "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Name",
               "type": "string"
             },
             {
@@ -1557,7 +2000,14 @@
         },
         "status": {
           "description": "Artifact status value.",
+          "examples": [
+            "ok",
+            "error"
+          ],
+          "maxLength": 32,
           "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+          "title": "Artifact Status",
           "type": "string"
         }
       },
@@ -1575,7 +2025,9 @@
         "output_dir"
       ],
       "title": "RunManifest",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "run_manifest"
     },
     "RunManifestEnvelope": {
       "description": "Envelope for run manifest artifacts.",
@@ -1594,7 +2046,9 @@
         "payload"
       ],
       "title": "RunManifestEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "run_manifest_envelope"
     },
     "RuntimeProfileSnapshot": {
       "description": "Unified runtime profile snapshot for reproducibility.",
@@ -1606,17 +2060,42 @@
           "type": "object"
         },
         "datafusion_settings_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "determinism_tier": {
+          "description": "Non-empty string value.",
+          "examples": [
+            "value"
+          ],
+          "minLength": 1,
+          "title": "Non-empty String",
           "type": "string"
         },
         "name": {
           "description": "Runtime profile name.",
+          "examples": [
+            "default",
+            "prod_primary"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Profile Name",
           "type": "string"
         },
         "profile_hash": {
+          "description": "Deterministic hash value.",
+          "examples": [
+            "sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"
+          ],
+          "minLength": 1,
+          "title": "Hash Value",
           "type": "string"
         },
         "telemetry_payload": {
@@ -1637,7 +2116,9 @@
         "profile_hash"
       ],
       "title": "RuntimeProfileSnapshot",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "runtime_profile"
     },
     "SemanticValidationArtifact": {
       "description": "Semantic metadata validation artifact for a view.",
@@ -1663,7 +2144,14 @@
         },
         "view_name": {
           "description": "View name.",
+          "examples": [
+            "example_view",
+            "analytics.view_summary"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "View Name",
           "type": "string"
         }
       },
@@ -1673,7 +2161,9 @@
         "entries"
       ],
       "title": "SemanticValidationArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "semantic_validation"
     },
     "SemanticValidationArtifactEnvelope": {
       "description": "Envelope for semantic validation artifacts.",
@@ -1692,7 +2182,9 @@
         "payload"
       ],
       "title": "SemanticValidationArtifactEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "semantic_validation_envelope"
     },
     "SemanticValidationEntry": {
       "description": "Validation entry for semantic metadata enforcement.",
@@ -1708,11 +2200,21 @@
           ]
         },
         "column_name": {
+          "description": "Non-empty string value.",
+          "examples": [
+            "value"
+          ],
           "minLength": 1,
+          "title": "Non-empty String",
           "type": "string"
         },
         "expected": {
+          "description": "Non-empty string value.",
+          "examples": [
+            "value"
+          ],
           "minLength": 1,
+          "title": "Non-empty String",
           "type": "string"
         },
         "status": {
@@ -1730,22 +2232,43 @@
         "status"
       ],
       "title": "SemanticValidationEntry",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "semantic_validation_entry"
     },
     "ViewArtifactPayload": {
       "description": "Serializable view artifact payload.",
       "properties": {
         "name": {
           "description": "View name.",
+          "examples": [
+            "example_view",
+            "analytics.view_summary"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "View Name",
           "type": "string"
         },
         "plan_fingerprint": {
           "description": "Deterministic plan fingerprint for reproducibility.",
-          "minLength": 1,
+          "examples": [
+            "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+          ],
+          "maxLength": 128,
+          "minLength": 32,
+          "pattern": "^[A-Fa-f0-9]{32,128}$",
+          "title": "Plan Fingerprint",
           "type": "string"
         },
         "plan_task_signature": {
+          "description": "Deterministic plan signature string.",
+          "examples": [
+            "sig_01HZX4J3C8F8M2KQ"
+          ],
+          "minLength": 1,
+          "title": "Plan Signature",
           "type": "string"
         },
         "referenced_tables": {
@@ -1784,7 +2307,9 @@
         "referenced_tables"
       ],
       "title": "ViewArtifactPayload",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "view"
     },
     "ViewCacheArtifact": {
       "description": "Cache materialization artifact for view registration.",
@@ -1800,7 +2325,12 @@
           ]
         },
         "cache_policy": {
+          "description": "Cache policy identifier.",
+          "examples": [
+            "prefer_cache"
+          ],
           "minLength": 1,
+          "title": "Cache Policy",
           "type": "string"
         },
         "hit": {
@@ -1818,7 +2348,13 @@
           "anyOf": [
             {
               "description": "Deterministic plan fingerprint for reproducibility.",
-              "minLength": 1,
+              "examples": [
+                "4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
+              ],
+              "maxLength": 128,
+              "minLength": 32,
+              "pattern": "^[A-Fa-f0-9]{32,128}$",
+              "title": "Plan Fingerprint",
               "type": "string"
             },
             {
@@ -1828,12 +2364,26 @@
         },
         "status": {
           "description": "Artifact status value.",
+          "examples": [
+            "ok",
+            "error"
+          ],
+          "maxLength": 32,
           "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+          "title": "Artifact Status",
           "type": "string"
         },
         "view_name": {
           "description": "View name.",
+          "examples": [
+            "example_view",
+            "analytics.view_summary"
+          ],
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "View Name",
           "type": "string"
         }
       },
@@ -1845,7 +2395,9 @@
         "status"
       ],
       "title": "ViewCacheArtifact",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "view_cache"
     },
     "ViewCacheArtifactEnvelope": {
       "description": "Envelope for view cache artifacts.",
@@ -1864,7 +2416,9 @@
         "payload"
       ],
       "title": "ViewCacheArtifactEnvelope",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "view_cache_envelope"
     },
     "WriteArtifactRow": {
       "description": "Serializable write artifact row persisted to the Delta store.",
@@ -1888,6 +2442,14 @@
         "commit_run_id": {
           "anyOf": [
             {
+              "description": "Unique identifier for a pipeline run.",
+              "examples": [
+                "run_01HZX4J3C8F8M2KQ"
+              ],
+              "maxLength": 64,
+              "minLength": 8,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+              "title": "Run Id",
               "type": "string"
             },
             {
@@ -1905,14 +2467,8 @@
             }
           ]
         },
-        "delta_schema_policy_msgpack": {
-          "contentEncoding": "base64",
-          "type": "string"
-        },
-        "delta_stats_decision_msgpack": {
-          "contentEncoding": "base64",
-          "type": "string"
-        },
+        "delta_schema_policy_msgpack": {},
+        "delta_stats_decision_msgpack": {},
         "delta_version": {
           "anyOf": [
             {
@@ -1923,10 +2479,7 @@
             }
           ]
         },
-        "delta_write_policy_msgpack": {
-          "contentEncoding": "base64",
-          "type": "string"
-        },
+        "delta_write_policy_msgpack": {},
         "destination": {
           "type": "string"
         },
@@ -1953,7 +2506,15 @@
         },
         "event_kind": {
           "description": "Artifact event kind identifier.",
+          "examples": [
+            "plan",
+            "execution",
+            "write"
+          ],
+          "maxLength": 64,
           "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Event Kind",
           "type": "string"
         },
         "event_time_unix_ms": {
@@ -1979,7 +2540,14 @@
           "anyOf": [
             {
               "description": "Runtime profile name.",
+              "examples": [
+                "default",
+                "prod_primary"
+              ],
+              "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Name",
               "type": "string"
             },
             {
@@ -2043,7 +2611,9 @@
         "error"
       ],
       "title": "WriteArtifactRow",
-      "type": "object"
+      "type": "object",
+      "x-codeanatomy-domain": "artifact",
+      "x-codeanatomy-scope": "write_row"
     }
   },
   "schemas": {

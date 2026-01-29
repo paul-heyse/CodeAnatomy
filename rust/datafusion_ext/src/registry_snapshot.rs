@@ -6,7 +6,8 @@ use datafusion::execution::session_state::SessionState;
 use datafusion_expr::{Signature, TypeSignature, Volatility, WindowUDF};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
-use crate::{udaf_builtin, udf_docs, udf_registry, udwf_builtin};
+use crate::udf_config::UdfConfigValue;
+use crate::{udaf_builtin, udf_custom, udf_docs, udf_registry, udwf_builtin};
 
 pub struct RegistrySnapshot {
     pub scalar: Vec<String>,
@@ -17,8 +18,12 @@ pub struct RegistrySnapshot {
     pub parameter_names: BTreeMap<String, Vec<String>>,
     pub volatility: BTreeMap<String, String>,
     pub rewrite_tags: BTreeMap<String, Vec<String>>,
+    pub simplify: BTreeMap<String, bool>,
+    pub coerce_types: BTreeMap<String, bool>,
+    pub short_circuits: BTreeMap<String, bool>,
     pub signature_inputs: BTreeMap<String, Vec<Vec<String>>>,
     pub return_types: BTreeMap<String, Vec<String>>,
+    pub config_defaults: BTreeMap<String, BTreeMap<String, UdfConfigValue>>,
     pub custom_udfs: Vec<String>,
 }
 
@@ -33,8 +38,12 @@ impl RegistrySnapshot {
             parameter_names: BTreeMap::new(),
             volatility: BTreeMap::new(),
             rewrite_tags: BTreeMap::new(),
+            simplify: BTreeMap::new(),
+            coerce_types: BTreeMap::new(),
+            short_circuits: BTreeMap::new(),
             signature_inputs: BTreeMap::new(),
             return_types: BTreeMap::new(),
+            config_defaults: BTreeMap::new(),
             custom_udfs: Vec::new(),
         }
     }
@@ -81,9 +90,13 @@ fn record_scalar_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
+        record_scalar_flags(name, udf_ref.signature(), udf_ref, snapshot);
         record_signature_details(name, udf_ref.signature(), snapshot, |arg_types| {
             udf_ref.return_type(arg_types).ok()
         });
+        if let Some(defaults) = udf_custom::config_defaults_for(udf_ref) {
+            snapshot.config_defaults.insert(name.clone(), defaults);
+        }
     }
 }
 
@@ -105,6 +118,7 @@ fn record_aggregate_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
+        record_signature_flags(name, udaf.signature(), snapshot);
         record_signature_details(name, udaf.signature(), snapshot, |arg_types| {
             udaf.return_type(arg_types).ok()
         });
@@ -129,6 +143,7 @@ fn record_window_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
+        record_signature_flags(name, udwf.signature(), snapshot);
         record_signature_details(name, udwf.signature(), snapshot, |arg_types| {
             window_return_type(udwf, arg_types, name).ok()
         });
@@ -176,12 +191,37 @@ fn record_rewrite_tags(name: &str, snapshot: &mut RegistrySnapshot) {
     }
 }
 
+fn record_signature_flags(name: &str, signature: &Signature, snapshot: &mut RegistrySnapshot) {
+    snapshot
+        .coerce_types
+        .insert(name.to_string(), signature_uses_custom_coercion(signature));
+    if let Some(flag) = simplify_flag_for(name) {
+        snapshot.simplify.insert(name.to_string(), flag);
+    }
+}
+
+fn record_scalar_flags(
+    name: &str,
+    signature: &Signature,
+    udf: &dyn datafusion_expr::ScalarUDFImpl,
+    snapshot: &mut RegistrySnapshot,
+) {
+    record_signature_flags(name, signature, snapshot);
+    snapshot
+        .short_circuits
+        .insert(name.to_string(), udf.short_circuits());
+}
+
 fn volatility_label(value: Volatility) -> String {
     match value {
         Volatility::Immutable => "immutable".to_string(),
         Volatility::Stable => "stable".to_string(),
         Volatility::Volatile => "volatile".to_string(),
     }
+}
+
+fn signature_uses_custom_coercion(signature: &Signature) -> bool {
+    matches!(signature.type_signature, TypeSignature::UserDefined)
 }
 
 struct TableSignature {
@@ -315,6 +355,9 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
                     DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 ),
+                Field::new("simplify", DataType::Boolean, false),
+                Field::new("coerce_types", DataType::Boolean, false),
+                Field::new("short_circuits", DataType::Boolean, false),
             ])),
         },
     );
@@ -685,6 +728,24 @@ fn rewrite_tags_for(name: &str) -> Option<Vec<String>> {
         .map(|(_, tags)| tags.iter().map(|tag| tag.to_string()).collect())
 }
 
+fn simplify_flag_for(name: &str) -> Option<bool> {
+    const SIMPLIFY: &[&str] = &[
+        "stable_hash64",
+        "stable_hash128",
+        "prefixed_hash64",
+        "stable_id",
+        "stable_id_parts",
+        "prefixed_hash_parts64",
+        "stable_hash_any",
+        "utf8_normalize",
+    ];
+    if SIMPLIFY.iter().any(|entry| *entry == name) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 fn custom_udf_names(table_signatures: &BTreeMap<String, TableSignature>) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for spec in udf_registry::all_udfs() {
@@ -734,6 +795,62 @@ fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnaps
         }
         let names = args.iter().map(|(arg, _)| arg.clone()).collect();
         snapshot.parameter_names.insert(name, names);
+    }
+    for (name, udf) in state.scalar_functions() {
+        if snapshot.parameter_names.contains_key(&name) {
+            continue;
+        }
+        let params = signature_param_names(udf.signature());
+        snapshot.parameter_names.insert(name.to_string(), params);
+    }
+    for (name, udaf) in state.aggregate_functions() {
+        if snapshot.parameter_names.contains_key(&name) {
+            continue;
+        }
+        let params = signature_param_names(udaf.signature());
+        snapshot.parameter_names.insert(name.to_string(), params);
+    }
+    for (name, udwf) in state.window_functions() {
+        if snapshot.parameter_names.contains_key(&name) {
+            continue;
+        }
+        let params = signature_param_names(udwf.signature());
+        snapshot.parameter_names.insert(name.to_string(), params);
+    }
+}
+
+fn signature_param_names(signature: &Signature) -> Vec<String> {
+    let Some(arity) = signature_arity(signature) else {
+        return Vec::new();
+    };
+    (1..=arity).map(|index| format!("arg{index}")).collect()
+}
+
+fn signature_arity(signature: &Signature) -> Option<usize> {
+    signature_arity_from_type_signature(&signature.type_signature)
+}
+
+fn signature_arity_from_type_signature(signature: &TypeSignature) -> Option<usize> {
+    match signature {
+        TypeSignature::Exact(values) => Some(values.len()),
+        TypeSignature::Uniform(count, _) => Some(*count),
+        TypeSignature::Any(count) => Some(*count),
+        TypeSignature::Numeric(count) => Some(*count),
+        TypeSignature::String(count) => Some(*count),
+        TypeSignature::OneOf(signatures) => {
+            let mut lengths = signatures
+                .iter()
+                .filter_map(signature_arity_from_type_signature)
+                .collect::<Vec<_>>();
+            lengths.sort_unstable();
+            lengths.dedup();
+            if lengths.len() == 1 {
+                lengths.first().copied()
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

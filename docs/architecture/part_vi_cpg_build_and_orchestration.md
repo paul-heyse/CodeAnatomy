@@ -412,7 +412,9 @@ This specification declares that:
 
 ### DataFusion-Native View Builders
 
-The emission pipeline uses **DataFusion native view builders** to construct CPG output DataFrames from registered views. These builders replace the deprecated Ibis-based approach.
+The emission pipeline uses **DataFusion native view builders** to construct CPG output DataFrames from registered views.
+
+> **Note:** The legacy Ibis-based approach (`view_builders.py`) has been removed; only `view_builders_df.py` (DataFusion native) remains. All CPG emission now uses DataFusion-native operations exclusively.
 
 **File:** `src/cpg/view_builders_df.py`
 

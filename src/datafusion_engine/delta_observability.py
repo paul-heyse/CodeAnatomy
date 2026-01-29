@@ -42,6 +42,8 @@ class DeltaSnapshotArtifact:
     snapshot: Mapping[str, object]
     dataset_name: str | None = None
     storage_options_hash: str | None = None
+    schema_fingerprint: str | None = None
+    ddl_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,8 @@ def record_delta_snapshot(
         "writer_features": _string_list(snapshot.get("writer_features") or ()),
         "table_properties": _string_map(snapshot.get("table_properties") or {}),
         "schema_msgpack": _msgpack_payload(_schema_payload(snapshot.get("schema_json"))),
+        "schema_fingerprint": artifact.schema_fingerprint,
+        "ddl_fingerprint": artifact.ddl_fingerprint,
         "partition_columns": _string_list(snapshot.get("partition_columns") or ()),
         "storage_options_hash": artifact.storage_options_hash,
     }
@@ -413,6 +417,8 @@ def _delta_snapshot_schema() -> pa.Schema:
             pa.field("writer_features", pa.list_(pa.string())),
             pa.field("table_properties", pa.map_(pa.string(), pa.string())),
             pa.field("schema_msgpack", pa.binary(), nullable=False),
+            pa.field("schema_fingerprint", pa.string()),
+            pa.field("ddl_fingerprint", pa.string()),
             pa.field("partition_columns", pa.list_(pa.string())),
             pa.field("storage_options_hash", pa.string()),
         ]

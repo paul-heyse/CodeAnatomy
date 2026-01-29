@@ -47,6 +47,9 @@ pub struct DfPluginExportsV1 {
 pub struct DfPluginMod {
     pub manifest: extern "C" fn() -> DfPluginManifestV1,
     pub exports: extern "C" fn() -> DfPluginExportsV1,
+    pub udf_bundle_with_options: extern "C" fn(
+        options_json: ROption<RString>,
+    ) -> DfResult<DfUdfBundleV1>,
     #[sabi(last_prefix_field)]
     pub create_table_provider: extern "C" fn(
         name: RStr<'_>,

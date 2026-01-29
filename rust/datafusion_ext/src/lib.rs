@@ -13,6 +13,7 @@ mod udaf_builtin;
 #[cfg(feature = "async-udf")]
 mod udf_async;
 mod udf_builtin;
+mod udf_config;
 mod udf_custom;
 mod udf_docs;
 pub mod udf_registry;
@@ -92,6 +93,7 @@ use delta_observability::{
 use delta_protocol::{gate_from_parts, DeltaFeatureGate, DeltaSnapshotInfo};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
+use udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 
 pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
@@ -378,20 +380,13 @@ fn extract_plugin_handle(py: Python<'_>, plugin: &Py<PyAny>) -> PyResult<Arc<Plu
 }
 
 #[pyfunction]
-#[pyo3(signature = (ctx, enable_async = false, async_udf_timeout_ms = None, async_udf_batch_size = None))]
-fn register_udfs(
-    ctx: PyRef<PySessionContext>,
-    enable_async: bool,
-    async_udf_timeout_ms: Option<u64>,
-    async_udf_batch_size: Option<usize>,
-) -> PyResult<()> {
-    udf_registry::register_all_with_policy(
-        &ctx.ctx,
-        enable_async,
-        async_udf_timeout_ms,
-        async_udf_batch_size,
-    )
-    .map_err(|err| PyRuntimeError::new_err(format!("Failed to register UDFs: {err}")))?;
+fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let config = state.config_mut();
+    if config.extensions.get::<CodeAnatomyUdfConfig>().is_none() {
+        config.extensions.insert(CodeAnatomyUdfConfig::default());
+    }
     Ok(())
 }
 
@@ -423,6 +418,21 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
         rewrite_payload.set_item(name, PyList::new(py, tags)?)?;
     }
     payload.set_item("rewrite_tags", rewrite_payload)?;
+    let simplify_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.simplify {
+        simplify_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("simplify", simplify_payload)?;
+    let coerce_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.coerce_types {
+        coerce_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("coerce_types", coerce_payload)?;
+    let short_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.short_circuits {
+        short_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("short_circuits", short_payload)?;
     let signature_payload = PyDict::new(py);
     for (name, signatures) in snapshot.signature_inputs {
         let mut rows: Vec<Py<PyAny>> = Vec::with_capacity(signatures.len());
@@ -437,6 +447,25 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
         return_payload.set_item(name, PyList::new(py, return_types)?)?;
     }
     payload.set_item("return_types", return_payload)?;
+    let config_payload = PyDict::new(py);
+    for (name, defaults) in snapshot.config_defaults {
+        let entry = PyDict::new(py);
+        for (key, value) in defaults {
+            match value {
+                UdfConfigValue::Bool(flag) => {
+                    entry.set_item(key, flag)?;
+                }
+                UdfConfigValue::Int(value) => {
+                    entry.set_item(key, value)?;
+                }
+                UdfConfigValue::String(text) => {
+                    entry.set_item(key, text)?;
+                }
+            }
+        }
+        config_payload.set_item(name, entry)?;
+    }
+    payload.set_item("config_defaults", config_payload)?;
     payload.set_item("custom_udfs", PyList::new(py, snapshot.custom_udfs)?)?;
     payload.set_item("pycapsule_udfs", PyList::empty(py))?;
     Ok(payload.into())
@@ -493,14 +522,16 @@ fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (ctx, plugin, options_json = None))]
 fn register_df_plugin_udfs(
     py: Python<'_>,
     ctx: PyRef<PySessionContext>,
     plugin: Py<PyAny>,
+    options_json: Option<String>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&ctx.ctx)
+        .register_udfs(&ctx.ctx, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     Ok(())
 }
@@ -537,6 +568,27 @@ fn register_df_plugin_table_providers(
 }
 
 #[pyfunction]
+fn create_df_plugin_table_provider(
+    py: Python<'_>,
+    plugin: Py<PyAny>,
+    provider_name: String,
+    options_json: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    let provider = handle
+        .create_table_provider(provider_name.as_str(), options_json.as_deref())
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to create plugin table provider {provider_name:?}: {err}"
+            ))
+        })?;
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, provider, Some(name))?;
+    Ok(capsule.unbind().into())
+}
+
+#[pyfunction]
 fn register_df_plugin(
     py: Python<'_>,
     ctx: PyRef<PySessionContext>,
@@ -546,7 +598,7 @@ fn register_df_plugin(
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&ctx.ctx)
+        .register_udfs(&ctx.ctx, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     handle.register_table_functions(&ctx.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
@@ -2319,7 +2371,7 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
         udf_custom::install_function_factory,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(register_udfs, module)?)?;
+    module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
@@ -2330,6 +2382,10 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     )?)?;
     module.add_function(wrap_pyfunction!(
         register_df_plugin_table_providers,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        create_df_plugin_table_provider,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(register_df_plugin, module)?)?;

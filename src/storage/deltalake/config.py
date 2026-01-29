@@ -9,22 +9,78 @@ import msgspec
 
 from serde_msgspec import StructBaseStrict
 
-NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
-PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
-PositiveFloat = Annotated[float, msgspec.Meta(gt=0)]
-NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
-ColumnName = Annotated[str, msgspec.Meta(min_length=1)]
+_COLUMN_NAME_PATTERN = "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+
+NonNegInt = Annotated[
+    int,
+    msgspec.Meta(
+        ge=0,
+        title="Non-negative Integer",
+        description="Non-negative integer value.",
+        examples=[0, 32],
+    ),
+]
+PositiveInt = Annotated[
+    int,
+    msgspec.Meta(
+        ge=1,
+        title="Positive Integer",
+        description="Positive integer value.",
+        examples=[1, 128],
+    ),
+]
+PositiveFloat = Annotated[
+    float,
+    msgspec.Meta(
+        gt=0,
+        title="Positive Float",
+        description="Positive floating-point value.",
+        examples=[0.01, 1.0],
+    ),
+]
+NonEmptyStr = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        title="Non-empty String",
+        description="Non-empty string value.",
+        examples=["value"],
+    ),
+]
+ColumnName = Annotated[
+    str,
+    msgspec.Meta(
+        min_length=1,
+        max_length=128,
+        pattern=_COLUMN_NAME_PATTERN,
+        title="Column Name",
+        description="Column identifier used in Delta and Parquet policies.",
+        examples=["node_id", "repo_name"],
+    ),
+]
 StatsPolicy = Annotated[
     Literal["off", "explicit", "auto"],
-    msgspec.Meta(description="Stats collection policy for Delta writes."),
+    msgspec.Meta(
+        title="Stats Policy",
+        description="Stats collection policy for Delta writes.",
+        examples=["auto"],
+    ),
 ]
 SchemaMode = Annotated[
     Literal["merge", "overwrite"],
-    msgspec.Meta(description="Schema evolution mode for Delta writes."),
+    msgspec.Meta(
+        title="Schema Mode",
+        description="Schema evolution mode for Delta writes.",
+        examples=["merge"],
+    ),
 ]
 ColumnMappingMode = Annotated[
     Literal["id", "name"],
-    msgspec.Meta(description="Delta column mapping mode."),
+    msgspec.Meta(
+        title="Column Mapping Mode",
+        description="Delta column mapping mode.",
+        examples=["name"],
+    ),
 ]
 
 

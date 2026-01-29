@@ -16,6 +16,8 @@ from datafusion_engine.diagnostics import (
 )
 from datafusion_engine.schema_contracts import SchemaViolation
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
+from obs.otel.logs import emit_diagnostics_event
+from obs.otel.metrics import record_artifact_count
 from serde_msgspec import StructBaseCompat
 
 _ = _datafusion_ext
@@ -32,26 +34,41 @@ class DiagnosticsCollector:
 
     events: dict[str, list[Mapping[str, object]]] = field(default_factory=dict)
     artifacts: dict[str, list[Mapping[str, object]]] = field(default_factory=dict)
-    metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
 
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         """Append event rows under a logical name."""
         bucket = self.events.setdefault(name, [])
-        bucket.extend([dict(row) for row in rows])
+        normalized = [dict(row) for row in rows]
+        bucket.extend(normalized)
+        for row in normalized:
+            emit_diagnostics_event(name, payload=row, event_kind="event")
+        record_artifact_count(name, status="ok", attributes={"artifact.type": "event"})
 
     def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
         """Append an artifact payload under a logical name."""
         bucket = self.artifacts.setdefault(name, [])
-        bucket.append(dict(payload))
+        normalized = dict(payload)
+        bucket.append(normalized)
+        emit_diagnostics_event(name, payload=normalized, event_kind="artifact")
+        record_artifact_count(name, status="ok", attributes={"artifact.type": "artifact"})
 
     def record_event(self, name: str, properties: Mapping[str, object]) -> None:
         """Append an event payload under a logical name."""
         bucket = self.events.setdefault(name, [])
-        bucket.append(dict(properties))
+        normalized = dict(properties)
+        bucket.append(normalized)
+        emit_diagnostics_event(name, payload=normalized, event_kind="event")
+        record_artifact_count(name, status="ok", attributes={"artifact.type": "event"})
 
-    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
+    @staticmethod
+    def record_metric(name: str, value: float, tags: Mapping[str, str]) -> None:
         """Record a metric value."""
-        self.metrics.append((name, value, dict(tags)))
+        payload = dict(tags)
+        emit_diagnostics_event(
+            name,
+            payload={**payload, "value": value},
+            event_kind="metric",
+        )
 
     def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         """Return a shallow copy of collected event rows.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::execution::context::SessionContext;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::RangeFunc;
 
@@ -215,6 +215,28 @@ pub fn all_udfs() -> Vec<UdfSpec> {
             aliases: &[],
         },
     ]
+}
+
+pub fn all_udfs_with_async(enable_async: bool) -> Result<Vec<UdfSpec>> {
+    let mut specs = all_udfs();
+    if enable_async {
+        #[cfg(feature = "async-udf")]
+        {
+            specs.push(UdfSpec {
+                name: udf_async::ASYNC_ECHO_NAME,
+                kind: UdfKind::Scalar,
+                builder: || UdfHandle::Scalar(udf_async::async_echo_udf()),
+                aliases: &[],
+            });
+        }
+        #[cfg(not(feature = "async-udf"))]
+        {
+            return Err(DataFusionError::Plan(
+                "Async UDFs require the async-udf feature".into(),
+            ));
+        }
+    }
+    Ok(specs)
 }
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {

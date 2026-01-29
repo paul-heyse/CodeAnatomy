@@ -20,7 +20,7 @@ T = TypeVar("T")
 
 
 def encode_json(obj: object) -> bytes:
-    return JSON_ENCODER.encode(obj)
+    return JSON_ENCODER.encode(to_builtins(obj, str_keys=True))
 
 
 def encode_json_pretty(obj: object, *, indent: int = 2) -> str:

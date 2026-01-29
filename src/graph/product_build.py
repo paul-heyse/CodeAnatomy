@@ -25,6 +25,8 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
 )
 from incremental.types import IncrementalConfig
+from obs.otel import OtelBootstrapOptions, configure_otel
+from obs.otel.tracing import record_exception, root_span, set_span_attributes
 
 GraphProduct = Literal["cpg"]
 
@@ -154,12 +156,40 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         use_materialize=request.use_materialize,
     )
 
-    raw = execute_pipeline(repo_root=repo_root_path, options=options)
-    return _parse_result(
-        request=request,
-        repo_root=repo_root_path,
-        pipeline_outputs=raw,
+    configure_otel(
+        service_name="codeanatomy",
+        options=OtelBootstrapOptions(
+            resource_overrides=_otel_resource_overrides(repo_root_path)
+        ),
     )
+    with root_span(
+        "graph_product.build",
+        attributes={
+            "codeanatomy.product": request.product,
+            "codeanatomy.execution_mode": request.execution_mode.value,
+            "codeanatomy.outputs": list(outputs),
+        },
+    ) as span:
+        try:
+            raw = execute_pipeline(repo_root=repo_root_path, options=options)
+        except Exception as exc:
+            record_exception(span, exc)
+            raise
+        result = _parse_result(
+            request=request,
+            repo_root=repo_root_path,
+            pipeline_outputs=raw,
+        )
+        set_span_attributes(
+            span,
+            {
+                "codeanatomy.product_version": result.product_version,
+                "codeanatomy.output_dir": str(result.output_dir),
+                "codeanatomy.run_id": result.run_id,
+            },
+        )
+        return result
+
 
 
 def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
@@ -320,6 +350,54 @@ def _parse_run_bundle(
     if run_id is None and run_bundle_dir is not None:
         run_id = run_bundle_dir.name
     return run_bundle_dir, run_id
+
+
+_PACKED_REF_PARTS = 2
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _resolve_packed_ref(git_dir: Path, ref_name: str) -> str | None:
+    packed_text = _read_text(git_dir / "packed-refs")
+    if packed_text is None:
+        return None
+    for line in packed_text.splitlines():
+        if not line or line.startswith(("#", "^")):
+            continue
+        parts = line.split()
+        if len(parts) != _PACKED_REF_PARTS:
+            continue
+        sha, ref = parts
+        if ref == ref_name:
+            return sha
+    return None
+
+
+def _resolve_repo_hash(repo_root: Path) -> str | None:
+    git_dir = repo_root / ".git"
+    head_value = _read_text(git_dir / "HEAD")
+    if head_value is None:
+        return None
+    if not head_value.startswith("ref:"):
+        return head_value
+    ref_name = head_value.split("ref:", maxsplit=1)[-1].strip()
+    if not ref_name:
+        return None
+    return _read_text(git_dir / ref_name) or _resolve_packed_ref(git_dir, ref_name)
+
+
+def _otel_resource_overrides(repo_root: Path) -> dict[str, str]:
+    overrides = {"codeanatomy.repo_root": str(repo_root)}
+    repo_hash = _resolve_repo_hash(repo_root)
+    if repo_hash is not None:
+        overrides["codeanatomy.repo_hash"] = repo_hash
+    return overrides
 
 
 def _resolve_version(packages: Sequence[str]) -> str | None:

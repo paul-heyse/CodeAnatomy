@@ -1,15 +1,11 @@
 {
   "kind": "plan_validation",
   "payload": {
-    "run_id": "run-1",
+    "invalid_edges": 1,
+    "invalid_tasks": 1,
     "plan_signature": "sig-1",
     "reduced_plan_signature": "sig-1:reduced",
-    "total_tasks": 2,
-    "valid_tasks": 1,
-    "invalid_tasks": 1,
-    "total_edges": 2,
-    "valid_edges": 1,
-    "invalid_edges": 1,
+    "run_id": "run_01HZX4J3C8F8M2KQ",
     "task_results": [
       {
         "contract_violations": [],
@@ -51,6 +47,10 @@
           "input_x"
         ]
       }
-    ]
+    ],
+    "total_edges": 2,
+    "total_tasks": 2,
+    "valid_edges": 1,
+    "valid_tasks": 1
   }
 }

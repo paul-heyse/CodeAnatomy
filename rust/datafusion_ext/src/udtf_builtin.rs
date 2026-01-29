@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, ListBuilder, StringBuilder};
+use arrow::array::{ArrayRef, BooleanBuilder, ListBuilder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{TableFunctionImpl, TableProvider};
@@ -44,6 +44,9 @@ fn registry_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider
     let mut volatility_builder = StringBuilder::new();
     let mut alias_builder = ListBuilder::new(StringBuilder::new());
     let mut params_builder = ListBuilder::new(StringBuilder::new());
+    let mut simplify_builder = BooleanBuilder::new();
+    let mut coerce_builder = BooleanBuilder::new();
+    let mut short_builder = BooleanBuilder::new();
 
     let mut append_row = |name: &str, kind: &str| {
         name_builder.append_value(name);
@@ -56,6 +59,9 @@ fn registry_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider
         volatility_builder.append_value(volatility);
         append_list(&mut alias_builder, snapshot.aliases.get(name));
         append_list(&mut params_builder, snapshot.parameter_names.get(name));
+        simplify_builder.append_value(*snapshot.simplify.get(name).unwrap_or(&false));
+        coerce_builder.append_value(*snapshot.coerce_types.get(name).unwrap_or(&false));
+        short_builder.append_value(*snapshot.short_circuits.get(name).unwrap_or(&false));
     };
 
     for name in &snapshot.scalar {
@@ -85,6 +91,9 @@ fn registry_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider
             DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
             true,
         ),
+        Field::new("simplify", DataType::Boolean, false),
+        Field::new("coerce_types", DataType::Boolean, false),
+        Field::new("short_circuits", DataType::Boolean, false),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -95,6 +104,9 @@ fn registry_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider
             Arc::new(volatility_builder.finish()) as ArrayRef,
             Arc::new(alias_builder.finish()) as ArrayRef,
             Arc::new(params_builder.finish()) as ArrayRef,
+            Arc::new(simplify_builder.finish()) as ArrayRef,
+            Arc::new(coerce_builder.finish()) as ArrayRef,
+            Arc::new(short_builder.finish()) as ArrayRef,
         ],
     )?;
 

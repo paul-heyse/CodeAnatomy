@@ -43,7 +43,6 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
@@ -99,6 +98,7 @@ from schema_spec.system import (
     ParquetColumnOptions,
     TableSchemaContract,
     dataset_spec_from_schema,
+    ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
 from serde_artifacts import DeltaScanConfigSnapshot
@@ -108,6 +108,7 @@ from storage.deltalake import DeltaCdfOptions
 if TYPE_CHECKING:
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
     from datafusion_engine.delta_protocol import DeltaFeatureGate
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
@@ -411,17 +412,6 @@ _DEFAULT_SCAN_CONFIGS: dict[str, _ScanDefaults] = {
         parquet_column_options=None,
     ),
 }
-
-
-@dataclass(frozen=True)
-class _ListingTableArtifactDetails:
-    scan: DataFusionScanOptions | None
-    file_extension: str
-    table_partition_cols: Sequence[tuple[str, str]] | None
-    skip_metadata: bool | None
-    table_schema_contract: TableSchemaContract | None
-    expr_adapter_factory: object | None
-    actual_schema: pa.Schema | None
 
 
 def _schema_field_type(schema: SchemaLike, field: str) -> pa.DataType | None:
@@ -924,17 +914,9 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     if context.options.provider == "delta_cdf":
         df = _register_delta_cdf(context)
     elif _should_register_delta_provider(context):
-        if _should_use_delta_ddl(context):
-            predicate_sql, predicate_error = _delta_pruning_predicate(context)
-            df = _register_delta_ddl_table(
-                context,
-                predicate=predicate_sql,
-                predicate_error=predicate_error,
-            )
-        else:
-            df = _register_delta_provider(context)
+        df = _register_delta_provider(context)
     else:
-        msg = "Delta registration requires the native provider or DDL opt-in."
+        msg = "Delta registration requires the native provider."
         raise ValueError(msg)
     scan = context.options.scan
     projection_exprs = scan.projection_exprs if scan is not None else ()
@@ -993,6 +975,26 @@ class _DeltaProviderArtifactContext:
     add_actions: Sequence[Mapping[str, object]] | None
 
 
+@dataclass(frozen=True)
+class _DeltaProviderRegistration:
+    provider: object
+    response: _DeltaProviderResponse
+    merged_storage_options: Mapping[str, str] | None
+    delta_scan: DeltaScanOptions | None
+    predicate_sql: str | None
+    predicate_error: str | None
+
+
+@dataclass(frozen=True)
+class _DeltaCdfRegistration:
+    provider: object
+    bundle: DeltaCdfProviderBundle
+    storage_options: Mapping[str, str] | None
+    log_storage_options: Mapping[str, str] | None
+    cdf_options: DeltaCdfOptions | None
+    runtime_profile: DataFusionRuntimeProfile | None
+
+
 def _delta_pruning_predicate(
     context: DataFusionRegistrationContext,
 ) -> tuple[str | None, str | None]:
@@ -1009,7 +1011,21 @@ def _delta_pruning_predicate(
         return None, str(exc)
 
 
-def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
+def _scan_files_from_add_actions(
+    add_actions: Sequence[Mapping[str, object]] | None,
+) -> tuple[str, ...]:
+    if not add_actions:
+        return ()
+    return tuple(
+        str(entry["path"])
+        for entry in add_actions
+        if isinstance(entry, Mapping) and entry.get("path") is not None
+    )
+
+
+def _build_delta_provider_registration(
+    context: DataFusionRegistrationContext,
+) -> _DeltaProviderRegistration:
     location = context.location
     predicate_sql, predicate_error = _delta_pruning_predicate(context)
     delta_scan = resolve_delta_scan_options(location)
@@ -1020,10 +1036,9 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     ):
         enable_view_types = _schema_hardening_view_types(context.runtime_profile)
         delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
-    log_storage_options = resolve_delta_log_storage_options(location)
     merged_storage_options = _merged_storage_options(
         location.storage_options,
-        log_storage_options,
+        resolve_delta_log_storage_options(location),
     )
     request = _DeltaProviderRequest(
         ctx=context.ctx,
@@ -1036,9 +1051,111 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         predicate=predicate_sql,
     )
     response = _delta_table_provider_from_session(request)
-    provider = response.provider
+    scan_files = _scan_files_from_add_actions(response.add_actions)
+    manager = _plugin_manager_for_profile(context.runtime_profile)
+    provider = manager.create_table_provider(
+        provider_name="delta",
+        options=_delta_plugin_options(
+            request=_DeltaPluginOptionsRequest(
+                path=str(location.path),
+                storage_options=merged_storage_options,
+                version=location.delta_version,
+                timestamp=location.delta_timestamp,
+                delta_scan=delta_scan,
+                gate=resolve_delta_feature_gate(location),
+                scan_files=scan_files or None,
+            ),
+        ),
+    )
+    return _DeltaProviderRegistration(
+        provider=provider,
+        response=response,
+        merged_storage_options=merged_storage_options,
+        delta_scan=delta_scan,
+        predicate_sql=predicate_sql,
+        predicate_error=predicate_error,
+    )
+
+
+def _build_delta_cdf_registration(
+    *,
+    path: str,
+    options: DeltaCdfRegistrationOptions | None,
+    gate: DeltaFeatureGate | None,
+) -> _DeltaCdfRegistration:
+    resolved = options or DeltaCdfRegistrationOptions()
+    cdf_options = resolved.cdf_options
+    explicit_log_storage_options = _merged_storage_options(
+        None,
+        resolved.log_storage_options,
+    )
+    storage_options = _merged_storage_options(
+        resolved.storage_options,
+        explicit_log_storage_options or resolved.storage_options,
+    )
+    bundle = _delta_cdf_table_provider(
+        path=path,
+        storage_options=storage_options,
+        options=cdf_options,
+        gate=gate,
+    )
+    if bundle is None:
+        msg = "Delta CDF provider requires Rust control-plane support."
+        raise ValueError(msg)
+    manager = _plugin_manager_for_profile(resolved.runtime_profile)
+    provider = manager.create_table_provider(
+        provider_name="delta_cdf",
+        options=_delta_cdf_plugin_options(
+            request=_DeltaCdfPluginOptionsRequest(
+                path=path,
+                storage_options=storage_options,
+                version=None,
+                timestamp=None,
+                options=cdf_options,
+                gate=gate,
+            ),
+        ),
+    )
+    return _DeltaCdfRegistration(
+        provider=provider,
+        bundle=bundle,
+        storage_options=storage_options,
+        log_storage_options=explicit_log_storage_options,
+        cdf_options=cdf_options,
+        runtime_profile=resolved.runtime_profile,
+    )
+
+
+def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
+    location = context.location
+    registration = _build_delta_provider_registration(context)
+    provider = registration.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
     adapter.register_delta_table_provider(context.name, TableProviderCapsule(provider))
+    df = context.ctx.table(context.name)
+    schema_fingerprint_value, ddl_fingerprint, fingerprint_details = (
+        _update_table_provider_fingerprints(
+            context.ctx,
+            name=context.name,
+            schema=df.schema(),
+        )
+    )
+    artifact_details = _delta_provider_artifact_payload(
+        location,
+        context=_DeltaProviderArtifactContext(
+            delta_scan=registration.delta_scan,
+            delta_scan_effective=registration.response.delta_scan_effective,
+            snapshot=registration.response.snapshot,
+            registration_path="provider",
+            predicate=registration.predicate_sql,
+            predicate_error=(
+                registration.predicate_error or registration.response.predicate_error
+            ),
+            add_actions=registration.response.add_actions,
+        ),
+    )
+    if fingerprint_details:
+        artifact_details.update(fingerprint_details)
     _record_table_provider_artifact(
         context.runtime_profile,
         artifact=_TableProviderArtifact(
@@ -1046,21 +1163,10 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             provider=provider,
             provider_kind="delta_table_provider",
             source=None,
-            details=_delta_provider_artifact_payload(
-                location,
-                context=_DeltaProviderArtifactContext(
-                    delta_scan=delta_scan,
-                    delta_scan_effective=response.delta_scan_effective,
-                    snapshot=response.snapshot,
-                    registration_path="provider",
-                    predicate=predicate_sql,
-                    predicate_error=predicate_error or response.predicate_error,
-                    add_actions=response.add_actions,
-                ),
-            ),
+            details=artifact_details,
         ),
     )
-    if response.snapshot is not None:
+    if registration.response.snapshot is not None:
         from datafusion_engine.delta_observability import (
             DeltaSnapshotArtifact,
             record_delta_snapshot,
@@ -1070,109 +1176,15 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             context.runtime_profile,
             artifact=DeltaSnapshotArtifact(
                 table_uri=str(location.path),
-                snapshot=response.snapshot,
+                snapshot=registration.response.snapshot,
                 dataset_name=context.name,
-                storage_options_hash=_storage_options_hash(merged_storage_options),
+                storage_options_hash=_storage_options_hash(
+                    registration.merged_storage_options
+                ),
+                schema_fingerprint=schema_fingerprint_value,
+                ddl_fingerprint=ddl_fingerprint,
             ),
         )
-    _update_table_provider_capabilities(
-        context.ctx,
-        name=context.name,
-        supports_insert=True,
-    )
-    df = context.ctx.table(context.name)
-    return _maybe_cache(context, df)
-
-
-def _should_use_delta_ddl(context: DataFusionRegistrationContext) -> bool:
-    profile = context.runtime_profile
-    return bool(profile is not None and profile.enable_delta_ddl_registration)
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
-def _sql_table_ref(name: str) -> str:
-    parts = [part for part in name.split(".") if part]
-    if not parts:
-        return _sql_identifier(name)
-    return ".".join(_sql_identifier(part) for part in parts)
-
-
-def _sql_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
-
-
-def _delta_external_table_ddl(
-    *,
-    table_name: str,
-    table_uri: str,
-    options: Mapping[str, str] | None,
-) -> str:
-    ddl = (
-        f"CREATE EXTERNAL TABLE {_sql_table_ref(table_name)} "
-        f"STORED AS DELTATABLE LOCATION {_sql_literal(table_uri)}"
-    )
-    if not options:
-        return ddl
-    entries = ", ".join(
-        f"{_sql_literal(str(key))} {_sql_literal(str(value))}"
-        for key, value in sorted(options.items())
-    )
-    return f"{ddl} OPTIONS({entries})"
-
-
-def _register_delta_ddl_table(
-    context: DataFusionRegistrationContext,
-    *,
-    predicate: str | None,
-    predicate_error: str | None,
-) -> DataFrame:
-    location = context.location
-    resolved_log_storage = resolve_delta_log_storage_options(location)
-    merged_storage_options = _merged_storage_options(
-        location.storage_options,
-        resolved_log_storage,
-    )
-    ddl = _delta_external_table_ddl(
-        table_name=context.name,
-        table_uri=str(location.path),
-        options=merged_storage_options,
-    )
-    deregister = getattr(context.ctx, "deregister_table", None)
-    if callable(deregister):
-        with suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister(context.name)
-    sql_options = _sql_options.statement_sql_options_for_profile(
-        context.runtime_profile
-    ).with_allow_ddl(allow=True)
-    df = context.ctx.sql_with_options(ddl, sql_options)
-    df.collect()
-    df = context.ctx.table(context.name)
-    _record_table_provider_artifact(
-        context.runtime_profile,
-        artifact=_TableProviderArtifact(
-            name=context.name,
-            provider=None,
-            provider_kind="delta_ddl",
-            source=None,
-            details=_delta_provider_artifact_payload(
-                location,
-                context=_DeltaProviderArtifactContext(
-                    delta_scan=resolve_delta_scan_options(location),
-                    delta_scan_effective=None,
-                    snapshot=None,
-                    registration_path="ddl",
-                    predicate=predicate,
-                    predicate_error=predicate_error,
-                    add_actions=None,
-                ),
-            ),
-        ),
-    )
     _update_table_provider_capabilities(
         context.ctx,
         name=context.name,
@@ -1224,6 +1236,98 @@ def _delta_table_provider_from_session(
         add_actions=cast("Sequence[Mapping[str, object]] | None", bundle.add_actions),
         predicate_error=bundle.predicate_error,
     )
+
+
+def _plugin_manager_for_profile(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionPluginManager:
+    if runtime_profile is None:
+        msg = "Plugin-based Delta registration requires a runtime profile."
+        raise RuntimeError(msg)
+    manager = runtime_profile.plugin_manager
+    if manager is not None:
+        return manager
+    from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+    if not runtime_profile.plugin_specs:
+        msg = "Plugin-based Delta registration requires plugin specs."
+        raise RuntimeError(msg)
+    return DataFusionPluginManager(runtime_profile.plugin_specs)
+
+
+@dataclass(frozen=True)
+class _DeltaPluginOptionsRequest:
+    """Inputs for Delta plugin provider options."""
+
+    path: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    delta_scan: DeltaScanOptions | None
+    gate: DeltaFeatureGate | None
+    scan_files: Sequence[str] | None = None
+
+
+@dataclass(frozen=True)
+class _DeltaCdfPluginOptionsRequest:
+    """Inputs for Delta CDF plugin provider options."""
+
+    path: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    options: DeltaCdfOptions | None
+    gate: DeltaFeatureGate | None
+
+
+def _delta_plugin_options(
+    *,
+    request: _DeltaPluginOptionsRequest,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "table_uri": request.path,
+        "storage_options": (dict(request.storage_options) if request.storage_options else None),
+        "version": request.version,
+        "timestamp": request.timestamp,
+        "file_column_name": (request.delta_scan.file_column_name if request.delta_scan else None),
+        "enable_parquet_pushdown": (
+            request.delta_scan.enable_parquet_pushdown if request.delta_scan else None
+        ),
+        "schema_force_view_types": (
+            request.delta_scan.schema_force_view_types if request.delta_scan else None
+        ),
+        "wrap_partition_values": (
+            request.delta_scan.wrap_partition_values if request.delta_scan else None
+        ),
+    }
+    gate_payload = _delta_gate_payload(request.gate)
+    if gate_payload is not None:
+        payload.update(gate_payload)
+    if request.scan_files:
+        payload["files"] = list(request.scan_files)
+    return payload
+
+
+def _delta_cdf_plugin_options(
+    *,
+    request: _DeltaCdfPluginOptionsRequest,
+) -> dict[str, object]:
+    cdf_payload = _cdf_options_payload(request.options) or {}
+    payload: dict[str, object] = {
+        "table_uri": request.path,
+        "storage_options": (dict(request.storage_options) if request.storage_options else None),
+        "version": request.version,
+        "timestamp": request.timestamp,
+        "starting_version": cdf_payload.get("starting_version"),
+        "ending_version": cdf_payload.get("ending_version"),
+        "starting_timestamp": cdf_payload.get("starting_timestamp"),
+        "ending_timestamp": cdf_payload.get("ending_timestamp"),
+        "allow_out_of_range": cdf_payload.get("allow_out_of_range"),
+    }
+    gate_payload = _delta_gate_payload(request.gate)
+    if gate_payload is not None:
+        payload.update(gate_payload)
+    return payload
 
 
 def _delta_provider_artifact_payload(
@@ -1307,144 +1411,6 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
         schema=dict(schema_payload) if schema_payload is not None else None,
     )
     return cast("dict[str, object]", to_builtins(snapshot, str_keys=True))
-
-
-def _file_extension_for_location(
-    location: DatasetLocation,
-    *,
-    scan: DataFusionScanOptions | None,
-) -> str:
-    if scan is not None and scan.file_extension:
-        return scan.file_extension
-    format_name = str(location.format or "delta").lower()
-    if format_name.startswith("."):
-        return format_name
-    return f".{format_name}"
-
-
-@dataclass(frozen=True)
-class _RegistrationInputs:
-    scan: DataFusionScanOptions | None
-    file_extension: str
-    table_partition_cols: Sequence[tuple[str, str]] | None
-    skip_metadata: bool | None
-    table_schema_contract: TableSchemaContract | None
-
-
-def _finalize_registered_df(
-    context: DataFusionRegistrationContext,
-    df: DataFrame,
-    *,
-    inputs: _RegistrationInputs,
-) -> DataFrame:
-    scan = inputs.scan
-    registered_schema = df.schema()
-    expr_adapter_factory = _resolve_expr_adapter_factory(
-        scan,
-        runtime_profile=context.runtime_profile,
-        dataset_name=context.name,
-        location=context.location,
-    )
-    dataset_spec = _resolve_dataset_spec(context.name, context.location)
-    evolution_required = (
-        _requires_schema_evolution_adapter(dataset_spec.evolution_spec)
-        if dataset_spec is not None
-        else False
-    )
-    _ensure_expr_adapter_factory(
-        context.ctx,
-        factory=expr_adapter_factory,
-        evolution_required=evolution_required,
-    )
-    _validate_constraints_and_defaults(
-        context,
-        enable_information_schema=(
-            context.runtime_profile.enable_information_schema
-            if context.runtime_profile is not None
-            else False
-        ),
-    )
-    _record_listing_table_artifact(
-        context,
-        details=_ListingTableArtifactDetails(
-            scan=scan,
-            file_extension=inputs.file_extension,
-            table_partition_cols=inputs.table_partition_cols,
-            skip_metadata=inputs.skip_metadata,
-            table_schema_contract=inputs.table_schema_contract,
-            expr_adapter_factory=expr_adapter_factory,
-            actual_schema=registered_schema,
-        ),
-    )
-    return _maybe_cache(context, df)
-
-
-def _register_listing_table(
-    context: DataFusionRegistrationContext,
-) -> DataFrame:
-    """Raise because listing table registration is disabled.
-
-    Raises
-    ------
-    ValueError
-        Raised when listing table registration is requested.
-    """
-    _ = context
-    msg = "Listing table registration is disabled; use Delta TableProvider."
-    raise ValueError(msg)
-
-
-def _register_file_list_dataset(
-    context: DataFusionRegistrationContext,
-) -> DataFrame:
-    scan = context.options.scan
-    file_extension = _file_extension_for_location(context.location, scan=scan)
-    table_schema_contract = _resolve_table_schema_contract(
-        schema=context.options.schema,
-        scan=scan,
-        partition_cols=scan.partition_cols if scan is not None else None,
-    )
-    _validate_table_schema_contract(table_schema_contract)
-    _validate_ordering_contract(context, scan=scan)
-    table_partition_cols_payload = (
-        [(col, str(dtype)) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
-    )
-    skip_metadata = None
-    if scan is not None:
-        skip_metadata = _effective_skip_metadata(context.location, scan)
-    _apply_scan_settings(
-        context.ctx,
-        scan=scan,
-        sql_options=_sql_options.statement_sql_options_for_profile(context.runtime_profile),
-    )
-    files = context.location.files
-    if not files:
-        msg = "File-list registration requires at least one file path."
-        raise ValueError(msg)
-    dataset = ds.dataset(
-        list(files),
-        format=str(context.location.format or "delta").lower(),
-        filesystem=context.location.filesystem,
-        schema=context.options.schema,
-        partitioning=context.location.partitioning or "hive",
-    )
-    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_dataset(context.name, dataset)
-    df = context.ctx.table(context.name)
-    inputs = _RegistrationInputs(
-        scan=scan,
-        file_extension=file_extension,
-        table_partition_cols=table_partition_cols_payload,
-        skip_metadata=skip_metadata,
-        table_schema_contract=table_schema_contract,
-    )
-    return _finalize_registered_df(
-        context,
-        df,
-        inputs=inputs,
-    )
 
 
 def provider_capsule_id(provider: object) -> str:
@@ -1579,117 +1545,31 @@ def _update_table_provider_capabilities(
     record_table_provider_metadata(id(ctx), metadata=updated)
 
 
-def _record_listing_table_artifact(
-    context: DataFusionRegistrationContext,
+def _update_table_provider_fingerprints(
+    ctx: SessionContext,
     *,
-    details: _ListingTableArtifactDetails,
-) -> None:
-    profile = context.runtime_profile
-    if profile is None:
-        return
-    provenance = _table_provenance_snapshot(
-        context.ctx,
-        name=context.name,
-        enable_information_schema=profile.enable_information_schema,
-        sql_options=_sql_options.sql_options_for_profile(profile),
-        runtime_profile=profile,
+    name: str,
+    schema: pa.Schema | None,
+) -> tuple[str | None, str | None, dict[str, object]]:
+    metadata = table_provider_metadata(id(ctx), table_name=name)
+    if metadata is None:
+        return None, None, {}
+    schema_fingerprint_value = _schema_fingerprint(schema)
+    ddl_fingerprint = metadata.ddl_fingerprint
+    if ddl_fingerprint is None and metadata.ddl is not None:
+        ddl_fingerprint = ddl_fingerprint_from_definition(metadata.ddl)
+    updated = replace(
+        metadata,
+        schema_fingerprint=schema_fingerprint_value,
+        ddl_fingerprint=ddl_fingerprint,
     )
-    expected_schema = context.options.schema
-    expected_schema_fingerprint = _schema_fingerprint(expected_schema)
-    actual_schema_fingerprint = _schema_fingerprint(details.actual_schema)
-    table_schema_snapshot = _table_schema_snapshot(
-        schema=context.options.schema,
-        partition_cols=details.table_partition_cols,
-    )
-    evolution_payload, evolution_required = _schema_evolution_details(context)
-    ordering_keys: list[list[str]] | None = None
-    ordering_matches_scan: bool | None = None
-    if expected_schema is not None:
-        ordering = ordering_from_schema(expected_schema)
-        if ordering.keys:
-            ordering_keys = [list(key) for key in ordering.keys]
-            if details.scan is not None and details.scan.file_sort_order:
-                expected = [list(key) for key in ordering.keys]
-                ordering_matches_scan = [
-                    list(key) for key in details.scan.file_sort_order
-                ] == expected
-    payload: dict[str, object] = {
-        "name": context.name,
-        "path": str(context.location.path),
-        "format": context.location.format,
-        "provider": "listing",
-        "file_extension": details.file_extension,
-        "partition_cols": [
-            {"name": col, "dtype": dtype} for col, dtype in (details.table_partition_cols or ())
-        ],
-        "file_sort_order": (
-            [list(key) for key in details.scan.file_sort_order]
-            if details.scan is not None
-            else None
-        ),
-        "ordering_keys": ordering_keys,
-        "ordering_matches_scan": ordering_matches_scan,
-        "parquet_pruning": details.scan.parquet_pruning if details.scan is not None else None,
-        "skip_metadata": details.skip_metadata,
-        "skip_arrow_metadata": (
-            details.scan.skip_arrow_metadata if details.scan is not None else None
-        ),
-        "binary_as_string": (details.scan.binary_as_string if details.scan is not None else None),
-        "schema_force_view_types": (
-            details.scan.schema_force_view_types if details.scan is not None else None
-        ),
-        "collect_statistics": (
-            details.scan.collect_statistics if details.scan is not None else None
-        ),
-        "meta_fetch_concurrency": (
-            details.scan.meta_fetch_concurrency if details.scan is not None else None
-        ),
-        "parquet_column_options": (
-            details.scan.parquet_column_options.external_table_options()
-            if details.scan is not None and details.scan.parquet_column_options is not None
-            else None
-        ),
-        "list_files_cache_limit": (
-            details.scan.list_files_cache_limit if details.scan is not None else None
-        ),
-        "list_files_cache_ttl": (
-            details.scan.list_files_cache_ttl if details.scan is not None else None
-        ),
-        "listing_table_factory_infer_partitions": (
-            details.scan.listing_table_factory_infer_partitions
-            if details.scan is not None
-            else None
-        ),
-        "listing_table_ignore_subdirectory": (
-            details.scan.listing_table_ignore_subdirectory if details.scan is not None else None
-        ),
-        "projection_exprs": (
-            list(details.scan.projection_exprs) if details.scan is not None else None
-        ),
-        "listing_mutable": details.scan.listing_mutable if details.scan is not None else None,
-        "unbounded": details.scan.unbounded if details.scan is not None else None,
-        "schema": schema_to_dict(expected_schema) if expected_schema is not None else None,
-        "expected_schema_fingerprint": expected_schema_fingerprint,
-        "actual_schema_fingerprint": actual_schema_fingerprint,
-        "schema_match": _fingerprints_match(expected_schema_fingerprint, actual_schema_fingerprint),
-        "table_schema_snapshot": table_schema_snapshot,
-        "table_schema_contract": _table_schema_contract_payload(details.table_schema_contract),
-        "schema_evolution": evolution_payload,
-        "schema_evolution_required": evolution_required,
-        "expr_adapter_factory": _adapter_factory_payload(details.expr_adapter_factory),
-        "read_options": dict(context.options.read_options),
-    }
-    payload["partition_schema_validation"] = _partition_schema_validation(
-        _PartitionSchemaContext(
-            ctx=context.ctx,
-            table_name=context.name,
-            enable_information_schema=profile.enable_information_schema,
-            runtime_profile=profile,
-        ),
-        expected_partition_cols=details.table_partition_cols,
-    )
-    payload.update(provenance)
-    record_artifact(profile, "datafusion_listing_tables_v1", payload)
+    record_table_provider_metadata(id(ctx), metadata=updated)
+    details: dict[str, object] = {}
+    if schema_fingerprint_value is not None:
+        details["schema_fingerprint"] = schema_fingerprint_value
+    if ddl_fingerprint is not None:
+        details["ddl_fingerprint"] = ddl_fingerprint
+    return schema_fingerprint_value, ddl_fingerprint, details
 
 
 def _apply_projection_exprs(
@@ -2487,27 +2367,40 @@ def _require_partition_schema_validation(
     )
     if validation is None:
         return
-    missing: list[str] = []
+    missing = _validation_missing_partition_cols(validation)
+    order_matches = validation.get("partition_order_matches")
+    type_mismatches = _validation_type_mismatches(validation)
+    if missing or order_matches is False or type_mismatches:
+        msg = f"Partition schema validation failed for {context.table_name}: {validation}."
+        raise ValueError(msg)
+
+
+def _validation_missing_partition_cols(
+    validation: Mapping[str, object],
+) -> list[str]:
     missing_value = validation.get("missing_partition_cols")
     if isinstance(missing_value, Sequence) and not isinstance(
         missing_value,
         (str, bytes, bytearray),
     ):
-        missing = [str(item) for item in missing_value]
-    order_matches = validation.get("partition_order_matches")
+        return [str(item) for item in missing_value]
+    return []
+
+
+def _validation_type_mismatches(
+    validation: Mapping[str, object],
+) -> list[dict[str, str]]:
     type_value = validation.get("partition_type_mismatches")
-    type_mismatches: list[dict[str, str]]
-    if isinstance(type_value, Sequence) and not isinstance(type_value, (str, bytes, bytearray)):
-        type_mismatches = [
+    if isinstance(type_value, Sequence) and not isinstance(
+        type_value,
+        (str, bytes, bytearray),
+    ):
+        return [
             {str(key): str(val) for key, val in item.items()}
             for item in type_value
             if isinstance(item, Mapping)
         ]
-    else:
-        type_mismatches = []
-    if missing or order_matches is False or type_mismatches:
-        msg = f"Partition schema validation failed for {context.table_name}: {validation}."
-        raise ValueError(msg)
+    return []
 
 
 def _normalize_filesystem(filesystem: object) -> pafs.FileSystem | None:
@@ -2544,35 +2437,45 @@ def register_delta_cdf_df(
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the registered CDF dataset.
     """
-    resolved = options or DeltaCdfRegistrationOptions()
-    cdf_options = resolved.cdf_options
-    explicit_log_storage_options = _merged_storage_options(
-        None,
-        resolved.log_storage_options,
-    )
-    fallback_log_storage_options = (
-        explicit_log_storage_options if explicit_log_storage_options is not None else None
-    )
-    storage_options = _merged_storage_options(
-        resolved.storage_options,
-        fallback_log_storage_options or resolved.storage_options,
-    )
-    runtime_profile = resolved.runtime_profile
-    bundle = _delta_cdf_table_provider(
-        path=path,
-        storage_options=storage_options,
-        options=cdf_options,
-        gate=gate,
-    )
-    if bundle is None:
-        msg = "Delta CDF provider requires Rust control-plane support."
-        raise ValueError(msg)
-    provider = bundle.provider
+    try:
+        registration = _build_delta_cdf_registration(
+            path=path,
+            options=options,
+            gate=gate,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    provider = registration.provider
+    runtime_profile = registration.runtime_profile
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     adapter = facade.io_adapter()
-    adapter.register_delta_cdf_provider(name, provider)
+    adapter.register_delta_cdf_provider(name, TableProviderCapsule(provider))
+    df = ctx.table(name)
+    _, _, fingerprint_details = _update_table_provider_fingerprints(
+        ctx,
+        name=name,
+        schema=df.schema(),
+    )
+    artifact_details: dict[str, object] = {
+        "path": path,
+        "delta_log_storage_options": (
+            dict(registration.log_storage_options)
+            if registration.log_storage_options is not None
+            else None
+        ),
+        "delta_storage_options": (
+            dict(registration.storage_options) if registration.storage_options is not None else None
+        ),
+        "delta_storage_options_hash": _storage_options_hash(
+            registration.storage_options
+        ),
+        "delta_snapshot": registration.bundle.snapshot,
+        "cdf_options": _cdf_options_payload(registration.cdf_options),
+    }
+    if fingerprint_details:
+        artifact_details.update(fingerprint_details)
     _record_table_provider_artifact(
         runtime_profile,
         artifact=_TableProviderArtifact(
@@ -2580,20 +2483,7 @@ def register_delta_cdf_df(
             provider=provider,
             provider_kind="cdf_table_provider",
             source=None,
-            details={
-                "path": path,
-                "delta_log_storage_options": (
-                    dict(explicit_log_storage_options)
-                    if explicit_log_storage_options is not None
-                    else None
-                ),
-                "delta_storage_options": (
-                    dict(storage_options) if storage_options is not None else None
-                ),
-                "delta_storage_options_hash": _storage_options_hash(storage_options),
-                "delta_snapshot": bundle.snapshot,
-                "cdf_options": _cdf_options_payload(cdf_options),
-            },
+            details=artifact_details,
         ),
     )
     _update_table_provider_capabilities(
@@ -2607,14 +2497,14 @@ def register_delta_cdf_df(
             name=name,
             path=path,
             provider="table_provider",
-            options=cdf_options,
-            log_storage_options=explicit_log_storage_options,
-            snapshot=bundle.snapshot,
-            storage_options_hash=_storage_options_hash(storage_options),
+            options=registration.cdf_options,
+            log_storage_options=registration.log_storage_options,
+            snapshot=registration.bundle.snapshot,
+            storage_options_hash=_storage_options_hash(registration.storage_options),
         ),
     )
     _invalidate_information_schema_cache(runtime_profile, ctx)
-    return ctx.table(name)
+    return df
 
 
 def _delta_cdf_table_provider(

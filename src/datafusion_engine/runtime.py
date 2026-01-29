@@ -6,6 +6,7 @@ import contextlib
 import importlib
 import logging
 import os
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -151,6 +152,55 @@ def _encode_telemetry_msgpack(payload: object) -> bytes:
     return bytes(buf)
 
 
+def _plugin_library_filename(crate_name: str) -> str:
+    if sys.platform == "win32":
+        return f"{crate_name}.dll"
+    if sys.platform == "darwin":
+        return f"lib{crate_name}.dylib"
+    return f"lib{crate_name}.so"
+
+
+def _default_df_plugin_path() -> Path:
+    env_path = os.environ.get("CODEANATOMY_DF_PLUGIN_PATH")
+    if env_path:
+        return Path(env_path)
+    root = Path(__file__).resolve().parents[2]
+    lib_name = _plugin_library_filename("df_plugin_codeanatomy")
+    for profile in ("release", "debug"):
+        candidate = root / "rust" / "df_plugin_codeanatomy" / "target" / profile / lib_name
+        if candidate.exists():
+            return candidate
+    msg = (
+        "DataFusion plugin library not found. Set CODEANATOMY_DF_PLUGIN_PATH or build "
+        "rust/df_plugin_codeanatomy to produce the shared library."
+    )
+    raise FileNotFoundError(msg)
+
+
+def _default_udf_plugin_options(profile: DataFusionRuntimeProfile) -> dict[str, object]:
+    options: dict[str, object] = {
+        "enable_async": profile.enable_async_udfs,
+    }
+    if profile.async_udf_timeout_ms is not None:
+        options["async_udf_timeout_ms"] = int(profile.async_udf_timeout_ms)
+    if profile.async_udf_batch_size is not None:
+        options["async_udf_batch_size"] = int(profile.async_udf_batch_size)
+    return options
+
+
+def _default_plugin_spec(profile: DataFusionRuntimeProfile) -> DataFusionPluginSpec:
+    from datafusion_engine.plugin_manager import DataFusionPluginSpec
+
+    plugin_path = _default_df_plugin_path()
+    return DataFusionPluginSpec(
+        path=str(plugin_path),
+        udf_options=_default_udf_plugin_options(profile),
+        enable_udfs=True,
+        enable_table_functions=True,
+        enable_table_providers=False,
+    )
+
+
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
 logger = logging.getLogger(__name__)
@@ -236,7 +286,6 @@ _DELTA_RUNTIME_ENV_SCHEMA = pa.struct(
 _EXTENSIONS_SCHEMA = pa.struct(
     [
         pa.field("delta_session_defaults_enabled", pa.bool_()),
-        pa.field("delta_ddl_registration_enabled", pa.bool_()),
         pa.field("delta_runtime_env", _DELTA_RUNTIME_ENV_SCHEMA),
         pa.field("delta_querybuilder_enabled", pa.bool_()),
         pa.field("delta_data_checker_enabled", pa.bool_()),
@@ -2259,7 +2308,6 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         },
         "extensions": {
             "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
-            "delta_ddl_registration_enabled": profile.enable_delta_ddl_registration,
             "delta_runtime_env": {
                 "max_spill_size": profile.delta_max_spill_size,
                 "max_temp_directory_size": profile.delta_max_temp_directory_size,
@@ -2949,9 +2997,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     plugin_specs: tuple[DataFusionPluginSpec, ...] = ()
     plugin_manager: DataFusionPluginManager | None = None
     udf_catalog_policy: Literal["default", "strict"] = "default"
-    require_delta: bool = True
     enable_delta_session_defaults: bool = False
-    enable_delta_ddl_registration: bool = False
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
@@ -3010,17 +3056,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
     session_context_hook: Callable[[SessionContext], SessionContext] | None = None
 
-    def __post_init__(self) -> None:
-        """Initialize defaults after dataclass construction.
-
-        Raises
-        ------
-        ValueError
-            Raised when the async UDF policy is invalid.
-        """
+    def _validate_information_schema(self) -> None:
         if not self.enable_information_schema:
             msg = "information_schema must be enabled for DataFusion sessions."
             raise ValueError(msg)
+
+    def _validate_catalog_names(self) -> None:
         if (
             self.registry_catalog_name is not None
             and self.registry_catalog_name != self.default_catalog
@@ -3036,35 +3077,74 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "custom catalog inference is not supported."
             )
             raise ValueError(msg)
-        if self.plan_cache is None:
-            object.__setattr__(
-                self,
-                "plan_cache",
-                PlanCache(cache_profile=self.diskcache_profile),
-            )
-        if self.plan_proto_cache is None:
-            object.__setattr__(
-                self,
-                "plan_proto_cache",
-                PlanProtoCache(cache_profile=self.diskcache_profile),
-            )
-        if self.diagnostics_sink is not None:
-            object.__setattr__(
-                self,
-                "diagnostics_sink",
-                ensure_recorder_sink(
-                    self.diagnostics_sink,
-                    session_id=self.context_cache_key(),
-                ),
-            )
-        if self.plugin_manager is None and self.plugin_specs:
-            from datafusion_engine.plugin_manager import DataFusionPluginManager
 
-            object.__setattr__(
-                self,
-                "plugin_manager",
-                DataFusionPluginManager(self.plugin_specs),
+    def _resolve_plan_cache(self) -> PlanCache:
+        if self.plan_cache is not None:
+            return self.plan_cache
+        return PlanCache(cache_profile=self.diskcache_profile)
+
+    def _resolve_plan_proto_cache(self) -> PlanProtoCache:
+        if self.plan_proto_cache is not None:
+            return self.plan_proto_cache
+        return PlanProtoCache(cache_profile=self.diskcache_profile)
+
+    def _resolve_diagnostics_sink(self) -> DiagnosticsSink | None:
+        if self.diagnostics_sink is None:
+            return None
+        return ensure_recorder_sink(
+            self.diagnostics_sink,
+            session_id=self.context_cache_key(),
+        )
+
+    def _resolve_plugin_specs(self) -> tuple[DataFusionPluginSpec, ...]:
+        if self.plugin_specs:
+            defaults = _default_udf_plugin_options(self)
+            return tuple(
+                replace(spec, udf_options=defaults)
+                if spec.enable_udfs and not spec.udf_options
+                else spec
+                for spec in self.plugin_specs
             )
+        return (_default_plugin_spec(self),)
+
+    def _resolve_plugin_manager(
+        self,
+        *,
+        plugin_specs: tuple[DataFusionPluginSpec, ...],
+    ) -> DataFusionPluginManager | None:
+        if self.plugin_manager is not None:
+            return self.plugin_manager
+        if not plugin_specs:
+            return None
+        from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+        return DataFusionPluginManager(plugin_specs)
+
+    def __post_init__(self) -> None:
+        """Initialize defaults after dataclass construction.
+
+        Raises
+        ------
+        ValueError
+            Raised when the async UDF policy is invalid.
+        """
+        self._validate_information_schema()
+        self._validate_catalog_names()
+        plan_cache = self._resolve_plan_cache()
+        if self.plan_cache is None:
+            object.__setattr__(self, "plan_cache", plan_cache)
+        plan_proto_cache = self._resolve_plan_proto_cache()
+        if self.plan_proto_cache is None:
+            object.__setattr__(self, "plan_proto_cache", plan_proto_cache)
+        diagnostics_sink = self._resolve_diagnostics_sink()
+        if diagnostics_sink is not None:
+            object.__setattr__(self, "diagnostics_sink", diagnostics_sink)
+        plugin_specs = self._resolve_plugin_specs()
+        if not self.plugin_specs:
+            object.__setattr__(self, "plugin_specs", plugin_specs)
+        plugin_manager = self._resolve_plugin_manager(plugin_specs=plugin_specs)
+        if self.plugin_manager is None and plugin_manager is not None:
+            object.__setattr__(self, "plugin_manager", plugin_manager)
         async_policy = self._validate_async_udf_policy()
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
@@ -3259,7 +3339,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
-        self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
         self._install_udf_platform(ctx)
         self._install_schema_registry(ctx)
@@ -3338,7 +3417,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
-        self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
         self._install_udf_platform(ctx)
         self._install_schema_registry(ctx)
@@ -3473,6 +3551,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalogs=self.registry_catalogs,
             catalog_name=catalog_name,
             default_schema=self.default_schema,
+            plugin_manager=self.plugin_manager,
         )
 
     def _install_view_schema(self, ctx: SessionContext) -> None:
@@ -3493,29 +3572,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion.catalog import Schema
 
         catalog.register_schema(self.view_schema_name, Schema.memory_schema())
-
-    def _install_delta_table_factory(self, ctx: SessionContext) -> None:
-        """Install Delta TableProviderFactory for DDL registration.
-
-        Raises
-        ------
-        RuntimeError
-            Raised when the DataFusion extension module is unavailable.
-        TypeError
-            Raised when the factory installer is missing in the extension.
-        """
-        if not self.require_delta:
-            return
-        try:
-            module = importlib.import_module("datafusion_ext")
-        except ImportError as exc:
-            msg = "Delta table factory requires datafusion_ext."
-            raise RuntimeError(msg) from exc
-        installer = getattr(module, "install_delta_table_factory", None)
-        if not callable(installer):
-            msg = "datafusion_ext.install_delta_table_factory is unavailable."
-            raise TypeError(msg)
-        installer(ctx, "DELTATABLE")
 
     def _install_plugins(self, ctx: SessionContext) -> None:
         """Install runtime-loaded DataFusion plugins."""
@@ -6296,6 +6352,11 @@ def read_delta_as_reader(
 ) -> pa.RecordBatchReader:
     """Return a streaming Delta table snapshot using the Delta TableProvider.
 
+    Raises
+    ------
+    RuntimeError
+        Raised when plugin-based Delta providers are unavailable.
+
     Returns
     -------
     pyarrow.RecordBatchReader
@@ -6305,23 +6366,30 @@ def read_delta_as_reader(
     log_storage: dict[str, str] = dict(log_storage_options or {})
     if log_storage:
         storage.update(log_storage)
-    from datafusion_engine.delta_control_plane import (
-        DeltaProviderRequest,
-        delta_provider_from_session,
-    )
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    manager = profile.plugin_manager
+    if manager is None:
+        from datafusion_engine.plugin_manager import DataFusionPluginManager
 
-    ctx = DataFusionRuntimeProfile().session_context()
-    bundle = delta_provider_from_session(
-        ctx,
-        request=DeltaProviderRequest(
-            table_uri=path,
-            storage_options=storage or None,
-            version=None,
-            timestamp=None,
-            delta_scan=delta_scan,
-        ),
-    )
-    df = ctx.read_table(bundle.provider)
+        if not profile.plugin_specs:
+            msg = "Plugin-based Delta readers require plugin specs."
+            raise RuntimeError(msg)
+        manager = DataFusionPluginManager(profile.plugin_specs)
+    options: dict[str, object] = {
+        "table_uri": path,
+        "storage_options": storage or None,
+        "version": None,
+        "timestamp": None,
+        "file_column_name": delta_scan.file_column_name if delta_scan else None,
+        "enable_parquet_pushdown": delta_scan.enable_parquet_pushdown if delta_scan else None,
+        "schema_force_view_types": delta_scan.schema_force_view_types if delta_scan else None,
+        "wrap_partition_values": delta_scan.wrap_partition_values if delta_scan else None,
+    }
+    provider = manager.create_table_provider(provider_name="delta", options=options)
+    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+
+    df = ctx.read_table(TableProviderCapsule(provider))
     to_reader = getattr(df, "to_arrow_reader", None)
     if callable(to_reader):
         reader = to_reader()

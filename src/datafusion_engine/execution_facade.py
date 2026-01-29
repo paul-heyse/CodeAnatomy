@@ -28,6 +28,9 @@ from datafusion_engine.write_pipeline import (
     WriteResult,
     WriteViewRequest,
 )
+from obs.otel.metrics import record_datafusion_duration, record_error, record_write_duration
+from obs.otel.scopes import SCOPE_DATAFUSION
+from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
@@ -414,16 +417,53 @@ class DataFusionExecutionFacade:
         if session_runtime is None:
             msg = "SessionRuntime is required to compile plan bundles."
             raise ValueError(msg)
-        df = builder(self.ctx)
-        return build_plan_bundle(
-            self.ctx,
-            df,
-            options=PlanBundleOptions(
-                compute_execution_plan=compute_execution_plan,
-                compute_substrait=True,
-                session_runtime=session_runtime,
+        tracer = get_tracer(SCOPE_DATAFUSION)
+        start = time.perf_counter()
+        with tracer.start_as_current_span(
+            "datafusion.plan.compile",
+            attributes=span_attributes(
+                attrs={
+                    "plan_kind": "compile",
+                    "compute_execution_plan": compute_execution_plan,
+                }
             ),
-        )
+        ) as span:
+            try:
+                df = builder(self.ctx)
+                bundle = build_plan_bundle(
+                    self.ctx,
+                    df,
+                    options=PlanBundleOptions(
+                        compute_execution_plan=compute_execution_plan,
+                        compute_substrait=True,
+                        session_runtime=session_runtime,
+                    ),
+                )
+            except Exception as exc:
+                record_exception(span, exc)
+                duration_ms = (time.perf_counter() - start) * 1000.0
+                record_error("datafusion", type(exc).__name__)
+                record_datafusion_duration(duration_ms, status="error", plan_kind="compile")
+                set_span_attributes(
+                    span,
+                    {
+                        "duration_ms": duration_ms,
+                        "status": "error",
+                        "plan_kind": "compile",
+                    },
+                )
+                raise
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            record_datafusion_duration(duration_ms, status="ok", plan_kind="compile")
+            set_span_attributes(
+                span,
+                {
+                    "plan_fingerprint": bundle.plan_fingerprint,
+                    "plan_identity_hash": bundle.plan_identity_hash,
+                    "duration_ms": duration_ms,
+                },
+            )
+            return bundle
 
     def execute_plan_bundle(
         self,
@@ -453,44 +493,77 @@ class DataFusionExecutionFacade:
         TypeError
             Raised when replay fails due to incompatible plan types.
         """
+        tracer = get_tracer(SCOPE_DATAFUSION)
         start = time.perf_counter()
-        try:
-            _ensure_udf_compatibility(self.ctx, bundle)
-            df, used_fallback = self._substrait_first_df(bundle)
-            if used_fallback:
-                self._record_substrait_fallback(
-                    bundle,
-                    view_name=view_name,
-                    reason="substrait_replay_failed",
+        plan_kind = "substrait"
+        with tracer.start_as_current_span(
+            "datafusion.execute",
+            attributes=span_attributes(
+                attrs={
+                    "view_name": view_name,
+                    "plan_fingerprint": bundle.plan_fingerprint,
+                    "plan_identity_hash": bundle.plan_identity_hash,
+                }
+            ),
+        ) as span:
+            try:
+                _ensure_udf_compatibility(self.ctx, bundle)
+                df, used_fallback = self._substrait_first_df(bundle)
+                if used_fallback:
+                    plan_kind = "fallback"
+                    self._record_substrait_fallback(
+                        bundle,
+                        view_name=view_name,
+                        reason="substrait_replay_failed",
+                    )
+                result = ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+            except (RuntimeError, ValueError, TypeError) as exc:
+                duration_ms = (time.perf_counter() - start) * 1000.0
+                record_exception(span, exc)
+                record_error("datafusion", type(exc).__name__)
+                record_datafusion_duration(duration_ms, status="error", plan_kind=plan_kind)
+                set_span_attributes(
+                    span,
+                    {
+                        "duration_ms": duration_ms,
+                        "status": "error",
+                        "plan_kind": plan_kind,
+                    },
                 )
-            result = ExecutionResult.from_dataframe(df, plan_bundle=bundle)
-        except (RuntimeError, ValueError, TypeError) as exc:
+                self._record_execution_artifact(
+                    _ExecutionArtifactRequest(
+                        bundle=bundle,
+                        view_name=view_name,
+                        duration_ms=duration_ms,
+                        status="error",
+                        error=str(exc),
+                        scan_units=scan_units,
+                        scan_keys=scan_keys,
+                    )
+                )
+                raise
             duration_ms = (time.perf_counter() - start) * 1000.0
+            record_datafusion_duration(duration_ms, status="ok", plan_kind=plan_kind)
             self._record_execution_artifact(
                 _ExecutionArtifactRequest(
                     bundle=bundle,
                     view_name=view_name,
                     duration_ms=duration_ms,
-                    status="error",
-                    error=str(exc),
+                    status="ok",
+                    error=None,
                     scan_units=scan_units,
                     scan_keys=scan_keys,
                 )
             )
-            raise
-        duration_ms = (time.perf_counter() - start) * 1000.0
-        self._record_execution_artifact(
-            _ExecutionArtifactRequest(
-                bundle=bundle,
-                view_name=view_name,
-                duration_ms=duration_ms,
-                status="ok",
-                error=None,
-                scan_units=scan_units,
-                scan_keys=scan_keys,
+            set_span_attributes(
+                span,
+                {
+                    "duration_ms": duration_ms,
+                    "plan_kind": plan_kind,
+                    "status": "ok",
+                },
             )
-        )
-        return result
+            return result
 
     def _record_execution_artifact(self, request: _ExecutionArtifactRequest) -> None:
         """Persist an execution artifact row when runtime settings allow it."""
@@ -685,9 +758,40 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Unified execution result for the write operation.
         """
-        pipeline = self.write_pipeline()
-        result = pipeline.write(request)
-        return ExecutionResult.from_write(result)
+        tracer = get_tracer(SCOPE_DATAFUSION)
+        start = time.perf_counter()
+        with tracer.start_as_current_span(
+            "datafusion.write",
+            attributes=span_attributes(
+                attrs={
+                    "destination": request.destination,
+                    "mode": request.mode,
+                    "format": request.format,
+                }
+            ),
+        ) as span:
+            try:
+                pipeline = self.write_pipeline()
+                result = pipeline.write(request)
+            except Exception as exc:
+                record_exception(span, exc)
+                duration_ms = (time.perf_counter() - start) * 1000.0
+                record_error("datafusion", type(exc).__name__)
+                record_write_duration(
+                    duration_ms,
+                    status="error",
+                    destination=request.destination,
+                )
+                set_span_attributes(span, {"duration_ms": duration_ms, "status": "error"})
+                raise
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            record_write_duration(
+                duration_ms,
+                status="ok",
+                destination=request.destination,
+            )
+            set_span_attributes(span, {"duration_ms": duration_ms, "status": "ok"})
+            return ExecutionResult.from_write(result)
 
     def write_view(
         self,
@@ -709,9 +813,40 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Execution result wrapping the write metadata.
         """
-        pipeline = self.write_pipeline()
-        result = pipeline.write_view(request, prefer_streaming=prefer_streaming)
-        return ExecutionResult.from_write(result)
+        tracer = get_tracer(SCOPE_DATAFUSION)
+        start = time.perf_counter()
+        with tracer.start_as_current_span(
+            "datafusion.write_view",
+            attributes=span_attributes(
+                attrs={
+                    "destination": request.destination,
+                    "view_name": request.view_name,
+                    "mode": request.mode,
+                }
+            ),
+        ) as span:
+            try:
+                pipeline = self.write_pipeline()
+                result = pipeline.write_view(request, prefer_streaming=prefer_streaming)
+            except Exception as exc:
+                record_exception(span, exc)
+                duration_ms = (time.perf_counter() - start) * 1000.0
+                record_error("datafusion", type(exc).__name__)
+                record_write_duration(
+                    duration_ms,
+                    status="error",
+                    destination=request.destination,
+                )
+                set_span_attributes(span, {"duration_ms": duration_ms, "status": "error"})
+                raise
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            record_write_duration(
+                duration_ms,
+                status="ok",
+                destination=request.destination,
+            )
+            set_span_attributes(span, {"duration_ms": duration_ms, "status": "ok"})
+            return ExecutionResult.from_write(result)
 
     def ensure_view_graph(
         self,

@@ -28,8 +28,13 @@ _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "table",
     "aliases",
     "parameter_names",
+    "volatility",
+    "simplify",
+    "coerce_types",
+    "short_circuits",
     "signature_inputs",
     "return_types",
+    "config_defaults",
 )
 
 RustUdfSnapshot = Mapping[str, object]
@@ -57,7 +62,15 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("simplify", {})
     payload.setdefault("coerce_types", {})
     payload.setdefault("short_circuits", {})
+    payload.setdefault("config_defaults", {})
     payload.setdefault("custom_udfs", [])
+    if ctx in _RUST_UDF_POLICIES:
+        enable_async, timeout_ms, batch_size = _RUST_UDF_POLICIES[ctx]
+        payload["async_udf_policy"] = {
+            "enabled": enable_async,
+            "timeout_ms": timeout_ms,
+            "batch_size": batch_size,
+        }
     return payload
 
 
@@ -75,6 +88,43 @@ def _require_mapping(snapshot: Mapping[str, object], *, name: str) -> Mapping[st
         msg = f"Rust UDF snapshot field {name!r} must be a mapping."
         raise TypeError(msg)
     return value
+
+
+def _require_bool_mapping(snapshot: Mapping[str, object], *, name: str) -> Mapping[str, bool]:
+    value = _require_mapping(snapshot, name=name)
+    output: dict[str, bool] = {}
+    for key, entry in value.items():
+        if not isinstance(key, str):
+            msg = f"Rust UDF snapshot field {name!r} must use string keys."
+            raise TypeError(msg)
+        if not isinstance(entry, bool):
+            msg = f"Rust UDF snapshot field {name!r} must contain boolean values."
+            raise TypeError(msg)
+        output[key] = entry
+    return output
+
+
+def _require_config_defaults(
+    snapshot: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
+    value = _require_mapping(snapshot, name="config_defaults")
+    output: dict[str, Mapping[str, object]] = {}
+    for key, entry in value.items():
+        if not isinstance(key, str):
+            msg = "Rust UDF snapshot config_defaults must use string keys."
+            raise TypeError(msg)
+        if not isinstance(entry, Mapping):
+            msg = "Rust UDF snapshot config_defaults must map to mappings."
+            raise TypeError(msg)
+        for field, field_value in entry.items():
+            if not isinstance(field, str):
+                msg = "Rust UDF snapshot config_defaults fields must use string keys."
+                raise TypeError(msg)
+            if not isinstance(field_value, (bool, int, str)):
+                msg = "Rust UDF snapshot config_defaults values must be bool, int, or str."
+                raise TypeError(msg)
+        output[key] = entry
+    return output
 
 
 def _snapshot_names(snapshot: Mapping[str, object]) -> frozenset[str]:
@@ -129,33 +179,105 @@ def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
     return mapping
 
 
-def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
-    """Validate structural requirements for a Rust UDF snapshot.
-
-    Raises
-    ------
-    ValueError
-        Raised when required snapshot keys or metadata are missing.
-    """
+def _validate_required_snapshot_keys(snapshot: Mapping[str, object]) -> None:
     missing = [key for key in _REQUIRED_SNAPSHOT_KEYS if key not in snapshot]
     if missing:
         msg = f"Rust UDF snapshot missing required keys: {missing}."
         raise ValueError(msg)
+
+
+def _require_snapshot_metadata(
+    snapshot: Mapping[str, object],
+) -> tuple[
+    Mapping[str, object],
+    Mapping[str, object],
+    Mapping[str, object],
+    Mapping[str, object],
+    frozenset[str],
+]:
     _require_sequence(snapshot, name="scalar")
     _require_sequence(snapshot, name="aggregate")
     _require_sequence(snapshot, name="window")
     _require_sequence(snapshot, name="table")
     _require_mapping(snapshot, name="aliases")
-    _require_mapping(snapshot, name="parameter_names")
+    param_names = _require_mapping(snapshot, name="parameter_names")
+    volatility = _require_mapping(snapshot, name="volatility")
+    _require_bool_mapping(snapshot, name="simplify")
+    _require_bool_mapping(snapshot, name="coerce_types")
+    _require_bool_mapping(snapshot, name="short_circuits")
+    _require_config_defaults(snapshot)
     signature_inputs = _require_mapping(snapshot, name="signature_inputs")
     return_types = _require_mapping(snapshot, name="return_types")
     names = _snapshot_names(snapshot)
+    return param_names, volatility, signature_inputs, return_types, names
+
+
+def _validate_udf_entries(
+    snapshot: Mapping[str, object],
+    *,
+    list_name: str,
+    param_names: Mapping[str, object],
+    volatility: Mapping[str, object],
+) -> None:
+    for name in _require_sequence(snapshot, name=list_name):
+        if not isinstance(name, str):
+            msg = f"Rust UDF snapshot {list_name} entries must be strings."
+            raise TypeError(msg)
+        if name not in param_names:
+            msg = f"Rust UDF snapshot missing parameter names for {name!r}."
+            raise ValueError(msg)
+        if name not in volatility:
+            msg = f"Rust UDF snapshot missing volatility for {name!r}."
+            raise ValueError(msg)
+
+
+def _validate_signature_metadata(
+    *,
+    names: frozenset[str],
+    signature_inputs: Mapping[str, object],
+    return_types: Mapping[str, object],
+) -> None:
     if names and not signature_inputs:
         msg = "Rust UDF snapshot missing signature_inputs entries."
         raise ValueError(msg)
     if names and not return_types:
         msg = "Rust UDF snapshot missing return_types entries."
         raise ValueError(msg)
+
+
+def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
+    """Validate structural requirements for a Rust UDF snapshot.
+
+    Raises
+    ------
+    TypeError
+        Raised when snapshot fields use invalid types.
+    ValueError
+        Raised when required snapshot keys or metadata are missing.
+    """
+    try:
+        _validate_required_snapshot_keys(snapshot)
+        param_names, volatility, signature_inputs, return_types, names = _require_snapshot_metadata(
+            snapshot,
+        )
+        for list_name in ("scalar", "aggregate", "window"):
+            _validate_udf_entries(
+                snapshot,
+                list_name=list_name,
+                param_names=param_names,
+                volatility=volatility,
+            )
+        _validate_signature_metadata(
+            names=names,
+            signature_inputs=signature_inputs,
+            return_types=return_types,
+        )
+    except TypeError as exc:
+        msg = f"Invalid Rust UDF snapshot types: {exc}"
+        raise TypeError(msg) from exc
+    except ValueError as exc:
+        msg = f"Invalid Rust UDF snapshot values: {exc}"
+        raise ValueError(msg) from exc
 
 
 def validate_required_udfs(
@@ -354,6 +476,46 @@ def rust_udf_snapshot_hash(snapshot: Mapping[str, object]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _async_udf_policy(
+    *,
+    enable_async: bool,
+    async_udf_timeout_ms: int | None,
+    async_udf_batch_size: int | None,
+) -> tuple[bool, int | None, int | None]:
+    if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
+        msg = "Async UDF policy provided but enable_async is False."
+        raise ValueError(msg)
+    if enable_async:
+        if async_udf_timeout_ms is None or async_udf_timeout_ms <= 0:
+            msg = "async_udf_timeout_ms must be a positive integer when async UDFs are enabled."
+            raise ValueError(msg)
+        if async_udf_batch_size is None or async_udf_batch_size <= 0:
+            msg = "async_udf_batch_size must be a positive integer when async UDFs are enabled."
+            raise ValueError(msg)
+    return (enable_async, async_udf_timeout_ms, async_udf_batch_size)
+
+
+def _install_udf_config(ctx: SessionContext) -> None:
+    installer = getattr(datafusion_ext, "install_codeanatomy_udf_config", None)
+    if callable(installer):
+        with contextlib.suppress(RuntimeError, TypeError, ValueError):
+            installer(ctx)
+
+
+def _registered_snapshot(
+    ctx: SessionContext,
+    *,
+    policy: tuple[bool, int | None, int | None],
+) -> Mapping[str, object] | None:
+    if ctx not in _RUST_UDF_CONTEXTS:
+        return None
+    existing = _RUST_UDF_POLICIES.get(ctx)
+    if existing is not None and existing != policy:
+        msg = "Rust UDFs already registered with a different async policy."
+        raise ValueError(msg)
+    return _validated_snapshot(ctx)
+
+
 def register_rust_udfs(
     ctx: SessionContext,
     *,
@@ -361,7 +523,7 @@ def register_rust_udfs(
     async_udf_timeout_ms: int | None = None,
     async_udf_batch_size: int | None = None,
 ) -> Mapping[str, object]:
-    """Register Rust-backed UDFs once per session context.
+    """Ensure Rust UDF snapshots are available for a session context.
 
     Returns
     -------
@@ -373,35 +535,22 @@ def register_rust_udfs(
     ValueError
         Raised when async UDF policy configuration is invalid.
     """
-    if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
-        msg = "Async UDF policy provided but enable_async is False."
-        raise ValueError(msg)
-    if enable_async:
-        if async_udf_timeout_ms is None or async_udf_timeout_ms <= 0:
-            msg = "async_udf_timeout_ms must be a positive integer when async UDFs are enabled."
-            raise ValueError(msg)
-        if async_udf_batch_size is None or async_udf_batch_size <= 0:
-            msg = "async_udf_batch_size must be a positive integer when async UDFs are enabled."
-            raise ValueError(msg)
-    policy = (enable_async, async_udf_timeout_ms, async_udf_batch_size)
-    if ctx in _RUST_UDF_CONTEXTS:
-        existing = _RUST_UDF_POLICIES.get(ctx)
-        if (
-            existing is not None
-            and existing != policy
-            and not (
-                not enable_async and async_udf_timeout_ms is None and async_udf_batch_size is None
-            )
-        ):
-            msg = "Rust UDFs already registered with a different async policy."
-            raise ValueError(msg)
-        return _validated_snapshot(ctx)
-    datafusion_ext.register_udfs(
+    try:
+        policy = _async_udf_policy(
+            enable_async=enable_async,
+            async_udf_timeout_ms=async_udf_timeout_ms,
+            async_udf_batch_size=async_udf_batch_size,
+        )
+    except ValueError as exc:
+        msg = f"Invalid async UDF policy: {exc}"
+        raise ValueError(msg) from exc
+    _install_udf_config(ctx)
+    existing = _registered_snapshot(
         ctx,
-        enable_async=enable_async,
-        async_udf_timeout_ms=async_udf_timeout_ms,
-        async_udf_batch_size=async_udf_batch_size,
+        policy=policy,
     )
+    if existing is not None:
+        return existing
     _RUST_UDF_CONTEXTS.add(ctx)
     _RUST_UDF_POLICIES[ctx] = policy
     return _validated_snapshot(ctx)

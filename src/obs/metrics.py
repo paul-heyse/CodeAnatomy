@@ -29,6 +29,7 @@ from datafusion_engine.arrow_schema.build import (
 )
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import NormalizePolicy
+from obs.otel.metrics import set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER
 
 type RowValue = str | int
@@ -131,6 +132,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
         if t is None:
             continue
         sch_fp = schema_fingerprint(t.schema)
+        set_dataset_stats(str(name), rows=int(t.num_rows), columns=len(t.column_names))
         rows.append(
             {
                 "dataset_name": str(name),

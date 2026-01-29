@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from obs.diagnostics import DiagnosticsCollector
     from relspec.pipeline_policy import DiagnosticsPolicy
 
+from obs.otel import configure_otel
+
 
 @dataclass(frozen=True)
 class EngineRuntime:
@@ -47,6 +49,7 @@ def build_engine_runtime(
     EngineRuntime
         Bundled runtime settings for DataFusion execution.
     """
+    configure_otel(service_name="codeanatomy")
     datafusion_profile = runtime_profile
     if diagnostics_policy is not None:
         datafusion_profile = _apply_diagnostics_policy(

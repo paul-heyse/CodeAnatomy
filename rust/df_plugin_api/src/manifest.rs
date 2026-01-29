@@ -2,7 +2,7 @@ use abi_stable::StableAbi;
 use abi_stable::std_types::{RString, RVec};
 
 pub const DF_PLUGIN_ABI_MAJOR: u16 = 1;
-pub const DF_PLUGIN_ABI_MINOR: u16 = 0;
+pub const DF_PLUGIN_ABI_MINOR: u16 = 1;
 
 pub mod caps {
     pub const TABLE_PROVIDER: u64 = 1 << 0;

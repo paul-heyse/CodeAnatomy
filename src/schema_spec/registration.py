@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TypedDict, Unpack
 
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.expr_spec import ExprSpec
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_alignment import SchemaEvolutionSpec
@@ -35,6 +36,7 @@ class DatasetRegistration:
     delta_maintenance_policy: DeltaMaintenancePolicy | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_feature_gate: DeltaFeatureGate | None = None
     delta_constraints: Sequence[str] = ()
     derived_fields: Sequence[DerivedFieldSpec] = ()
     predicate: ExprSpec | None = None
@@ -95,6 +97,7 @@ def register_dataset(
         delta_maintenance_policy=registration.delta_maintenance_policy,
         delta_write_policy=registration.delta_write_policy,
         delta_schema_policy=registration.delta_schema_policy,
+        delta_feature_gate=registration.delta_feature_gate,
         delta_constraints=registration.delta_constraints,
         derived_fields=registration.derived_fields,
         predicate=registration.predicate,

@@ -39,6 +39,7 @@ class RuntimeProfileSpec:
     name: str
     datafusion: DataFusionRuntimeProfile
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
+    tracker_config: HamiltonTrackerConfig | None = None
 
     @property
     def datafusion_settings_hash(self) -> str:
@@ -88,6 +89,59 @@ def _settings_int(value: str | None) -> int | None:
 def _env_value(name: str) -> str | None:
     value = os.environ.get(name, "").strip()
     return value if value else None
+
+
+def _env_int(name: str) -> int | None:
+    raw = _env_value(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class HamiltonTrackerConfig:
+    """Tracker configuration sourced from runtime profile or environment."""
+
+    project_id: int | None = None
+    username: str | None = None
+    dag_name: str | None = None
+    api_url: str | None = None
+    ui_url: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Return True when tracker configuration is complete."""
+        return self.project_id is not None and self.username is not None
+
+
+def _tracker_config_from_env() -> HamiltonTrackerConfig | None:
+    project_id = _env_int("CODEANATOMY_HAMILTON_PROJECT_ID")
+    if project_id is None:
+        project_id = _env_int("HAMILTON_PROJECT_ID")
+    username = _env_value("CODEANATOMY_HAMILTON_USERNAME")
+    if username is None:
+        username = _env_value("HAMILTON_USERNAME")
+    dag_name = _env_value("CODEANATOMY_HAMILTON_DAG_NAME") or _env_value("HAMILTON_DAG_NAME")
+    api_url = _env_value("CODEANATOMY_HAMILTON_API_URL") or _env_value("HAMILTON_API_URL")
+    ui_url = _env_value("CODEANATOMY_HAMILTON_UI_URL") or _env_value("HAMILTON_UI_URL")
+    if (
+        project_id is None
+        and username is None
+        and dag_name is None
+        and api_url is None
+        and ui_url is None
+    ):
+        return None
+    return HamiltonTrackerConfig(
+        project_id=project_id,
+        username=username,
+        dag_name=dag_name,
+        api_url=api_url,
+        ui_url=ui_url,
+    )
 
 
 def _profile_hash_payload(
@@ -294,10 +348,12 @@ def resolve_runtime_profile(
     df_profile = _apply_named_profile_overrides(profile, df_profile)
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
+    tracker_config = _tracker_config_from_env()
     return RuntimeProfileSpec(
         name=profile,
         datafusion=df_profile,
         determinism_tier=determinism or DeterminismTier.BEST_EFFORT,
+        tracker_config=tracker_config,
     )
 
 
@@ -319,6 +375,7 @@ def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[
 
 
 __all__ = [
+    "HamiltonTrackerConfig",
     "RuntimeProfileSnapshot",
     "RuntimeProfileSpec",
     "engine_runtime_artifact",

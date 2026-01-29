@@ -21,6 +21,7 @@ from datafusion_engine.plan_bundle import (
     PlanBundleOptions,
     build_plan_bundle,
 )
+from datafusion_engine.plan_cache import PlanCacheEntry
 from datafusion_engine.write_pipeline import (
     WritePipeline,
     WriteRequest,
@@ -543,14 +544,94 @@ class DataFusionExecutionFacade:
         tuple[DataFrame, bool]
             DataFrame and whether fallback was used.
         """
-        if bundle.substrait_bytes is None:
+        substrait_bytes = bundle.substrait_bytes
+        if substrait_bytes is None:
+            cached_entry = self._plan_cache_entry(bundle)
+            if cached_entry is not None and cached_entry.substrait_bytes is not None:
+                substrait_bytes = cached_entry.substrait_bytes
+                self._record_plan_cache_event(bundle, status="hit", source="substrait")
+            else:
+                self._record_plan_cache_event(bundle, status="miss", source="substrait")
+        if substrait_bytes is None:
+            cached_df = self._rehydrate_from_proto(bundle)
+            if cached_df is not None:
+                self._record_plan_cache_event(bundle, status="hit", source="proto")
+                return cached_df, False
+            self._record_plan_cache_event(bundle, status="miss", source="proto")
             return bundle.df, True
         try:
-            df = replay_substrait_bytes(self.ctx, bundle.substrait_bytes)
+            df = replay_substrait_bytes(self.ctx, substrait_bytes)
         except (RuntimeError, TypeError, ValueError):
             return bundle.df, True
         else:
             return df, False
+
+    def _plan_cache_entry(
+        self,
+        bundle: DataFusionPlanBundle,
+    ) -> PlanCacheEntry | None:
+        if self.runtime_profile is None:
+            return None
+        cache = self.runtime_profile.plan_proto_cache
+        if cache is None:
+            return None
+        plan_identity_hash = bundle.plan_identity_hash
+        if plan_identity_hash is None:
+            return None
+        entry = cache.get(plan_identity_hash)
+        if isinstance(entry, PlanCacheEntry):
+            return entry
+        return None
+
+    def _rehydrate_from_proto(
+        self,
+        bundle: DataFusionPlanBundle,
+    ) -> DataFrame | None:
+        cached_entry = self._plan_cache_entry(bundle)
+        if cached_entry is None:
+            return None
+        from_proto = getattr(self.ctx, "from_proto", None)
+        if not callable(from_proto):
+            return None
+        proto_candidates = (
+            getattr(cached_entry, "execution_plan_proto", None),
+            getattr(cached_entry, "optimized_plan_proto", None),
+            getattr(cached_entry, "logical_plan_proto", None),
+        )
+        for payload in proto_candidates:
+            if payload is None:
+                continue
+            try:
+                df = from_proto(payload)
+            except (RuntimeError, TypeError, ValueError):
+                continue
+            if isinstance(df, DataFrame):
+                return df
+        return None
+
+    def _record_plan_cache_event(
+        self,
+        bundle: DataFusionPlanBundle,
+        *,
+        status: str,
+        source: str,
+    ) -> None:
+        if self.runtime_profile is None:
+            return
+        if bundle.plan_identity_hash is None:
+            return
+        from datafusion_engine.diagnostics import record_artifact
+
+        record_artifact(
+            self.runtime_profile,
+            "plan_cache_events_v1",
+            {
+                "plan_identity_hash": bundle.plan_identity_hash,
+                "plan_fingerprint": bundle.plan_fingerprint,
+                "status": status,
+                "source": source,
+            },
+        )
 
     def _record_substrait_fallback(
         self,

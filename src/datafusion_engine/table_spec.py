@@ -15,6 +15,7 @@ import pyarrow as pa
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
+    from schema_spec.system import DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class TableSpec:
     name: str
     schema: pa.Schema
     storage_location: str
+    dataset_spec: DatasetSpec | None = None
     format: str = "delta"
     delta_version: int | None = None
     delta_timestamp: str | None = None
@@ -75,6 +77,7 @@ class TableSpec:
         return TableSpec(
             name=self.name,
             schema=self.schema,
+            dataset_spec=self.dataset_spec,
             storage_location=self.storage_location,
             format=self.format,
             delta_version=version,
@@ -147,6 +150,7 @@ def table_spec_from_location(
     return TableSpec(
         name=name,
         schema=schema,
+        dataset_spec=location.dataset_spec,
         storage_location=str(location.path),
         format=location.format or "delta",
         delta_version=location.delta_version,

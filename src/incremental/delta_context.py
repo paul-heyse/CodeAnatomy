@@ -124,6 +124,8 @@ def register_delta_df(
     resolved_scan = None
     resolved_version = version
     resolved_timestamp = timestamp
+    dataset_spec = None
+    table_spec = None
     if profile_location is not None and profile_location.format == "delta":
         if profile_location.storage_options:
             resolved_storage = profile_location.storage_options
@@ -135,6 +137,9 @@ def register_delta_df(
             resolved_version = profile_location.delta_version
         if resolved_timestamp is None:
             resolved_timestamp = profile_location.delta_timestamp
+        dataset_spec = profile_location.dataset_spec
+        if dataset_spec is None:
+            table_spec = profile_location.table_spec
     location = DatasetLocation(
         path=str(path),
         format="delta",
@@ -143,6 +148,8 @@ def register_delta_df(
         delta_version=resolved_version,
         delta_timestamp=resolved_timestamp,
         delta_scan=resolved_scan,
+        dataset_spec=dataset_spec,
+        table_spec=table_spec,
     )
     return register_dataset_df(
         context.runtime.session_runtime().ctx,

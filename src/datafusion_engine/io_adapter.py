@@ -347,6 +347,15 @@ class DataFusionIOAdapter:
             self._deregister_table(name)
         view = df.into_view(temporary=temporary)
         self.ctx.register_table(name, view)
+        namespace = self._view_namespace()
+        if namespace is not None:
+            self._register_view_in_schema(
+                name,
+                view,
+                catalog=namespace[0],
+                schema=namespace[1],
+                overwrite=overwrite,
+            )
         invalidate_introspection_cache(self.ctx)
         self._record_registration(
             name=name,
@@ -356,6 +365,44 @@ class DataFusionIOAdapter:
             "view_registered",
             {"name": name, "temporary": temporary},
         )
+
+    def _view_namespace(self) -> tuple[str, str] | None:
+        profile = self.profile
+        if profile is None:
+            return None
+        schema = profile.view_schema_name
+        if schema is None:
+            return None
+        catalog = profile.view_catalog_name or profile.default_catalog
+        if schema == profile.default_schema and catalog == profile.default_catalog:
+            return None
+        return catalog, schema
+
+    def _register_view_in_schema(
+        self,
+        name: str,
+        view: object,
+        *,
+        catalog: str,
+        schema: str,
+        overwrite: bool,
+    ) -> None:
+        try:
+            catalog_provider = self.ctx.catalog(catalog)
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            return
+        schema_provider = catalog_provider.schema(schema)
+        if schema_provider is None:
+            from datafusion.catalog import Schema
+
+            catalog_provider.register_schema(schema, Schema.memory_schema())
+            schema_provider = catalog_provider.schema(schema)
+        if schema_provider is None:
+            return
+        if overwrite:
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                schema_provider.deregister_table(name)
+        schema_provider.register_table(name, view)
 
     def register_dataset(
         self,
@@ -409,6 +456,17 @@ class DataFusionIOAdapter:
         catalog = self.ctx.catalog()
         schema = catalog.schema()
         schema.deregister_table(name)
+        namespace = self._view_namespace()
+        if namespace is not None:
+            try:
+                catalog_provider = self.ctx.catalog(namespace[0])
+            except (KeyError, RuntimeError, TypeError, ValueError):
+                catalog_provider = None
+            if catalog_provider is not None:
+                schema_provider = catalog_provider.schema(namespace[1])
+                if schema_provider is not None:
+                    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                        schema_provider.deregister_table(name)
         invalidate_introspection_cache(self.ctx)
 
     def _record_registration(

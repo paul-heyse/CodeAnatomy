@@ -41,7 +41,9 @@ from datafusion_engine.arrow_schema.metadata import (
 )
 from datafusion_engine.arrow_schema.semantic_types import (
     SEMANTIC_TYPE_META,
+    apply_semantic_types,
     byte_span_type,
+    semantic_type_for_field_name,
     span_metadata,
     span_type,
 )
@@ -1120,12 +1122,12 @@ _AST_SCHEMA_META.update(
 )
 AST_FILES_SCHEMA = _schema_with_metadata(
     "ast_files_v1",
-    AST_FILES_SCHEMA,
+    apply_semantic_types(AST_FILES_SCHEMA),
     extra_metadata=_AST_SCHEMA_META,
 )
 BYTECODE_FILES_SCHEMA = _schema_with_metadata(
     "bytecode_files_v1",
-    BYTECODE_FILES_SCHEMA,
+    apply_semantic_types(BYTECODE_FILES_SCHEMA),
     extra_metadata=BYTECODE_SCHEMA_META,
 )
 _LIBCST_ORDERING_META = ordering_metadata_spec(
@@ -1217,7 +1219,7 @@ _TREE_SITTER_SCHEMA_META = dict(_TREE_SITTER_ORDERING_META.schema_metadata)
 _TREE_SITTER_SCHEMA_META.update(_TREE_SITTER_CONSTRAINT_META)
 TREE_SITTER_FILES_SCHEMA = _schema_with_metadata(
     "tree_sitter_files_v1",
-    TREE_SITTER_FILES_SCHEMA,
+    apply_semantic_types(TREE_SITTER_FILES_SCHEMA),
     extra_metadata=_TREE_SITTER_SCHEMA_META,
 )
 
@@ -2906,6 +2908,37 @@ def _require_semantic_type(
         raise ValueError(msg)
 
 
+def _semantic_validation_tables() -> tuple[str, ...]:
+    tables = set(extract_base_schema_names())
+    tables.update({"cpg_nodes_v1", "cpg_edges_v1"})
+    return tuple(sorted(tables))
+
+
+def validate_semantic_types(
+    ctx: SessionContext,
+    *,
+    table_names: Sequence[str] | None = None,
+) -> None:
+    """Validate semantic type metadata for known tables."""
+    names = table_names or _semantic_validation_tables()
+    sql_options = sql_options_for_profile(None)
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+    for name in names:
+        if not ctx.table_exist(name):
+            continue
+        column_names = introspector.table_column_names(name)
+        for column_name in column_names:
+            semantic = semantic_type_for_field_name(column_name)
+            if semantic is None:
+                continue
+            _require_semantic_type(
+                ctx,
+                table_name=name,
+                column_name=column_name,
+                expected=semantic.name,
+            )
+
+
 def validate_ast_views(
     ctx: SessionContext,
     *,
@@ -3822,6 +3855,7 @@ __all__ = [
     "validate_required_symtable_functions",
     "validate_schema_metadata",
     "validate_scip_views",
+    "validate_semantic_types",
     "validate_symtable_views",
     "validate_ts_views",
     "validate_udf_info_schema_parity",

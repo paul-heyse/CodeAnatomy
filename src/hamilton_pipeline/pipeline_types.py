@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from core_types import JsonValue
     from datafusion_engine.arrow_interop import TableLike
     from datafusion_engine.nested_tables import ViewReference
     from engine.plan_policy import WriterStrategy
@@ -92,6 +93,17 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class CacheRuntimeContext:
+    """Snapshot of Hamilton cache configuration for run manifests."""
+
+    cache_path: str | None
+    cache_log_dir: str | None
+    cache_log_glob: str | None
+    cache_policy_profile: str | None
+    cache_log_enabled: bool = True
+
+
+@dataclass(frozen=True)
 class IncrementalRunConfig:
     """Incremental run configuration snapshot for manifests."""
 
@@ -150,6 +162,7 @@ ScipIndexConfig = ScipIndexSettings
 
 
 ExecutorKind = Literal["threadpool", "multiprocessing", "dask", "ray"]
+GraphAdapterKind = Literal["threadpool", "dask", "ray"]
 
 
 class ExecutionMode(StrEnum):
@@ -169,6 +182,17 @@ class ExecutorConfig:
     remote_kind: ExecutorKind | None = None
     remote_max_tasks: int | None = None
     cost_threshold: float | None = None
+    ray_init_config: Mapping[str, JsonValue] | None = None
+    dask_scheduler: str | None = None
+    dask_client_kwargs: Mapping[str, JsonValue] | None = None
+
+
+@dataclass(frozen=True)
+class GraphAdapterConfig:
+    """Graph adapter configuration for non-dynamic execution backends."""
+
+    kind: GraphAdapterKind
+    options: Mapping[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)

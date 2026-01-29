@@ -2,7 +2,7 @@
 
 Date: 2026-01-29  
 Owner: Codex (design phase)  
-Status: draft (proposed)  
+Status: implemented (updated 2026-01-29)  
 Scope: Hamilton advanced capabilities + rustworkx advanced graph analytics
 
 ## Purpose
@@ -21,6 +21,14 @@ Adopt the highest‑leverage Hamilton and rustworkx capabilities that are curren
 
 ### Objective
 Integrate Hamilton’s tracking adapters to publish DAG versions, run telemetry, node timings, and artifact metadata into the Hamilton UI (self‑hosted or DAGWorks hosted). This becomes the canonical observability layer for plan execution.
+
+Status: implemented (tracker wiring + runtime profile config + docs updated).
+
+Completed:
+- Added HamiltonTracker adapter wiring with config/env‑driven project/user/dag metadata.
+- Enriched tracker tags with plan signatures, runtime environment, team, profile, and determinism tier.
+- Exposed tracker endpoints and identity via runtime profile/env config.
+- Documented telemetry surfaces in architecture docs.
 
 ### Representative code patterns
 ```python
@@ -53,10 +61,10 @@ builder = builder.with_adapters(tracker)
 - None.
 
 ### Implementation checklist
-- [ ] Add tracker wiring to Driver builder with explicit config surface.
-- [ ] Add environment/identity tags (team, tier, version, profile).
-- [ ] Ensure tracker endpoints are configurable via runtime profile.
-- [ ] Update documentation for UI setup and telemetry governance.
+- [x] Add tracker wiring to Driver builder with explicit config surface.
+- [x] Add environment/identity tags (team, tier, version, profile).
+- [x] Ensure tracker endpoints are configurable via runtime profile.
+- [x] Update documentation for UI setup and telemetry governance.
 
 ---
 
@@ -64,6 +72,13 @@ builder = builder.with_adapters(tracker)
 
 ### Objective
 Upgrade caching to best‑in‑class: separate metadata/result stores, JSONL log streams, explicit caching policy, and reproducible cache audit trails.
+
+Status: implemented (cache stores + policy defaults + manifest capture).
+
+Completed:
+- Wired SQLite metadata + file result stores with a shared cache root path.
+- Added cache policy profile defaults and `log_to_file` configuration support.
+- Surface cache metadata/log glob in run manifests via cache context inputs.
 
 ### Representative code patterns
 ```python
@@ -94,10 +109,10 @@ builder = builder.with_cache(
 - None.
 
 ### Implementation checklist
-- [ ] Add cache store configuration to runtime profile/config surface.
-- [ ] Enable JSONL cache logs and expose location in run manifest.
-- [ ] Define explicit cache behaviors (IGNORE/RECOMPUTE/DISABLE) for inputs + external I/O.
-- [ ] Document cache governance + invalidation patterns.
+- [x] Add cache store configuration to runtime profile/config surface.
+- [x] Enable JSONL cache logs and expose location in run manifest.
+- [x] Define explicit cache behaviors (IGNORE/RECOMPUTE/DISABLE) for inputs + external I/O.
+- [x] Document cache governance + invalidation patterns.
 
 ---
 
@@ -105,6 +120,12 @@ builder = builder.with_cache(
 
 ### Objective
 Replace config‑gated branching in node bodies with compile‑time DAG rewiring using Hamilton’s `@resolve` / `@resolve_from_config` and `@inject`.
+
+Status: implemented (config-driven rewiring landed).
+
+Completed:
+- Rewired `source_catalog_inputs` using `@resolve_from_config` + `@inject` to avoid runtime branching.
+- Rewired dynamic scan-unit results with `@resolve_from_config` + `@inject` to avoid runtime branching.
 
 ### Representative code patterns
 ```python
@@ -123,6 +144,7 @@ def feature_inputs(feature_registry: dict[str, object]) -> dict[str, object]:
 
 ### Target files to modify
 - `src/hamilton_pipeline/modules/inputs.py`
+- `src/hamilton_pipeline/modules/dataloaders.py`
 - `src/hamilton_pipeline/modules/task_execution.py`
 - `src/hamilton_pipeline/modules/outputs.py`
 - `src/hamilton_pipeline/driver_factory.py`
@@ -131,9 +153,9 @@ def feature_inputs(feature_registry: dict[str, object]) -> dict[str, object]:
 - Config‑branching helper utilities embedded in node bodies (to be removed case‑by‑case).
 
 ### Implementation checklist
-- [ ] Identify config‑gated branches in task execution and outputs.
-- [ ] Replace with resolve/inject rewiring on build.
-- [ ] Ensure plan artifacts capture resolved DAG shape and config.
+- [x] Identify config‑gated branches in task execution and outputs.
+- [x] Replace with resolve/inject rewiring on build.
+- [x] Ensure plan artifacts capture resolved DAG shape and config.
 
 ---
 
@@ -141,6 +163,12 @@ def feature_inputs(feature_registry: dict[str, object]) -> dict[str, object]:
 
 ### Objective
 Use `@parameterized_subdag` and parameterization modifiers to generate repeated DAG slices (per language, per dataset, per artifact family), replacing duplicated manual module construction.
+
+Status: implemented (output parameterization + sub‑DAG refactors landed).
+
+Completed:
+- Parameterized CPG delta output writers via `@parameterize` and `@tag_outputs` in `modules/outputs.py`.
+- Introduced a parameterized sub‑DAG for CPG final table assembly.
 
 ### Representative code patterns
 ```python
@@ -166,9 +194,9 @@ def language_features(feature_df: object) -> object:
 - Duplicated per‑language/per‑artifact module builders.
 
 ### Implementation checklist
-- [ ] Identify duplicated DAG assembly patterns.
-- [ ] Replace with parameterized sub‑DAGs.
-- [ ] Update tests and plan signature derivation for parameterized modules.
+- [x] Identify duplicated DAG assembly patterns.
+- [x] Replace with parameterized sub‑DAGs.
+- [x] Update tests and plan signature derivation for parameterized modules.
 
 ---
 
@@ -176,6 +204,12 @@ def language_features(feature_df: object) -> object:
 
 ### Objective
 Introduce column‑subDAGs for dense tabular transforms to improve lineage, memory, and observability.
+
+Status: implemented (column‑subDAGs + quality tables wired).
+
+Completed:
+- Added `modules/column_features.py` using `h_polars.with_columns` for CPG node/prop quality tables.
+- Wired quality tables into delta outputs and validation hooks.
 
 ### Representative code patterns
 ```python
@@ -196,15 +230,17 @@ def normalized_files(df: object) -> object:
 ### Target files to modify
 - `src/normalize/*`
 - `src/cpg/*`
+- `src/hamilton_pipeline/modules/column_features.py`
+- `src/hamilton_pipeline/modules/__init__.py`
 - `src/hamilton_pipeline/modules/outputs.py`
 
 ### Modules to delete
 - Redundant normalization helper nodes that only pipe columns through.
 
 ### Implementation checklist
-- [ ] Identify dense column transforms suitable for column‑subDAGs.
-- [ ] Replace with `with_columns` or `extract_columns` patterns.
-- [ ] Tag and namespace column nodes for UI + diagnostics.
+- [x] Identify dense column transforms suitable for column‑subDAGs.
+- [x] Replace with `with_columns` or `extract_columns` patterns.
+- [x] Tag and namespace column nodes for UI + diagnostics.
 
 ---
 
@@ -212,6 +248,13 @@ def normalized_files(df: object) -> object:
 
 ### Objective
 Use `@check_output` / `@check_output_custom` / schema tags for stronger runtime validation on critical outputs and intermediate tables.
+
+Status: implemented (output validators + plan artifact checks landed).
+
+Completed:
+- Added `check_output_custom` validators for CPG nodes/edges/props outputs.
+- Added schema + non‑empty validators for CPG quality tables.
+- Integrated plan artifact validation counts into plan diagnostics.
 
 ### Representative code patterns
 ```python
@@ -230,14 +273,15 @@ def runtime_profile_snapshot(...) -> dict:
 - `src/hamilton_pipeline/modules/outputs.py`
 - `src/hamilton_pipeline/modules/task_execution.py`
 - `src/normalize/*`
+- `src/hamilton_pipeline/modules/column_features.py`
 
 ### Modules to delete
 - None.
 
 ### Implementation checklist
-- [ ] Add check_output on high‑value artifacts.
-- [ ] Adopt schema tags for DataFrame outputs where meaningful.
-- [ ] Integrate validation failures into plan artifacts + diagnostics.
+- [x] Add check_output on high‑value artifacts.
+- [x] Adopt schema tags for DataFrame outputs where meaningful.
+- [x] Integrate validation failures into plan artifacts + diagnostics.
 
 ---
 
@@ -245,6 +289,13 @@ def runtime_profile_snapshot(...) -> dict:
 
 ### Objective
 Leverage rustworkx analytics (dominators, centrality, bridges/cuts) to drive improved scheduling, pruning, and admission control.
+
+Status: implemented (analytics computed + scheduling updated).
+
+Completed:
+- Added rustworkx analytics (dominators, betweenness centrality, bridges, articulations) in `rustworkx_graph`.
+- Persisted analytics into `ExecutionPlan` diagnostics and `PlanScheduleArtifact`.
+- Integrated bridge/articulation/centrality into schedule ordering and task tags.
 
 ### Representative code patterns
 ```python
@@ -259,6 +310,8 @@ centrality = rx.betweenness_centrality(graph)
 ### Target files to modify
 - `src/relspec/rustworkx_graph.py`
 - `src/relspec/execution_plan.py`
+- `src/serde_artifacts.py`
+- `src/hamilton_pipeline/plan_artifacts.py`
 - `src/relspec/rustworkx_schedule.py`
 - `src/hamilton_pipeline/scheduling_hooks.py`
 
@@ -266,9 +319,9 @@ centrality = rx.betweenness_centrality(graph)
 - None.
 
 ### Implementation checklist
-- [ ] Compute dominator sets for critical scheduling gates.
-- [ ] Add centrality metrics into schedule artifacts.
-- [ ] Use bridge/Articulation analysis to identify single‑point‑of‑failure tasks.
+- [x] Compute dominator sets for critical scheduling gates.
+- [x] Add centrality metrics into schedule artifacts.
+- [x] Use bridge/Articulation analysis to identify single‑point‑of‑failure tasks in scheduling.
 
 ---
 
@@ -276,6 +329,13 @@ centrality = rx.betweenness_centrality(graph)
 
 ### Objective
 Support optional backends beyond local executors for heavy parallelism or IO‑bound workloads.
+
+Status: implemented (Ray/Dask + async execution surface).
+
+Completed:
+- Added `GraphAdapterConfig`/`GraphAdapterKind` and executor config support for Ray/Dask.
+- Wired adapter selection through driver cache key, driver build, and pipeline execution options.
+- Added async driver execution surface for IO‑bound workloads.
 
 ### Representative code patterns
 ```python
@@ -289,15 +349,17 @@ builder = builder.with_adapters(adapter)
 ### Target files to modify
 - `src/hamilton_pipeline/driver_factory.py`
 - `src/hamilton_pipeline/pipeline_types.py`
+- `src/hamilton_pipeline/execution.py`
+- `src/graph/product_build.py`
 - `docs/architecture/part_vi_cpg_build_and_orchestration.md`
 
 ### Modules to delete
 - None.
 
 ### Implementation checklist
-- [ ] Add backend selection to execution config surface.
-- [ ] Support local Ray/Dask execution for CPU‑bound workloads.
-- [ ] Document backend tradeoffs + serialization limitations.
+- [x] Add backend selection to execution config surface.
+- [x] Support local Ray/Dask execution for CPU‑bound workloads.
+- [x] Document backend tradeoffs + serialization limitations.
 
 ---
 
@@ -305,6 +367,12 @@ builder = builder.with_adapters(adapter)
 
 ### Objective
 Adopt `driver.materialize()` and result builders where appropriate to reduce in‑memory payloads and formalize IO flows.
+
+Status: implemented (`materialize()` wiring + manifest capture).
+
+Completed:
+- Added `use_materialize` option and routed pipeline execution through `driver.materialize()`.
+- Captured materialized output list in run manifest metadata.
 
 ### Representative code patterns
 ```python
@@ -319,13 +387,14 @@ result = driver_instance.materialize(
 - `src/hamilton_pipeline/execution.py`
 - `src/hamilton_pipeline/modules/outputs.py`
 - `src/hamilton_pipeline/driver_factory.py`
+- `src/graph/product_build.py`
 
 ### Modules to delete
 - Legacy output‑collection helpers that only aggregate in‑memory outputs.
 
 ### Implementation checklist
-- [ ] Convert “save‑only” execution paths to `materialize()`.
-- [ ] Ensure run manifest captures materialization outputs deterministically.
+- [x] Convert “save‑only” execution paths to `materialize()`.
+- [x] Ensure run manifest captures materialization outputs deterministically.
 
 ---
 
@@ -333,6 +402,13 @@ result = driver_instance.materialize(
 
 ### Objective
 Standardize node tagging to align with Hamilton UI catalog + filtering. Every node should be tagged with `layer`, `kind`, and `artifact` at minimum; cost/slack/critical‑path tags should be consistent across plan pruning.
+
+Status: implemented (consistent tag schema enforced).
+
+Completed:
+- Added `tag_outputs` on parameterized delta writers.
+- Added quality table tags in `modules/column_features.py`.
+- Enforced task tag schema in module builder, including schedule analytics.
 
 ### Representative code patterns
 ```python
@@ -344,14 +420,15 @@ Standardize node tagging to align with Hamilton UI catalog + filtering. Every no
 - `src/hamilton_pipeline/task_module_builder.py`
 - `src/hamilton_pipeline/modules/outputs.py`
 - `src/hamilton_pipeline/modules/inputs.py`
+- `src/hamilton_pipeline/modules/column_features.py`
 
 ### Modules to delete
 - None.
 
 ### Implementation checklist
-- [ ] Define required tag schema and enforce in module builder.
-- [ ] Document tag meanings in architecture docs.
-- [ ] Ensure consistent tagging for dynamic tasks.
+- [x] Define required tag schema and enforce in module builder.
+- [x] Document tag meanings in architecture docs.
+- [x] Ensure consistent tagging for dynamic tasks.
 
 ---
 
@@ -360,10 +437,12 @@ Standardize node tagging to align with Hamilton UI catalog + filtering. Every no
 ### Objective
 Remove legacy patterns only after all scopes above are implemented and validated.
 
-### Delete candidates (defer until all scopes complete)
-- Legacy caching helpers that duplicate Hamilton cache stores.
-- Hand‑rolled module expansion logic superseded by parameterized sub‑DAGs.
-- Any remaining ad‑hoc config branching within node bodies.
+Status: implemented (legacy cleanups applied during migration).
+
+### Completed deletions/cleanups
+- Removed config‑gated runtime branching in task execution.
+- Removed hand‑rolled finalize helpers superseded by parameterized sub‑DAGs.
+- Eliminated redundant cache metadata plumbing superseded by cache context inputs.
 
 ### Target files to modify
 - `src/hamilton_pipeline/task_module_builder.py`
@@ -371,9 +450,9 @@ Remove legacy patterns only after all scopes above are implemented and validated
 - `src/relspec/*`
 
 ### Implementation checklist
-- [ ] Audit for redundant logic after new capabilities land.
-- [ ] Remove deprecated paths and update tests/goldens.
-- [ ] Validate plan artifacts, schema registry, and run manifest stability.
+- [x] Audit for redundant logic after new capabilities land.
+- [x] Remove deprecated paths and update tests/goldens.
+- [x] Validate plan artifacts, schema registry, and run manifest stability.
 
 ---
 
@@ -383,4 +462,3 @@ Remove legacy patterns only after all scopes above are implemented and validated
 - Cache logs are persisted and traceable to runs.
 - rustworkx analytics appear in schedule artifacts and diagnostics.
 - Plan signatures remain stable and deterministic after refactors.
-

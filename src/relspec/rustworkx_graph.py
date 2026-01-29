@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import numbers
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 import rustworkx as rx
@@ -107,6 +108,9 @@ _TASK_DEPENDENCY_SCHEMA = pa.schema(
         pa.field("edges", pa.list_(_TASK_DEPENDENCY_EDGE_SCHEMA), nullable=False),
     ]
 )
+
+_BRIDGE_EDGE_TUPLE_LEN = 2
+_BRIDGE_INDEX_TUPLE_LEN = 1
 
 
 @dataclass(frozen=True)
@@ -231,6 +235,10 @@ class GraphDiagnostics:
     dependency_edge_count: int | None = None
     reduced_dependency_edge_count: int | None = None
     dependency_removed_edge_count: int | None = None
+    dominators: dict[str, str | None] | None = None
+    betweenness_centrality: dict[str, float] | None = None
+    bridge_edges: tuple[tuple[str, str], ...] = ()
+    articulation_tasks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -762,6 +770,138 @@ def task_dependency_reduction(
     )
 
 
+def task_dependency_immediate_dominators(
+    graph: rx.PyDiGraph,
+) -> dict[str, str | None]:
+    """Return immediate dominators for task dependency graphs.
+
+    Returns
+    -------
+    dict[str, str | None]
+        Mapping of task name to its immediate dominator task name.
+        Tasks that are dominated only by the synthetic root are mapped to ``None``.
+    """
+    if graph.num_nodes() == 0:
+        return {}
+    rooted, root_idx = _task_dependency_graph_with_root(graph)
+    dominators = rx.immediate_dominators(rooted, root_idx)
+    name_map = _task_dependency_name_map(rooted)
+    results: dict[str, str | None] = {}
+    for node_idx, name in name_map.items():
+        if node_idx == root_idx:
+            continue
+        idom = dominators.get(node_idx)
+        if idom is None or idom == root_idx:
+            results[name] = None
+            continue
+        results[name] = name_map.get(idom)
+    return dict(sorted(results.items()))
+
+
+def task_dependency_betweenness_centrality(
+    graph: rx.PyDiGraph,
+) -> dict[str, float]:
+    """Return betweenness centrality for task dependency graphs.
+
+    Returns
+    -------
+    dict[str, float]
+        Mapping of task name to betweenness centrality.
+    """
+    if graph.num_nodes() == 0:
+        return {}
+    name_map = _task_dependency_name_map(graph)
+    centrality = rx.betweenness_centrality(graph)
+    results: dict[str, float] = {}
+    for node_idx, value in centrality.items():
+        name = name_map.get(node_idx)
+        if name is None:
+            continue
+        results[name] = float(value)
+    return dict(sorted(results.items()))
+
+
+def _bridge_edge_from_index(
+    edge_index_value: object,
+    edge_list: Sequence[tuple[int, int]],
+) -> tuple[int, int] | None:
+    if not isinstance(edge_index_value, numbers.Integral):
+        return None
+    edge_index = int(edge_index_value)
+    if edge_index >= len(edge_list):
+        return None
+    return edge_list[edge_index]
+
+
+def _resolve_bridge_edge(
+    bridge: object,
+    *,
+    edge_list: Sequence[tuple[int, int]],
+) -> tuple[int, int] | None:
+    if isinstance(bridge, tuple):
+        if len(bridge) == _BRIDGE_EDGE_TUPLE_LEN:
+            left, right = bridge
+            if isinstance(left, numbers.Integral) and isinstance(right, numbers.Integral):
+                return int(left), int(right)
+            return None
+        if len(bridge) == _BRIDGE_INDEX_TUPLE_LEN:
+            return _bridge_edge_from_index(bridge[0], edge_list)
+        return None
+    return _bridge_edge_from_index(bridge, edge_list)
+
+
+def task_dependency_bridge_edges(
+    graph: rx.PyDiGraph,
+) -> tuple[tuple[str, str], ...]:
+    """Return bridge edges for the undirected view of the dependency graph.
+
+    Returns
+    -------
+    tuple[tuple[str, str], ...]
+        Sorted task-name pairs representing bridge edges.
+    """
+    if graph.num_edges() == 0:
+        return ()
+    name_map = _task_dependency_name_map(graph)
+    undirected = graph.to_undirected()
+    bridges = cast("Sequence[object]", rx.bridges(undirected))
+    edge_list = undirected.edge_list()
+    edges: set[tuple[str, str]] = set()
+    for bridge in bridges:
+        resolved_edge = _resolve_bridge_edge(bridge, edge_list=edge_list)
+        if resolved_edge is None:
+            continue
+        left, right = resolved_edge
+        left_name = name_map.get(left)
+        right_name = name_map.get(right)
+        if left_name is None or right_name is None:
+            continue
+        if left_name <= right_name:
+            edges.add((left_name, right_name))
+        else:
+            edges.add((right_name, left_name))
+    return tuple(sorted(edges))
+
+
+def task_dependency_articulation_tasks(
+    graph: rx.PyDiGraph,
+) -> tuple[str, ...]:
+    """Return articulation tasks for the undirected dependency graph.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted task names that are articulation points.
+    """
+    if graph.num_nodes() == 0:
+        return ()
+    name_map = _task_dependency_name_map(graph)
+    undirected = graph.to_undirected()
+    articulation = rx.articulation_points(undirected)
+    names = [name_map[idx] for idx in articulation if idx in name_map]
+    return tuple(sorted(set(names)))
+
+
 def task_dependency_signature(snapshot: TaskDependencySnapshot) -> str:
     """Return a stable signature for a task dependency snapshot.
 
@@ -777,6 +917,36 @@ def task_dependency_signature(snapshot: TaskDependencySnapshot) -> str:
         "edges": list(snapshot.edges),
     }
     return payload_hash(payload, _TASK_DEPENDENCY_SCHEMA)
+
+
+def _task_dependency_name_map(graph: rx.PyDiGraph) -> dict[int, str]:
+    mapping: dict[int, str] = {}
+    for node_idx in graph.node_indices():
+        node = graph[node_idx]
+        if isinstance(node, TaskNode):
+            mapping[node_idx] = node.name
+    return mapping
+
+
+def _task_dependency_graph_with_root(
+    graph: rx.PyDiGraph,
+) -> tuple[rx.PyDiGraph, int]:
+    rooted = graph.copy()
+    root = TaskNode(
+        name="__root__",
+        output="__root__",
+        inputs=(),
+        sources=(),
+        priority=0,
+        task_kind="root",
+    )
+    root_idx = rooted.add_node(root)
+    for node_idx in rooted.node_indices():
+        if node_idx == root_idx:
+            continue
+        if rooted.in_degree(node_idx) == 0:
+            rooted.add_edge(root_idx, node_idx, None)
+    return rooted, root_idx
 
 
 def task_dependency_critical_path(
@@ -1340,10 +1510,14 @@ __all__ = [
     "TaskNode",
     "build_task_graph_from_inferred_deps",
     "build_task_graph_from_views",
+    "task_dependency_articulation_tasks",
+    "task_dependency_betweenness_centrality",
+    "task_dependency_bridge_edges",
     "task_dependency_critical_path",
     "task_dependency_critical_path_length",
     "task_dependency_critical_path_tasks",
     "task_dependency_graph",
+    "task_dependency_immediate_dominators",
     "task_dependency_reduction",
     "task_dependency_signature",
     "task_graph_diagnostics",

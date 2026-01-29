@@ -270,6 +270,7 @@ class ProviderRegistry:
             delta_version=spec.delta_version,
             delta_timestamp=spec.delta_timestamp,
             storage_options=spec.storage_options,
+            dataset_spec=spec.dataset_spec,
         )
 
         context = _build_registration_context(

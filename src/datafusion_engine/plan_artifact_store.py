@@ -19,6 +19,7 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_scan_options,
 )
 from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.sql_options import planning_sql_options
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
     StructBaseCompat,
@@ -32,7 +33,7 @@ from serde_msgspec_ext import SubstraitBytes
 from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
+    from datafusion import SessionContext, SQLOptions
 
     from datafusion_engine.lineage_datafusion import LineageReport
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -291,6 +292,7 @@ def validate_plan_determinism(
         table_path,
         view_name=view_name,
         plan_fingerprint=plan_fingerprint,
+        sql_options=planning_sql_options(profile),
     )
     if results is None:
         return DeterminismValidationResult(
@@ -326,6 +328,7 @@ def _collect_determinism_results(
     *,
     view_name: str | None,
     plan_fingerprint: str,
+    sql_options: SQLOptions,
 ) -> tuple[list[pa.RecordBatch] | None, str | None]:
     identity_error: str | None = None
     identity_query = _determinism_validation_query(
@@ -335,7 +338,7 @@ def _collect_determinism_results(
         include_identity=True,
     )
     try:
-        return ctx.sql(identity_query).collect(), None
+        return ctx.sql_with_options(identity_query, sql_options).collect(), None
     except (RuntimeError, ValueError, TypeError) as exc:
         identity_error = str(exc)
     fallback_query = _determinism_validation_query(
@@ -345,7 +348,7 @@ def _collect_determinism_results(
         include_identity=False,
     )
     try:
-        return ctx.sql(fallback_query).collect(), identity_error
+        return ctx.sql_with_options(fallback_query, sql_options).collect(), identity_error
     except (RuntimeError, ValueError, TypeError) as fallback_exc:
         error = identity_error or str(fallback_exc)
         return None, error

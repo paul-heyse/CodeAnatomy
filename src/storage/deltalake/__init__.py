@@ -11,6 +11,7 @@ __all__ = (
     "DeltaDeleteWhereRequest",
     "DeltaFeatureMutationOptions",
     "DeltaMergeArrowRequest",
+    "DeltaReadRequest",
     "DeltaSchemaPolicy",
     "DeltaSchemaRequest",
     "DeltaVacuumOptions",
@@ -71,6 +72,7 @@ __all__ = (
     "idempotent_commit_properties",
     "query_delta_sql",
     "read_delta_cdf",
+    "read_delta_table",
     "select_candidate_files",
     "vacuum_delta",
     "write_delta_table",
@@ -86,6 +88,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaDeleteWhereRequest": ("storage.deltalake.delta", "DeltaDeleteWhereRequest"),
     "DeltaFeatureMutationOptions": ("storage.deltalake.delta", "DeltaFeatureMutationOptions"),
     "DeltaMergeArrowRequest": ("storage.deltalake.delta", "DeltaMergeArrowRequest"),
+    "DeltaReadRequest": ("storage.deltalake.delta", "DeltaReadRequest"),
     "DeltaSchemaRequest": ("storage.deltalake.delta", "DeltaSchemaRequest"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
     "DeltaWriteOptions": ("storage.deltalake.delta", "DeltaWriteOptions"),
@@ -182,6 +185,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     ),
     "query_delta_sql": ("storage.deltalake.delta", "query_delta_sql"),
     "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
+    "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
     "write_delta_table": ("storage.deltalake.delta", "write_delta_table"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
@@ -217,6 +221,7 @@ if TYPE_CHECKING:
     DeltaDeleteWhereRequest = _delta_io.DeltaDeleteWhereRequest
     DeltaFeatureMutationOptions = _delta_io.DeltaFeatureMutationOptions
     DeltaMergeArrowRequest = _delta_io.DeltaMergeArrowRequest
+    DeltaReadRequest = _delta_io.DeltaReadRequest
     DeltaSchemaRequest = _delta_io.DeltaSchemaRequest
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
     DeltaWriteOptions = _delta_io.DeltaWriteOptions
@@ -265,6 +270,7 @@ if TYPE_CHECKING:
     enable_delta_vacuum_protocol_check = _delta_io.enable_delta_vacuum_protocol_check
     query_delta_sql = _delta_io.query_delta_sql
     read_delta_cdf = _delta_io.read_delta_cdf
+    read_delta_table = _delta_io.read_delta_table
     write_delta_table = _delta_io.write_delta_table
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry

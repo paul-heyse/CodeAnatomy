@@ -17,8 +17,11 @@ from datafusion_engine.arrow_schema.metadata import (
 from datafusion_engine.arrow_schema.semantic_types import (
     SPAN_STORAGE,
     edge_id_metadata,
+    edge_id_type,
     span_id_metadata,
+    span_id_type,
 )
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import ContractRow, DatasetRow
@@ -29,10 +32,13 @@ from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, dict_field
 from schema_spec.system import (
     ContractSpec,
     DatasetSpec,
+    DeltaCdfPolicy,
+    DeltaMaintenancePolicy,
     VirtualFieldSpec,
     make_contract_spec,
     make_table_spec,
 )
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 
 
 @dataclass(frozen=True)
@@ -74,7 +80,7 @@ _FIELD_SPECS: dict[str, ArrowFieldSpec] = {
     "line_base": _spec("line_base", pa.int32()),
     "col_unit": _spec("col_unit", pa.string()),
     "end_exclusive": _spec("end_exclusive", pa.bool_()),
-    "span_id": _spec("span_id", pa.string(), metadata=span_id_metadata()),
+    "span_id": _spec("span_id", span_id_type(), metadata=span_id_metadata()),
     "span": _spec("span", SPAN_STORAGE),
     "bstart": _spec("bstart", pa.int64()),
     "bend": _spec("bend", pa.int64()),
@@ -99,7 +105,7 @@ _FIELD_SPECS: dict[str, ArrowFieldSpec] = {
     "start_offset": _spec("start_offset", pa.int32()),
     "end_offset": _spec("end_offset", pa.int32()),
     "kind": _dict("kind"),
-    "edge_id": _spec("edge_id", pa.string(), metadata=edge_id_metadata()),
+    "edge_id": _spec("edge_id", edge_id_type(), metadata=edge_id_metadata()),
     "src_block_id": _spec("src_block_id", pa.string()),
     "dst_block_id": _spec("dst_block_id", pa.string()),
     "cond_instr_id": _spec("cond_instr_id", pa.string()),
@@ -336,8 +342,79 @@ def build_dataset_spec(row: DatasetRow) -> DatasetSpec:
         query_spec=build_query_spec(row),
         contract_spec=contract_spec,
         metadata_spec=metadata_spec,
+        delta_cdf_policy=_normalize_cdf_policy(row),
+        delta_maintenance_policy=_normalize_maintenance_policy(row),
+        delta_write_policy=_normalize_write_policy(row),
+        delta_schema_policy=_normalize_schema_policy(),
+        delta_feature_gate=_normalize_feature_gate(),
     )
     return register_dataset(table_spec=table_spec, registration=registration)
+
+
+def _normalize_schema_policy() -> DeltaSchemaPolicy:
+    return DeltaSchemaPolicy(schema_mode="merge", column_mapping_mode="name")
+
+
+def _normalize_feature_gate() -> DeltaFeatureGate:
+    return DeltaFeatureGate(
+        required_writer_features=("change_data_feed", "column_mapping", "v2_checkpoints"),
+        required_reader_features=(),
+    )
+
+
+def _normalize_cdf_policy(_row: DatasetRow) -> DeltaCdfPolicy:
+    return DeltaCdfPolicy(required=True, allow_out_of_range=False)
+
+
+def _normalize_maintenance_policy(row: DatasetRow) -> DeltaMaintenancePolicy:
+    z_order_cols = tuple(row.join_keys)
+    z_order_when = "after_partition_complete" if z_order_cols else "never"
+    return DeltaMaintenancePolicy(
+        optimize_on_write=True,
+        optimize_target_size=256 * 1024 * 1024,
+        z_order_cols=z_order_cols,
+        z_order_when=z_order_when,
+        vacuum_on_write=False,
+    )
+
+
+def _normalize_write_policy(row: DatasetRow) -> DeltaWritePolicy:
+    bloom_columns = _bloom_filter_columns(row)
+    parquet_policy = None
+    if bloom_columns:
+        parquet_policy = ParquetWriterPolicy(
+            bloom_filter_enabled=bloom_columns,
+            bloom_filter_fpp=0.01,
+            bloom_filter_ndv=10_000_000,
+        )
+    stats_columns = _stats_columns_for_row(row, bloom_columns)
+    return DeltaWritePolicy(
+        target_file_size=128 * 1024 * 1024,
+        zorder_by=tuple(row.join_keys),
+        stats_policy="explicit",
+        stats_columns=stats_columns,
+        parquet_writer_policy=parquet_policy,
+        enable_features=("change_data_feed", "column_mapping", "v2_checkpoints"),
+    )
+
+
+def _bloom_filter_columns(row: DatasetRow) -> tuple[str, ...]:
+    candidates = [
+        field_name(key)
+        for key in (*row.fields, *row.input_fields)
+        if field_name(key).endswith("_id")
+    ]
+    derived = [spec.name for spec in row.derived if spec.name.endswith("_id")]
+    return tuple(dict.fromkeys((*candidates, *derived)))
+
+
+def _stats_columns_for_row(
+    row: DatasetRow,
+    bloom_columns: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    if row.join_keys or bloom_columns:
+        return tuple(dict.fromkeys((*row.join_keys, *bloom_columns)))
+    return None
 
 
 __all__ = [

@@ -33,7 +33,7 @@ import hashlib
 import json
 import shutil
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -54,6 +54,7 @@ from datafusion_engine.dataset_registry import (
 )
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.sql_options import sql_options_for_profile
+from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert
 from storage.deltalake import (
@@ -400,6 +401,7 @@ class DeltaWriteSpec:
     dataset_location: DatasetLocation | None = None
     write_policy: DeltaWritePolicy | None = None
     schema_policy: DeltaSchemaPolicy | None = None
+    maintenance_policy: DeltaMaintenancePolicy | None = None
     partition_by: tuple[str, ...] = ()
     zorder_by: tuple[str, ...] = ()
     enable_features: tuple[str, ...] = ()
@@ -626,22 +628,47 @@ class WritePipeline:
         if location is not None:
             return destination, location
         normalized_destination = str(destination)
-        for name, loc in sorted(self.runtime_profile.extract_dataset_locations.items()):
-            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
-            if str(resolved.path) == normalized_destination:
-                return name, resolved
-        for name, loc in sorted(self.runtime_profile.scip_dataset_locations.items()):
-            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
-            if str(resolved.path) == normalized_destination:
-                return name, resolved
+        locations = [
+            sorted(self.runtime_profile.extract_dataset_locations.items()),
+            sorted(self.runtime_profile.scip_dataset_locations.items()),
+            sorted(self.runtime_profile.normalize_dataset_locations().items()),
+        ]
+        for candidates in locations:
+            match = self._match_dataset_location(
+                candidates,
+                normalized_destination=normalized_destination,
+            )
+            if match is not None:
+                return match
         for catalog in self.runtime_profile.registry_catalogs.values():
-            for name in catalog.names():
-                loc = apply_delta_store_policy(
-                    catalog.get(name),
-                    policy=self.runtime_profile.delta_store_policy,
-                )
-                if str(loc.path) == normalized_destination:
-                    return name, loc
+            candidates = ((name, catalog.get(name)) for name in catalog.names())
+            match = self._match_dataset_location(
+                candidates,
+                normalized_destination=normalized_destination,
+            )
+            if match is not None:
+                return match
+        return None
+
+    def _match_dataset_location(
+        self,
+        candidates: Iterable[tuple[str, DatasetLocation]],
+        *,
+        normalized_destination: str,
+    ) -> tuple[str, DatasetLocation] | None:
+        """Return the first dataset location matching the destination path.
+
+        Returns
+        -------
+        tuple[str, DatasetLocation] | None
+            Dataset name and location when the destination matches.
+        """
+        if self.runtime_profile is None:
+            return None
+        for name, loc in candidates:
+            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
+            if str(resolved.path) == normalized_destination:
+                return name, resolved
         return None
 
     def _dataset_binding(
@@ -986,6 +1013,13 @@ class WritePipeline:
             options,
             dataset_location=inputs.dataset_location,
         )
+        maintenance_policy = _delta_maintenance_policy_override(options)
+        if maintenance_policy is None:
+            maintenance_policy = (
+                resolve_delta_maintenance_policy(inputs.dataset_location)
+                if inputs.dataset_location is not None
+                else None
+            )
         policy_ctx = _delta_policy_context(
             options=options,
             dataset_location=inputs.dataset_location,
@@ -993,15 +1027,18 @@ class WritePipeline:
             schema_columns=inputs.schema_columns,
             lineage_columns=inputs.lineage_columns,
         )
+        feature_gate = _delta_feature_gate_override(options)
+        if feature_gate is None and inputs.dataset_location is not None:
+            feature_gate = resolve_delta_feature_gate(inputs.dataset_location)
         stats_decision = _stats_decision_from_policy(
             dataset_name=inputs.dataset_name or request.destination,
             policy_ctx=policy_ctx,
             lineage_columns=inputs.lineage_columns,
         )
-        dataset_constraints = (
-            resolve_delta_constraints(inputs.dataset_location) if inputs.dataset_location else ()
+        extra_constraints = _merge_constraints(
+            request.constraints,
+            resolve_delta_constraints(inputs.dataset_location) if inputs.dataset_location else (),
         )
-        extra_constraints = _merge_constraints(request.constraints, dataset_constraints)
         commit_metadata = _delta_commit_metadata(
             request,
             options,
@@ -1044,12 +1081,11 @@ class WritePipeline:
             dataset_location=inputs.dataset_location,
             write_policy=policy_ctx.write_policy,
             schema_policy=policy_ctx.schema_policy,
+            maintenance_policy=maintenance_policy,
             partition_by=policy_ctx.partition_by,
             zorder_by=policy_ctx.zorder_by,
             enable_features=policy_ctx.enable_features,
-            feature_gate=resolve_delta_feature_gate(inputs.dataset_location)
-            if inputs.dataset_location is not None
-            else None,
+            feature_gate=feature_gate,
             table_properties=policy_ctx.table_properties,
             target_file_size=policy_ctx.target_file_size,
             schema_mode=_delta_schema_mode(
@@ -1228,11 +1264,9 @@ class WritePipeline:
     ) -> None:
         if self.runtime_profile is None:
             return
-        policy = (
-            resolve_delta_maintenance_policy(spec.dataset_location)
-            if spec.dataset_location is not None
-            else None
-        )
+        policy = spec.maintenance_policy
+        if policy is None and spec.dataset_location is not None:
+            policy = resolve_delta_maintenance_policy(spec.dataset_location)
         if policy is None:
             return
         from datafusion_engine.delta_control_plane import (
@@ -1659,6 +1693,42 @@ def _delta_schema_policy_override(options: Mapping[str, object]) -> DeltaSchemaP
         return raw
     if isinstance(raw, Mapping):
         return convert(dict(raw), target_type=DeltaSchemaPolicy, strict=True)
+    return None
+
+
+def _delta_maintenance_policy_override(
+    options: Mapping[str, object],
+) -> DeltaMaintenancePolicy | None:
+    raw = options.get("delta_maintenance_policy")
+    if raw is None:
+        raw = options.get("maintenance_policy")
+    if raw is None:
+        return None
+    if isinstance(raw, DeltaMaintenancePolicy):
+        return raw
+    if isinstance(raw, Mapping):
+        payload = {str(key): value for key, value in raw.items()}
+        try:
+            return DeltaMaintenancePolicy(**payload)
+        except TypeError as exc:
+            msg = "delta_maintenance_policy mapping is invalid."
+            raise TypeError(msg) from exc
+    return None
+
+
+def _delta_feature_gate_override(options: Mapping[str, object]) -> DeltaFeatureGate | None:
+    raw = options.get("delta_feature_gate")
+    if raw is None:
+        raw = options.get("feature_gate")
+    if raw is None:
+        return None
+    from datafusion_engine.delta_protocol import DeltaFeatureGate
+
+    if isinstance(raw, DeltaFeatureGate):
+        return raw
+    if isinstance(raw, Mapping):
+        payload = dict(raw)
+        return convert(payload, target_type=DeltaFeatureGate, strict=True)
     return None
 
 

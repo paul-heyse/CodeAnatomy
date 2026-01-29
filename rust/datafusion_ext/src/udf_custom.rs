@@ -2445,7 +2445,16 @@ impl ScalarUDFImpl for PrefixedHashParts64Udf {
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+        let mut field = Field::new(self.name(), DataType::Utf8, nullable);
+        let prefix = scalar_argument_string(&args, 0, "span_id")?;
+        let semantic = prefix
+            .as_deref()
+            .and_then(semantic_type_from_prefix)
+            .unwrap_or("SpanId");
+        let mut metadata = HashMap::new();
+        metadata.insert("semantic_type".to_string(), semantic.to_string());
+        field = field.with_metadata(metadata);
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

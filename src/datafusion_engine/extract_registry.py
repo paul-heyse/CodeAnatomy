@@ -3,17 +3,46 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from functools import cache
+from typing import Literal
 
 import pyarrow as pa
 
 from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract_templates import config
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from schema_spec.system import DatasetSpec, dataset_spec_from_schema
+from schema_spec.system import DatasetSpec, DeltaCdfPolicy, dataset_spec_from_schema
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+
+_EXTRACT_DELTA_FEATURES: tuple[
+    Literal[
+        "change_data_feed",
+        "column_mapping",
+        "deletion_vectors",
+        "in_commit_timestamps",
+        "row_tracking",
+        "v2_checkpoints",
+    ],
+    ...,
+] = (
+    "change_data_feed",
+    "column_mapping",
+    "v2_checkpoints",
+)
+_EXTRACT_FEATURE_GATE = DeltaFeatureGate(
+    required_writer_features=_EXTRACT_DELTA_FEATURES,
+)
+_EXTRACT_CDF_POLICY = DeltaCdfPolicy(required=True, allow_out_of_range=False)
+_EXTRACT_SCHEMA_POLICY = DeltaSchemaPolicy(column_mapping_mode="name")
+_EXTRACT_WRITE_POLICY = DeltaWritePolicy(
+    stats_policy="auto",
+    enable_features=_EXTRACT_DELTA_FEATURES,
+)
 
 
 def extract_metadata(name: str) -> ExtractMetadata:
@@ -60,7 +89,14 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    return dataset_spec_from_schema(name, dataset_schema(name))
+    spec = dataset_spec_from_schema(name, dataset_schema(name))
+    return replace(
+        spec,
+        delta_cdf_policy=_EXTRACT_CDF_POLICY,
+        delta_write_policy=_EXTRACT_WRITE_POLICY,
+        delta_schema_policy=_EXTRACT_SCHEMA_POLICY,
+        delta_feature_gate=_EXTRACT_FEATURE_GATE,
+    )
 
 
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:

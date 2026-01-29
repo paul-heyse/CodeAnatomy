@@ -1269,12 +1269,37 @@
     "PlanScheduleArtifact": {
       "description": "Schedule artifact for deterministic plan scheduling.",
       "properties": {
+        "articulation_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "bottom_level_costs": {
           "additionalProperties": {
             "minimum": 0,
             "type": "number"
           },
           "type": "object"
+        },
+        "bridge_edges": {
+          "default": [],
+          "items": {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
         },
         "critical_path_length_weighted": {
           "anyOf": [
@@ -1334,6 +1359,21 @@
           ],
           "default": null
         },
+        "task_centrality": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "task_costs": {
           "additionalProperties": {
             "minimum": 0,
@@ -1344,6 +1384,27 @@
         "task_count": {
           "minimum": 0,
           "type": "integer"
+        },
+        "task_dominators": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1476,6 +1537,50 @@
           ],
           "default": null
         },
+        "cache_log_enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_log_glob": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_policy_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "delta_inputs": {
           "items": {
             "type": "object"
@@ -1495,6 +1600,20 @@
         "event_time_unix_ms": {
           "minimum": 0,
           "type": "integer"
+        },
+        "materialized_outputs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "output_dir": {
           "anyOf": [

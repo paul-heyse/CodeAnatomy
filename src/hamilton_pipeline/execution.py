@@ -7,14 +7,20 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, cast
 
+from hamilton import async_driver as hamilton_async_driver
 from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from hamilton_pipeline.driver_factory import DriverBuildRequest, build_driver
+from hamilton_pipeline.driver_factory import (
+    DriverBuildRequest,
+    build_async_driver,
+    build_driver,
+)
 from hamilton_pipeline.pipeline_types import (
     ExecutionMode,
     ExecutorConfig,
+    GraphAdapterConfig,
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
@@ -53,10 +59,12 @@ class PipelineExecutionOptions:
     incremental_impact_strategy: str | None = None
     execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
     executor_config: ExecutorConfig | None = None
+    graph_adapter_config: GraphAdapterConfig | None = None
     outputs: Sequence[str] | None = None
     config: Mapping[str, JsonValue] = field(default_factory=dict)
-    pipeline_driver: hamilton_driver.Driver | None = None
+    pipeline_driver: hamilton_driver.Driver | hamilton_async_driver.AsyncDriver | None = None
     overrides: Mapping[str, object] | None = None
+    use_materialize: bool = True
 
 
 def _resolve_dir(repo_root: Path, value: PathLike | None) -> Path | None:
@@ -107,6 +115,25 @@ def _apply_incremental_overrides(
         execute_overrides["incremental_impact_strategy"] = impact_strategy
 
 
+def _apply_cache_overrides(
+    execute_overrides: dict[str, object],
+    *,
+    options: PipelineExecutionOptions,
+) -> None:
+    config = options.config
+    cache_path_value = config.get("cache_path")
+    if not isinstance(cache_path_value, str) or not cache_path_value.strip():
+        cache_path_value = config.get("hamilton_cache_path")
+    if isinstance(cache_path_value, str) and cache_path_value.strip():
+        execute_overrides.setdefault("cache_path", cache_path_value.strip())
+    cache_log_value = config.get("cache_log_to_file")
+    if isinstance(cache_log_value, bool):
+        execute_overrides.setdefault("cache_log_to_file", cache_log_value)
+    cache_policy_value = config.get("cache_policy_profile")
+    if isinstance(cache_policy_value, str) and cache_policy_value.strip():
+        execute_overrides.setdefault("cache_policy_profile", cache_policy_value.strip())
+
+
 def _build_execute_overrides(
     *,
     repo_root_path: Path,
@@ -128,9 +155,25 @@ def _build_execute_overrides(
         options=options,
         repo_root_path=repo_root_path,
     )
+    _apply_cache_overrides(execute_overrides, options=options)
     if options.overrides:
         execute_overrides.update(options.overrides)
     return execute_overrides
+
+
+def _output_names(nodes: Sequence[PipelineFinalVar]) -> tuple[str, ...]:
+    names: list[str] = []
+    for node in nodes:
+        if isinstance(node, str):
+            names.append(node)
+            continue
+        if isinstance(node, HamiltonNode):
+            names.append(node.name)
+            continue
+        name = getattr(node, "__name__", None)
+        if isinstance(name, str) and name:
+            names.append(name)
+    return tuple(names)
 
 
 def execute_pipeline(
@@ -161,6 +204,7 @@ def execute_pipeline(
                 config=options.config,
                 execution_mode=options.execution_mode,
                 executor_config=options.executor_config,
+                graph_adapter_config=options.graph_adapter_config,
             )
         )
     )
@@ -168,12 +212,88 @@ def execute_pipeline(
         "list[PipelineFinalVar]",
         list(options.outputs or FULL_PIPELINE_OUTPUTS),
     )
-    results = driver_instance.execute(
-        output_nodes,
-        inputs={"repo_root": str(repo_root_path)},
-        overrides=execute_overrides,
-    )
+    execute_overrides.setdefault("materialized_outputs", _output_names(output_nodes))
+    output_names = cast("list[str]", _output_names(output_nodes))
+    if options.use_materialize:
+        _materialized, results = driver_instance.materialize(
+            additional_vars=output_nodes,
+            inputs={"repo_root": str(repo_root_path)},
+            overrides=execute_overrides,
+        )
+    elif isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
+        results = driver_instance.execute(
+            output_names,
+            inputs={"repo_root": str(repo_root_path)},
+            overrides=execute_overrides,
+        )
+    else:
+        results = driver_instance.execute(
+            output_nodes,
+            inputs={"repo_root": str(repo_root_path)},
+            overrides=execute_overrides,
+        )
     return cast("Mapping[str, JsonDict | None]", results)
 
 
-__all__ = ["FULL_PIPELINE_OUTPUTS", "PipelineExecutionOptions", "execute_pipeline"]
+async def execute_pipeline_async(
+    *,
+    repo_root: PathLike,
+    options: PipelineExecutionOptions | None = None,
+) -> Mapping[str, JsonDict | None]:
+    """Execute the pipeline using the async Hamilton driver.
+
+    Returns
+    -------
+    Mapping[str, JsonDict | None]
+        Mapping of output node names to payloads.
+
+    Raises
+    ------
+    ValueError
+        Raised when materialize() is requested for async execution.
+    TypeError
+        Raised when a non-async driver is provided.
+    """
+    repo_root_path = ensure_path(repo_root).resolve()
+    options = options or PipelineExecutionOptions()
+    if options.use_materialize:
+        msg = "Async driver does not support materialize(); use execute() instead."
+        raise ValueError(msg)
+    execute_overrides = _build_execute_overrides(
+        repo_root_path=repo_root_path,
+        options=options,
+    )
+    output_nodes = cast(
+        "list[PipelineFinalVar]",
+        list(options.outputs or FULL_PIPELINE_OUTPUTS),
+    )
+    execute_overrides.setdefault("materialized_outputs", _output_names(output_nodes))
+    driver_instance = (
+        options.pipeline_driver
+        if options.pipeline_driver is not None
+        else await build_async_driver(
+            request=DriverBuildRequest(
+                config=options.config,
+                execution_mode=options.execution_mode,
+                executor_config=options.executor_config,
+                graph_adapter_config=options.graph_adapter_config,
+            )
+        )
+    )
+    if not isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
+        msg = "Async pipeline execution requires an async Hamilton driver."
+        raise TypeError(msg)
+    result = await driver_instance.execute(
+        cast("list[str]", _output_names(output_nodes)),
+        inputs={"repo_root": str(repo_root_path)},
+        overrides=execute_overrides,
+    )
+    return cast("Mapping[str, JsonDict | None]", result)
+
+
+__all__ = [
+    "FULL_PIPELINE_OUTPUTS",
+    "PipelineExecutionOptions",
+    "execute_pipeline",
+    "execute_pipeline_async",
+]

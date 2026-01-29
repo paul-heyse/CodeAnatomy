@@ -7,22 +7,24 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from hamilton.function_modifiers import config, pipe_input, source, step, tag
+from hamilton.function_modifiers import (
+    inject,
+    parameterized_subdag,
+    resolve_from_config,
+    source,
+    tag,
+    tag_outputs,
+    value,
+)
 from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
 from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.arrow_schema.semantic_types import (
-    edge_id_metadata,
-    node_id_metadata,
-    span_id_metadata,
-)
 from datafusion_engine.execution_facade import ExecutionResult
-from datafusion_engine.finalize import Contract, FinalizeOptions, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
-from engine.runtime_profile import RuntimeProfileSpec
+from hamilton_pipeline.modules import cpg_finalize as cpg_finalize_module
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
@@ -87,112 +89,6 @@ class TaskExecutionSpec:
     plan_task_signature: str
     task_kind: Literal["view", "scan"]
     scan_unit_key: str | None = None
-
-
-def _finalize_cpg_table(
-    table: TableLike,
-    *,
-    name: str,
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> TableLike:
-    schema_names = getattr(table.schema, "names", [])
-    if not schema_names:
-        return empty_table(table.schema)
-    contract = Contract(name=name, schema=table.schema)
-    normalized = normalize_only(
-        cast("ArrowTableLike", table),
-        contract=contract,
-        options=FinalizeOptions(
-            runtime_profile=runtime_profile_spec.datafusion,
-            determinism_tier=runtime_profile_spec.determinism_tier,
-        ),
-    )
-    field_metadata = _semantic_field_metadata_for_cpg(name)
-    return _apply_field_metadata(normalized, field_metadata=field_metadata)
-
-
-def _semantic_field_metadata_for_cpg(name: str) -> dict[str, dict[bytes, bytes]]:
-    if name == "cpg_nodes_v1":
-        return {"node_id": node_id_metadata()}
-    if name == "cpg_edges_v1":
-        return {
-            "edge_id": edge_id_metadata(),
-            "src_node_id": node_id_metadata(),
-            "dst_node_id": node_id_metadata(),
-            "span_id": span_id_metadata(),
-        }
-    return {}
-
-
-def _apply_field_metadata(
-    table: TableLike,
-    *,
-    field_metadata: Mapping[str, Mapping[bytes, bytes]],
-) -> TableLike:
-    if not field_metadata:
-        return table
-    if not isinstance(table, pa.Table):
-        return table
-    table_value = cast("pa.Table", table)
-    schema = table_value.schema
-    fields: list[pa.Field] = []
-    for field in schema:
-        metadata = dict(field.metadata or {})
-        extra = field_metadata.get(field.name)
-        if extra:
-            metadata.update(extra)
-        fields.append(
-            pa.field(
-                field.name,
-                field.type,
-                nullable=field.nullable,
-                metadata=metadata or None,
-            )
-        )
-    updated_schema = pa.schema(fields, metadata=schema.metadata)
-    try:
-        return table_value.cast(updated_schema, safe=False)
-    except (pa.ArrowInvalid, TypeError, ValueError):
-        return table_value
-
-
-@tag(layer="execution", artifact="cpg_nodes_finalize", kind="stage")
-def _finalize_cpg_nodes_stage(
-    table: TableLike,
-    *,
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> TableLike:
-    return _finalize_cpg_table(
-        table,
-        name="cpg_nodes_v1",
-        runtime_profile_spec=runtime_profile_spec,
-    )
-
-
-@tag(layer="execution", artifact="cpg_edges_finalize", kind="stage")
-def _finalize_cpg_edges_stage(
-    table: TableLike,
-    *,
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> TableLike:
-    return _finalize_cpg_table(
-        table,
-        name="cpg_edges_v1",
-        runtime_profile_spec=runtime_profile_spec,
-    )
-
-
-@tag(layer="execution", artifact="cpg_props_finalize", kind="stage")
-def _finalize_cpg_props_stage(
-    table: TableLike,
-    *,
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> TableLike:
-    return _finalize_cpg_table(
-        table,
-        name="cpg_props_v1",
-        runtime_profile_spec=runtime_profile_spec,
-    )
 
 
 def _record_output(
@@ -274,7 +170,6 @@ def plan_scan_inputs(
     )
 
 
-@config.when(enable_dynamic_scan_units=True)
 @tag(layer="execution", artifact="scan_unit_stream", kind="dynamic")
 def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[ScanUnit]:
     """Yield scan units for dynamic parallel execution.
@@ -287,7 +182,6 @@ def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[Sc
     yield from plan_scan_units
 
 
-@config.when(enable_dynamic_scan_units=True)
 @tag(layer="execution", artifact="scan_unit_execution", kind="dynamic")
 def scan_unit_execution(
     scan_unit_stream: ScanUnit,
@@ -314,7 +208,6 @@ def scan_unit_execution(
     return scan_unit_stream.key, result.require_table()
 
 
-@config.when(name="scan_unit_results_by_key", enable_dynamic_scan_units=True)
 @tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
 def scan_unit_results_by_key__dynamic(
     scan_unit_execution: Collect[tuple[str, TableLike]],
@@ -330,7 +223,6 @@ def scan_unit_results_by_key__dynamic(
     return dict(items)
 
 
-@config.when_not(name="scan_unit_results_by_key", enable_dynamic_scan_units=True)
 @tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
 def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
     """Return an empty mapping when dynamic scan units are disabled.
@@ -341,6 +233,29 @@ def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
         Empty mapping placeholder.
     """
     return {}
+
+
+@resolve_from_config(
+    decorate_with=lambda enable_dynamic_scan_units=True: inject(
+        scan_unit_results_by_key=source(
+            "scan_unit_results_by_key__dynamic"
+            if enable_dynamic_scan_units
+            else "scan_unit_results_by_key__static"
+        )
+    ),
+)
+@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+def scan_unit_results_by_key(
+    scan_unit_results_by_key: Mapping[str, TableLike],
+) -> Mapping[str, TableLike]:
+    """Resolve scan unit results based on the dynamic execution config.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Resolved scan unit results mapping.
+    """
+    return scan_unit_results_by_key
 
 
 @tag(layer="execution", artifact="task_execution_inputs", kind="context")
@@ -576,55 +491,45 @@ def _execute_and_record(
     return table
 
 
-@pipe_input(
-    step(_finalize_cpg_nodes_stage, runtime_profile_spec=source("runtime_profile_spec")),
-    on_input="cpg_nodes_v1",
-    namespace="cpg_nodes_final",
+_CPG_FINAL_TAGS: dict[str, dict[str, str | list[str]]] = {
+    "cpg_nodes_final": {"layer": "execution", "artifact": "cpg_nodes_final", "kind": "table"},
+    "cpg_edges_final": {"layer": "execution", "artifact": "cpg_edges_final", "kind": "table"},
+    "cpg_props_final": {"layer": "execution", "artifact": "cpg_props_final", "kind": "table"},
+}
+
+
+@parameterized_subdag(
+    cpg_finalize_module,
+    inputs={"runtime_profile_spec": source("runtime_profile_spec")},
+    cpg_nodes_final={
+        "inputs": {
+            "table": source("cpg_nodes_v1"),
+            "table_name": value("cpg_nodes_v1"),
+        }
+    },
+    cpg_edges_final={
+        "inputs": {
+            "table": source("cpg_edges_v1"),
+            "table_name": value("cpg_edges_v1"),
+        }
+    },
+    cpg_props_final={
+        "inputs": {
+            "table": source("cpg_props_v1"),
+            "table_name": value("cpg_props_v1"),
+        }
+    },
 )
-@tag(layer="execution", artifact="cpg_nodes_final", kind="table")
-def cpg_nodes_final(cpg_nodes_v1: TableLike) -> TableLike:
-    """Return the final CPG nodes table.
+@tag_outputs(**_CPG_FINAL_TAGS)
+def cpg_final_tables(final_table: TableLike) -> TableLike:
+    """Finalize CPG outputs via parameterized sub-DAGs.
 
     Returns
     -------
     TableLike
-        Final nodes table.
+        Finalized output table for the parameterized sub-DAG.
     """
-    return cpg_nodes_v1
-
-
-@pipe_input(
-    step(_finalize_cpg_edges_stage, runtime_profile_spec=source("runtime_profile_spec")),
-    on_input="cpg_edges_v1",
-    namespace="cpg_edges_final",
-)
-@tag(layer="execution", artifact="cpg_edges_final", kind="table")
-def cpg_edges_final(cpg_edges_v1: TableLike) -> TableLike:
-    """Return the final CPG edges table.
-
-    Returns
-    -------
-    TableLike
-        Final edges table.
-    """
-    return cpg_edges_v1
-
-
-@pipe_input(
-    step(_finalize_cpg_props_stage, runtime_profile_spec=source("runtime_profile_spec")),
-    on_input="cpg_props_v1",
-    namespace="cpg_props_final",
-)
-@tag(layer="execution", artifact="cpg_props_final", kind="table")
-def cpg_props_final(cpg_props_v1: TableLike) -> TableLike:
-    """Return the final CPG properties table.
-
-    Returns
-    -------
-    TableLike
-        Final properties table.
-    """
-    return cpg_props_v1
+    return final_table
 
 
 __all__ = [
@@ -632,12 +537,7 @@ __all__ = [
     "PlanScanInputs",
     "TaskExecutionInputs",
     "TaskExecutionSpec",
-    "_finalize_cpg_edges_stage",
-    "_finalize_cpg_nodes_stage",
-    "_finalize_cpg_props_stage",
-    "cpg_edges_final",
-    "cpg_nodes_final",
-    "cpg_props_final",
+    "cpg_final_tables",
     "execute_task_from_catalog",
     "plan_scan_inputs",
     "runtime_artifacts",

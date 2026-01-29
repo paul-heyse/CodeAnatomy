@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import datafusion
@@ -70,6 +71,7 @@ from datafusion_engine.diagnostics import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
+from datafusion_engine.plan_cache import PlanProtoCache
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -87,6 +89,7 @@ from datafusion_engine.schema_registry import (
     nested_view_specs,
     validate_nested_types,
     validate_required_engine_functions,
+    validate_semantic_types,
     validate_udf_info_schema_parity,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
@@ -627,8 +630,28 @@ def feature_state_snapshot(
         determinism_tier=determinism_tier,
         dynamic_filters_enabled=dynamic_filters_enabled,
         spill_enabled=spill_enabled,
-        named_args_supported=runtime_profile.named_args_supported(),
+        named_args_supported=named_args_supported(runtime_profile),
     )
+
+
+def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
+    """Return whether named arguments are enabled for SQL execution.
+
+    Parameters
+    ----------
+    profile
+        Runtime profile to evaluate.
+
+    Returns
+    -------
+    bool
+        ``True`` when named arguments should be supported.
+    """
+    if not profile.enable_expr_planners:
+        return False
+    if profile.expr_planner_hook is not None:
+        return True
+    return bool(profile.expr_planner_names)
 
 
 @dataclass
@@ -2250,7 +2273,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "expr_planner_names": list(profile.expr_planner_names),
             "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
             "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
-            "named_args_supported": profile.named_args_supported(),
+            "named_args_supported": named_args_supported(profile),
             "async_udfs_enabled": profile.enable_async_udfs,
             "async_udf_timeout_ms": profile.async_udf_timeout_ms,
             "async_udf_batch_size": profile.async_udf_batch_size,
@@ -2417,6 +2440,12 @@ class _RuntimeDiagnosticsMixin:
             "memory_limit_bytes": profile.memory_limit_bytes,
             "default_catalog": profile.default_catalog,
             "default_schema": profile.default_schema,
+            "view_catalog": (
+                profile.view_catalog_name or profile.default_catalog
+                if profile.view_schema_name is not None
+                else None
+            ),
+            "view_schema": profile.view_schema_name,
             "enable_ident_normalization": _effective_ident_normalization(profile),
             "catalog_auto_load_location": profile.catalog_auto_load_location,
             "catalog_auto_load_format": profile.catalog_auto_load_format,
@@ -2635,7 +2664,7 @@ class _RuntimeDiagnosticsMixin:
                 "expr_planner_names": list(profile.expr_planner_names),
                 "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
                 "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
-                "named_args_supported": profile.named_args_supported(),
+                "named_args_supported": named_args_supported(profile),
                 "async_udfs_enabled": profile.enable_async_udfs,
                 "async_udf_timeout_ms": profile.async_udf_timeout_ms,
                 "async_udf_batch_size": profile.async_udf_batch_size,
@@ -2838,6 +2867,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     delta_max_temp_directory_size: int | None = None
     default_catalog: str = "datafusion"
     default_schema: str = "public"
+    view_catalog_name: str | None = None
+    view_schema_name: str | None = "views"
     registry_catalogs: Mapping[str, DatasetCatalog] = field(default_factory=dict)
     registry_catalog_name: str | None = None
     catalog_auto_load_location: str | None = None
@@ -2893,6 +2924,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     bytecode_delta_scan: DeltaScanOptions | None = None
     extract_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
+    normalize_output_root: str | None = None
     enable_information_schema: bool = True
     enable_ident_normalization: bool = False
     force_disable_ident_normalization: bool = False
@@ -2952,12 +2984,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
     plan_cache: PlanCache | None = None
+    plan_proto_cache: PlanProtoCache | None = None
     udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
     delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
     plan_artifacts_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
-    prepared_statements: tuple[PreparedStatementSpec, ...] = ()
+    prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     schema_hardening_name: str | None = "schema_hardening"
@@ -2997,11 +3030,26 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "custom catalog inference is not supported."
             )
             raise ValueError(msg)
+        if (
+            self.view_catalog_name is not None
+            and self.view_catalog_name != self.default_catalog
+        ):
+            msg = (
+                "view_catalog_name must match default_catalog; "
+                "custom catalog inference is not supported."
+            )
+            raise ValueError(msg)
         if self.plan_cache is None:
             object.__setattr__(
                 self,
                 "plan_cache",
                 PlanCache(cache_profile=self.diskcache_profile),
+            )
+        if self.plan_proto_cache is None:
+            object.__setattr__(
+                self,
+                "plan_proto_cache",
+                PlanProtoCache(cache_profile=self.diskcache_profile),
             )
         if self.diagnostics_sink is not None:
             object.__setattr__(
@@ -3213,6 +3261,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
+        self._install_view_schema(ctx)
         self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
         self._install_udf_platform(ctx)
@@ -3256,6 +3305,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
+        self._install_view_schema(ctx)
         self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
         self._install_udf_platform(ctx)
@@ -3271,20 +3321,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
         return ctx
-
-    def named_args_supported(self) -> bool:
-        """Return whether named arguments are enabled for SQL execution.
-
-        Returns
-        -------
-        bool
-            ``True`` when named arguments should be supported.
-        """
-        if not self.enable_expr_planners:
-            return False
-        if self.expr_planner_hook is not None:
-            return True
-        return bool(self.expr_planner_names)
 
     def _validate_async_udf_policy(self) -> dict[str, object]:
         """Validate async UDF policy configuration.
@@ -3345,7 +3381,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "enable_function_factory": self.enable_function_factory,
             "enable_expr_planners": self.enable_expr_planners,
             "expr_planner_names": list(self.expr_planner_names),
-            "named_args_supported": self.named_args_supported(),
+            "named_args_supported": named_args_supported(self),
             "warnings": warnings,
         }
 
@@ -3412,6 +3448,21 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalog_name=catalog_name,
             default_schema=self.default_schema,
         )
+
+    def _install_view_schema(self, ctx: SessionContext) -> None:
+        """Install the view schema namespace when configured."""
+        if self.view_schema_name is None:
+            return
+        catalog_name = self.view_catalog_name or self.default_catalog
+        try:
+            catalog = ctx.catalog(catalog_name)
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            return
+        if catalog.schema(self.view_schema_name) is not None:
+            return
+        from datafusion.catalog import Schema
+
+        catalog.register_schema(self.view_schema_name, Schema.memory_schema())
 
     def _install_delta_table_factory(self, ctx: SessionContext) -> None:
         """Install Delta TableProviderFactory for DDL registration.
@@ -3855,6 +3906,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.ast_delta_location:
             delta_scan = self.ast_delta_scan
             from datafusion_engine.dataset_registry import DatasetLocation
+            from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
 
             return DatasetLocation(
                 path=self.ast_delta_location,
@@ -3863,9 +3915,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 delta_timestamp=self.ast_delta_timestamp,
                 delta_constraints=self.ast_delta_constraints,
                 delta_scan=delta_scan,
+                dataset_spec=extract_dataset_spec("ast_files_v1"),
             )
         if self.ast_external_location:
             from datafusion_engine.dataset_registry import DatasetLocation
+            from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
 
             scan = DataFusionScanOptions(
                 partition_cols=self.ast_external_partition_cols,
@@ -3888,6 +3942,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 format=self.ast_external_format,
                 datafusion_provider=self.ast_external_provider,
                 datafusion_scan=scan,
+                dataset_spec=extract_dataset_spec("ast_files_v1"),
             )
         return None
 
@@ -3923,6 +3978,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.bytecode_delta_location:
             delta_scan = self.bytecode_delta_scan
             from datafusion_engine.dataset_registry import DatasetLocation
+            from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
 
             return DatasetLocation(
                 path=self.bytecode_delta_location,
@@ -3931,9 +3987,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 delta_timestamp=self.bytecode_delta_timestamp,
                 delta_constraints=self.bytecode_delta_constraints,
                 delta_scan=delta_scan,
+                dataset_spec=extract_dataset_spec("bytecode_files_v1"),
             )
         if self.bytecode_external_location:
             from datafusion_engine.dataset_registry import DatasetLocation
+            from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
 
             scan = DataFusionScanOptions(
                 partition_cols=self.bytecode_external_partition_cols,
@@ -3956,6 +4014,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 format=self.bytecode_external_format,
                 datafusion_provider=self.bytecode_external_provider,
                 datafusion_scan=scan,
+                dataset_spec=extract_dataset_spec("bytecode_files_v1"),
             )
         return None
 
@@ -3992,13 +4051,47 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         DatasetLocation | None
             Extract dataset location when configured.
         """
-        if name in self.extract_dataset_locations:
-            return self.extract_dataset_locations[name]
-        if name == "ast_files_v1":
-            return self._ast_dataset_location()
-        if name == "bytecode_files_v1":
-            return self._bytecode_dataset_location()
-        return self.scip_dataset_locations.get(name)
+        location = self.extract_dataset_locations.get(name)
+        if location is None:
+            if name == "ast_files_v1":
+                return self._ast_dataset_location()
+            if name == "bytecode_files_v1":
+                return self._bytecode_dataset_location()
+            location = self.scip_dataset_locations.get(name)
+        if location is None:
+            return None
+        if location.dataset_spec is None and location.table_spec is None:
+            from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
+
+            try:
+                spec = extract_dataset_spec(name)
+            except KeyError:
+                return location
+            return replace(location, dataset_spec=spec)
+        return location
+
+    def normalize_dataset_locations(self) -> Mapping[str, DatasetLocation]:
+        """Return normalize dataset locations derived from the output root.
+
+        Returns
+        -------
+        Mapping[str, DatasetLocation]
+            Mapping of normalize dataset names to locations, or empty mapping
+            when normalize output root is not configured.
+        """
+        if self.normalize_output_root is None:
+            return {}
+        root = Path(self.normalize_output_root)
+        from normalize.dataset_specs import dataset_specs
+
+        locations: dict[str, DatasetLocation] = {}
+        for spec in dataset_specs():
+            locations[spec.name] = DatasetLocation(
+                path=str(root / spec.name),
+                format="delta",
+                dataset_spec=spec,
+            )
+        return locations
 
     def dataset_location(self, name: str) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
@@ -4011,6 +4104,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self.extract_dataset_location(name)
         if location is not None:
             return apply_delta_store_policy(location, policy=self.delta_store_policy)
+        normalize_location = self.normalize_dataset_locations().get(name)
+        if normalize_location is not None:
+            return apply_delta_store_policy(normalize_location, policy=self.delta_store_policy)
         mapped = self.scip_dataset_locations.get(name)
         if mapped is not None:
             return apply_delta_store_policy(mapped, policy=self.delta_store_policy)
@@ -4595,6 +4691,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 validate_nested_types(ctx, name)
             except (RuntimeError, TypeError, ValueError) as exc:
                 view_errors[f"nested_types:{name}"] = str(exc)
+        try:
+            validate_semantic_types(ctx)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            view_errors["semantic_types"] = str(exc)
         return view_errors
 
     def _install_schema_registry(self, ctx: SessionContext) -> None:

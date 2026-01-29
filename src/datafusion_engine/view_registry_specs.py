@@ -306,6 +306,7 @@ def _normalize_view_nodes(
                 ),
                 required_udfs=required,
                 plan_bundle=bundle,
+                cache_policy="delta_output",
             )
         )
     return nodes

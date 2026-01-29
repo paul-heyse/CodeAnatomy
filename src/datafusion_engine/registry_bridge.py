@@ -85,6 +85,7 @@ from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
 )
+from datafusion_engine.schema_validation import _datafusion_type_name
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -524,10 +525,8 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         if format_name != "delta":
             msg = "Delta CDF policy requires delta-format datasets."
             raise ValueError(msg)
-        if location.delta_cdf_options is None:
-            msg = "Delta CDF policy requires delta_cdf_options to be configured."
-            raise ValueError(msg)
-        provider = "delta_cdf"
+        if location.delta_cdf_options is not None:
+            provider = "delta_cdf"
     if provider == "delta_cdf" and format_name != "delta":
         msg = "Delta CDF provider requires delta-format datasets."
         raise ValueError(msg)
@@ -937,6 +936,21 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     else:
         msg = "Delta registration requires the native provider or DDL opt-in."
         raise ValueError(msg)
+    scan = context.options.scan
+    projection_exprs = scan.projection_exprs if scan is not None else ()
+    if not projection_exprs and context.options.schema is not None:
+        projection_exprs = _projection_exprs_for_schema(
+            actual_columns=df.schema().names,
+            expected_schema=pa.schema(context.options.schema),
+        )
+    if projection_exprs:
+        df = _apply_projection_exprs(
+            context.ctx,
+            table_name=context.name,
+            projection_exprs=projection_exprs,
+            sql_options=_sql_options.sql_options_for_profile(context.runtime_profile),
+            runtime_profile=context.runtime_profile,
+        )
     _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
     _validate_schema_contracts(context)
     return df
@@ -1742,6 +1756,85 @@ def _apply_projection_exprs(
         record_view_definition(runtime_profile, artifact=artifact)
         _invalidate_information_schema_cache(runtime_profile, ctx)
     return ctx.table(table_name)
+
+
+def _projection_exprs_for_schema(
+    *,
+    actual_columns: Sequence[str],
+    expected_schema: pa.Schema,
+) -> tuple[str, ...]:
+    actual = set(actual_columns)
+    defaults = _expected_column_defaults(expected_schema)
+    projection_exprs: list[str] = []
+    for field in expected_schema:
+        dtype_name = _datafusion_type_name(field.type)
+        if field.name in actual:
+            cast_expr = f"cast({field.name} as {dtype_name})"
+            default_value = defaults.get(field.name)
+            if default_value is not None:
+                literal = _sql_literal_for_field(default_value, dtype=field.type)
+                if literal is not None:
+                    cast_expr = f"coalesce({cast_expr}, {literal})"
+            projection_exprs.append(f"{cast_expr} as {field.name}")
+        else:
+            projection_exprs.append(f"cast(NULL as {dtype_name}) as {field.name}")
+    return tuple(projection_exprs)
+
+
+def _sql_literal_for_field(value: str, *, dtype: pa.DataType) -> str | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if pa.types.is_boolean(dtype):
+        return _sql_bool_literal(normalized)
+    if pa.types.is_integer(dtype):
+        return _sql_int_literal(normalized)
+    if pa.types.is_floating(dtype):
+        return _sql_float_literal(normalized)
+    escaped = normalized.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _sql_bool_literal(value: str) -> str | None:
+    """Return SQL boolean literal or None for invalid inputs.
+
+    Returns
+    -------
+    str | None
+        SQL boolean literal when valid.
+    """
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered
+    return None
+
+
+def _sql_int_literal(value: str) -> str | None:
+    """Return SQL integer literal or None for invalid inputs.
+
+    Returns
+    -------
+    str | None
+        SQL integer literal when valid.
+    """
+    try:
+        return str(int(value))
+    except ValueError:
+        return None
+
+
+def _sql_float_literal(value: str) -> str | None:
+    """Return SQL float literal or None for invalid inputs.
+
+    Returns
+    -------
+    str | None
+        SQL float literal when valid.
+    """
+    try:
+        return str(float(value))
+    except ValueError:
+        return None
 
 
 def _schema_from_df(df: DataFrame) -> pa.Schema:

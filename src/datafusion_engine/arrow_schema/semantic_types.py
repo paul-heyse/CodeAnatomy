@@ -260,6 +260,75 @@ def span_id_type() -> pa.DataType:
     return _extension_type(SPAN_ID_TYPE_INFO)
 
 
+def semantic_type_for_field_name(name: str) -> SemanticTypeInfo | None:
+    """Return the semantic type info for a field name when matched.
+
+    Returns
+    -------
+    SemanticTypeInfo | None
+        Semantic type info when a field name is recognized.
+    """
+    normalized = name.lower()
+    if normalized == "edge_id" or normalized.endswith("_edge_id"):
+        return EDGE_ID_TYPE_INFO
+    if normalized == "span_id" or normalized.endswith("_span_id"):
+        return SPAN_ID_TYPE_INFO
+    if normalized in {"error_id", "missing_id", "capture_id"}:
+        return SPAN_ID_TYPE_INFO
+    if normalized == "node_id" or normalized.endswith("_node_id"):
+        return NODE_ID_TYPE_INFO
+    if normalized in {"parent_id", "child_id"}:
+        return NODE_ID_TYPE_INFO
+    return None
+
+
+def apply_semantic_types(schema: pa.Schema) -> pa.Schema:
+    """Return a schema with semantic extension types and metadata applied.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Schema with semantic types applied to matching fields.
+    """
+    fields = [_apply_semantic_field(field) for field in schema]
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _apply_semantic_field(field: pa.Field) -> pa.Field:
+    data_type = _apply_semantic_type(field.type)
+    metadata = dict(field.metadata or {})
+    semantic = semantic_type_for_field_name(field.name)
+    if semantic is NODE_ID_TYPE_INFO:
+        metadata.update(node_id_metadata())
+        data_type = node_id_type()
+    elif semantic is EDGE_ID_TYPE_INFO:
+        metadata.update(edge_id_metadata())
+        data_type = edge_id_type()
+    elif semantic is SPAN_ID_TYPE_INFO:
+        metadata.update(span_id_metadata())
+        data_type = span_id_type()
+    return pa.field(
+        field.name,
+        data_type,
+        nullable=field.nullable,
+        metadata=metadata or None,
+    )
+
+
+def _apply_semantic_type(data_type: pa.DataType) -> pa.DataType:
+    if isinstance(data_type, pa.ExtensionType):
+        return data_type
+    if pa.types.is_struct(data_type):
+        return pa.struct([_apply_semantic_field(field) for field in data_type])
+    if pa.types.is_list(data_type):
+        value_field = _apply_semantic_field(data_type.value_field)
+        return pa.list_(value_field)
+    if pa.types.is_large_list(data_type):
+        value_field = _apply_semantic_field(data_type.value_field)
+        return pa.large_list(value_field)
+    return data_type
+
+
 __all__ = [
     "BYTE_SPAN_STORAGE",
     "BYTE_SPAN_TYPE_INFO",
@@ -269,12 +338,14 @@ __all__ = [
     "SPAN_ID_TYPE_INFO",
     "SPAN_STORAGE",
     "SPAN_TYPE_INFO",
+    "apply_semantic_types",
     "byte_span_type",
     "edge_id_metadata",
     "edge_id_type",
     "node_id_metadata",
     "node_id_type",
     "register_semantic_extension_types",
+    "semantic_type_for_field_name",
     "semantic_type_metadata",
     "span_id_metadata",
     "span_id_type",

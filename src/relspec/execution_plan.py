@@ -26,8 +26,12 @@ from relspec.rustworkx_graph import (
     TaskGraphBuildOptions,
     TaskNode,
     build_task_graph_from_inferred_deps,
+    task_dependency_articulation_tasks,
+    task_dependency_betweenness_centrality,
+    task_dependency_bridge_edges,
     task_dependency_critical_path_length,
     task_dependency_critical_path_tasks,
+    task_dependency_immediate_dominators,
     task_dependency_reduction,
     task_graph_diagnostics,
     task_graph_signature,
@@ -357,19 +361,11 @@ def _assemble_plan_components(
         plan_fingerprints,
         plan_task_signatures,
     )
-    if request.enable_metric_scheduling:
-        plan_metrics = _task_plan_metrics(context.view_nodes)
-        task_costs = _task_costs_from_metrics(
-            plan_metrics,
-            scan_units_by_task=context.scan_task_units_by_name,
-        )
-    else:
-        plan_metrics: dict[str, TaskPlanMetrics] = {}
-        task_costs: dict[str, float] = {}
-    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=task_costs)
-    slack_by_task = task_slack_by_task(
-        reduction.reduced_graph,
-        task_costs=task_costs,
+    cost_context, plan_metrics, task_costs = _plan_cost_context(
+        view_nodes=context.view_nodes,
+        scan_units_by_task=context.scan_task_units_by_name,
+        reduction=reduction,
+        enable_metric_scheduling=request.enable_metric_scheduling,
     )
     schedule = schedule_tasks(
         context.task_graph,
@@ -378,11 +374,7 @@ def _assemble_plan_components(
             output_schema_for=output_schema_for,
             allow_partial=request.allow_partial,
             reduced_dependency_graph=reduction.reduced_graph,
-            cost_context=ScheduleCostContext(
-                task_costs=task_costs,
-                bottom_level_costs=bottom_costs,
-                slack_by_task=slack_by_task,
-            ),
+            cost_context=cost_context,
         ),
     )
     schedule_meta = task_schedule_metadata(schedule)
@@ -399,6 +391,8 @@ def _assemble_plan_components(
     )
     scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
     session_runtime_hash = _session_runtime_hash(context.session_runtime)
+    bottom_costs = cost_context.bottom_level_costs or {}
+    slack_by_task = cost_context.slack_by_task or {}
     return _PlanAssembly(
         schedule=schedule,
         schedule_metadata=schedule_meta,
@@ -413,6 +407,60 @@ def _assemble_plan_components(
         scan_delta_pins=scan_delta_pins,
         session_runtime_hash=session_runtime_hash,
     )
+
+
+def _plan_cost_context(
+    *,
+    view_nodes: Sequence[ViewNode],
+    scan_units_by_task: Mapping[str, ScanUnit],
+    reduction: TaskDependencyReduction,
+    enable_metric_scheduling: bool,
+) -> tuple[ScheduleCostContext, dict[str, TaskPlanMetrics], dict[str, float]]:
+    """Build scheduling cost context and metrics.
+
+    Parameters
+    ----------
+    view_nodes
+        View nodes used to derive task metrics.
+    scan_units_by_task
+        Mapping of task names to scan units for cost derivation.
+    reduction
+        Reduced dependency graph used for scheduling analytics.
+    enable_metric_scheduling
+        Flag indicating whether metric-based scheduling is enabled.
+
+    Returns
+    -------
+    tuple[ScheduleCostContext, dict[str, TaskPlanMetrics], dict[str, float]]
+        Cost context, plan metrics, and task cost mapping.
+    """
+    if enable_metric_scheduling:
+        plan_metrics = _task_plan_metrics(view_nodes)
+        task_costs = _task_costs_from_metrics(
+            plan_metrics,
+            scan_units_by_task=scan_units_by_task,
+        )
+    else:
+        plan_metrics: dict[str, TaskPlanMetrics] = {}
+        task_costs: dict[str, float] = {}
+    bottom_costs = bottom_level_costs(reduction.reduced_graph, task_costs=task_costs)
+    slack_by_task = task_slack_by_task(
+        reduction.reduced_graph,
+        task_costs=task_costs,
+    )
+    centrality = task_dependency_betweenness_centrality(reduction.reduced_graph)
+    bridge_edges = task_dependency_bridge_edges(reduction.reduced_graph)
+    articulation_tasks = task_dependency_articulation_tasks(reduction.reduced_graph)
+    bridge_tasks = _bridge_task_names(bridge_edges)
+    cost_context = ScheduleCostContext(
+        task_costs=task_costs,
+        bottom_level_costs=bottom_costs,
+        slack_by_task=slack_by_task,
+        betweenness_centrality=centrality,
+        articulation_tasks=frozenset(articulation_tasks),
+        bridge_tasks=bridge_tasks,
+    )
+    return cost_context, plan_metrics, task_costs
 
 
 def compile_execution_plan(
@@ -722,6 +770,10 @@ def _dataset_location_map(
         locations.setdefault(
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )
+    for name, location in profile.normalize_dataset_locations().items():
+        locations.setdefault(
+            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+        )
     for catalog in profile.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
@@ -822,6 +874,10 @@ def _plan_signature_and_diagnostics(
         if reduction.reduced_graph.num_nodes() > 0
         else None
     )
+    dominators = task_dependency_immediate_dominators(reduction.reduced_graph)
+    centrality = task_dependency_betweenness_centrality(reduction.reduced_graph)
+    bridge_edges = task_dependency_bridge_edges(reduction.reduced_graph)
+    articulation_tasks = task_dependency_articulation_tasks(reduction.reduced_graph)
     enriched = replace(
         diagnostics,
         full_graph_signature=signature,
@@ -832,8 +888,22 @@ def _plan_signature_and_diagnostics(
         dependency_edge_count=reduction.edge_count,
         reduced_dependency_edge_count=reduction.reduced_edge_count,
         dependency_removed_edge_count=reduction.removed_edge_count,
+        dominators=dominators,
+        betweenness_centrality=centrality,
+        bridge_edges=bridge_edges,
+        articulation_tasks=articulation_tasks,
     )
     return signature, enriched
+
+
+def _bridge_task_names(
+    bridge_edges: Sequence[tuple[str, str]],
+) -> frozenset[str]:
+    tasks: set[str] = set()
+    for left, right in bridge_edges:
+        tasks.add(left)
+        tasks.add(right)
+    return frozenset(tasks)
 
 
 def dependency_map_from_inferred(

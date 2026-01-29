@@ -7,26 +7,34 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, TypeVar, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import (
     cache,
     check_output_custom,
     datasaver,
+    parameterize,
     pipe_input,
+    source,
     step,
     tag,
+    tag_outputs,
+    value,
 )
+from hamilton.function_modifiers.dependencies import ParametrizedDependency
 
 from core_types import JsonDict, JsonValue
+from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
-from hamilton_pipeline.pipeline_types import OutputConfig
-from hamilton_pipeline.validators import NonEmptyTableValidator
+from hamilton_pipeline.pipeline_types import CacheRuntimeContext, OutputConfig
+from hamilton_pipeline.validators import NonEmptyTableValidator, TableSchemaValidator
+from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import (
     ExtractErrorsArtifact,
     NormalizeOutputsArtifact,
@@ -35,6 +43,7 @@ from serde_artifacts import (
 )
 from serde_msgspec import convert, dumps_msgpack, to_builtins
 from storage.deltalake import DeltaWritePolicy, delta_table_version
+from storage.deltalake.config import DeltaSchemaPolicy, ParquetWriterPolicy
 from storage.ipc_utils import payload_hash
 
 
@@ -73,6 +82,7 @@ class OutputRuntimeContext:
 
     runtime_profile_spec: RuntimeProfileSpec
     output_config: OutputConfig
+    cache_context: CacheRuntimeContext
 
 
 @dataclass(frozen=True)
@@ -84,6 +94,7 @@ class OutputPlanContext:
     plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
     run_id: str
     artifact_ids: Mapping[str, str]
+    materialized_outputs: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,12 +109,32 @@ class DeltaWriteInputs:
 
 
 @dataclass(frozen=True)
+class OutputPlanArtifactsContext:
+    """Artifacts metadata for building output plan contexts."""
+
+    plan_fingerprints: Mapping[str, str]
+    plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
+    plan_artifact_ids: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _DeltaWriteSpec:
+    """Parameterized Delta write specification for CPG outputs."""
+
+    dataset_name: str
+    plan_dataset_name: str | None = None
+    write_policy_override: DeltaWritePolicy | None = None
+
+
+@dataclass(frozen=True)
 class PrimaryOutputs:
     """Primary CPG outputs for run manifests."""
 
     cpg_nodes: DataSaverDict
     cpg_edges: DataSaverDict
     cpg_props: DataSaverDict
+    cpg_nodes_quality: DataSaverDict
+    cpg_props_quality: DataSaverDict
 
 
 @dataclass(frozen=True)
@@ -172,6 +203,7 @@ def run_id() -> str:
 def output_runtime_context(
     runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
+    cache_context: CacheRuntimeContext,
 ) -> OutputRuntimeContext:
     """Build output runtime context.
 
@@ -181,6 +213,8 @@ def output_runtime_context(
         Runtime profile specification for this run.
     output_config
         Output configuration settings.
+    cache_context
+        Cache configuration snapshot for the run.
 
     Returns
     -------
@@ -190,15 +224,15 @@ def output_runtime_context(
     return OutputRuntimeContext(
         runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
+        cache_context=cache_context,
     )
 
 
 def output_plan_context(
     plan_signature: str,
-    plan_fingerprints: Mapping[str, str],
-    plan_bundles_by_task: Mapping[str, DataFusionPlanBundle],
-    plan_artifact_ids: Mapping[str, str],
+    plan_artifacts_context: OutputPlanArtifactsContext,
     run_id: str,
+    materialized_outputs: Sequence[str] | None = None,
 ) -> OutputPlanContext:
     """Build output plan context.
 
@@ -206,28 +240,58 @@ def output_plan_context(
     ----------
     plan_signature
         Plan signature string for the run.
-    plan_fingerprints
-        Mapping of plan fingerprints by dataset.
-    plan_bundles_by_task
-        Plan bundles grouped by task name.
-    plan_artifact_ids
-        Mapping of plan artifact identifiers by dataset.
+    plan_artifacts_context
+        Plan artifact metadata for the execution run.
     run_id
         Run identifier for the pipeline execution.
+    materialized_outputs
+        Output node names targeted for materialization.
 
     Returns
     -------
     OutputPlanContext
         Plan metadata context.
     """
-    artifact_ids = dict(plan_artifact_ids)
-    artifact_ids.update(_plan_identity_hashes_for_outputs(plan_bundles_by_task))
+    artifact_ids = dict(plan_artifacts_context.plan_artifact_ids)
+    artifact_ids.update(
+        _plan_identity_hashes_for_outputs(plan_artifacts_context.plan_bundles_by_task)
+    )
+    outputs = tuple(str(name) for name in materialized_outputs or ())
     return OutputPlanContext(
         plan_signature=plan_signature,
-        plan_fingerprints=plan_fingerprints,
-        plan_bundles_by_task=plan_bundles_by_task,
+        plan_fingerprints=plan_artifacts_context.plan_fingerprints,
+        plan_bundles_by_task=plan_artifacts_context.plan_bundles_by_task,
         run_id=run_id,
         artifact_ids=artifact_ids,
+        materialized_outputs=outputs or None,
+    )
+
+
+def output_plan_artifacts_context(
+    plan_fingerprints: Mapping[str, str],
+    plan_bundles_by_task: Mapping[str, DataFusionPlanBundle],
+    plan_artifact_ids: Mapping[str, str],
+) -> OutputPlanArtifactsContext:
+    """Build plan artifacts metadata for output plan contexts.
+
+    Parameters
+    ----------
+    plan_fingerprints
+        Mapping of plan fingerprints by dataset.
+    plan_bundles_by_task
+        Plan bundles grouped by task name.
+    plan_artifact_ids
+        Mapping of plan artifact identifiers by dataset.
+
+    Returns
+    -------
+    OutputPlanArtifactsContext
+        Plan artifacts metadata container.
+    """
+    return OutputPlanArtifactsContext(
+        plan_fingerprints=plan_fingerprints,
+        plan_bundles_by_task=plan_bundles_by_task,
+        plan_artifact_ids=plan_artifact_ids,
     )
 
 
@@ -235,6 +299,8 @@ def primary_outputs(
     write_cpg_nodes_delta: DataSaverDict,
     write_cpg_edges_delta: DataSaverDict,
     write_cpg_props_delta: DataSaverDict,
+    write_cpg_nodes_quality_delta: DataSaverDict,
+    write_cpg_props_quality_delta: DataSaverDict,
 ) -> PrimaryOutputs:
     """Bundle primary output artifacts.
 
@@ -246,6 +312,10 @@ def primary_outputs(
         CPG edges output artifact metadata.
     write_cpg_props_delta
         CPG props output artifact metadata.
+    write_cpg_nodes_quality_delta
+        CPG nodes quality output artifact metadata.
+    write_cpg_props_quality_delta
+        CPG props quality output artifact metadata.
 
     Returns
     -------
@@ -256,6 +326,8 @@ def primary_outputs(
         cpg_nodes=write_cpg_nodes_delta,
         cpg_edges=write_cpg_edges_delta,
         cpg_props=write_cpg_props_delta,
+        cpg_nodes_quality=write_cpg_nodes_quality_delta,
+        cpg_props_quality=write_cpg_props_quality_delta,
     )
 
 
@@ -374,10 +446,15 @@ def _delta_write(
     )
     if resolved_write_policy is not None:
         format_options["delta_write_policy"] = resolved_write_policy
-    if output_config.delta_schema_policy is not None:
-        format_options["delta_schema_policy"] = output_config.delta_schema_policy
+    schema_policy = output_config.delta_schema_policy or _CPG_SCHEMA_POLICY
+    if schema_policy is not None:
+        format_options["delta_schema_policy"] = schema_policy
     if output_config.delta_storage_options is not None:
         format_options["storage_options"] = dict(output_config.delta_storage_options)
+    maintenance_policy = _CPG_MAINTENANCE_POLICIES.get(details.dataset_name)
+    if maintenance_policy is not None:
+        format_options["delta_maintenance_policy"] = maintenance_policy
+        format_options["delta_feature_gate"] = _OUTPUT_FEATURE_GATE
     pipeline = WritePipeline(
         session_runtime.ctx,
         sql_options=runtime_profile.sql_options(),
@@ -437,14 +514,14 @@ def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None
     if not isinstance(protocol, Mapping):
         return None
     payload: dict[str, object] = {}
-    for key, value in protocol.items():
-        if isinstance(value, (str, int, float)) or value is None:
-            payload[str(key)] = value
+    for key, protocol_value in protocol.items():
+        if isinstance(protocol_value, (str, int, float)) or protocol_value is None:
+            payload[str(key)] = protocol_value
             continue
-        if isinstance(value, (list, tuple)):
-            payload[str(key)] = [str(item) for item in value]
+        if isinstance(protocol_value, (list, tuple)):
+            payload[str(key)] = [str(item) for item in protocol_value]
             continue
-        payload[str(key)] = str(value)
+        payload[str(key)] = str(protocol_value)
     return payload or None
 
 
@@ -533,8 +610,10 @@ def _plan_identity_hashes_for_outputs(
 
 _OUTPUT_PLAN_FINGERPRINTS: dict[str, str] = {
     "cpg_nodes": "cpg_nodes_v1",
+    "cpg_nodes_quality": "cpg_nodes_v1",
     "cpg_edges": "cpg_edges_v1",
     "cpg_props": "cpg_props_v1",
+    "cpg_props_quality": "cpg_props_v1",
     "cpg_props_map": "cpg_props_map_v1",
     "cpg_edges_by_src": "cpg_edges_by_src_v1",
     "cpg_edges_by_dst": "cpg_edges_by_dst_v1",
@@ -556,6 +635,11 @@ _RUN_MANIFEST_SCHEMA = pa.schema(
         pa.field("runtime_profile_hash", pa.string(), nullable=True),
         pa.field("determinism_tier", pa.string(), nullable=True),
         pa.field("output_dir", pa.string(), nullable=True),
+        pa.field("cache_path", pa.string(), nullable=True),
+        pa.field("cache_log_glob", pa.string(), nullable=True),
+        pa.field("cache_policy_profile", pa.string(), nullable=True),
+        pa.field("cache_log_enabled", pa.bool_(), nullable=True),
+        pa.field("materialized_outputs_msgpack", pa.binary(), nullable=True),
     ]
 )
 
@@ -589,6 +673,51 @@ _OUTPUT_METADATA_WRITE_POLICY = DeltaWritePolicy(
     stats_policy="explicit",
     stats_columns=("run_id", "event_time_unix_ms"),
 )
+_OUTPUT_DELTA_FEATURES: tuple[
+    Literal[
+        "change_data_feed",
+        "column_mapping",
+        "deletion_vectors",
+        "in_commit_timestamps",
+        "row_tracking",
+        "v2_checkpoints",
+    ],
+    ...,
+] = (
+    "change_data_feed",
+    "column_mapping",
+    "v2_checkpoints",
+)
+_OUTPUT_FEATURE_GATE = DeltaFeatureGate(
+    required_writer_features=_OUTPUT_DELTA_FEATURES,
+)
+_CPG_SCHEMA_POLICY = DeltaSchemaPolicy(column_mapping_mode="name")
+_BLOOM_FILTER_FPP = 0.01
+_BLOOM_FILTER_NDV = 10_000_000
+
+
+def _parquet_policy(
+    *,
+    stats_columns: tuple[str, ...],
+    bloom_columns: tuple[str, ...],
+) -> ParquetWriterPolicy:
+    return ParquetWriterPolicy(
+        statistics_enabled=stats_columns,
+        bloom_filter_enabled=bloom_columns,
+        bloom_filter_fpp=_BLOOM_FILTER_FPP,
+        bloom_filter_ndv=_BLOOM_FILTER_NDV,
+    )
+
+
+def _maintenance_policy(z_order_cols: tuple[str, ...]) -> DeltaMaintenancePolicy:
+    return DeltaMaintenancePolicy(
+        optimize_on_write=True,
+        optimize_target_size=256 * 1024 * 1024,
+        z_order_cols=z_order_cols,
+        z_order_when="after_partition_complete",
+        vacuum_on_write=False,
+    )
+
 
 _CPG_NODES_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=256 * 1024 * 1024,
@@ -596,6 +725,11 @@ _CPG_NODES_WRITE_POLICY = DeltaWritePolicy(
     zorder_by=("file_id", "bstart", "node_id"),
     stats_policy="explicit",
     stats_columns=("file_id", "path", "node_id", "node_kind", "bstart", "bend"),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=("file_id", "path", "node_id", "node_kind", "bstart", "bend"),
+        bloom_columns=("node_id", "file_id"),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
 _CPG_EDGES_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=256 * 1024 * 1024,
@@ -611,6 +745,19 @@ _CPG_EDGES_WRITE_POLICY = DeltaWritePolicy(
         "bstart",
         "bend",
     ),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=(
+            "path",
+            "edge_id",
+            "edge_kind",
+            "src_node_id",
+            "dst_node_id",
+            "bstart",
+            "bend",
+        ),
+        bloom_columns=("edge_id", "src_node_id", "dst_node_id"),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
 _CPG_PROPS_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=256 * 1024 * 1024,
@@ -618,25 +765,55 @@ _CPG_PROPS_WRITE_POLICY = DeltaWritePolicy(
     zorder_by=("entity_kind", "prop_key", "entity_id"),
     stats_policy="explicit",
     stats_columns=("entity_kind", "entity_id", "prop_key", "node_kind"),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=("entity_kind", "entity_id", "prop_key", "node_kind"),
+        bloom_columns=("entity_id",),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
 _CPG_PROPS_MAP_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=128 * 1024 * 1024,
     zorder_by=("entity_kind", "entity_id"),
     stats_policy="explicit",
     stats_columns=("entity_kind", "entity_id", "node_kind"),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=("entity_kind", "entity_id", "node_kind"),
+        bloom_columns=("entity_id",),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
 _CPG_EDGES_BY_SRC_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=128 * 1024 * 1024,
     zorder_by=("src_node_id",),
     stats_policy="explicit",
     stats_columns=("src_node_id",),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=("src_node_id",),
+        bloom_columns=("src_node_id",),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
 _CPG_EDGES_BY_DST_WRITE_POLICY = DeltaWritePolicy(
     target_file_size=128 * 1024 * 1024,
     zorder_by=("dst_node_id",),
     stats_policy="explicit",
     stats_columns=("dst_node_id",),
+    parquet_writer_policy=_parquet_policy(
+        stats_columns=("dst_node_id",),
+        bloom_columns=("dst_node_id",),
+    ),
+    enable_features=_OUTPUT_DELTA_FEATURES,
 )
+_CPG_MAINTENANCE_POLICIES: dict[str, DeltaMaintenancePolicy] = {
+    "cpg_nodes": _maintenance_policy(("file_id", "node_id", "bstart")),
+    "cpg_nodes_quality": _maintenance_policy(("file_id", "node_id", "bstart")),
+    "cpg_edges": _maintenance_policy(("src_node_id", "dst_node_id", "edge_id")),
+    "cpg_props": _maintenance_policy(("entity_kind", "entity_id", "prop_key")),
+    "cpg_props_quality": _maintenance_policy(("entity_kind", "entity_id", "prop_key")),
+    "cpg_props_map": _maintenance_policy(("entity_kind", "entity_id")),
+    "cpg_edges_by_src": _maintenance_policy(("src_node_id",)),
+    "cpg_edges_by_dst": _maintenance_policy(("dst_node_id",)),
+}
 
 
 @pipe_input(
@@ -646,7 +823,10 @@ _CPG_EDGES_BY_DST_WRITE_POLICY = DeltaWritePolicy(
     namespace="cpg_nodes",
 )
 @cache(format="delta", behavior="default")
-@check_output_custom(NonEmptyTableValidator())
+@check_output_custom(
+    TableSchemaValidator(expected_columns=_NODE_OUTPUT_COLUMNS, importance="fail"),
+    NonEmptyTableValidator(),
+)
 @_semantic_tag(
     artifact="cpg_nodes",
     spec=SemanticTagSpec(
@@ -675,7 +855,10 @@ def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
     namespace="cpg_edges",
 )
 @cache(format="delta", behavior="default")
-@check_output_custom(NonEmptyTableValidator())
+@check_output_custom(
+    TableSchemaValidator(expected_columns=_EDGE_OUTPUT_COLUMNS, importance="fail"),
+    NonEmptyTableValidator(),
+)
 @_semantic_tag(
     artifact="cpg_edges",
     spec=SemanticTagSpec(
@@ -704,7 +887,10 @@ def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
     namespace="cpg_props",
 )
 @cache(format="delta", behavior="default")
-@check_output_custom(NonEmptyTableValidator())
+@check_output_custom(
+    TableSchemaValidator(expected_columns=_PROP_OUTPUT_COLUMNS, importance="fail"),
+    NonEmptyTableValidator(),
+)
 @_semantic_tag(
     artifact="cpg_props",
     spec=SemanticTagSpec(
@@ -727,236 +913,143 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
     return cpg_props_final
 
 
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_nodes_delta", kind="delta")
-def write_cpg_nodes_delta(
-    cpg_nodes: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return stub metadata for CPG nodes output.
-
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
-    """
-    return _delta_write(
-        cpg_nodes,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_nodes",
-            write_policy_override=(
-                _CPG_NODES_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
+def _delta_write_spec(
+    *,
+    table: str,
+    dataset_name: str,
+    write_policy: DeltaWritePolicy | None,
+    plan_dataset_name: str | None = None,
+) -> dict[str, ParametrizedDependency]:
+    return {
+        "table": source(table),
+        "write_spec": value(
+            _DeltaWriteSpec(
+                dataset_name=dataset_name,
+                plan_dataset_name=plan_dataset_name,
+                write_policy_override=write_policy,
+            )
         ),
-    )
+    }
 
 
+_CPG_DELTA_WRITE_PARAMS: dict[str, dict[str, ParametrizedDependency]] = {
+    "write_cpg_nodes_delta": _delta_write_spec(
+        table="cpg_nodes",
+        dataset_name="cpg_nodes",
+        write_policy=_CPG_NODES_WRITE_POLICY,
+    ),
+    "write_cpg_edges_delta": _delta_write_spec(
+        table="cpg_edges",
+        dataset_name="cpg_edges",
+        write_policy=_CPG_EDGES_WRITE_POLICY,
+    ),
+    "write_cpg_props_delta": _delta_write_spec(
+        table="cpg_props",
+        dataset_name="cpg_props",
+        write_policy=_CPG_PROPS_WRITE_POLICY,
+    ),
+    "write_cpg_props_map_delta": _delta_write_spec(
+        table="cpg_props_map_v1",
+        dataset_name="cpg_props_map",
+        write_policy=_CPG_PROPS_MAP_WRITE_POLICY,
+    ),
+    "write_cpg_edges_by_src_delta": _delta_write_spec(
+        table="cpg_edges_by_src_v1",
+        dataset_name="cpg_edges_by_src",
+        write_policy=_CPG_EDGES_BY_SRC_WRITE_POLICY,
+    ),
+    "write_cpg_edges_by_dst_delta": _delta_write_spec(
+        table="cpg_edges_by_dst_v1",
+        dataset_name="cpg_edges_by_dst",
+        write_policy=_CPG_EDGES_BY_DST_WRITE_POLICY,
+    ),
+    "write_cpg_nodes_quality_delta": _delta_write_spec(
+        table="cpg_nodes_quality",
+        dataset_name="cpg_nodes_quality",
+        plan_dataset_name="cpg_nodes",
+        write_policy=_CPG_NODES_WRITE_POLICY,
+    ),
+    "write_cpg_props_quality_delta": _delta_write_spec(
+        table="cpg_props_quality",
+        dataset_name="cpg_props_quality",
+        plan_dataset_name="cpg_props",
+        write_policy=_CPG_PROPS_WRITE_POLICY,
+    ),
+}
+
+_CPG_DELTA_WRITE_TAGS: dict[str, dict[str, str | list[str]]] = {
+    "write_cpg_nodes_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_nodes_delta",
+        "kind": "delta",
+    },
+    "write_cpg_edges_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_edges_delta",
+        "kind": "delta",
+    },
+    "write_cpg_props_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_props_delta",
+        "kind": "delta",
+    },
+    "write_cpg_props_map_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_props_map_delta",
+        "kind": "delta",
+    },
+    "write_cpg_edges_by_src_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_edges_by_src_delta",
+        "kind": "delta",
+    },
+    "write_cpg_edges_by_dst_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_edges_by_dst_delta",
+        "kind": "delta",
+    },
+    "write_cpg_nodes_quality_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_nodes_quality_delta",
+        "kind": "delta",
+    },
+    "write_cpg_props_quality_delta": {
+        "layer": "outputs",
+        "artifact": "write_cpg_props_quality_delta",
+        "kind": "delta",
+    },
+}
+
+
+@parameterize(**_CPG_DELTA_WRITE_PARAMS)
+@tag_outputs(**_CPG_DELTA_WRITE_TAGS)
 @datasaver()
-@tag(layer="outputs", artifact="write_cpg_edges_delta", kind="delta")
-def write_cpg_edges_delta(
-    cpg_edges: TableLike,
+def write_cpg_delta_output(
+    table: TableLike,
     output_runtime_context: OutputRuntimeContext,
     output_plan_context: OutputPlanContext,
+    write_spec: _DeltaWriteSpec,
 ) -> DataSaverDict:
-    """Return stub metadata for CPG edges output.
-
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
-    """
-    return _delta_write(
-        cpg_edges,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_edges",
-            write_policy_override=(
-                _CPG_EDGES_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
-    )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_props_delta", kind="delta")
-def write_cpg_props_delta(
-    cpg_props: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return stub metadata for CPG properties output.
-
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
-    """
-    return _delta_write(
-        cpg_props,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_props",
-            write_policy_override=(
-                _CPG_PROPS_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
-    )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_props_map_delta", kind="delta")
-def write_cpg_props_map_delta(
-    cpg_props_map_v1: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return metadata for the CPG property map output.
+    """Return metadata for Delta-backed CPG outputs.
 
     Returns
     -------
     JsonDict
         Output metadata payload.
     """
-    return _delta_write(
-        cpg_props_map_v1,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_props_map",
-            write_policy_override=(
-                _CPG_PROPS_MAP_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
+    write_override = (
+        write_spec.write_policy_override
+        if output_runtime_context.output_config.delta_write_policy is None
+        else None
     )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_edges_by_src_delta", kind="delta")
-def write_cpg_edges_by_src_delta(
-    cpg_edges_by_src_v1: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return metadata for the CPG edges-by-src output.
-
-    Returns
-    -------
-    JsonDict
-        Output metadata payload.
-    """
     return _delta_write(
-        cpg_edges_by_src_v1,
+        table,
         inputs=DeltaWriteInputs(
             runtime=output_runtime_context,
             plan=output_plan_context,
-            dataset_name="cpg_edges_by_src",
-            write_policy_override=(
-                _CPG_EDGES_BY_SRC_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
-    )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_edges_by_dst_delta", kind="delta")
-def write_cpg_edges_by_dst_delta(
-    cpg_edges_by_dst_v1: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return metadata for the CPG edges-by-dst output.
-
-    Returns
-    -------
-    JsonDict
-        Output metadata payload.
-    """
-    return _delta_write(
-        cpg_edges_by_dst_v1,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_edges_by_dst",
-            write_policy_override=(
-                _CPG_EDGES_BY_DST_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
-    )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_nodes_quality_delta", kind="delta")
-def write_cpg_nodes_quality_delta(
-    cpg_nodes: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return stub metadata for CPG node quality output.
-
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
-    """
-    return _delta_write(
-        cpg_nodes,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_nodes_quality",
-            plan_dataset_name="cpg_nodes",
-            write_policy_override=(
-                _CPG_NODES_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
-        ),
-    )
-
-
-@datasaver()
-@tag(layer="outputs", artifact="write_cpg_props_quality_delta", kind="delta")
-def write_cpg_props_quality_delta(
-    cpg_props: TableLike,
-    output_runtime_context: OutputRuntimeContext,
-    output_plan_context: OutputPlanContext,
-) -> DataSaverDict:
-    """Return stub metadata for CPG prop quality output.
-
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
-    """
-    return _delta_write(
-        cpg_props,
-        inputs=DeltaWriteInputs(
-            runtime=output_runtime_context,
-            plan=output_plan_context,
-            dataset_name="cpg_props_quality",
-            plan_dataset_name="cpg_props",
-            write_policy_override=(
-                _CPG_PROPS_WRITE_POLICY
-                if output_runtime_context.output_config.delta_write_policy is None
-                else None
-            ),
+            dataset_name=write_spec.dataset_name,
+            plan_dataset_name=write_spec.plan_dataset_name,
+            write_policy_override=write_override,
         ),
     )
 
@@ -1080,6 +1173,12 @@ def _run_manifest_output_payloads(
             "rows": primary.cpg_nodes.get("rows"),
         },
         {
+            "name": "cpg_nodes_quality",
+            "path": primary.cpg_nodes_quality.get("path"),
+            "delta_version": primary.cpg_nodes_quality.get("delta_version"),
+            "rows": primary.cpg_nodes_quality.get("rows"),
+        },
+        {
             "name": "cpg_edges",
             "path": primary.cpg_edges.get("path"),
             "delta_version": primary.cpg_edges.get("delta_version"),
@@ -1090,6 +1189,12 @@ def _run_manifest_output_payloads(
             "path": primary.cpg_props.get("path"),
             "delta_version": primary.cpg_props.get("delta_version"),
             "rows": primary.cpg_props.get("rows"),
+        },
+        {
+            "name": "cpg_props_quality",
+            "path": primary.cpg_props_quality.get("path"),
+            "delta_version": primary.cpg_props_quality.get("delta_version"),
+            "rows": primary.cpg_props_quality.get("rows"),
         },
         {
             "name": "cpg_props_map",
@@ -1205,6 +1310,7 @@ def _run_manifest_payload(
     delta_inputs_payload = _delta_inputs_payload(output_plan_context.plan_bundles_by_task)
     runtime_profile_spec = output_runtime_context.runtime_profile_spec
     artifact_ids = dict(output_plan_context.artifact_ids)
+    cache_context = output_runtime_context.cache_context
     return RunManifest(
         run_id=output_plan_context.run_id,
         status="completed",
@@ -1218,10 +1324,20 @@ def _run_manifest_payload(
         determinism_tier=runtime_profile_spec.determinism_tier.value,
         output_dir=output_dir,
         artifact_ids=artifact_ids or None,
+        cache_path=cache_context.cache_path,
+        cache_log_glob=cache_context.cache_log_glob,
+        cache_policy_profile=cache_context.cache_policy_profile,
+        cache_log_enabled=cache_context.cache_log_enabled,
+        materialized_outputs=output_plan_context.materialized_outputs,
     )
 
 
 def _run_manifest_table_payload(manifest: RunManifest) -> JsonDict:
+    materialized_outputs_msgpack = (
+        dumps_msgpack(to_builtins(manifest.materialized_outputs, str_keys=True))
+        if manifest.materialized_outputs is not None
+        else None
+    )
     return {
         "run_id": manifest.run_id,
         "status": manifest.status,
@@ -1235,6 +1351,11 @@ def _run_manifest_table_payload(manifest: RunManifest) -> JsonDict:
         "runtime_profile_hash": manifest.runtime_profile_hash,
         "determinism_tier": manifest.determinism_tier,
         "output_dir": manifest.output_dir,
+        "cache_path": manifest.cache_path,
+        "cache_log_glob": manifest.cache_log_glob,
+        "cache_policy_profile": manifest.cache_policy_profile,
+        "cache_log_enabled": manifest.cache_log_enabled,
+        "materialized_outputs_msgpack": materialized_outputs_msgpack,
     }
 
 
@@ -1391,14 +1512,7 @@ __all__ = [
     "cpg_edges",
     "cpg_nodes",
     "cpg_props",
-    "write_cpg_edges_by_dst_delta",
-    "write_cpg_edges_by_src_delta",
-    "write_cpg_edges_delta",
-    "write_cpg_nodes_delta",
-    "write_cpg_nodes_quality_delta",
-    "write_cpg_props_delta",
-    "write_cpg_props_map_delta",
-    "write_cpg_props_quality_delta",
+    "write_cpg_delta_output",
     "write_extract_error_artifacts_delta",
     "write_normalize_outputs_delta",
     "write_run_bundle_dir",

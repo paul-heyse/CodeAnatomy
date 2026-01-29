@@ -37,10 +37,15 @@ class _PlanTaskContext:
     bottom_level_costs: Mapping[str, float]
     slack_by_task: Mapping[str, float]
     critical_path_tasks: frozenset[str]
+    betweenness_centrality: Mapping[str, float]
+    dominators: Mapping[str, str | None]
+    bridge_task_counts: Mapping[str, int]
+    articulation_tasks: frozenset[str]
     plan_signature: str
 
     @classmethod
     def from_plan(cls, plan: ExecutionPlan) -> _PlanTaskContext:
+        bridge_task_counts = _bridge_task_counts(plan.diagnostics.bridge_edges)
         return cls(
             dependency_map=plan.dependency_map,
             plan_fingerprints=plan.plan_fingerprints,
@@ -50,6 +55,10 @@ class _PlanTaskContext:
             bottom_level_costs=plan.bottom_level_costs,
             slack_by_task=plan.slack_by_task,
             critical_path_tasks=frozenset(plan.critical_path_task_names),
+            betweenness_centrality=plan.diagnostics.betweenness_centrality or {},
+            dominators=plan.diagnostics.dominators or {},
+            bridge_task_counts=bridge_task_counts,
+            articulation_tasks=frozenset(plan.diagnostics.articulation_tasks or ()),
             plan_signature=plan.plan_signature,
         )
 
@@ -67,6 +76,10 @@ class _PlanTaskContext:
         bottom_cost = float(self.bottom_level_costs.get(task.name, task_cost))
         slack = float(self.slack_by_task.get(task.name, 0.0))
         on_critical_path = task.name in self.critical_path_tasks
+        centrality = float(self.betweenness_centrality.get(task.name, 0.0))
+        dominator = self.dominators.get(task.name)
+        bridge_edge_count = int(self.bridge_task_counts.get(task.name, 0))
+        is_articulation = task.name in self.articulation_tasks
         return TaskNodeContext(
             task=task,
             output_name=output_name,
@@ -80,6 +93,10 @@ class _PlanTaskContext:
             bottom_level_cost=bottom_cost,
             slack=slack,
             on_critical_path=on_critical_path,
+            betweenness_centrality=centrality,
+            immediate_dominator=dominator,
+            bridge_edge_count=bridge_edge_count,
+            is_articulation_task=is_articulation,
         )
 
 
@@ -155,6 +172,10 @@ class TaskNodeContext:
     bottom_level_cost: float
     slack: float
     on_critical_path: bool
+    betweenness_centrality: float
+    immediate_dominator: str | None
+    bridge_edge_count: int
+    is_articulation_task: bool
 
 
 def _build_task_node(context: TaskNodeContext) -> Callable[..., TableLike]:
@@ -256,6 +277,11 @@ def _decorate_task_node(
             bottom_level_cost=str(context.bottom_level_cost),
             slack=str(context.slack),
             on_critical_path=str(context.on_critical_path),
+            betweenness_centrality=str(context.betweenness_centrality),
+            immediate_dominator=str(context.immediate_dominator or ""),
+            bridge_edge_count=str(context.bridge_edge_count),
+            is_bridge_task=str(context.bridge_edge_count > 0),
+            is_articulation_task=str(context.is_articulation_task),
             plan_signature=context.plan_signature,
             plan_fingerprint=context.plan_fingerprint,
             plan_task_signature=context.plan_task_signature,
@@ -277,10 +303,23 @@ def _decorate_task_node(
         bottom_level_cost=str(context.bottom_level_cost),
         slack=str(context.slack),
         on_critical_path=str(context.on_critical_path),
+        betweenness_centrality=str(context.betweenness_centrality),
+        immediate_dominator=str(context.immediate_dominator or ""),
+        bridge_edge_count=str(context.bridge_edge_count),
+        is_bridge_task=str(context.bridge_edge_count > 0),
+        is_articulation_task=str(context.is_articulation_task),
         plan_signature=context.plan_signature,
         plan_fingerprint=context.plan_fingerprint,
         plan_task_signature=context.plan_task_signature,
     )(node_fn)
+
+
+def _bridge_task_counts(bridge_edges: Sequence[tuple[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for left, right in bridge_edges:
+        counts[left] = counts.get(left, 0) + 1
+        counts[right] = counts.get(right, 0) + 1
+    return counts
 
 
 __all__ = ["TaskExecutionModuleOptions", "build_task_execution_module"]

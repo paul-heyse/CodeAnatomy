@@ -391,6 +391,11 @@ class RunManifest(StructBaseCompat, frozen=True):
     determinism_tier: str | None
     output_dir: str | None
     artifact_ids: dict[str, str] | None = None
+    cache_path: str | None = None
+    cache_log_glob: str | None = None
+    cache_policy_profile: str | None = None
+    cache_log_enabled: bool | None = None
+    materialized_outputs: tuple[str, ...] | None = None
 
 
 class NormalizeOutputsArtifact(StructBaseCompat, frozen=True):
@@ -451,6 +456,10 @@ class PlanScheduleArtifact(StructBaseCompat, frozen=True):
     task_costs: dict[str, NonNegFloat]
     bottom_level_costs: dict[str, NonNegFloat]
     slack_by_task: dict[str, NonNegFloat] | None = None
+    task_centrality: dict[str, NonNegFloat] | None = None
+    task_dominators: dict[str, str | None] | None = None
+    bridge_edges: tuple[tuple[str, str], ...] = ()
+    articulation_tasks: tuple[str, ...] = ()
 
 
 class PlanScheduleEnvelope(ArtifactEnvelopeBase, tag="plan_schedule", frozen=True):

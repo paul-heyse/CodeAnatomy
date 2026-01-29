@@ -853,7 +853,8 @@ def _empty_props_df(ctx: SessionContext) -> DataFrame:
     DataFrame
         Empty DataFrame with properties schema.
     """
-    return ctx.sql("""
+    return ctx.sql_with_options(
+        """
         SELECT
             CAST(NULL AS VARCHAR) AS entity_kind,
             CAST(NULL AS VARCHAR) AS entity_id,
@@ -868,7 +869,9 @@ def _empty_props_df(ctx: SessionContext) -> DataFrame:
             CAST(NULL AS VARCHAR) AS task_name,
             CAST(NULL AS INTEGER) AS task_priority
         WHERE FALSE
-    """)
+        """,
+        sql_options_for_profile(None),
+    )
 
 
 def _source_columns_lookup_df(

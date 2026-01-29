@@ -20,6 +20,7 @@ from hamilton_pipeline.execution import ImpactStrategy
 from hamilton_pipeline.pipeline_types import (
     ExecutionMode,
     ExecutorConfig,
+    GraphAdapterConfig,
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
@@ -91,6 +92,7 @@ class GraphProductBuildRequest:
     product: GraphProduct = "cpg"
     execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
     executor_config: ExecutorConfig | None = None
+    graph_adapter_config: GraphAdapterConfig | None = None
 
     output_dir: PathLike | None = None
     work_dir: PathLike | None = None
@@ -113,6 +115,7 @@ class GraphProductBuildRequest:
 
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     overrides: Mapping[str, object] | None = None
+    use_materialize: bool = True
 
 
 def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildResult:
@@ -144,9 +147,11 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         incremental_impact_strategy=request.incremental_impact_strategy,
         execution_mode=request.execution_mode,
         executor_config=request.executor_config,
+        graph_adapter_config=request.graph_adapter_config,
         outputs=outputs,
         config=request.config,
         overrides=overrides or None,
+        use_materialize=request.use_materialize,
     )
 
     raw = execute_pipeline(repo_root=repo_root_path, options=options)

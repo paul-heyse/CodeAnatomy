@@ -22,6 +22,7 @@ from datafusion_engine.delta_store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
 )
+from datafusion_engine.plan_cache import PlanCacheEntry
 from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from serde_artifacts import DeltaInputPin, JsonValue, PlanArtifacts, PlanProtoStatus
@@ -319,7 +320,7 @@ def build_plan_bundle(
         options=resolved,
     )
 
-    return DataFusionPlanBundle(
+    bundle = DataFusionPlanBundle(
         df=df,
         logical_plan=components.logical,
         optimized_logical_plan=components.optimized,
@@ -334,6 +335,53 @@ def build_plan_bundle(
         required_rewrite_tags=components.required_rewrite_tags,
         plan_details=components.plan_details,
     )
+    _store_plan_cache_entry(
+        bundle=bundle,
+        runtime_profile=resolved.session_runtime.profile,
+    )
+    return bundle
+
+
+def _store_plan_cache_entry(
+    *,
+    bundle: DataFusionPlanBundle,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> None:
+    cache = runtime_profile.plan_proto_cache
+    if cache is None:
+        return
+    if bundle.plan_identity_hash is None:
+        return
+    artifacts = bundle.artifacts
+    entry = PlanCacheEntry(
+        plan_identity_hash=bundle.plan_identity_hash,
+        plan_fingerprint=bundle.plan_fingerprint,
+        substrait_bytes=bundle.substrait_bytes,
+        logical_plan_proto=_plan_proto_data(artifacts.logical_plan_proto),
+        optimized_plan_proto=_plan_proto_data(artifacts.optimized_plan_proto),
+        execution_plan_proto=_plan_proto_data(artifacts.execution_plan_proto),
+    )
+    cache.put(entry)
+
+
+def _plan_proto_data(
+    payload: LogicalPlanProtoBytes | OptimizedPlanProtoBytes | ExecutionPlanProtoBytes | None,
+) -> bytes | None:
+    """Return proto bytes from wrapped payloads.
+
+    Parameters
+    ----------
+    payload
+        Wrapped plan proto payload.
+
+    Returns
+    -------
+    bytes | None
+        Raw proto bytes when available.
+    """
+    if payload is None:
+        return None
+    return payload.data
 
 
 @dataclass(frozen=True)
@@ -1584,6 +1632,14 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
             ),
         )
     for name, location in runtime_profile.scip_dataset_locations.items():
+        locations.setdefault(
+            name,
+            apply_delta_store_policy(
+                cast("DatasetLocation", location),
+                policy=runtime_profile.delta_store_policy,
+            ),
+        )
+    for name, location in runtime_profile.normalize_dataset_locations().items():
         locations.setdefault(
             name,
             apply_delta_store_policy(

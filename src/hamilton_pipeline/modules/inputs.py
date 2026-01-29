@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
 
@@ -20,6 +20,7 @@ from extract.repo_scan import default_repo_scan_options, repo_scan_globs_from_op
 from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
 from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
 from hamilton_pipeline.pipeline_types import (
+    CacheRuntimeContext,
     OutputConfig,
     OutputStoragePolicy,
     RelspecConfig,
@@ -68,6 +69,26 @@ def _determinism_from_str(value: str) -> DeterminismTier | None:
     return mapping.get(value.strip().lower())
 
 
+def _cache_path_from_inputs(cache_path: str | None) -> str | None:
+    if isinstance(cache_path, str) and cache_path.strip():
+        return cache_path.strip()
+    for name in ("CODEANATOMY_HAMILTON_CACHE_PATH", "HAMILTON_CACHE_PATH"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _cache_policy_profile_from_inputs(cache_policy_profile: str | None) -> str | None:
+    if isinstance(cache_policy_profile, str) and cache_policy_profile.strip():
+        return cache_policy_profile.strip()
+    for name in ("CODEANATOMY_CACHE_POLICY_PROFILE", "HAMILTON_CACHE_POLICY_PROFILE"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
 @tag(layer="inputs", kind="runtime")
 def runtime_profile_name(runtime_profile_name_override: str | None = None) -> str:
     """Return the runtime profile name for execution.
@@ -107,10 +128,12 @@ def determinism_override(
     return _determinism_from_str(tier)
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def runtime_profile_spec(
     runtime_profile_name: str,
     determinism_override: DeterminismTier | None,
+    output_config: OutputConfig,
 ) -> RuntimeProfileSpec:
     """Return a resolved runtime profile spec.
 
@@ -119,7 +142,19 @@ def runtime_profile_spec(
     RuntimeProfileSpec
         Runtime profile spec with determinism overrides applied.
     """
-    return resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
+    resolved = resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
+    normalize_root = _normalize_output_root(output_config)
+    if normalize_root is None:
+        return resolved
+    updated_profile = replace(resolved.datafusion, normalize_output_root=normalize_root)
+    return replace(resolved, datafusion=updated_profile)
+
+
+def _normalize_output_root(output_config: OutputConfig) -> str | None:
+    base_dir = output_config.output_dir or output_config.work_dir
+    if not base_dir:
+        return None
+    return str(Path(base_dir) / "normalize")
 
 
 @cache(behavior="ignore")
@@ -529,6 +564,7 @@ class OutputConfigOverrides:
     output_storage_policy: OutputStoragePolicy | None = None
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="object")
 def output_config(
     work_dir: str | None,
@@ -566,6 +602,48 @@ def output_config(
         if overrides.delta is not None
         else None,
     )
+
+
+@cache(behavior="ignore")
+@tag(layer="inputs", kind="object")
+def cache_context(
+    *,
+    cache_path: str | None = None,
+    cache_log_to_file: bool | None = None,
+    cache_policy_profile: str | None = None,
+) -> CacheRuntimeContext:
+    """Return cache configuration details for run manifests.
+
+    Returns
+    -------
+    CacheRuntimeContext
+        Cache configuration snapshot for the run.
+    """
+    resolved_path = _cache_path_from_inputs(cache_path)
+    log_enabled = True if cache_log_to_file is None else bool(cache_log_to_file)
+    log_dir = resolved_path if log_enabled and resolved_path else None
+    log_glob = str(Path(log_dir) / "**" / "*.jsonl") if log_dir is not None else None
+    profile = _cache_policy_profile_from_inputs(cache_policy_profile)
+    return CacheRuntimeContext(
+        cache_path=resolved_path,
+        cache_log_dir=log_dir,
+        cache_log_glob=log_glob,
+        cache_policy_profile=profile,
+        cache_log_enabled=log_enabled,
+    )
+
+
+@cache(behavior="ignore")
+@tag(layer="inputs", kind="list")
+def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> tuple[str, ...]:
+    """Return the ordered list of materialized output nodes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered output node names targeted for materialization.
+    """
+    return tuple(str(name) for name in materialized_outputs or ())
 
 
 @tag(layer="inputs", kind="object")

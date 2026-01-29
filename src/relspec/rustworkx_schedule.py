@@ -41,6 +41,9 @@ class ScheduleCostContext:
     task_costs: Mapping[str, float] | None = None
     bottom_level_costs: Mapping[str, float] | None = None
     slack_by_task: Mapping[str, float] | None = None
+    betweenness_centrality: Mapping[str, float] | None = None
+    articulation_tasks: frozenset[str] | None = None
+    bridge_tasks: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -363,23 +366,41 @@ def _task_cost_value(task: TaskNode, *, cost_context: ScheduleCostContext) -> fl
     return float(max(task.priority, 1))
 
 
+def _task_centrality_value(task: TaskNode, *, cost_context: ScheduleCostContext) -> float:
+    centrality = cost_context.betweenness_centrality
+    if centrality is not None and task.name in centrality:
+        return float(max(centrality[task.name], 0.0))
+    return 0.0
+
+
+def _task_structural_bonus(task: TaskNode, *, cost_context: ScheduleCostContext) -> float:
+    bonus = 0.0
+    if cost_context.articulation_tasks is not None and task.name in cost_context.articulation_tasks:
+        bonus += 1.0
+    if cost_context.bridge_tasks is not None and task.name in cost_context.bridge_tasks:
+        bonus += 0.5
+    return bonus
+
+
 def _task_sort_key(
     task: TaskNode,
     *,
     cost_context: ScheduleCostContext,
-) -> tuple[float, float, str]:
+) -> tuple[float, float, float, str]:
     base_cost = _task_cost_value(task, cost_context=cost_context)
+    structural_bonus = _task_structural_bonus(task, cost_context=cost_context)
     bottom_cost = (
         cost_context.bottom_level_costs.get(task.name, base_cost)
         if cost_context.bottom_level_costs is not None
         else base_cost
     )
+    centrality = _task_centrality_value(task, cost_context=cost_context)
     slack = (
         cost_context.slack_by_task.get(task.name, 0.0)
         if cost_context.slack_by_task is not None
         else 0.0
     )
-    return (-float(bottom_cost), float(slack), task.name)
+    return (-float(bottom_cost + structural_bonus), -float(centrality), float(slack), task.name)
 
 
 __all__ = [

@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from datafusion_engine.sql_options import sql_options_for_profile
 from datafusion_engine.udf_runtime import rust_udf_snapshot, validate_rust_udf_snapshot
 
 if TYPE_CHECKING:
@@ -451,7 +452,10 @@ def _missing_return_types(
         Names of UDFs missing from information_schema routines.
     """
     try:
-        routines_df = ctx.sql("SELECT routine_name FROM information_schema.routines")
+        routines_df = ctx.sql_with_options(
+            "SELECT routine_name FROM information_schema.routines",
+            sql_options_for_profile(None),
+        )
         routines_table = routines_df.collect()
     except (RuntimeError, ValueError, TypeError):
         return list(udf_names)

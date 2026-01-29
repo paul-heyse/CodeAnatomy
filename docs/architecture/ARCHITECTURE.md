@@ -366,7 +366,11 @@ The CPG Build subsystem transforms normalized evidence into a queryable Code Pro
 - **Entity Family Specs**: Declarative node/property emission rules
 - **Hamilton DAG**: Dynamic module generation for task execution
 - **Execution Modes**: Explicit orchestration config via `ExecutionMode` + `ExecutorConfig`
+- **Graph Adapter Backends**: Optional Ray/Dask/Threadpool adapters for non-dynamic execution
+- **Async Driver**: Optional async execution path for IO‑bound workloads
 - **Plan Artifacts**: Schedule/validation msgspec envelopes linked in the run manifest
+- **Run Manifest Cache/Materialization**: Cache path/log glob + materialized output list recorded per run
+- **Schedule Intelligence**: Dominators, centrality, bridges, articulation points recorded and tagged
 
 ### CPG Output Schema
 

@@ -32,6 +32,14 @@ class ExecutorConfig:
 
 Execution routing uses plan-aware tags (task cost, slack, critical-path membership) to steer high-cost or scan workloads to remote executors (`src/hamilton_pipeline/execution_manager.py`). Dynamic scan units are enabled when the execution mode is parallel, and the scan-unit result mapping is ordered deterministically for stable downstream behavior (`src/hamilton_pipeline/modules/task_execution.py`).
 
+**Graph Adapter Backends + Async Execution**
+- `GraphAdapterConfig` enables non-dynamic backends (threadpool, Dask, Ray) for CPU-bound workloads (`src/hamilton_pipeline/driver_factory.py`).
+- `execute_pipeline_async(...)` uses Hamilton’s async driver for IO-bound workloads; dynamic execution and materializers are intentionally disabled in this mode (`src/hamilton_pipeline/execution.py`).
+
+**Schedule Intelligence**
+- rustworkx analytics (dominators, betweenness centrality, bridges, articulations) are computed during plan compilation and persisted in plan artifacts (`src/relspec/execution_plan.py`, `src/serde_artifacts.py`).
+- Task tags include these analytics so the Hamilton UI and diagnostics can surface single‑point‑of‑failure nodes and centrality hotspots (`src/hamilton_pipeline/task_module_builder.py`).
+
 ### Plan Schedule + Validation Artifacts
 
 Scheduling and edge validation diagnostics are emitted as msgspec envelopes and persisted to the Hamilton events v2 table (msgspec bytes). The run manifest stays lean and links to these artifacts by ID.
@@ -40,6 +48,22 @@ Scheduling and edge validation diagnostics are emitted as msgspec envelopes and 
 - **Artifact emission**: `src/hamilton_pipeline/lifecycle.py`
 - **Hamilton events v2 storage**: `src/datafusion_engine/plan_artifact_store.py`
 - **Artifact links in manifest**: `src/hamilton_pipeline/modules/outputs.py`
+
+Run manifests now include cache and materialization metadata (cache path/log glob + materialized output list) to make cache logs traceable to a specific run and output set.
+
+---
+
+## Telemetry, Cache Governance, and Tagging
+
+Hamilton UI tracking is configured through the runtime profile (or environment variables) and emits plan-aware tags for run provenance. Tracker endpoints (API/UI URLs) and identity metadata are configured per runtime profile, and tags include plan signatures, execution environment, determinism tier, and schedule analytics. Avoid embedding PII in tags; they are intended for filtering and diagnostics in the Hamilton UI.
+
+Cache governance is explicit. The cache path controls metadata/result stores and JSONL cache logs (`cache_log_glob`), while cache policy defaults enforce conservative reuse. The default profile disables saver behavior and recomputes loaders unless explicitly overridden. Use `cache_policy_profile`, `cache_default_behavior`, and `cache_default_*_behavior` to opt into reuse for safe nodes, and invalidate by changing the cache path or running with recompute/disable overrides. Run manifests link to cache log locations for auditability.
+
+Tag schema is enforced at the module builder. Every node is tagged with `layer`, `kind`, and `artifact` at minimum. Execution tasks also include `task_name`, `task_kind`, `cache_policy`, schedule indices, cost/slack metrics, plan signatures, and graph analytics (`betweenness_centrality`, `immediate_dominator`, `bridge_edge_count`, `is_bridge_task`, `is_articulation_task`). These tags drive UI catalog filtering and schedule diagnostics.
+
+## Backend Tradeoffs and Serialization
+
+Threadpool and multiprocessing adapters are local defaults. Dask and Ray enable distributed execution but require that inputs/outputs are serializable and that worker environments mirror local dependencies. Async execution is reserved for IO-bound paths; it disables dynamic scan units and materializers to keep ordering deterministic. Use Ray/Dask only for coarse-grained tasks with picklable payloads and stable worker environments.
 
 ---
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-from hamilton.function_modifiers import cache, extract_fields, tag
+from hamilton.function_modifiers import cache, check_output, extract_fields, tag
 
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.modules import task_execution
@@ -19,6 +19,7 @@ from relspec.execution_plan import (
     downstream_task_closure,
     upstream_task_closure,
 )
+from relspec.graph_edge_validation import validate_graph_edges
 
 if TYPE_CHECKING:
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -258,6 +259,7 @@ def _plan_signature_value_node(plan_signature: str) -> object:
 
 def _plan_artifacts_node() -> object:
     @tag(layer="plan", artifact="plan_artifacts", kind="mapping")
+    @check_output(data_type=dict, importance="fail")
     @extract_fields(
         {
             "plan_task_dependency_signature": str,
@@ -273,6 +275,12 @@ def _plan_artifacts_node() -> object:
             "plan_scan_file_candidate_count": int,
             "plan_task_signature_count": int,
             "plan_session_runtime_hash": str | None,
+            "plan_total_edges": int,
+            "plan_valid_edges": int,
+            "plan_invalid_edges": int,
+            "plan_total_tasks": int,
+            "plan_valid_tasks": int,
+            "plan_invalid_tasks": int,
         }
     )
     def plan_artifacts(execution_plan: ExecutionPlan) -> dict[str, object]:
@@ -285,6 +293,12 @@ def _plan_artifacts_node() -> object:
             len(unit.candidate_files) for unit in execution_plan.scan_units
         )
         plan_task_signature_count = len(execution_plan.plan_task_signatures)
+        summary = execution_plan.task_schedule.validation_summary
+        if summary is None:
+            summary = validate_graph_edges(
+                execution_plan.task_graph,
+                catalog=execution_plan.evidence.clone(),
+            )
         return {
             "plan_task_dependency_signature": (execution_plan.task_dependency_signature),
             "plan_reduced_task_dependency_signature": (
@@ -301,6 +315,12 @@ def _plan_artifacts_node() -> object:
             "plan_scan_file_candidate_count": scan_file_candidate_count,
             "plan_task_signature_count": plan_task_signature_count,
             "plan_session_runtime_hash": execution_plan.session_runtime_hash,
+            "plan_total_edges": summary.total_edges,
+            "plan_valid_edges": summary.valid_edges,
+            "plan_invalid_edges": summary.invalid_edges,
+            "plan_total_tasks": summary.total_tasks,
+            "plan_valid_tasks": summary.valid_tasks,
+            "plan_invalid_tasks": summary.invalid_tasks,
         }
 
     return plan_artifacts
@@ -308,6 +328,7 @@ def _plan_artifacts_node() -> object:
 
 def _plan_artifact_ids_node() -> object:
     @tag(layer="plan", artifact="plan_artifact_ids", kind="mapping")
+    @check_output(data_type=Mapping, importance="fail")
     def plan_artifact_ids(
         execution_plan: ExecutionPlan,
         run_id: str | None = None,

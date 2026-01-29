@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from hamilton.function_modifiers import dataloader, tag
+from hamilton.function_modifiers import dataloader, inject, resolve_from_config, source, tag
 
 from datafusion_engine.arrow_interop import TableLike
 from engine.runtime_profile import RuntimeProfileSpec
@@ -178,7 +178,26 @@ def scip_tables(
     return tables, metadata
 
 
+@tag(layer="inputs", artifact="scip_tables_empty", kind="catalog")
+def empty_scip_tables() -> Mapping[str, TableLike]:
+    """Return an empty SCIP table mapping for repo-only runs.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Empty mapping placeholder.
+    """
+    return {}
+
+
 @tag(layer="inputs", artifact="source_catalog_inputs", kind="catalog")
+@resolve_from_config(
+    decorate_with=lambda source_catalog_mode="full": inject(
+        scip_tables=source("empty_scip_tables")
+        if source_catalog_mode == "repo_only"
+        else source("scip_tables")
+    )
+)
 def source_catalog_inputs(
     repo_files: TableLike,
     scip_tables: Mapping[str, TableLike],
@@ -196,6 +215,7 @@ def source_catalog_inputs(
 
 
 __all__ = [
+    "empty_scip_tables",
     "repo_files",
     "scip_index_path",
     "scip_tables",

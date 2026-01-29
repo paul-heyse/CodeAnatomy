@@ -60,7 +60,7 @@ class ViewNode:
         Required UDF names for this view.
     plan_bundle : DataFusionPlanBundle | None
         DataFusion plan bundle (preferred source of truth for lineage).
-    cache_policy : Literal["none", "memory", "delta_staging"]
+    cache_policy : Literal["none", "memory", "delta_staging", "delta_output"]
         Cache policy for view materialization.
     """
 
@@ -70,7 +70,7 @@ class ViewNode:
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
     plan_bundle: DataFusionPlanBundle | None = None
-    cache_policy: Literal["none", "memory", "delta_staging"] = "none"
+    cache_policy: Literal["none", "memory", "delta_staging", "delta_output"] = "none"
 
 
 class SchemaContractViolationError(ValueError):
@@ -287,6 +287,51 @@ def _register_view_with_cache(
             cache,
             node=node,
             cache_path=staging_path,
+            status="cached",
+            hit=None,
+        )
+        return ctx.table(node.name)
+    if node.cache_policy == "delta_output":
+        if cache.runtime.runtime_profile is None:
+            msg = "Delta output cache requires a runtime profile."
+            raise ValueError(msg)
+        location = cache.runtime.runtime_profile.dataset_location(node.name)
+        if location is None:
+            msg = f"Delta output cache missing dataset location for {node.name!r}."
+            raise ValueError(msg)
+        target_path = str(location.path)
+        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.write_pipeline import (
+            WriteFormat,
+            WriteMode,
+            WritePipeline,
+            WriteRequest,
+        )
+
+        pipeline = WritePipeline(ctx, runtime_profile=cache.runtime.runtime_profile)
+        plan_bundle = node.plan_bundle
+        plan_fingerprint = plan_bundle.plan_fingerprint if plan_bundle is not None else None
+        plan_identity_hash = plan_bundle.plan_identity_hash if plan_bundle is not None else None
+        pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=target_path,
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                plan_fingerprint=plan_fingerprint,
+                plan_identity_hash=plan_identity_hash,
+            )
+        )
+        register_dataset_df(
+            ctx,
+            name=node.name,
+            location=location,
+            runtime_profile=cache.runtime.runtime_profile,
+        )
+        _record_cache_artifact(
+            cache,
+            node=node,
+            cache_path=target_path,
             status="cached",
             hit=None,
         )

@@ -265,6 +265,21 @@ class DeltaSchemaRequest:
 
 
 @dataclass(frozen=True)
+class DeltaReadRequest:
+    """Inputs required to read a Delta table with optional time travel."""
+
+    path: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    version: int | None = None
+    timestamp: str | None = None
+    columns: Sequence[str] | None = None
+    predicate: str | None = None
+    gate: DeltaFeatureGate | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
+
+
+@dataclass(frozen=True)
 class DeltaDeleteWhereRequest:
     """Inputs required to delete rows from a Delta table."""
 
@@ -384,6 +399,59 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         if isinstance(resolved, pa.Schema):
             return resolved
     return None
+
+
+def read_delta_table(request: DeltaReadRequest) -> TableLike:
+    """Read a Delta table at a specific version or timestamp.
+
+    Returns
+    -------
+    TableLike
+        Arrow Table containing the requested Delta snapshot.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Delta provider is unavailable or the request is invalid.
+    """
+    if request.version is not None and request.timestamp is not None:
+        msg = "Delta read request must set either version or timestamp, not both."
+        raise ValueError(msg)
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    ctx = _runtime_profile_ctx(request.runtime_profile)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaProviderRequest,
+            delta_provider_from_session,
+        )
+
+        bundle = delta_provider_from_session(
+            ctx,
+            request=DeltaProviderRequest(
+                table_uri=request.path,
+                storage_options=storage or None,
+                version=request.version,
+                timestamp=request.timestamp,
+                delta_scan=None,
+                gate=request.gate,
+            ),
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Delta read provider request failed: {exc}"
+        raise ValueError(msg) from exc
+    df = ctx.read_table(bundle.provider)
+    if request.predicate:
+        try:
+            predicate_expr = df.parse_sql_expr(request.predicate)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta read predicate parse failed: {exc}"
+            raise ValueError(msg) from exc
+        df = df.filter(predicate_expr)
+    if request.columns:
+        from datafusion import col
+
+        df = df.select(*(col(name) for name in request.columns))
+    return cast("TableLike", df.to_arrow_table())
 
 
 def delta_table_features(
@@ -2652,6 +2720,7 @@ __all__ = [
     "DeltaDeleteWhereRequest",
     "DeltaFeatureMutationOptions",
     "DeltaMergeArrowRequest",
+    "DeltaReadRequest",
     "DeltaSchemaRequest",
     "DeltaVacuumOptions",
     "DeltaWriteOptions",
@@ -2697,6 +2766,7 @@ __all__ = [
     "enable_delta_vacuum_protocol_check",
     "idempotent_commit_properties",
     "read_delta_cdf",
+    "read_delta_table",
     "vacuum_delta",
     "write_delta_table",
 ]

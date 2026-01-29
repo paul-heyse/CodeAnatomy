@@ -77,6 +77,13 @@ def _plan_schedule_payload(*, plan: ExecutionPlan, run_id: str) -> PlanScheduleA
     slack_by_task = {
         name: float(max(slack, 0.0)) for name, slack in sorted(plan.slack_by_task.items())
     }
+    centrality_raw = plan.diagnostics.betweenness_centrality or {}
+    task_centrality = {
+        name: float(max(score, 0.0)) for name, score in sorted(centrality_raw.items())
+    }
+    dominators = dict(sorted((plan.diagnostics.dominators or {}).items()))
+    bridge_edges = tuple(plan.diagnostics.bridge_edges)
+    articulation_tasks = tuple(plan.diagnostics.articulation_tasks)
     return PlanScheduleArtifact(
         run_id=run_id,
         plan_signature=plan.plan_signature,
@@ -89,6 +96,10 @@ def _plan_schedule_payload(*, plan: ExecutionPlan, run_id: str) -> PlanScheduleA
         task_costs=task_costs,
         bottom_level_costs=bottom_level_costs,
         slack_by_task=slack_by_task,
+        task_centrality=task_centrality,
+        task_dominators=dominators,
+        bridge_edges=bridge_edges,
+        articulation_tasks=articulation_tasks,
     )
 
 

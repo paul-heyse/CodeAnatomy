@@ -715,7 +715,7 @@ def persist_hamilton_events(
             normalized = _normalized_event_payload(payload)
             event_time_unix_ms = _event_time_unix_ms(normalized)
             payload_msgpack = _event_payload_msgpack(normalized)
-            payload_hash = _payload_hash_bytes(payload_msgpack)
+            payload_hash = hash_sha256_hex(payload_msgpack)
             rows.append(
                 HamiltonEventRow(
                     event_time_unix_ms=event_time_unix_ms,
@@ -807,7 +807,7 @@ def build_plan_artifact_row(
         scan_payload=scan_payload,
         scan_keys_payload=scan_keys_payload,
     )
-    plan_identity_hash = _payload_hash(plan_identity_payload)
+    plan_identity_hash = hash_json_default(plan_identity_payload)
     udf_ok, udf_detail = _udf_compatibility(ctx, request.bundle)
     plan_details_payload = _plan_details_payload(
         request.bundle,
@@ -1329,20 +1329,11 @@ def _plan_details_payload(
     plan_identity_hash: str,
 ) -> Mapping[str, object]:
     base_details = dict(bundle.plan_details)
-    base_details["delta_inputs_hash"] = _payload_hash(delta_inputs_payload)
-    base_details["scan_units_hash"] = _payload_hash(scan_payload)
-    base_details["df_settings_hash"] = _payload_hash(bundle.artifacts.df_settings)
+    base_details["delta_inputs_hash"] = hash_json_default(delta_inputs_payload)
+    base_details["scan_units_hash"] = hash_json_default(scan_payload)
+    base_details["df_settings_hash"] = hash_json_default(bundle.artifacts.df_settings)
     base_details["plan_identity_hash"] = plan_identity_hash
     return base_details
-
-
-def _payload_hash(payload: object) -> str:
-    _ = to_builtins
-    return hash_json_default(payload)
-
-
-def _payload_hash_bytes(payload: bytes) -> str:
-    return hash_sha256_hex(payload)
 
 
 def _udf_compatibility(

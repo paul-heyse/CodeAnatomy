@@ -502,6 +502,8 @@ Some legacy files and helpers should be removed only after the new scope system 
 
 ## Scope 9 — Materialize `python_imports_v1` (physical dataset)
 
+**Status**: Complete.
+
 ### Why
 The `python_imports` view is convenient but recomputed and ephemeral. A physical dataset provides a stable, cacheable import graph for reuse across runs, better diffability, and simpler downstream consumption.
 
@@ -540,15 +542,17 @@ def extract_python_imports(
 - None (retain `python_imports` view as a thin wrapper over `python_imports_v1` for compatibility).
 
 ### Implementation Checklist
-- [ ] Introduce `extract_python_imports` and materialize `python_imports_v1`.
-- [ ] Add schema + metadata entries for `python_imports_v1` with stable fields.
-- [ ] Update `python_external` to depend on `python_imports_v1` by default.
-- [ ] Keep `python_imports` view as alias to the physical dataset (or select from it).
-- [ ] Add cache key updates where needed to include import graph when materialized.
+- [x] Introduce `extract_python_imports` and materialize `python_imports_v1`.
+- [x] Add schema + metadata entries for `python_imports_v1` with stable fields.
+- [x] Make `python_imports` view prefer `python_imports_v1`, so `python_external` reads the materialized dataset when available.
+- [x] Keep `python_imports` view as alias to the physical dataset (or select from it).
+- [x] Confirm no additional cache key updates required (no dedicated import-graph cache layer).
 
 ---
 
 ## Scope 10 — Submodule + Worktree Traversal (explicit, repo-aware)
+
+**Status**: Complete.
 
 ### Why
 `include_submodules` / `include_worktrees` are currently configuration knobs without traversal logic. In multi-repo codebases, this leaves scope gaps and makes the resulting scope inaccurate versus a developer’s actual edit surface.
@@ -576,16 +580,18 @@ def iter_scoped_repo_roots(scope: RepoScope) -> list[Path]:
 - None (existing submodule helpers are reused and extended).
 
 ### Implementation Checklist
-- [ ] Implement `discover_submodule_roots()` based on `.gitmodules` and pygit2.
-- [ ] Implement `discover_worktree_roots()` using pygit2 worktree metadata.
-- [ ] Build per-root `RepoScope` and merge into a multi-root scan bundle.
-- [ ] Prefix paths in the scope manifest with the submodule/worktree-relative root.
-- [ ] Ensure `repo.path_is_ignored` uses the correct repo for each root.
-- [ ] Emit per-root scope stats, preserving root identity in telemetry.
+- [x] Implement `discover_submodule_roots()` based on `.gitmodules` and pygit2.
+- [x] Implement `discover_worktree_roots()` using pygit2 worktree metadata.
+- [x] Build per-root `RepoScope` and merge into a multi-root scan bundle.
+- [x] Prefix paths in the scope manifest with the submodule/worktree-relative root.
+- [x] Ensure `repo.path_is_ignored` uses the correct repo for each root.
+- [x] Emit per-root scope stats, preserving root identity in telemetry.
 
 ---
 
 ## Scope 11 — Pathspec Trace Telemetry (detailed_match_files payloads)
+
+**Status**: Complete.
 
 ### Why
 We already track pathspec match counts. Detailed trace payloads make it possible to debug why a given path was included/excluded, enabling richer diagnostics and targeted rule fixes.
@@ -610,7 +616,7 @@ record_artifact(profile, "repo_scope_trace_v1", {
 - None.
 
 ### Implementation Checklist
-- [ ] Add optional trace capture (with sampling) using `detailed_match_files`.
-- [ ] Emit `repo_scope_trace_v1` with include/exclude pattern traces.
-- [ ] Keep trace payload size bounded (sample limits + top-N patterns).
-- [ ] Add config flags for enabling trace diagnostics.
+- [x] Add optional trace capture (with sampling) using `detailed_match_files`.
+- [x] Emit `repo_scope_trace_v1` with include/exclude pattern traces.
+- [x] Keep trace payload size bounded (sample limits + top-N patterns).
+- [x] Add config flags for enabling trace diagnostics.

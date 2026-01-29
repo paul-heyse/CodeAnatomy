@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -14,6 +14,7 @@ from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.scan_profile import build_delta_scan_config
+from utils.registry_protocol import Registry
 
 if TYPE_CHECKING:
     from schema_spec.system import (
@@ -59,19 +60,19 @@ class DatasetLocation:
 
 
 @dataclass(frozen=True)
-class DatasetCatalog:
+class DatasetCatalog(Registry[str, DatasetLocation]):
     """Map dataset names to locations for DataFusion registration."""
 
     _locs: dict[str, DatasetLocation] = field(default_factory=dict)
 
-    def register(self, name: str, location: DatasetLocation) -> None:
+    def register(self, key: str, value: DatasetLocation) -> None:
         """Register a dataset location.
 
         Parameters
         ----------
-        name:
+        key:
             Dataset name.
-        location:
+        value:
             Location metadata.
 
         Raises
@@ -79,17 +80,17 @@ class DatasetCatalog:
         ValueError
             Raised when the dataset name is empty.
         """
-        if not name:
+        if not key:
             msg = "DatasetCatalog.register: name must be non-empty."
             raise ValueError(msg)
-        self._locs[name] = location
+        self._locs[key] = value
 
-    def get(self, name: str) -> DatasetLocation:
+    def get(self, key: str) -> DatasetLocation:
         """Return a registered dataset location.
 
         Parameters
         ----------
-        name:
+        key:
             Dataset name.
 
         Returns
@@ -102,10 +103,10 @@ class DatasetCatalog:
         KeyError
             Raised when the dataset name is not registered.
         """
-        if name not in self._locs:
-            msg = f"DatasetCatalog: unknown dataset {name!r}."
+        if key not in self._locs:
+            msg = f"DatasetCatalog: unknown dataset {key!r}."
             raise KeyError(msg)
-        return self._locs[name]
+        return self._locs[key]
 
     def has(self, name: str) -> bool:
         """Return whether a dataset name is registered.
@@ -121,6 +122,41 @@ class DatasetCatalog:
             ``True`` when the dataset is registered.
         """
         return name in self._locs
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a dataset name is registered.
+
+        Parameters
+        ----------
+        key
+            Dataset name.
+
+        Returns
+        -------
+        bool
+            ``True`` when the dataset is registered.
+        """
+        return key in self._locs
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered dataset names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator of registered dataset names.
+        """
+        return iter(self._locs)
+
+    def __len__(self) -> int:
+        """Return the number of registered datasets.
+
+        Returns
+        -------
+        int
+            Count of registered datasets.
+        """
+        return len(self._locs)
 
     def names(self) -> list[str]:
         """Return registered dataset names in sorted order.

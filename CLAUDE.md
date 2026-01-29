@@ -106,6 +106,31 @@ Dependencies are automatically inferred from DataFusion plan lineage. No manual 
 from __future__ import annotations
 ```
 
+## Consolidated Utilities
+
+Use the shared utilities before introducing new helpers:
+
+- `src/utils/hashing.py` - Explicit, semantics-preserving hash helpers (msgpack, JSON, storage options).
+- `src/utils/env_utils.py` - Canonical environment parsing helpers for bool/int/float/string.
+- `src/utils/storage_options.py` - Normalization + merge helpers for storage/log storage options.
+- `src/utils/registry_protocol.py` - Registry protocol + `MutableRegistry`/`ImmutableRegistry`.
+- `src/datafusion_engine/hash_utils.py` - Thin re-export wrapper for DataFusion callers.
+
+## Configuration + Registry Conventions
+
+**Config naming**
+- `Policy`: runtime behavior control (e.g., `DeltaWritePolicy`)
+- `Settings`: initialization parameters (e.g., `DiskCacheSettings`)
+- `Config`: request/command parameters (e.g., `OtelConfig`)
+- `Spec`: declarative schema definitions (e.g., `TableSpec`)
+- `Options`: optional parameter bundles (e.g., `CompileOptions`)
+
+**Registry usage**
+- Prefer `Registry` protocol types for simple key/value registries.
+- Use `ImmutableRegistry` for static module-level registries.
+- Use `MutableRegistry` only when registry behavior is pure key/value.
+- Avoid forcing inheritance for rich registries (`ProviderRegistry`, `ParamTableRegistry`, etc.).
+
 ## Test Markers
 
 - `@pytest.mark.smoke` - Fast sanity checks

@@ -51,6 +51,7 @@ from datafusion_engine.expr_udf_shims import arrow_metadata
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
@@ -3076,7 +3077,8 @@ def _validate_required_functions(
     if not available:
         errors["datafusion_functions"] = "information_schema.routines returned no entries."
         return
-    missing = sorted(name for name in required if name.lower() not in available)
+    missing_lower = find_missing([name.lower() for name in required], available)
+    missing = sorted(name for name in required if name.lower() in missing_lower)
     if missing:
         errors["datafusion_functions"] = f"Missing required functions: {missing}."
 
@@ -3235,7 +3237,8 @@ def _signature_errors(
     required: Mapping[str, int],
     counts: Mapping[str, int],
 ) -> dict[str, list[str]]:
-    missing = [name for name in required if name.lower() not in counts]
+    missing_lower = find_missing([name.lower() for name in required], counts)
+    missing = [name for name in required if name.lower() in missing_lower]
     mismatched = _mismatched_signatures(required, counts)
     details: dict[str, list[str]] = {}
     if missing:

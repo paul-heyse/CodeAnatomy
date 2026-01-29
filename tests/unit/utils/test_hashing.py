@@ -17,6 +17,7 @@ from utils.hashing import (
     hash_json_stdlib,
     hash_msgpack_canonical,
     hash_msgpack_default,
+    hash_settings,
     hash_sha256_hex,
     hash_storage_options,
 )
@@ -76,6 +77,14 @@ def test_hash_storage_options_matches_stdlib_json() -> None:
     payload = {"storage": storage, "log_storage": log_storage}
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     assert hash_storage_options(storage, log_storage) == expected
+
+
+def test_hash_settings_matches_legacy_payload() -> None:
+    """Verify settings hashing matches legacy sorted payload semantics."""
+    settings = {"b": "2", "a": "1"}
+    payload = tuple(sorted(settings.items()))
+    expected = hashlib.sha256(MSGPACK_ENCODER.encode(payload)).hexdigest()
+    assert hash_settings(settings) == expected
 
 
 def test_hash_file_sha256(tmp_path: Path) -> None:

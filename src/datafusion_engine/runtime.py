@@ -8,8 +8,7 @@ import logging
 import os
 import sys
 import time
-import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -43,13 +42,9 @@ from cache.diskcache_factory import (
     run_profile_maintenance,
 )
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import (
-    RecordBatchReaderLike,
-    SchemaLike,
-    TableLike,
-    coerce_table_like,
-)
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.arrow_schema.metadata import schema_constraints_from_metadata
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
@@ -57,6 +52,11 @@ from datafusion_engine.compile_options import (
     DataFusionSqlPolicy,
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
+)
+from datafusion_engine.config_helpers import (
+    apply_bool_config,
+    apply_int_config,
+    apply_optional_setting,
 )
 from datafusion_engine.delta_protocol import DeltaProtocolSupport
 from datafusion_engine.delta_store_policy import (
@@ -93,12 +93,15 @@ from datafusion_engine.schema_registry import (
     validate_semantic_types,
     validate_udf_info_schema_parity,
 )
+from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
 from storage.ipc_utils import payload_hash
+from utils.registry_protocol import Registry
+from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -747,10 +750,22 @@ class DataFusionPlanCollector:
 
 
 @dataclass
-class DataFusionViewRegistry:
+class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
     """Record DataFusion view artifacts for reproducibility."""
 
     entries: dict[str, DataFusionViewArtifact] = field(default_factory=dict)
+
+    def register(self, key: str, value: DataFusionViewArtifact) -> None:
+        """Register a view artifact by name.
+
+        Parameters
+        ----------
+        key
+            View name.
+        value
+            View artifact payload for the registry.
+        """
+        self.entries[key] = value
 
     def record(self, *, name: str, artifact: DataFusionViewArtifact) -> None:
         """Record a view artifact by name.
@@ -762,7 +777,57 @@ class DataFusionViewRegistry:
         artifact
             View artifact payload for the registry.
         """
-        self.entries[name] = artifact
+        self.register(name, artifact)
+
+    def get(self, key: str) -> DataFusionViewArtifact | None:
+        """Return a view artifact when present.
+
+        Parameters
+        ----------
+        key
+            View name.
+
+        Returns
+        -------
+        DataFusionViewArtifact | None
+            View artifact when registered, otherwise ``None``.
+        """
+        return self.entries.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a view artifact is registered.
+
+        Parameters
+        ----------
+        key
+            View name.
+
+        Returns
+        -------
+        bool
+            ``True`` when the view is registered.
+        """
+        return key in self.entries
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered view names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator of registered view names.
+        """
+        return iter(self.entries)
+
+    def __len__(self) -> int:
+        """Return the number of registered views.
+
+        Returns
+        -------
+        int
+            Count of registered views.
+        """
+        return len(self.entries)
 
     def snapshot(self) -> list[dict[str, object]]:
         """Return a stable snapshot of registered view artifacts.
@@ -1338,80 +1403,6 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_arrow_table(name, table)
-
-
-def _apply_config_int(
-    config: SessionConfig,
-    *,
-    method: str,
-    key: str,
-    value: int,
-) -> SessionConfig:
-    updater = getattr(config, method, None)
-    if callable(updater):
-        return cast("SessionConfig", updater(value))
-    setter = getattr(config, "set", None)
-    if callable(setter):
-        return cast("SessionConfig", setter(key, str(value)))
-    return config
-
-
-def _apply_optional_int_config(
-    config: SessionConfig,
-    *,
-    method: str,
-    key: str,
-    value: int | None,
-) -> SessionConfig:
-    if value is None:
-        return config
-    return _apply_config_int(config, method=method, key=key, value=int(value))
-
-
-def _apply_optional_int_setting(
-    config: SessionConfig,
-    *,
-    key: str,
-    value: int | None,
-) -> SessionConfig:
-    if value is None:
-        return config
-    setter = getattr(config, "set", None)
-    if callable(setter):
-        return cast("SessionConfig", setter(key, str(int(value))))
-    return config
-
-
-def _apply_optional_bool_config(
-    config: SessionConfig,
-    *,
-    method: str,
-    key: str,
-    value: bool | None,
-) -> SessionConfig:
-    if value is None:
-        return config
-    updater = getattr(config, method, None)
-    if callable(updater):
-        return cast("SessionConfig", updater(value))
-    setter = getattr(config, "set", None)
-    if callable(setter):
-        return cast("SessionConfig", setter(key, str(value).lower()))
-    return config
-
-
-def _apply_optional_bool_setting(
-    config: SessionConfig,
-    *,
-    key: str,
-    value: bool | None,
-) -> SessionConfig:
-    if value is None:
-        return config
-    setter = getattr(config, "set", None)
-    if callable(setter):
-        return cast("SessionConfig", setter(key, str(value).lower()))
-    return config
 
 
 def _apply_config_policy(
@@ -3169,57 +3160,57 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             config,
             enable_ident_normalization=_effective_ident_normalization(self),
         )
-        config = _apply_optional_int_config(
+        config = apply_int_config(
             config,
             method="with_target_partitions",
             key="datafusion.execution.target_partitions",
             value=self.target_partitions,
         )
-        config = _apply_optional_int_config(
+        config = apply_int_config(
             config,
             method="with_batch_size",
             key="datafusion.execution.batch_size",
             value=self.batch_size,
         )
-        config = _apply_optional_bool_config(
+        config = apply_bool_config(
             config,
             method="with_repartition_aggregations",
             key="datafusion.optimizer.repartition_aggregations",
             value=self.repartition_aggregations,
         )
-        config = _apply_optional_bool_config(
+        config = apply_bool_config(
             config,
             method="with_repartition_windows",
             key="datafusion.optimizer.repartition_windows",
             value=self.repartition_windows,
         )
-        config = _apply_optional_bool_config(
+        config = apply_bool_config(
             config,
             method="with_repartition_file_scans",
             key="datafusion.execution.repartition_file_scans",
             value=self.repartition_file_scans,
         )
-        config = _apply_optional_int_setting(
+        config = apply_optional_setting(
             config,
             key="datafusion.execution.repartition_file_min_size",
             value=self.repartition_file_min_size,
         )
-        config = _apply_optional_int_setting(
+        config = apply_optional_setting(
             config,
             key="datafusion.execution.minimum_parallel_output_files",
             value=self.minimum_parallel_output_files,
         )
-        config = _apply_optional_int_setting(
+        config = apply_optional_setting(
             config,
             key="datafusion.execution.soft_max_rows_per_output_file",
             value=self.soft_max_rows_per_output_file,
         )
-        config = _apply_optional_int_setting(
+        config = apply_optional_setting(
             config,
             key="datafusion.execution.maximum_parallel_row_group_writers",
             value=self.maximum_parallel_row_group_writers,
         )
-        config = _apply_optional_int_setting(
+        config = apply_optional_setting(
             config,
             key="datafusion.execution.objectstore_writer_buffer_size",
             value=self.objectstore_writer_buffer_size,
@@ -3972,7 +3963,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if major is None:
                 blocked_by_version.append(view)
                 continue
-            missing = [name for name in required if name not in functions]
+            missing = find_missing(required, functions)
             if missing:
                 missing_functions[view] = missing
                 continue
@@ -6231,20 +6222,9 @@ def align_table_to_schema(
         Table aligned to the provided schema.
     """
     resolved_schema = pa.schema(schema)
-    resolved = coerce_table_like(table)
-    resolved_table: pa.Table
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("pa.RecordBatchReader", resolved)
-        resolved_table = cast("pa.Table", reader.read_all())
-    else:
-        resolved_table = cast("pa.Table", resolved)
+    resolved_table = to_arrow_table(table)
     session = ctx or DataFusionRuntimeProfile().session_context()
-    temp_name = f"__schema_align_{uuid.uuid4().hex}"
-    from_arrow = getattr(session, "from_arrow", None)
-    if not callable(from_arrow):
-        msg = "SessionContext does not support from_arrow ingestion."
-        raise NotImplementedError(msg)
-    from_arrow(resolved_table, name=temp_name)
+    temp_name = register_temp_table(session, resolved_table, prefix="__schema_align_")
     try:
         selections = _align_projection_exprs(
             schema=resolved_schema,
@@ -6253,10 +6233,7 @@ def align_table_to_schema(
         )
         aligned = session.table(temp_name).select(*selections).to_arrow_table()
     finally:
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister = getattr(session, "deregister_table", None)
-            if callable(deregister):
-                deregister(temp_name)
+        deregister_table(session, temp_name)
     return _apply_table_schema_metadata(
         aligned,
         schema=resolved_schema,

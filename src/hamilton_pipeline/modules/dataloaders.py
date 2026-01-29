@@ -67,6 +67,9 @@ def _repo_scan_options(
         diff_base_ref=config.diff_base_ref,
         diff_head_ref=config.diff_head_ref,
         changed_only=config.changed_only,
+        record_pathspec_trace=config.record_pathspec_trace,
+        pathspec_trace_limit=config.pathspec_trace_limit,
+        pathspec_trace_pattern_limit=config.pathspec_trace_pattern_limit,
     )
 
 

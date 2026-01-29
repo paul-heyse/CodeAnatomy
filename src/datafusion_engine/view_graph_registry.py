@@ -34,6 +34,7 @@ from datafusion_engine.view_artifacts import (
 )
 from serde_artifacts import ViewCacheArtifact, ViewCacheArtifactEnvelope
 from serde_msgspec import convert, to_builtins
+from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage_datafusion import LineageReport
@@ -385,7 +386,8 @@ def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
     if not required_udfs:
         return
     available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
-    missing = [name for name in required_udfs if name.lower() not in available]
+    missing_lower = find_missing([name.lower() for name in required_udfs], available)
+    missing = [name for name in required_udfs if name.lower() in missing_lower]
     if missing:
         msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
         raise ValueError(msg)
@@ -585,7 +587,8 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         name = row.get("function_name") or row.get("routine_name") or row.get("name")
         if isinstance(name, str):
             available.add(name.lower())
-    missing = [name for name in required if name.lower() not in available]
+    missing_lower = find_missing([name.lower() for name in required], available)
+    missing = [name for name in required if name.lower() in missing_lower]
     if missing:
         msg = f"information_schema missing required functions: {sorted(missing)}."
         raise ValueError(msg)

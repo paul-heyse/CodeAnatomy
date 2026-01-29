@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow_schema.metadata import EvidenceMetadataSpec, evidence_metadata
 from datafusion_engine.extract_template_specs import DatasetTemplateSpec
+from utils.registry_protocol import ImmutableRegistry
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,20 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
                 coordinate_system="path",
                 ambiguity_policy="preserve",
                 superior_rank=8,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
+    ),
+    "python_imports": ExtractorTemplate(
+        extractor_name="python_imports",
+        evidence_rank=7,
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="python_imports",
+                coordinate_system="module",
+                ambiguity_policy="preserve",
+                superior_rank=7,
                 streaming_safe=True,
                 pipeline_breaker=False,
             ),
@@ -287,6 +302,15 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "record_blame": False,
             "blame_max_files": None,
             "blame_ref": None,
+            "record_pathspec_trace": False,
+            "pathspec_trace_limit": 200,
+            "pathspec_trace_pattern_limit": 50,
+        },
+    ),
+    "python_imports": ExtractorConfigSpec(
+        extractor_name="python_imports",
+        defaults={
+            "repo_id": None,
         },
     ),
     "python_external": ExtractorConfigSpec(
@@ -593,6 +617,51 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
     )
 
 
+def _python_imports_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
+    version = _param_int(spec, "version", default=1)
+    base = {
+        "version": version,
+        "template": spec.template,
+    }
+    return (
+        {
+            **base,
+            "name": "python_imports_v1",
+            "bundles": None,
+            "fields": [
+                "file_id",
+                "path",
+                "source",
+                "kind",
+                "module",
+                "name",
+                "asname",
+                "level",
+                "is_star",
+            ],
+            "derived": None,
+            "row_fields": None,
+            "row_extras": None,
+            "ordering_keys": [{"column": "path", "order": "ascending"}],
+            "join_keys": [
+                "file_id",
+                "path",
+                "source",
+                "module",
+                "name",
+                "asname",
+                "level",
+                "is_star",
+            ],
+            "enabled_when": None,
+            "feature_flag": None,
+            "postprocess": None,
+            "metadata_extra": None,
+            "evidence_required_columns": None,
+        },
+    )
+
+
 def _python_external_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
     version = _param_int(spec, "version", default=1)
     base = {
@@ -652,18 +721,21 @@ def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, .
     )
 
 
-_DATASET_TEMPLATE_REGISTRY: Mapping[
+_DATASET_TEMPLATE_REGISTRY: ImmutableRegistry[
     str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
-] = {
-    "repo_scan": _repo_scan_records,
-    "ast": _ast_records,
-    "cst": _cst_records,
-    "bytecode": _bytecode_records,
-    "symtable": _symtable_records,
-    "scip": _scip_records,
-    "python_external": _python_external_records,
-    "tree_sitter": _tree_sitter_records,
-}
+] = ImmutableRegistry.from_dict(
+    {
+        "repo_scan": _repo_scan_records,
+        "ast": _ast_records,
+        "cst": _cst_records,
+        "bytecode": _bytecode_records,
+        "symtable": _symtable_records,
+        "scip": _scip_records,
+        "python_imports": _python_imports_records,
+        "python_external": _python_external_records,
+        "tree_sitter": _tree_sitter_records,
+    }
+)
 
 
 def expand_dataset_templates(

@@ -7,12 +7,10 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from functools import cache
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
-from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.cache_utils import (
@@ -37,7 +35,9 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
+from extract.options import RepoOptions, WorkerOptions, WorklistQueueOptions
 from extract.parallel import resolve_max_workers
+from extract.schema_cache import symtable_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
@@ -52,13 +52,10 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class SymtableExtractOptions:
+class SymtableExtractOptions(RepoOptions, WorklistQueueOptions, WorkerOptions):
     """Configure symtable extraction."""
 
     compile_type: str = "exec"
-    repo_id: str | None = None
-    max_workers: int | None = None
-    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -121,11 +118,6 @@ class SymtableContext:
 _SYMTABLE_CACHE_PARTS = 3
 
 
-@cache
-def _symtable_schema_fingerprint() -> str:
-    return schema_fingerprint(dataset_schema("symtable_files_v1"))
-
-
 def _symtable_cache_key(
     file_ctx: FileContext,
     *,
@@ -133,7 +125,7 @@ def _symtable_cache_key(
 ) -> tuple[str, str, str, str] | None:
     if not file_ctx.file_id or file_ctx.file_sha256 is None:
         return None
-    return (file_ctx.file_id, file_ctx.file_sha256, _symtable_schema_fingerprint(), compile_type)
+    return (file_ctx.file_id, file_ctx.file_sha256, symtable_files_fingerprint(), compile_type)
 
 
 def _effective_max_workers(

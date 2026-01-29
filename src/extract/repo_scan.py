@@ -11,8 +11,7 @@ from diskcache import memoize_stampede, throttle
 
 from core_types import PathLike, ensure_path
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
-from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
+from datafusion_engine.extract_registry import dataset_query, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec
 from extract.cache_utils import (
@@ -32,6 +31,7 @@ from extract.helpers import (
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.options import RepoOptions
 from extract.repo_scan_pygit2 import repo_status_paths
 from extract.repo_scope import (
     RepoScope,
@@ -39,9 +39,10 @@ from extract.repo_scope import (
     default_repo_scope_options,
     resolve_repo_scope,
 )
+from extract.schema_cache import repo_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.scope_manifest import ScopeManifest, ScopeManifestOptions, build_scope_manifest
-from extract.scope_rules import ScopeRuleSet, build_scope_rules
+from extract.scope_rules import ScopeRuleSet, build_scope_rules, explain_scope_paths
 from extract.session import ExtractSession
 from serde_msgspec import to_builtins
 from utils.hashing import hash_file_sha256
@@ -54,10 +55,9 @@ SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
-class RepoScanOptions:
+class RepoScanOptions(RepoOptions):
     """Configure repository scanning behavior."""
 
-    repo_id: str | None = None
     scope_policy: RepoScopeOptions | Mapping[str, object] = field(
         default_factory=default_repo_scope_options
     )
@@ -74,6 +74,9 @@ class RepoScanOptions:
     record_blame: bool = False
     blame_max_files: int | None = None
     blame_ref: str | None = None
+    record_pathspec_trace: bool = False
+    pathspec_trace_limit: int | None = 200
+    pathspec_trace_pattern_limit: int | None = 50
 
 
 @dataclass(frozen=True)
@@ -487,6 +490,12 @@ def scan_repo_plan(
         options=options,
         session=session,
     )
+    _record_repo_scope_trace(
+        repo_root_path,
+        bundle,
+        options=options,
+        session=session,
+    )
     _record_repo_blame(
         repo_root_path,
         bundle.repo_rows,
@@ -630,7 +639,7 @@ def _with_repo_scan_cache_key(
         "repo_scan",
         {
             "repo_root": str(repo_root_path),
-            "schema_fingerprint": schema_fingerprint(dataset_schema("repo_files_v1")),
+            "schema_fingerprint": repo_files_fingerprint(),
             "options": to_builtins(options),
             "scope_signature": scope_signature,
             "scope_hash": scope_hash,
@@ -946,6 +955,96 @@ def _record_repo_scope_stats(
     from datafusion_engine.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "repo_scope_stats_v1", payload)
+
+
+def _trace_sample_paths(paths: Sequence[str], limit: int | None) -> list[str]:
+    if limit is None:
+        return list(paths)
+    if limit <= 0:
+        return []
+    return list(paths[:limit])
+
+
+def _match_detail_payload(detail: object, *, limit: int | None) -> dict[str, object]:
+    patterns = getattr(detail, "patterns", None)
+    if isinstance(patterns, Sequence) and not isinstance(patterns, (str, bytes, bytearray)):
+        return {"patterns": _truncate_patterns(patterns, limit)}
+    return {"patterns": []}
+
+
+def _truncate_patterns(patterns: Sequence[object], limit: int | None) -> list[str]:
+    if limit is None:
+        return [str(pattern) for pattern in patterns]
+    if limit <= 0:
+        return []
+    return [str(pattern) for pattern in patterns[:limit]]
+
+
+def _trace_payload(
+    paths: Sequence[str],
+    rules: ScopeRuleSet,
+    *,
+    pattern_limit: int | None,
+) -> Mapping[str, object]:
+    raw = explain_scope_paths(paths, rules)
+    include_raw = raw.get("include")
+    exclude_raw = raw.get("exclude")
+    include_payload: dict[str, object] = {}
+    exclude_payload: dict[str, object] = {}
+    if isinstance(include_raw, Mapping):
+        for key, value in include_raw.items():
+            include_payload[str(key)] = _match_detail_payload(value, limit=pattern_limit)
+    if isinstance(exclude_raw, Mapping):
+        for key, value in exclude_raw.items():
+            exclude_payload[str(key)] = _match_detail_payload(value, limit=pattern_limit)
+    return {"include": include_payload, "exclude": exclude_payload}
+
+
+def _record_repo_scope_trace(
+    repo_root: Path,
+    bundle: RepoScanBundle,
+    *,
+    options: RepoScanOptions,
+    session: ExtractSession,
+) -> None:
+    if not options.record_pathspec_trace:
+        return
+    runtime_profile = session.engine_session.datafusion_profile
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    scoped_roots = _scoped_roots(repo_root, options=options)
+    traces: list[dict[str, object]] = []
+    trace_limit = options.pathspec_trace_limit
+    pattern_limit = options.pathspec_trace_pattern_limit
+    for scoped_root in scoped_roots:
+        candidate_paths = _candidate_paths_for_root(scoped_root)
+        sample_paths = _trace_sample_paths(candidate_paths, trace_limit)
+        if not sample_paths:
+            continue
+        trace = _trace_payload(sample_paths, scoped_root.rules, pattern_limit=pattern_limit)
+        traces.append(
+            {
+                "repo_root": str(scoped_root.scope.repo_root),
+                "prefix": scoped_root.prefix.as_posix(),
+                "sample_size": len(sample_paths),
+                "sample_paths": sample_paths,
+                "include_pattern_total": len(scoped_root.rules.include_lines),
+                "exclude_pattern_total": len(scoped_root.rules.exclude_lines),
+                "pattern_limit": pattern_limit,
+                "trace": trace,
+            }
+        )
+    if not traces:
+        return
+    payload = {
+        "repo_root": str(repo_root),
+        "scope_hash": bundle.scope_hash,
+        "trace_limit": trace_limit,
+        "traces": traces,
+    }
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime_profile, "repo_scope_trace_v1", payload)
 
 
 @dataclass

@@ -9,7 +9,7 @@ from typing import Literal, TypedDict, Unpack
 
 from hamilton.function_modifiers import cache, tag
 
-from core_types import DeterminismTier, JsonDict
+from core_types import DeterminismTier, JsonDict, parse_determinism_tier
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
@@ -42,20 +42,6 @@ def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bo
         return bool(config.enabled)
     mode = (env_value("CODEANATOMY_PIPELINE_MODE") or "").lower()
     return mode in {"incremental", "streaming"}
-
-
-def _determinism_from_str(value: str) -> DeterminismTier | None:
-    mapping: dict[str, DeterminismTier] = {
-        "tier2": DeterminismTier.CANONICAL,
-        "canonical": DeterminismTier.CANONICAL,
-        "tier1": DeterminismTier.STABLE_SET,
-        "stable": DeterminismTier.STABLE_SET,
-        "stable_set": DeterminismTier.STABLE_SET,
-        "tier0": DeterminismTier.BEST_EFFORT,
-        "fast": DeterminismTier.BEST_EFFORT,
-        "best_effort": DeterminismTier.BEST_EFFORT,
-    }
-    return mapping.get(value.strip().lower())
 
 
 def _cache_path_from_inputs(cache_path: str | None) -> str | None:
@@ -103,18 +89,14 @@ def determinism_override(
     DeterminismTier | None
         Override tier when requested, otherwise ``None``.
     """
-    override = determinism_override_override
-    if isinstance(override, DeterminismTier):
-        return override
-    if isinstance(override, str):
-        resolved = _determinism_from_str(override)
-        if resolved is not None:
-            return resolved
+    resolved = parse_determinism_tier(determinism_override_override)
+    if resolved is not None:
+        return resolved
     force_flag = env_bool("CODEANATOMY_FORCE_TIER2", default=False, on_invalid="false")
     if force_flag:
         return DeterminismTier.CANONICAL
     tier = env_value("CODEANATOMY_DETERMINISM_TIER")
-    return _determinism_from_str(tier or "")
+    return parse_determinism_tier(tier)
 
 
 @cache(behavior="ignore")

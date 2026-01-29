@@ -98,7 +98,7 @@ def scan_units_hash(scan_units: Sequence[ScanUnit]) -> str:
             for unit in scan_units
         )
     )
-    return _hash_payload(payload)
+    return hash_msgpack_canonical(payload)[:16]
 
 
 def _scan_units_by_dataset(scan_units: Sequence[ScanUnit]) -> dict[str, list[ScanUnit]]:
@@ -296,7 +296,7 @@ def _record_override_artifact(
     *,
     request: _ScanOverrideArtifactRequest,
 ) -> None:
-    scan_files_hash = _hash_payload(request.scan_files)
+    scan_files_hash = hash_msgpack_canonical(request.scan_files)[:16]
     payload = {
         "dataset_name": request.dataset_name,
         "pinned_version": request.pinned_version,
@@ -306,10 +306,6 @@ def _record_override_artifact(
         "scan_files_hash": scan_files_hash,
     }
     record_artifact(runtime_profile, "scan_unit_overrides_v1", payload)
-
-
-def _hash_payload(payload: object) -> str:
-    return hash_msgpack_canonical(payload)[:16]
 
 
 if TYPE_CHECKING:

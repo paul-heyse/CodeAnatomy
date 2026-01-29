@@ -24,6 +24,7 @@ from datafusion_engine.delta_protocol import (
     delta_feature_gate_rust_payload,
 )
 from schema_spec.system import DeltaScanOptions
+from utils.validation import ensure_mapping
 
 if TYPE_CHECKING:
     from storage.deltalake.delta import DeltaCdfOptions
@@ -488,25 +489,6 @@ def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _ensure_mapping(value: object, *, label: str) -> Mapping[str, object]:
-    """Validate that a payload value is a mapping.
-
-    Returns
-    -------
-    Mapping[str, object]
-        Validated mapping payload.
-
-    Raises
-    ------
-    TypeError
-        Raised when the payload value is not a mapping.
-    """
-    if isinstance(value, Mapping):
-        return value
-    msg = f"Delta control-plane payload for {label} was not a mapping."
-    raise TypeError(msg)
-
-
 def delta_provider_from_session(
     ctx: SessionContext,
     *,
@@ -556,9 +538,9 @@ def delta_provider_from_session(
         gate_payload[2],
         gate_payload[3],
     )
-    payload = _ensure_mapping(response, label="delta_table_provider_from_session")
-    snapshot = _ensure_mapping(payload.get("snapshot"), label="snapshot")
-    scan_config = _ensure_mapping(payload.get("scan_config"), label="scan_config")
+    payload = ensure_mapping(response, label="delta_table_provider_from_session")
+    snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
+    scan_config = ensure_mapping(payload.get("scan_config"), label="scan_config")
     provider = payload.get("provider")
     if provider is None:
         msg = "Delta control-plane response missing provider capsule."
@@ -625,9 +607,9 @@ def delta_provider_with_files(
         gate_payload[2],
         gate_payload[3],
     )
-    payload = _ensure_mapping(response, label="delta_table_provider_with_files")
-    snapshot = _ensure_mapping(payload.get("snapshot"), label="snapshot")
-    scan_config = _ensure_mapping(payload.get("scan_config"), label="scan_config")
+    payload = ensure_mapping(response, label="delta_table_provider_with_files")
+    snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
+    scan_config = ensure_mapping(payload.get("scan_config"), label="scan_config")
     provider = payload.get("provider")
     if provider is None:
         msg = "Delta control-plane response missing provider capsule."
@@ -681,8 +663,8 @@ def delta_cdf_provider(
         gate_payload[2],
         gate_payload[3],
     )
-    payload = _ensure_mapping(response, label="delta_cdf_table_provider")
-    snapshot = _ensure_mapping(payload.get("snapshot"), label="snapshot")
+    payload = ensure_mapping(response, label="delta_cdf_table_provider")
+    snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
     provider = payload.get("provider")
     if provider is None:
         msg = "Delta control-plane CDF response missing provider capsule."
@@ -731,7 +713,7 @@ def delta_snapshot_info(
         gate_payload[2],
         gate_payload[3],
     )
-    return _ensure_mapping(response, label="delta_snapshot_info")
+    return ensure_mapping(response, label="delta_snapshot_info")
 
 
 def delta_add_actions(
@@ -771,7 +753,7 @@ def delta_add_actions(
         gate_payload[2],
         gate_payload[3],
     )
-    return _ensure_mapping(response, label="delta_add_actions")
+    return ensure_mapping(response, label="delta_add_actions")
 
 
 def delta_write_ipc(
@@ -831,7 +813,7 @@ def delta_write_ipc(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_write_ipc")
+    return ensure_mapping(response, label="delta_write_ipc")
 
 
 def delta_delete(
@@ -886,7 +868,7 @@ def delta_delete(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_delete")
+    return ensure_mapping(response, label="delta_delete")
 
 
 def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateRequest) -> None:
@@ -1005,7 +987,7 @@ def delta_update(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_update")
+    return ensure_mapping(response, label="delta_update")
 
 
 def delta_merge(
@@ -1075,7 +1057,7 @@ def delta_merge(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_merge")
+    return ensure_mapping(response, label="delta_merge")
 
 
 def delta_optimize_compact(
@@ -1130,7 +1112,7 @@ def delta_optimize_compact(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_optimize_compact")
+    return ensure_mapping(response, label="delta_optimize_compact")
 
 
 def delta_vacuum(
@@ -1186,7 +1168,7 @@ def delta_vacuum(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_vacuum")
+    return ensure_mapping(response, label="delta_vacuum")
 
 
 def delta_restore(
@@ -1240,7 +1222,7 @@ def delta_restore(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_restore")
+    return ensure_mapping(response, label="delta_restore")
 
 
 def delta_set_properties(
@@ -1299,7 +1281,7 @@ def delta_set_properties(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_set_properties")
+    return ensure_mapping(response, label="delta_set_properties")
 
 
 def delta_add_features(
@@ -1359,7 +1341,7 @@ def delta_add_features(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_add_features")
+    return ensure_mapping(response, label="delta_add_features")
 
 
 def delta_add_constraints(
@@ -1413,7 +1395,7 @@ def delta_add_constraints(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_add_constraints")
+    return ensure_mapping(response, label="delta_add_constraints")
 
 
 def delta_drop_constraints(
@@ -1465,7 +1447,7 @@ def delta_drop_constraints(
         commit_payload[4],
         commit_payload[5],
     )
-    return _ensure_mapping(response, label="delta_drop_constraints")
+    return ensure_mapping(response, label="delta_drop_constraints")
 
 
 def delta_create_checkpoint(
@@ -1503,7 +1485,7 @@ def delta_create_checkpoint(
         gate_payload[2],
         gate_payload[3],
     )
-    return _ensure_mapping(response, label="delta_create_checkpoint")
+    return ensure_mapping(response, label="delta_create_checkpoint")
 
 
 def delta_cleanup_metadata(
@@ -1541,7 +1523,7 @@ def delta_cleanup_metadata(
         gate_payload[2],
         gate_payload[3],
     )
-    return _ensure_mapping(response, label="delta_cleanup_metadata")
+    return ensure_mapping(response, label="delta_cleanup_metadata")
 
 
 def _feature_reports(

@@ -200,13 +200,14 @@ def _import_targets_from_row(
 ) -> list[str]:
     module = row.get("module")
     name = row.get("name")
-    level = row.get("level")
-    if isinstance(level, int) and level > 0:
+    level_value = _coerce_int(row.get("level"))
+    if level_value is not None and level_value > 0:
         return []
     module_value = module if isinstance(module, str) and module else None
     name_value = name if isinstance(name, str) and name else None
-    is_star = row.get("is_star")
-    is_star_import = bool(is_star) if isinstance(is_star, bool) else name_value == "*"
+    is_star_import = _coerce_bool(row.get("is_star"))
+    if is_star_import is None:
+        is_star_import = name_value == "*"
     targets: list[str] = []
     if module_value is not None:
         targets.append(module_value)
@@ -216,6 +217,31 @@ def _import_targets_from_row(
     if name_value is not None and name_value != "*":
         targets.append(name_value)
     return targets
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes"}:
+            return True
+        if text in {"false", "0", "no"}:
+            return False
+    return None
 
 
 def _resolve_external_interface(

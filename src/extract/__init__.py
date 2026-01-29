@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from extract.ast_extract import (
-        ASTExtractOptions,
-        ASTExtractResult,
+        AstExtractOptions,
+        AstExtractResult,
         extract_ast,
         extract_ast_tables,
     )
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
         extract_bytecode_table,
     )
     from extract.cst_extract import (
-        CSTExtractOptions,
-        CSTExtractResult,
+        CstExtractOptions,
+        CstExtractResult,
         extract_cst,
         extract_cst_tables,
     )
@@ -43,6 +43,12 @@ if TYPE_CHECKING:
         ExternalInterfaceExtractResult,
         extract_python_external,
         extract_python_external_tables,
+    )
+    from extract.python_imports_extract import (
+        PythonImportsExtractOptions,
+        PythonImportsExtractResult,
+        extract_python_imports,
+        extract_python_imports_tables,
     )
     from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
     from extract.repo_scan import RepoScanOptions, scan_repo
@@ -73,12 +79,17 @@ if TYPE_CHECKING:
     )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "ASTExtractOptions": ("extract.ast_extract", "ASTExtractOptions"),
-    "ASTExtractResult": ("extract.ast_extract", "ASTExtractResult"),
+    "AstExtractOptions": ("extract.ast_extract", "AstExtractOptions"),
+    "AstExtractResult": ("extract.ast_extract", "AstExtractResult"),
     "BytecodeExtractOptions": ("extract.bytecode_extract", "BytecodeExtractOptions"),
     "BytecodeExtractResult": ("extract.bytecode_extract", "BytecodeExtractResult"),
-    "CSTExtractOptions": ("extract.cst_extract", "CSTExtractOptions"),
-    "CSTExtractResult": ("extract.cst_extract", "CSTExtractResult"),
+    "CstExtractOptions": ("extract.cst_extract", "CstExtractOptions"),
+    "CstExtractResult": ("extract.cst_extract", "CstExtractResult"),
+    "PythonImportsExtractOptions": (
+        "extract.python_imports_extract",
+        "PythonImportsExtractOptions",
+    ),
+    "PythonImportsExtractResult": ("extract.python_imports_extract", "PythonImportsExtractResult"),
     "RepoBlobOptions": ("extract.repo_blobs", "RepoBlobOptions"),
     "RepoScanOptions": ("extract.repo_scan", "RepoScanOptions"),
     "SCIPIndexOptions": ("extract.scip_extract", "SCIPIndexOptions"),
@@ -101,6 +112,11 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "extract_python_external_tables": (
         "extract.python_external_scope",
         "extract_python_external_tables",
+    ),
+    "extract_python_imports": ("extract.python_imports_extract", "extract_python_imports"),
+    "extract_python_imports_tables": (
+        "extract.python_imports_extract",
+        "extract_python_imports_tables",
     ),
     "scan_repo_blobs": ("extract.repo_blobs", "scan_repo_blobs"),
     "extract_scip_tables": ("extract.scip_extract", "extract_scip_tables"),
@@ -130,14 +146,16 @@ def __dir__() -> list[str]:
 
 
 __all__ = (
-    "ASTExtractOptions",
-    "ASTExtractResult",
+    "AstExtractOptions",
+    "AstExtractResult",
     "BytecodeExtractOptions",
     "BytecodeExtractResult",
-    "CSTExtractOptions",
-    "CSTExtractResult",
+    "CstExtractOptions",
+    "CstExtractResult",
     "ExternalInterfaceExtractOptions",
     "ExternalInterfaceExtractResult",
+    "PythonImportsExtractOptions",
+    "PythonImportsExtractResult",
     "RepoBlobOptions",
     "RepoScanOptions",
     "SCIPIndexOptions",
@@ -158,6 +176,8 @@ __all__ = (
     "extract_cst_tables",
     "extract_python_external",
     "extract_python_external_tables",
+    "extract_python_imports",
+    "extract_python_imports_tables",
     "extract_scip_tables",
     "extract_symtable",
     "extract_symtables_table",

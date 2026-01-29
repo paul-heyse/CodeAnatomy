@@ -18,6 +18,7 @@ from datafusion_engine.arrow_interop import (
     StructArrayLike,
 )
 from datafusion_engine.arrow_schema.types import list_view_type, map_type
+from utils.validation import find_missing
 
 MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767
@@ -489,7 +490,7 @@ def struct_array_from_dicts(
         for row in normalized:
             if row is None:
                 continue
-            missing = [name for name in required_fields if name not in row]
+            missing = find_missing(required_fields, row)
             if missing:
                 msg = f"Missing required struct field(s): {missing!r}."
                 raise ValueError(msg)

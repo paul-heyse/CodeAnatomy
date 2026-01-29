@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import configparser
-import tomllib
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import cast
 import pygit2
 
 from extract.git_context import open_git_context
+from utils.file_io import read_pyproject_toml
 
 DEFAULT_PYTHON_EXTENSIONS: frozenset[str] = frozenset(
     {".py", ".pyi", ".pyx", ".pxd", ".pxi", ".pyw"}
@@ -150,8 +150,8 @@ def _extensions_from_pyproject(repo_root: Path) -> set[str]:
     if not pyproject.is_file():
         return set()
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+        data = read_pyproject_toml(pyproject)
+    except (OSError, ValueError):
         return set()
     tool = data.get("tool")
     if not isinstance(tool, dict):

@@ -31,6 +31,7 @@ from extract.helpers import (
     extract_plan_from_row_batches,
     materialize_extract_plan,
 )
+from extract.options import BatchOptions
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
 from extract.session import ExtractSession, build_extract_session
 from extract.string_utils import normalize_string_items
@@ -105,7 +106,7 @@ class SCIPParseOptions:
 
 
 @dataclass(frozen=True)
-class ScipExtractOptions:
+class ScipExtractOptions(BatchOptions):
     """Options for SCIP extraction table materialization."""
 
     parse_opts: SCIPParseOptions | None = None

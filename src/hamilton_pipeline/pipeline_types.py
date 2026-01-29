@@ -67,6 +67,9 @@ class RepoScanConfig:
     diff_base_ref: str | None = None
     diff_head_ref: str | None = None
     changed_only: bool = False
+    record_pathspec_trace: bool = False
+    pathspec_trace_limit: int | None = 200
+    pathspec_trace_pattern_limit: int | None = 50
 
 
 @dataclass(frozen=True)

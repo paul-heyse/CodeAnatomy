@@ -19,8 +19,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from core_types import RowRich as Row
 from core_types import RowValueRich as RowValue
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
-from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.cache_utils import (
@@ -46,7 +45,9 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
+from extract.options import RepoOptions, WorkerOptions, WorklistQueueOptions
 from extract.parallel import resolve_max_workers
+from extract.schema_cache import bytecode_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
@@ -67,13 +68,8 @@ PYTHON_VERSION = sys.version.split()[0]
 PYTHON_MAGIC = importlib.util.MAGIC_NUMBER.hex()
 
 
-@functools.cache
-def _bytecode_schema_fingerprint() -> str:
-    return schema_fingerprint(dataset_schema("bytecode_files_v1"))
-
-
 @dataclass(frozen=True)
-class BytecodeExtractOptions:
+class BytecodeExtractOptions(RepoOptions, WorklistQueueOptions, WorkerOptions):
     """
     Bytecode extraction options.
 
@@ -87,7 +83,6 @@ class BytecodeExtractOptions:
     dont_inherit: bool = True
     adaptive: bool = False
     include_cfg_derivations: bool = True
-    max_workers: int | None = None
     parallel_min_files: int = 8
     parallel_max_bytes: int = 50_000_000
     terminator_opnames: Sequence[str] = (
@@ -96,8 +91,6 @@ class BytecodeExtractOptions:
         "RAISE_VARARGS",
         "RERAISE",
     )
-    repo_id: str | None = None
-    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -552,7 +545,7 @@ def _bytecode_cache_key(
     return (
         file_ctx.file_id,
         file_ctx.file_sha256,
-        _bytecode_schema_fingerprint(),
+        bytecode_files_fingerprint(),
         int(options.optimize),
         bool(options.dont_inherit),
         bool(options.adaptive),

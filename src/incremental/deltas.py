@@ -10,13 +10,14 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from datafusion_engine.arrow_interop import TableLike
 from datafusion_engine.arrow_schema.build import empty_table
 from datafusion_engine.schema_alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
+from utils.validation import ensure_table
 
 
 def compute_changed_exports(
@@ -81,7 +82,7 @@ def _compute_changed_exports_table(
     curr_exports: TableLike,
     changed_files: TableLike,
 ) -> pa.Table:
-    curr_table = _ensure_table(curr_exports)
+    curr_table = ensure_table(curr_exports, label="curr_exports")
     key_cols = _export_key_columns(curr_table.schema)
     with TempTableRegistry(runtime) as registry:
         curr_df, prev_df, changed_df = _prefixed_sources(
@@ -89,7 +90,7 @@ def _compute_changed_exports_table(
             registry=registry,
             prev_exports=prev_exports,
             curr_table=curr_table,
-            changed_table=_ensure_table(changed_files),
+            changed_table=ensure_table(changed_files, label="changed_files"),
         )
         added_df = _added_exports_df(curr_df, prev_df, changed_df, key_cols=key_cols)
         removed_df = _removed_exports_df(curr_df, prev_df, changed_df, key_cols=key_cols)
@@ -183,15 +184,6 @@ def _symbol_expr(cols: list[str], *, prefix: str) -> Expr:
     if "symbol" in cols:
         return col(f"{prefix}_symbol")
     return f.arrow_cast(lit(None), lit("Utf8"))
-
-
-def _ensure_table(value: TableLike) -> pa.Table:
-    resolved = coerce_table_like(value, requested_schema=None)
-    if isinstance(resolved, RecordBatchReaderLike):
-        resolved = resolved.read_all()
-    if isinstance(resolved, pa.Table):
-        return resolved
-    return pa.Table.from_pydict(resolved.to_pydict())
 
 
 __all__ = ["compute_changed_exports"]

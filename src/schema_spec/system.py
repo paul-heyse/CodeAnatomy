@@ -57,6 +57,7 @@ from storage.dataset_sources import (
 )
 from storage.deltalake import DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion_engine.expr_spec import ExprSpec
@@ -398,7 +399,7 @@ class ContractSpec:
         """
         if self.virtual_field_docs is None:
             return
-        missing = [key for key in self.virtual_field_docs if key not in self.virtual_fields]
+        missing = find_missing(self.virtual_field_docs, self.virtual_fields)
         if missing:
             msg = f"virtual_field_docs keys missing in virtual_fields: {missing}"
             raise ValueError(msg)

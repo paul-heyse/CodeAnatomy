@@ -3,28 +3,34 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, cast
 
 import pyarrow as pa
 from hamilton import async_driver, driver
 from hamilton.execution import executors
 from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
+from opentelemetry import trace as otel_trace
 
-from core_types import DeterminismTier, JsonValue
+from core_types import DeterminismTier, JsonValue, parse_determinism_tier
 from datafusion_engine.arrow_interop import SchemaLike
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.execution_manager import PlanExecutionManager
+from hamilton_pipeline.hamilton_tracker import (
+    CodeAnatomyAsyncHamiltonTracker,
+    CodeAnatomyHamiltonTracker,
+)
 from hamilton_pipeline.lifecycle import (
     DiagnosticsNodeHook,
     PlanDiagnosticsHook,
     set_hamilton_diagnostics_collector,
 )
+from hamilton_pipeline.materializers import build_hamilton_materializers
 from hamilton_pipeline.modules.execution_plan import build_execution_plan_module
 from hamilton_pipeline.pipeline_types import (
     ExecutionMode,
@@ -39,6 +45,7 @@ from hamilton_pipeline.task_module_builder import (
 )
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
+from obs.otel.run_context import get_run_id
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from utils.env_utils import env_bool, env_value
 
@@ -130,34 +137,15 @@ def _runtime_profile_name(config: Mapping[str, JsonValue]) -> str:
 
 def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | None:
     value = config.get("determinism_override")
-    if isinstance(value, str) and value.strip():
-        normalized = value.strip().lower()
-        mapping: dict[str, DeterminismTier] = {
-            "tier2": DeterminismTier.CANONICAL,
-            "canonical": DeterminismTier.CANONICAL,
-            "tier1": DeterminismTier.STABLE_SET,
-            "stable": DeterminismTier.STABLE_SET,
-            "stable_set": DeterminismTier.STABLE_SET,
-            "tier0": DeterminismTier.BEST_EFFORT,
-            "fast": DeterminismTier.BEST_EFFORT,
-            "best_effort": DeterminismTier.BEST_EFFORT,
-        }
-        return mapping.get(normalized)
+    if isinstance(value, str):
+        resolved = parse_determinism_tier(value)
+        if resolved is not None:
+            return resolved
     force_flag = env_bool("CODEANATOMY_FORCE_TIER2", default=False, on_invalid="false")
     if force_flag:
         return DeterminismTier.CANONICAL
-    tier = (env_value("CODEANATOMY_DETERMINISM_TIER") or "").lower()
-    mapping = {
-        "tier2": DeterminismTier.CANONICAL,
-        "canonical": DeterminismTier.CANONICAL,
-        "tier1": DeterminismTier.STABLE_SET,
-        "stable": DeterminismTier.STABLE_SET,
-        "stable_set": DeterminismTier.STABLE_SET,
-        "tier0": DeterminismTier.BEST_EFFORT,
-        "fast": DeterminismTier.BEST_EFFORT,
-        "best_effort": DeterminismTier.BEST_EFFORT,
-    }
-    return mapping.get(tier)
+    tier = env_value("CODEANATOMY_DETERMINISM_TIER")
+    return parse_determinism_tier(tier)
 
 
 def _executor_config_payload(
@@ -461,6 +449,8 @@ def _tracker_tags(value: object | None) -> dict[str, str]:
 
 def _maybe_build_tracker_adapter(
     config: Mapping[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
 ) -> lifecycle_base.LifecycleAdapter | None:
     """Build an optional Hamilton UI tracker adapter.
 
@@ -542,12 +532,17 @@ def _maybe_build_tracker_adapter(
     if ui_url is not None:
         tracker_kwargs["hamilton_ui_url"] = ui_url
 
-    tracker = hamilton_adapters.HamiltonTracker(**tracker_kwargs)
+    tracker = CodeAnatomyHamiltonTracker(
+        **tracker_kwargs,
+        run_tag_provider=_run_tag_provider(config, profile_spec=profile_spec),
+    )
     return cast("lifecycle_base.LifecycleAdapter", tracker)
 
 
 def _maybe_build_async_tracker_adapter(
     config: Mapping[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
 ) -> lifecycle_base.LifecycleAdapter | None:
     """Build an async Hamilton UI tracker adapter when enabled.
 
@@ -616,7 +611,10 @@ def _maybe_build_async_tracker_adapter(
     if ui_url is not None:
         tracker_kwargs["hamilton_ui_url"] = ui_url
 
-    tracker = hamilton_adapters.AsyncHamiltonTracker(**tracker_kwargs)
+    tracker = CodeAnatomyAsyncHamiltonTracker(
+        **tracker_kwargs,
+        run_tag_provider=_run_tag_provider(config, profile_spec=profile_spec),
+    )
     return cast("lifecycle_base.LifecycleAdapter", tracker)
 
 
@@ -626,44 +624,88 @@ def _with_graph_tags(
     plan: ExecutionPlan,
 ) -> dict[str, JsonValue]:
     config_payload = dict(config)
-    dag_name_value = config_payload.get("hamilton_dag_name")
-    dag_name = (
-        dag_name_value if isinstance(dag_name_value, str) and dag_name_value else _DEFAULT_DAG_NAME
-    )
+    dag_name = _resolve_dag_name(config_payload)
     config_payload["hamilton_dag_name"] = dag_name
+    merged_tags = _merge_graph_tags(config_payload, plan=plan)
+    config_payload["hamilton_tags"] = merged_tags
+    return config_payload
+
+
+def _resolve_dag_name(config_payload: Mapping[str, JsonValue]) -> str:
+    dag_name_value = config_payload.get("hamilton_dag_name")
+    if isinstance(dag_name_value, str) and dag_name_value:
+        return dag_name_value
+    return _DEFAULT_DAG_NAME
+
+
+def _merge_graph_tags(
+    config_payload: Mapping[str, JsonValue],
+    *,
+    plan: ExecutionPlan,
+) -> dict[str, str]:
+    merged_tags = _base_graph_tags(config_payload)
+    _append_plan_tags(merged_tags, plan=plan)
+    _append_telemetry_tags(merged_tags, config_payload)
+    return merged_tags
+
+
+def _base_graph_tags(config_payload: Mapping[str, JsonValue]) -> dict[str, str]:
     tags_value = config_payload.get("hamilton_tags")
     merged_tags: dict[str, str] = {}
     if isinstance(tags_value, Mapping):
         merged_tags.update({str(k): str(v) for k, v in tags_value.items()})
-    merged_tags["plan_signature"] = plan.plan_signature
-    merged_tags["reduced_plan_signature"] = plan.reduced_task_dependency_signature
-    merged_tags["task_dependency_signature"] = plan.task_dependency_signature
-    merged_tags["plan_task_count"] = str(len(plan.active_tasks))
-    merged_tags["plan_task_signature_count"] = str(len(plan.plan_task_signatures))
-    merged_tags["plan_generation_count"] = str(len(plan.task_schedule.generations))
-    merged_tags["plan_reduction_edge_count"] = str(plan.reduction_edge_count)
-    merged_tags["plan_reduction_removed_edge_count"] = str(plan.reduction_removed_edge_count)
-    runtime_env = _string_override(config_payload, "runtime_environment")
-    if runtime_env is None:
-        runtime_env = env_value("CODEANATOMY_ENV")
+    runtime_env = _string_override(config_payload, "runtime_environment") or env_value(
+        "CODEANATOMY_ENV"
+    )
     if runtime_env:
         merged_tags.setdefault("environment", runtime_env)
-    team_value = _string_override(config_payload, "runtime_team")
-    if team_value is None:
-        team_value = env_value("CODEANATOMY_TEAM")
+    team_value = _string_override(config_payload, "runtime_team") or env_value(
+        "CODEANATOMY_TEAM"
+    )
     if team_value:
         merged_tags.setdefault("team", team_value)
     merged_tags.setdefault("runtime_profile", _runtime_profile_name(config_payload))
     determinism = _determinism_override(config_payload)
     if determinism is not None:
         merged_tags.setdefault("determinism_tier", determinism.value)
+    telemetry_profile = _string_override(config_payload, "hamilton_telemetry_profile")
+    if telemetry_profile is not None:
+        merged_tags.setdefault("telemetry_profile", telemetry_profile)
+    return merged_tags
+
+
+def _append_plan_tags(tags: dict[str, str], *, plan: ExecutionPlan) -> None:
+    tags["plan_signature"] = plan.plan_signature
+    tags["reduced_plan_signature"] = plan.reduced_task_dependency_signature
+    tags["task_dependency_signature"] = plan.task_dependency_signature
+    tags["plan_task_count"] = str(len(plan.active_tasks))
+    tags["plan_task_signature_count"] = str(len(plan.plan_task_signatures))
+    tags["plan_generation_count"] = str(len(plan.task_schedule.generations))
+    tags["plan_reduction_edge_count"] = str(plan.reduction_edge_count)
+    tags["plan_reduction_removed_edge_count"] = str(plan.reduction_removed_edge_count)
     if plan.session_runtime_hash is not None:
-        merged_tags["session_runtime_hash"] = plan.session_runtime_hash
-    merged_tags["semantic_version"] = _SEMANTIC_VERSION
+        tags["session_runtime_hash"] = plan.session_runtime_hash
+    tags["semantic_version"] = _SEMANTIC_VERSION
     if plan.critical_path_length_weighted is not None:
-        merged_tags["plan_critical_path_length_weighted"] = str(plan.critical_path_length_weighted)
-    config_payload["hamilton_tags"] = merged_tags
-    return config_payload
+        tags["plan_critical_path_length_weighted"] = str(plan.critical_path_length_weighted)
+
+
+def _append_telemetry_tags(
+    tags: dict[str, str],
+    config_payload: Mapping[str, JsonValue],
+) -> None:
+    capture_stats_value = config_payload.get("hamilton_capture_data_statistics")
+    if isinstance(capture_stats_value, bool):
+        tags.setdefault(
+            "capture_data_statistics",
+            "true" if capture_stats_value else "false",
+        )
+    max_list_value = config_payload.get("hamilton_max_list_length_capture")
+    if isinstance(max_list_value, int):
+        tags.setdefault("max_list_length_capture", str(max_list_value))
+    max_dict_value = config_payload.get("hamilton_max_dict_length_capture")
+    if isinstance(max_dict_value, int):
+        tags.setdefault("max_dict_length_capture", str(max_dict_value))
 
 
 def _apply_tracker_config_from_profile(
@@ -687,6 +729,140 @@ def _apply_tracker_config_from_profile(
     if tracker.enabled:
         config.setdefault("enable_hamilton_tracker", True)
     return config
+
+
+def _apply_hamilton_telemetry_profile(
+    config: dict[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
+) -> dict[str, JsonValue]:
+    telemetry = profile_spec.hamilton_telemetry
+    if telemetry is None:
+        return config
+    config.setdefault("hamilton_telemetry_profile", telemetry.name)
+    config.setdefault("hamilton_capture_data_statistics", telemetry.capture_data_statistics)
+    config.setdefault("hamilton_max_list_length_capture", telemetry.max_list_length_capture)
+    config.setdefault("hamilton_max_dict_length_capture", telemetry.max_dict_length_capture)
+    if "enable_hamilton_tracker" not in config:
+        config["enable_hamilton_tracker"] = telemetry.enable_tracker
+    return config
+
+
+def _configure_hamilton_sdk_capture(
+    config: Mapping[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
+) -> None:
+    telemetry = profile_spec.hamilton_telemetry
+    if telemetry is None:
+        return
+    if hamilton_adapters is None:
+        return
+    try:
+        from hamilton_sdk.tracking import constants as sdk_constants
+    except ModuleNotFoundError:
+        return
+    capture = config.get("hamilton_capture_data_statistics")
+    capture_value = capture if isinstance(capture, bool) else telemetry.capture_data_statistics
+    max_list = config.get("hamilton_max_list_length_capture")
+    max_list_value = (
+        max_list if isinstance(max_list, int) else telemetry.max_list_length_capture
+    )
+    max_dict = config.get("hamilton_max_dict_length_capture")
+    max_dict_value = (
+        max_dict if isinstance(max_dict, int) else telemetry.max_dict_length_capture
+    )
+    sdk_constants.CAPTURE_DATA_STATISTICS = capture_value
+    sdk_constants.MAX_LIST_LENGTH_CAPTURE = max_list_value
+    sdk_constants.MAX_DICT_LENGTH_CAPTURE = max_dict_value
+
+
+def _run_tag_provider(
+    config: Mapping[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
+) -> Callable[[], dict[str, str]]:
+    runtime_profile_hash = profile_spec.runtime_profile_hash
+    runtime_profile_name = profile_spec.name
+    determinism_tier = profile_spec.determinism_tier.value
+    telemetry_profile = (
+        profile_spec.hamilton_telemetry.name
+        if profile_spec.hamilton_telemetry is not None
+        else None
+    )
+    repo_id = env_value("CODEANATOMY_REPO_ID")
+    git_head_ref = env_value("CODEANATOMY_GIT_HEAD_REF")
+    git_base_ref = env_value("CODEANATOMY_GIT_BASE_REF")
+    runtime_env = _string_override(config, "runtime_environment") or env_value("CODEANATOMY_ENV")
+
+    def provider() -> dict[str, str]:
+        tags: dict[str, str] = {
+            "runtime_profile_hash": runtime_profile_hash,
+            "runtime_profile_name": runtime_profile_name,
+            "determinism_tier": determinism_tier,
+        }
+        if telemetry_profile is not None:
+            tags["telemetry_profile"] = telemetry_profile
+        if runtime_env:
+            tags["environment"] = runtime_env
+        if repo_id:
+            tags["repo_id"] = repo_id
+        if git_head_ref:
+            tags["git_head_ref"] = git_head_ref
+        if git_base_ref:
+            tags["git_base_ref"] = git_base_ref
+        run_id = get_run_id()
+        if run_id:
+            tags["codeanatomy.run_id"] = run_id
+        span = otel_trace.get_current_span()
+        span_context = span.get_span_context()
+        if span_context.is_valid:
+            tags["otel.trace_id"] = f"{span_context.trace_id:032x}"
+            tags["otel.span_id"] = f"{span_context.span_id:016x}"
+        return tags
+
+    return provider
+
+
+def _resolve_config_payload(
+    config: Mapping[str, JsonValue],
+    *,
+    profile_spec: RuntimeProfileSpec,
+    plan: ExecutionPlan,
+    execution_mode: ExecutionMode | None,
+    allow_dynamic_scan_units: bool,
+) -> dict[str, JsonValue]:
+    config_payload = dict(config)
+    config_payload.setdefault(
+        "runtime_profile_name_override",
+        _runtime_profile_name(config_payload),
+    )
+    determinism_override = _determinism_override(config_payload)
+    if determinism_override is not None:
+        config_payload.setdefault(
+            "determinism_override_override",
+            determinism_override.value,
+        )
+    if allow_dynamic_scan_units:
+        config_payload.setdefault(
+            "enable_dynamic_scan_units",
+            (execution_mode or ExecutionMode.PLAN_PARALLEL) != ExecutionMode.DETERMINISTIC_SERIAL,
+        )
+    else:
+        if bool(config_payload.get("enable_dynamic_scan_units")):
+            msg = "Async driver does not support dynamic scan units."
+            raise ValueError(msg)
+        config_payload["enable_dynamic_scan_units"] = False
+    config_payload.setdefault("hamilton.enable_power_user_mode", True)
+    config_payload = _apply_tracker_config_from_profile(
+        config_payload,
+        profile_spec=profile_spec,
+    )
+    config_payload = _apply_hamilton_telemetry_profile(
+        config_payload,
+        profile_spec=profile_spec,
+    )
+    return _with_graph_tags(config_payload, plan=plan)
 
 
 class DaskClientKwargs(TypedDict, total=False):
@@ -1048,18 +1224,21 @@ def _apply_graph_adapter(
 def _build_materializers(
     _config: Mapping[str, JsonValue],
 ) -> list[MaterializerFactory]:
-    return []
+    return build_hamilton_materializers()
 
 
 def _apply_materializers(
-    builder: driver.Builder,
+    builder: BuilderT,
     *,
     config: Mapping[str, JsonValue],
-) -> driver.Builder:
+) -> BuilderT:
     materializers = _build_materializers(config)
     if not materializers:
         return builder
-    return builder.with_materializers(*materializers)
+    return cast("BuilderT", builder.with_materializers(*materializers))
+
+
+BuilderT = TypeVar("BuilderT", driver.Builder, async_driver.Builder)
 
 
 @dataclass(frozen=True)
@@ -1171,26 +1350,36 @@ def _cache_path_from_config(config: Mapping[str, JsonValue]) -> str | None:
     return value.strip()
 
 
+@dataclass(frozen=True)
+class _AdapterContext:
+    diagnostics: DiagnosticsCollector
+    plan: ExecutionPlan
+    profile: DataFusionRuntimeProfile
+    profile_spec: RuntimeProfileSpec
+
+
 def _apply_adapters(
     builder: driver.Builder,
     *,
     config: Mapping[str, JsonValue],
-    diagnostics: DiagnosticsCollector,
-    plan: ExecutionPlan,
-    profile: DataFusionRuntimeProfile,
+    context: _AdapterContext,
 ) -> driver.Builder:
-    tracker = _maybe_build_tracker_adapter(config)
+    tracker = _maybe_build_tracker_adapter(config, profile_spec=context.profile_spec)
     if tracker is not None:
         builder = builder.with_adapters(tracker)
     if bool(config.get("enable_hamilton_type_checker", True)):
         builder = builder.with_adapters(FunctionInputOutputTypeChecker())
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
-        builder = builder.with_adapters(DiagnosticsNodeHook(diagnostics))
+        builder = builder.with_adapters(DiagnosticsNodeHook(context.diagnostics))
     if bool(config.get("enable_otel_node_tracing", True)):
         builder = builder.with_adapters(OtelNodeHook())
     if bool(config.get("enable_plan_diagnostics", True)):
         builder = builder.with_adapters(
-            PlanDiagnosticsHook(plan=plan, profile=profile, collector=diagnostics)
+            PlanDiagnosticsHook(
+                plan=context.plan,
+                profile=context.profile,
+                collector=context.diagnostics,
+            )
         )
     if bool(config.get("enable_otel_plan_tracing", True)):
         builder = builder.with_adapters(OtelPlanHook())
@@ -1201,11 +1390,9 @@ def _apply_async_adapters(
     builder: async_driver.Builder,
     *,
     config: Mapping[str, JsonValue],
-    diagnostics: DiagnosticsCollector,
-    plan: ExecutionPlan,
-    profile: DataFusionRuntimeProfile,
+    context: _AdapterContext,
 ) -> async_driver.Builder:
-    tracker = _maybe_build_async_tracker_adapter(config)
+    tracker = _maybe_build_async_tracker_adapter(config, profile_spec=context.profile_spec)
     if tracker is not None:
         builder = cast("async_driver.Builder", builder.with_adapters(tracker))
     if bool(config.get("enable_hamilton_type_checker", True)):
@@ -1216,7 +1403,7 @@ def _apply_async_adapters(
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
         builder = cast(
             "async_driver.Builder",
-            builder.with_adapters(DiagnosticsNodeHook(diagnostics)),
+            builder.with_adapters(DiagnosticsNodeHook(context.diagnostics)),
         )
     if bool(config.get("enable_otel_node_tracing", True)):
         builder = cast(
@@ -1227,7 +1414,11 @@ def _apply_async_adapters(
         builder = cast(
             "async_driver.Builder",
             builder.with_adapters(
-                PlanDiagnosticsHook(plan=plan, profile=profile, collector=diagnostics)
+                PlanDiagnosticsHook(
+                    plan=context.plan,
+                    profile=context.profile,
+                    collector=context.diagnostics,
+                )
             ),
         )
     if bool(config.get("enable_otel_plan_tracing", True)):
@@ -1284,28 +1475,17 @@ def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
         )
     )
 
-    config_payload = dict(request.config)
-    config_payload.setdefault(
-        "runtime_profile_name_override",
-        _runtime_profile_name(config_payload),
+    config_payload = _resolve_config_payload(
+        request.config,
+        profile_spec=resolved_view_ctx.runtime_profile_spec,
+        plan=resolved_plan,
+        execution_mode=request.execution_mode,
+        allow_dynamic_scan_units=True,
     )
-    determinism_override = _determinism_override(config_payload)
-    if determinism_override is not None:
-        config_payload.setdefault(
-            "determinism_override_override",
-            determinism_override.value,
-        )
-    config_payload.setdefault(
-        "enable_dynamic_scan_units",
-        (request.execution_mode or ExecutionMode.PLAN_PARALLEL)
-        != ExecutionMode.DETERMINISTIC_SERIAL,
-    )
-    config_payload.setdefault("hamilton.enable_power_user_mode", True)
-    config_payload = _apply_tracker_config_from_profile(
+    _configure_hamilton_sdk_capture(
         config_payload,
         profile_spec=resolved_view_ctx.runtime_profile_spec,
     )
-    config_payload = _with_graph_tags(config_payload, plan=resolved_plan)
 
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
@@ -1330,12 +1510,16 @@ def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
     )
     builder = _apply_cache(builder, config=config_payload)
     builder = _apply_materializers(builder, config=config_payload)
-    builder = _apply_adapters(
-        builder,
-        config=config_payload,
+    adapter_context = _AdapterContext(
         diagnostics=diagnostics,
         plan=resolved_plan,
         profile=resolved_view_ctx.profile,
+        profile_spec=resolved_view_ctx.runtime_profile_spec,
+    )
+    builder = _apply_adapters(
+        builder,
+        config=config_payload,
+        context=adapter_context,
     )
     semantic_registry_hook: SemanticRegistryHook | None = None
     if bool(config_payload.get("enable_semantic_registry", True)):
@@ -1377,11 +1561,6 @@ async def build_async_driver(*, request: DriverBuildRequest) -> async_driver.Asy
     -------
     async_driver.AsyncDriver
         Built async Hamilton driver instance.
-
-    Raises
-    ------
-    ValueError
-        Raised when dynamic scan units are enabled for async execution.
     """
     modules = list(request.modules) if request.modules is not None else default_modules()
     resolved_view_ctx = request.view_ctx or _view_graph_context(request.config)
@@ -1403,27 +1582,17 @@ async def build_async_driver(*, request: DriverBuildRequest) -> async_driver.Asy
         )
     )
 
-    config_payload = dict(request.config)
-    config_payload.setdefault(
-        "runtime_profile_name_override",
-        _runtime_profile_name(config_payload),
+    config_payload = _resolve_config_payload(
+        request.config,
+        profile_spec=resolved_view_ctx.runtime_profile_spec,
+        plan=resolved_plan,
+        execution_mode=request.execution_mode,
+        allow_dynamic_scan_units=False,
     )
-    determinism_override = _determinism_override(config_payload)
-    if determinism_override is not None:
-        config_payload.setdefault(
-            "determinism_override_override",
-            determinism_override.value,
-        )
-    if bool(config_payload.get("enable_dynamic_scan_units")):
-        msg = "Async driver does not support dynamic scan units."
-        raise ValueError(msg)
-    config_payload["enable_dynamic_scan_units"] = False
-    config_payload.setdefault("hamilton.enable_power_user_mode", True)
-    config_payload = _apply_tracker_config_from_profile(
+    _configure_hamilton_sdk_capture(
         config_payload,
         profile_spec=resolved_view_ctx.runtime_profile_spec,
     )
-    config_payload = _with_graph_tags(config_payload, plan=resolved_plan)
 
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
@@ -1433,12 +1602,17 @@ async def build_async_driver(*, request: DriverBuildRequest) -> async_driver.Asy
         "async_driver.Builder",
         builder.with_modules(*modules).with_config(config_payload),
     )
-    builder = _apply_async_adapters(
-        builder,
-        config=config_payload,
+    builder = _apply_materializers(builder, config=config_payload)
+    adapter_context = _AdapterContext(
         diagnostics=diagnostics,
         plan=resolved_plan,
         profile=resolved_view_ctx.profile,
+        profile_spec=resolved_view_ctx.runtime_profile_spec,
+    )
+    builder = _apply_async_adapters(
+        builder,
+        config=config_payload,
+        context=adapter_context,
     )
     if bool(config_payload.get("enable_semantic_registry", True)):
         from hamilton_pipeline.semantic_registry import (

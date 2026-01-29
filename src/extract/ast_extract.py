@@ -5,17 +5,15 @@ from __future__ import annotations
 import ast
 import json
 import re
-import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
-from functools import cache, partial
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
-from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.cache_utils import (
@@ -42,11 +40,14 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
+from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers
+from extract.schema_cache import ast_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
+from utils.file_io import read_pyproject_toml
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -58,7 +59,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class ASTExtractOptions:
+class AstExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
     """Define AST extraction options."""
 
     type_comments: bool = True
@@ -67,29 +68,19 @@ class ASTExtractOptions:
     optimize: Literal[-1, 0, 1, 2] | None = None
     allow_top_level_await: bool = False
     dont_inherit: bool = True
-    batch_size: int | None = 512
     max_bytes: int | None = 50_000_000
     max_nodes: int | None = 1_000_000
     cache_by_sha: bool = True
-    parallel: bool = True
-    max_workers: int | None = None
-    repo_id: str | None = None
-    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
-class ASTExtractResult:
+class AstExtractResult:
     """Hold extracted AST tables for nodes, edges, and errors."""
 
     ast_files: TableLike
 
 
 _PYTHON_VERSION_RE = re.compile(r"(\\d+)\\.(\\d+)")
-
-
-@cache
-def _ast_schema_fingerprint() -> str:
-    return schema_fingerprint(dataset_schema("ast_files_v1"))
 
 
 def _parse_requires_python(spec: str) -> tuple[int, int] | None:
@@ -104,8 +95,8 @@ def _feature_version_from_pyproject(repo_root: Path) -> tuple[int, int] | None:
     if not pyproject.exists():
         return None
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+        data = read_pyproject_toml(pyproject)
+    except (OSError, ValueError):
         return None
     project = data.get("project")
     if isinstance(project, Mapping):
@@ -149,9 +140,9 @@ def _infer_repo_root(contexts: Sequence[FileContext]) -> Path | None:
 
 
 def _resolve_feature_version(
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     contexts: Sequence[FileContext],
-) -> ASTExtractOptions:
+) -> AstExtractOptions:
     if options.feature_version is not None:
         return options
     repo_root = _infer_repo_root(contexts)
@@ -540,7 +531,7 @@ def _limit_errors(
     file_ctx: FileContext,
     *,
     text: str,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
 ) -> tuple[int | None, list[dict[str, object]]]:
     error_rows: list[dict[str, object]] = []
     try:
@@ -570,7 +561,7 @@ def _parse_via_compile(
     text: str,
     *,
     filename: str,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     optimize: Literal[-1, 0, 1, 2],
 ) -> tuple[ast.AST | None, dict[str, object] | None]:
     flags = ast.PyCF_ONLY_AST if optimize <= 0 else ast.PyCF_OPTIMIZED_AST
@@ -598,7 +589,7 @@ def _parse_via_ast_parse(
     text: str,
     *,
     filename: str,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     optimize: Literal[-1, 0, 1, 2],
 ) -> tuple[ast.AST | None, dict[str, object] | None]:
     try:
@@ -623,7 +614,7 @@ def _parse_ast_text(
     text: str,
     *,
     filename: str,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
 ) -> tuple[ast.AST | None, dict[str, object] | None]:
     if options.feature_version is not None and (
         options.allow_top_level_await or options.dont_inherit
@@ -639,12 +630,12 @@ def _parse_ast_text(
     return _parse_via_ast_parse(text, filename=filename, options=options, optimize=optimize)
 
 
-def _cache_key(file_ctx: FileContext, *, options: ASTExtractOptions) -> tuple[object, ...] | None:
+def _cache_key(file_ctx: FileContext, *, options: AstExtractOptions) -> tuple[object, ...] | None:
     if not options.cache_by_sha or not file_ctx.file_sha256:
         return None
     return (
         file_ctx.file_sha256,
-        _ast_schema_fingerprint(),
+        ast_files_fingerprint(),
         options.mode,
         options.feature_version,
         options.type_comments,
@@ -659,7 +650,7 @@ def _cache_key(file_ctx: FileContext, *, options: ASTExtractOptions) -> tuple[ob
 def _ast_row_worker(
     file_ctx: FileContext,
     *,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     cache_profile: DiskCacheProfile | None,
     cache_ttl: float | None,
 ) -> dict[str, object] | None:
@@ -675,7 +666,7 @@ def _ast_row_worker(
 def _ast_row_from_walk(
     file_ctx: FileContext,
     *,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     walk: _AstWalkResult | None,
     errors: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -891,7 +882,7 @@ def _parse_and_walk(
     text: str,
     *,
     filename: str,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     max_nodes: int | None,
 ) -> tuple[_AstWalkResult | None, list[dict[str, object]]]:
     error_rows: list[dict[str, object]] = []
@@ -915,7 +906,7 @@ def _parse_and_walk(
 def _extract_ast_for_context(
     file_ctx: FileContext,
     *,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     cache: Cache | FanoutCache | None = None,
     cache_ttl: float | None = None,
 ) -> dict[str, object] | None:
@@ -973,7 +964,7 @@ def _extract_ast_for_context(
 def _extract_ast_for_row(
     row: dict[str, object],
     *,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
 ) -> dict[str, object] | None:
     file_ctx = FileContext.from_repo_row(row)
     return _extract_ast_for_context(file_ctx, options=options)
@@ -981,18 +972,18 @@ def _extract_ast_for_row(
 
 def extract_ast(
     repo_files: TableLike,
-    options: ASTExtractOptions | None = None,
+    options: AstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> ASTExtractResult:
+) -> AstExtractResult:
     """Extract a minimal AST fact set per file.
 
     Returns
     -------
-    ASTExtractResult
+    AstExtractResult
         Tables of AST nodes, edges, and errors.
     """
-    normalized_options = normalize_options("ast", options, ASTExtractOptions)
+    normalized_options = normalize_options("ast", options, AstExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
     exec_context = replace(exec_context, session=session)
@@ -1004,7 +995,7 @@ def extract_ast(
         options=normalized_options,
         context=exec_context,
     )
-    return ASTExtractResult(
+    return AstExtractResult(
         ast_files=cast(
             "TableLike",
             materialize_extract_plan(
@@ -1023,7 +1014,7 @@ def extract_ast(
 
 def extract_ast_plans(
     repo_files: TableLike,
-    options: ASTExtractOptions | None = None,
+    options: AstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
 ) -> dict[str, DataFusionPlanBundle]:
@@ -1034,7 +1025,7 @@ def extract_ast_plans(
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by ``ast_files``.
     """
-    normalized_options = normalize_options("ast", options, ASTExtractOptions)
+    normalized_options = normalize_options("ast", options, AstExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
     exec_context = replace(exec_context, session=session)
@@ -1081,7 +1072,7 @@ class _AstRowRequest:
     repo_files: TableLike
     file_contexts: Iterable[FileContext] | None
     scope_manifest: ScopeManifest | None
-    options: ASTExtractOptions
+    options: AstExtractOptions
     runtime_profile: DataFusionRuntimeProfile | None
 
 
@@ -1090,7 +1081,7 @@ def _collect_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     scope_manifest: ScopeManifest | None,
-    options: ASTExtractOptions,
+    options: AstExtractOptions,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
     request = _AstRowRequest(
@@ -1168,7 +1159,7 @@ def _iter_ast_rows(request: _AstRowRequest) -> Iterable[dict[str, object]]:
             yield row
 
 
-def _resolve_batch_size(options: ASTExtractOptions) -> int | None:
+def _resolve_batch_size(options: AstExtractOptions) -> int | None:
     if options.batch_size is None:
         return None
     if options.batch_size <= 0:
@@ -1212,7 +1203,7 @@ class _AstPlanContext:
 
 class _AstTablesKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: ASTExtractOptions | None
+    options: AstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1223,7 +1214,7 @@ class _AstTablesKwargs(TypedDict, total=False):
 
 class _AstTablesKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: ASTExtractOptions | None
+    options: AstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1234,7 +1225,7 @@ class _AstTablesKwargsTable(TypedDict, total=False):
 
 class _AstTablesKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: ASTExtractOptions | None
+    options: AstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1278,7 +1269,7 @@ def extract_ast_tables(
         attributes={"codeanatomy.extractor": "ast"},
     ):
         repo_files = kwargs["repo_files"]
-        normalized_options = normalize_options("ast", kwargs.get("options"), ASTExtractOptions)
+        normalized_options = normalize_options("ast", kwargs.get("options"), AstExtractOptions)
         file_contexts = kwargs.get("file_contexts")
         evidence_plan = kwargs.get("evidence_plan")
         profile = kwargs.get("profile", "default")

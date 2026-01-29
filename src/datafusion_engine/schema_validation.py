@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -14,10 +12,11 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from pyarrow import Table as ArrowTable
 
-from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike, TableLike, coerce_table_like
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike, TableLike
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema_introspection import table_constraint_rows
+from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from datafusion_engine.sql_options import sql_options_for_profile
 
 if TYPE_CHECKING:
@@ -191,34 +190,11 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
         result = _expr_table(df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1))
         value = result["dtype"][0].as_py()
     finally:
-        _deregister_table(ctx, name="t")
+        deregister_table(ctx, "t")
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)
     return value
-
-
-def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) -> str:
-    name = f"__{prefix}_{uuid.uuid4().hex}"
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        resolved_table = cast("pa.RecordBatchReader", resolved).read_all()
-    else:
-        resolved_table = cast("ArrowTable", resolved)
-    from_arrow = getattr(ctx, "from_arrow", None)
-    if not callable(from_arrow):
-        msg = "SessionContext does not support from_arrow ingestion."
-        raise NotImplementedError(msg)
-    from_arrow(resolved_table, name=name)
-    return name
-
-
-def _deregister_table(ctx: SessionContext, *, name: str) -> None:
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister(name)
-            invalidate_introspection_cache(ctx)
 
 
 def _count_rows(
@@ -582,17 +558,12 @@ def _prepare_validation_context(
     options: ArrowValidationOptions,
 ) -> tuple[SessionContext, _ValidationContext, str, str]:
     session = _session_context(runtime_profile)
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("pa.RecordBatchReader", resolved)
-        resolved_table = reader.read_all()
-    else:
-        resolved_table = cast("ArrowTable", resolved)
+    resolved_table = to_arrow_table(table)
     row_count = int(resolved_table.num_rows)
     aligned, info = _align_for_validation(resolved_table, spec=spec, options=options)
     aligned_table = cast("ArrowTable", aligned)
-    aligned_name = _register_temp_table(session, aligned_table, prefix="schema_validate")
-    original_name = _register_temp_table(session, resolved_table, prefix="schema_validate_src")
+    aligned_name = register_temp_table(session, aligned_table, prefix="schema_validate")
+    original_name = register_temp_table(session, resolved_table, prefix="schema_validate_src")
     return (
         session,
         _ValidationContext(
@@ -646,8 +617,8 @@ def validate_table(
             sql_options=sql_options,
         )
     finally:
-        _deregister_table(session, name=aligned_name)
-        _deregister_table(session, name=original_name)
+        deregister_table(session, aligned_name)
+        deregister_table(session, original_name)
 
     if options.max_errors is not None:
         error_entries = error_entries[: options.max_errors]

@@ -7,6 +7,8 @@ from typing import Any
 
 from hamilton.data_quality import base as dq_base
 
+from utils.validation import find_missing
+
 
 class TableSchemaValidator(dq_base.DataValidator):
     """Validate that a table-like object matches an expected schema."""
@@ -67,7 +69,7 @@ class TableSchemaValidator(dq_base.DataValidator):
                 message="Table schema is missing or empty.",
                 diagnostics={"expected_columns": list(self._expected_columns)},
             )
-        missing = [name for name in self._expected_columns if name not in names]
+        missing = find_missing(self._expected_columns, names)
         if missing:
             return dq_base.ValidationResult(
                 passes=False,

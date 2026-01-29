@@ -2679,6 +2679,18 @@ def _ts_cst_docstrings_check_df(ctx: SessionContext) -> DataFrame:
 
 def _python_imports_df(ctx: SessionContext) -> DataFrame:
     available = table_names_snapshot(ctx)
+    if "python_imports_v1" in available:
+        return ctx.table("python_imports_v1").select(
+            col("file_id"),
+            col("path"),
+            col("source"),
+            col("kind"),
+            col("module"),
+            col("name"),
+            col("asname"),
+            _arrow_cast(col("level"), "Int32").alias("level"),
+            _arrow_cast(col("is_star"), "Boolean").alias("is_star"),
+        )
     frames: list[DataFrame] = []
     if "ast_files_v1" in available:
         ast_df = _view_df(ctx, "ast_imports").select(
@@ -2831,7 +2843,7 @@ def _register_builder_map() -> dict[str, Callable[[SessionContext], DataFrame]]:
 _CUSTOM_BUILDERS: Final[dict[str, Callable[[SessionContext], DataFrame]]] = _register_builder_map()
 
 _CUSTOM_VIEW_DEPENDENCIES: Final[dict[str, tuple[str, ...]]] = {
-    "python_imports": ("ast_imports", "cst_imports", "ts_imports"),
+    "python_imports": ("python_imports_v1", "ast_imports", "cst_imports", "ts_imports"),
     "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
     "ts_ast_calls_check": ("ts_calls", "ast_calls"),
     "ts_ast_defs_check": ("ts_defs", "ast_defs"),

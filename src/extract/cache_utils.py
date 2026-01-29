@@ -24,10 +24,6 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
-def _hash_payload(payload: object) -> str:
-    return hash_msgpack_canonical(to_builtins(payload))
-
-
 CACHE_VERSION: int = 1
 LOCK_EXPIRE_SECONDS: float = 60.0
 
@@ -40,7 +36,7 @@ def stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
     str
         Stable cache key string.
     """
-    digest = _hash_payload({"version": CACHE_VERSION, **payload})
+    digest = hash_msgpack_canonical(to_builtins({"version": CACHE_VERSION, **payload}))
     return f"{prefix}:{digest}"
 
 
@@ -52,7 +48,7 @@ def stable_cache_label(prefix: str, payload: Mapping[str, object]) -> str:
     str
         Stable label derived from the payload fingerprint.
     """
-    digest = _hash_payload({"version": CACHE_VERSION, **payload})
+    digest = hash_msgpack_canonical(to_builtins({"version": CACHE_VERSION, **payload}))
     return f"{prefix}_{digest}"
 
 

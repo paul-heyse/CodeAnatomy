@@ -13,6 +13,9 @@ wheels/
 # Rust build artifacts
 rust/datafusion_ext/target/
 rust/datafusion_ext/Cargo.lock
+rust/datafusion_python/target
+rust/datafusion_python/Cargo.lock
+rust/datafusion_python/python/datafusion/_internal.abi3.so
 Cargo.lock
 # Virtual environments
 .venv

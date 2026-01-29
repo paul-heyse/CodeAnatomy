@@ -2,8 +2,8 @@
 
 Date: 2026-01-29  
 Owner: Codex (design phase)  
-Status: in progress (code scopes complete; documentation/cleanup deferred)
-Validated: 2026-01-29 (codebase cross-check; docs deferred)  
+Status: in progress (code scopes complete; documentation/cleanup remaining)
+Validated: 2026-01-29 (codebase cross-check; docs/cleanup pending)  
 
 ## Purpose
 Deliver a best-in-class OpenTelemetry (OTel) architecture across CodeAnatomy. The target state provides end-to-end traces, metrics, and logs with consistent resource identity, strict semantic conventions, deterministic context propagation, and a clean separation between domain observability (src/obs) and telemetry transport (OTel SDK + Collector). The plan assumes breaking changes are acceptable.
@@ -40,9 +40,9 @@ providers.activate_global()
 - `src/obs/otel/resources.py` (new)
 - `src/obs/otel/config.py` (new)
 - `src/obs/otel/__init__.py` (new)
-- `src/engine/session.py`
 - `src/engine/runtime.py`
-- `src/hamilton_pipeline/driver_factory.py`
+- `src/engine/session_factory.py`
+- `src/engine/materialize_pipeline.py`
 - `src/graph/product_build.py`
 - `docs/architecture/ARCHITECTURE.md`
 
@@ -55,6 +55,7 @@ providers.activate_global()
 - [x] Standardize propagators and log correlation defaults.
 - [x] Provide a test-mode config (in-memory exporters, simple span processor).
 - [x] Update entry points to call the bootstrap once per process.
+- [x] Bootstrap wired in runtime/session factory/materialize pipeline/product build/extract worker init.
 
 ---
 
@@ -132,10 +133,10 @@ Map existing `src/obs/metrics.py` and scan telemetry outputs into OTel metrics w
 
 ### Representative code pattern
 ```python
-duration = meter.create_histogram("codeanatomy.stage.duration", unit="ms")
+duration = meter.create_histogram("codeanatomy.stage.duration", unit="s")
 
-with timed_span("extract.ast") as elapsed_ms:
-    duration.record(elapsed_ms, {"stage": "extract", "status": "ok"})
+with timed_span("extract.ast") as elapsed_s:
+    duration.record(elapsed_s, {"stage": "extract", "status": "ok"})
 ```
 
 ### Target files to modify
@@ -205,8 +206,10 @@ provider = TracerProvider(resource=resource, sampler=sampler)
 
 ### Implementation checklist
 - [x] Configure parent-based head sampling in the bootstrap.
-- [ ] Document and enforce attribute/span/log limits via env vars. (doc deferred)
+- [x] Enforce attribute/span/log limits via env vars (SpanLimits + attribute normalization).
+- [ ] Document limit env vars and defaults. (doc deferred)
 - [x] Provide a Collector config with tail sampling, redaction, and routing.
+- [x] Implement attribute redaction defaults (`CODEANATOMY_OTEL_REDACT_KEYS`).
 - [ ] Adopt a privacy policy for attributes and baggage usage. (doc deferred)
 
 ---
@@ -318,6 +321,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4317"
 - [x] Provide Collector configuration examples.
 - [x] Provide dev/test/prod profiles with different sampling and exporters.
 - [ ] Update reference links in `docs/python_library_reference/opentelemetry.md`.
+- [ ] Align `docs/architecture/observability.md` metric names/units with seconds-based catalog.
 
 ---
 

@@ -4,6 +4,19 @@ from __future__ import annotations
 
 import hashlib
 
+from utils.hashing import (
+    config_fingerprint,
+    hash_file_sha256,
+    hash_json_canonical,
+    hash_json_default,
+    hash_json_stdlib,
+    hash_msgpack_canonical,
+    hash_msgpack_default,
+    hash_settings,
+    hash_sha256_hex,
+    hash_storage_options,
+)
+
 
 def hash64_from_text(value: str) -> int:
     """Return a deterministic signed 64-bit hash for a string.
@@ -39,4 +52,17 @@ def hash128_from_text(value: str) -> str:
     return hashlib.blake2b(value.encode("utf-8"), digest_size=16).hexdigest()
 
 
-__all__ = ["hash64_from_text", "hash128_from_text"]
+__all__ = [
+    "config_fingerprint",
+    "hash64_from_text",
+    "hash128_from_text",
+    "hash_file_sha256",
+    "hash_json_canonical",
+    "hash_json_default",
+    "hash_json_stdlib",
+    "hash_msgpack_canonical",
+    "hash_msgpack_default",
+    "hash_settings",
+    "hash_sha256_hex",
+    "hash_storage_options",
+]

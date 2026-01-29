@@ -20,8 +20,8 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.schema_validation import ArrowValidationOptions
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
+from schema_spec.contract_row import ContractRow
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
 
@@ -74,18 +74,6 @@ def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
 
 def _sql_spec(expr: ExprIR) -> ExprSpec:
     return ExprSpec(expr_ir=expr)
-
-
-@dataclass(frozen=True)
-class ContractRow:
-    """Contract specification for a dataset row."""
-
-    dedupe: DedupeSpecSpec | None = None
-    canonical_sort: tuple[SortKeySpec, ...] = ()
-    version: int | None = None
-    virtual_fields: tuple[str, ...] = ()
-    virtual_field_docs: dict[str, str] | None = None
-    validation: ArrowValidationOptions | None = None
 
 
 @dataclass(frozen=True)

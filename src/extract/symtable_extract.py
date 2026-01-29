@@ -39,7 +39,7 @@ from extract.helpers import (
 )
 from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
-from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
     from extract.evidence_plan import EvidencePlan
+    from extract.scope_manifest import ScopeManifest
     from extract.session import ExtractSession
 
 
@@ -655,20 +656,24 @@ def _collect_symtable_file_rows(
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None,
     *,
+    scope_manifest: ScopeManifest | None,
     options: SymtableExtractOptions,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
     contexts = list(
         iter_worklist_contexts(
-            repo_files,
-            output_table="symtable_files_v1",
-            runtime_profile=runtime_profile,
-            file_contexts=file_contexts,
-            queue_name=(
-                worklist_queue_name(output_table="symtable_files_v1", repo_id=options.repo_id)
-                if options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=repo_files,
+                output_table="symtable_files_v1",
+                runtime_profile=runtime_profile,
+                file_contexts=file_contexts,
+                queue_name=(
+                    worklist_queue_name(output_table="symtable_files_v1", repo_id=options.repo_id)
+                    if options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=scope_manifest,
+            )
         )
     )
     cache_profile = diskcache_profile_from_ctx(runtime_profile)
@@ -744,6 +749,7 @@ def extract_symtable(
     rows = _collect_symtable_file_rows(
         repo_files,
         exec_context.file_contexts,
+        scope_manifest=exec_context.scope_manifest,
         options=normalized_options,
         runtime_profile=runtime_profile,
     )
@@ -793,6 +799,7 @@ def extract_symtable_plans(
     rows = _collect_symtable_file_rows(
         repo_files,
         exec_context.file_contexts,
+        scope_manifest=exec_context.scope_manifest,
         options=normalized_options,
         runtime_profile=runtime_profile,
     )
@@ -811,6 +818,7 @@ class _SymtableTableKwargs(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: bool
@@ -821,6 +829,7 @@ class _SymtableTableKwargsTable(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Literal[False]
@@ -831,6 +840,7 @@ class _SymtableTableKwargsReader(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -883,6 +893,7 @@ def extract_symtables_table(
         exec_context = ExtractExecutionContext(
             file_contexts=file_contexts,
             evidence_plan=evidence_plan,
+            scope_manifest=kwargs.get("scope_manifest"),
             session=kwargs.get("session"),
             profile=profile,
         )

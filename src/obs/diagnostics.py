@@ -60,16 +60,6 @@ class DiagnosticsCollector:
         emit_diagnostics_event(name, payload=normalized, event_kind="event")
         record_artifact_count(name, status="ok", attributes={"artifact.type": "event"})
 
-    @staticmethod
-    def record_metric(name: str, value: float, tags: Mapping[str, str]) -> None:
-        """Record a metric value."""
-        payload = dict(tags)
-        emit_diagnostics_event(
-            name,
-            payload={**payload, "value": value},
-            event_kind="metric",
-        )
-
     def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         """Return a shallow copy of collected event rows.
 

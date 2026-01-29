@@ -258,9 +258,7 @@ def build_view_product(
     """
     configure_otel(
         service_name="codeanatomy",
-        options=OtelBootstrapOptions(
-            resource_overrides={"codeanatomy.view_name": view_name}
-        ),
+        options=OtelBootstrapOptions(resource_overrides={"codeanatomy.view_name": view_name}),
     )
     profile = session_runtime.profile
     session = session_runtime.ctx

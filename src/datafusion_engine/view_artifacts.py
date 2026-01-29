@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -19,6 +18,7 @@ from serde_msgspec import (
     to_builtins,
     validation_error_payload,
 )
+from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -108,7 +108,7 @@ _PLAN_TASK_SIGNATURE_VERSION = 2
 
 
 def _hash_payload(payload: object) -> str:
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return hash_msgpack_canonical(payload)
 
 
 def _df_settings_hash(df_settings: Mapping[str, str]) -> str:

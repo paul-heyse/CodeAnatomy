@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from datafusion import DataFrame, SessionContext, col
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from extract.scope_manifest import ScopeManifest
 
 
 class _ArrowBatch(Protocol):
@@ -72,28 +74,25 @@ def worklist_builder(
     return _builder
 
 
-def iter_worklist_contexts(
-    repo_files: TableLike,
-    *,
-    output_table: str,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    file_contexts: Iterable[FileContext] | None = None,
-    queue_name: str | None = None,
-) -> Iterable[FileContext]:
+@dataclass(frozen=True)
+class WorklistRequest:
+    """Inputs needed to build a worklist iterator."""
+
+    repo_files: TableLike
+    output_table: str
+    runtime_profile: DataFusionRuntimeProfile | None
+    file_contexts: Iterable[FileContext] | None = None
+    queue_name: str | None = None
+    scope_manifest: ScopeManifest | None = None
+
+
+def iter_worklist_contexts(request: WorklistRequest) -> Iterable[FileContext]:
     """Yield worklist file contexts with DataFusion fallback.
 
     Parameters
     ----------
-    repo_files:
-        Repo manifest table.
-    output_table:
-        Output dataset name used for worklist computation.
-    runtime_profile:
-        DataFusion runtime profile used for worklist execution.
-    file_contexts:
-        Optional precomputed file contexts.
-    queue_name:
-        Optional DiskCache queue name for persistent worklists.
+    request:
+        Worklist request inputs including repo files, output dataset, and options.
 
     Yields
     ------
@@ -101,32 +100,56 @@ def iter_worklist_contexts(
         File contexts matching the worklist query.
 
     """
-    if file_contexts is not None:
-        yield from file_contexts
-        return
-    if runtime_profile is None:
-        from datafusion_engine.runtime import DataFusionRuntimeProfile
+    allowed_paths = (
+        request.scope_manifest.allowed_paths() if request.scope_manifest is not None else None
+    )
+    for file_ctx in _iter_worklist_contexts_raw(request):
+        if allowed_paths is not None and file_ctx.path not in allowed_paths:
+            continue
+        yield file_ctx
 
-        runtime_profile = DataFusionRuntimeProfile()
-    if queue_name is None:
+
+def _iter_worklist_contexts_raw(request: WorklistRequest) -> Iterable[FileContext]:
+    if request.file_contexts is not None:
+        yield from request.file_contexts
+        return
+    runtime_profile = _resolve_runtime_profile(request.runtime_profile)
+    if request.queue_name is None:
         yield from _worklist_stream(
             runtime_profile,
-            repo_files=repo_files,
-            output_table=output_table,
+            repo_files=request.repo_files,
+            output_table=request.output_table,
         )
         return
-    queue_bundle = _worklist_queue(runtime_profile, queue_name=queue_name)
+    queue_bundle = _worklist_queue(runtime_profile, queue_name=request.queue_name)
     if queue_bundle is None:
         yield from _worklist_stream(
             runtime_profile,
-            repo_files=repo_files,
-            output_table=output_table,
+            repo_files=request.repo_files,
+            output_table=request.output_table,
         )
         return
     queue, index = queue_bundle
     if len(queue) > 0:
         yield from _drain_worklist_queue(queue, index=index)
         return
+    yield from _stream_with_queue(
+        runtime_profile,
+        repo_files=request.repo_files,
+        output_table=request.output_table,
+        queue=queue,
+        index=index,
+    )
+
+
+def _stream_with_queue(
+    runtime_profile: DataFusionRuntimeProfile,
+    *,
+    repo_files: TableLike,
+    output_table: str,
+    queue: Deque,
+    index: Index,
+) -> Iterable[FileContext]:
     for file_ctx in _worklist_stream(
         runtime_profile,
         repo_files=repo_files,
@@ -142,6 +165,16 @@ def iter_worklist_contexts(
         index[file_id] = sha
         queue.append(file_ctx)
     yield from _drain_worklist_queue(queue, index=index)
+
+
+def _resolve_runtime_profile(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionRuntimeProfile:
+    if runtime_profile is not None:
+        return runtime_profile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    return DataFusionRuntimeProfile()
 
 
 def _worklist_stream(
@@ -308,4 +341,9 @@ def _registered_output_table(
                 deregister(name)
 
 
-__all__ = ["iter_worklist_contexts", "worklist_builder", "worklist_queue_name"]
+__all__ = [
+    "WorklistRequest",
+    "iter_worklist_contexts",
+    "worklist_builder",
+    "worklist_queue_name",
+]

@@ -5,11 +5,12 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sys
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TypeVar
 
 from opentelemetry import context as otel_context
+from opentelemetry import propagate
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -47,11 +48,17 @@ def supports_fork() -> bool:
     return "fork" in multiprocessing.get_all_start_methods()
 
 
-def _process_executor(max_workers: int | None) -> ProcessPoolExecutor:
-    def _worker_init() -> None:
+def _process_executor(
+    max_workers: int | None,
+    carrier: Mapping[str, str] | None,
+) -> ProcessPoolExecutor:
+    def _worker_init(carrier_payload: Mapping[str, str] | None) -> None:
         from obs.otel import configure_otel
 
         configure_otel(service_name="codeanatomy")
+        if carrier_payload:
+            context = propagate.extract(carrier_payload)
+            otel_context.attach(context)
 
     if supports_fork():
         ctx = multiprocessing.get_context("fork")
@@ -59,8 +66,19 @@ def _process_executor(max_workers: int | None) -> ProcessPoolExecutor:
             max_workers=max_workers,
             mp_context=ctx,
             initializer=_worker_init,
+            initargs=(carrier,),
         )
-    return ProcessPoolExecutor(max_workers=max_workers, initializer=_worker_init)
+    return ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_worker_init,
+        initargs=(carrier,),
+    )
+
+
+def _build_propagation_carrier() -> dict[str, str]:
+    carrier: dict[str, str] = {}
+    propagate.inject(carrier)
+    return carrier
 
 
 def parallel_map(
@@ -90,7 +108,8 @@ def parallel_map(
             for item in executor.map(_wrapped, items):
                 yield item
         return
-    with _process_executor(max_workers) as executor:
+    carrier = _build_propagation_carrier()
+    with _process_executor(max_workers, carrier) as executor:
         for item in executor.map(fn, items):
             yield item
 

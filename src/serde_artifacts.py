@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import msgspec
 
@@ -13,22 +12,24 @@ from core_types import (
     IDENTIFIER_PATTERN,
     RUN_ID_PATTERN,
     STATUS_PATTERN,
+    JsonValueLax,
 )
 from datafusion_engine.delta_protocol import (
     DeltaFeatureGate,
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
 )
-from serde_msgspec import StructBaseCompat, StructBaseHotPath, dumps_msgpack
+from serde_msgspec import StructBaseCompat, StructBaseHotPath
 from serde_msgspec_ext import (
     ExecutionPlanProtoBytes,
     LogicalPlanProtoBytes,
     OptimizedPlanProtoBytes,
     SubstraitBytes,
 )
+from utils.hashing import hash_msgpack_canonical
 
 # Any is required to model arbitrary JSON payloads in schema exports.
-type JsonValue = Any
+type JsonValue = JsonValueLax
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 NonNegFloat = Annotated[float, msgspec.Meta(ge=0)]
@@ -615,7 +616,7 @@ def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
     str
         SHA-256 hash of the msgpack payload.
     """
-    return hashlib.sha256(dumps_msgpack(envelope)).hexdigest()
+    return hash_msgpack_canonical(envelope)
 
 
 __all__ = [

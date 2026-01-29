@@ -28,6 +28,7 @@ from libcst.metadata import (
     WhitespaceInclusivePositionProvider,
 )
 
+from core_types import RowPermissive as Row
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
@@ -52,17 +53,16 @@ from extract.helpers import (
 from extract.parallel import parallel_map, resolve_max_workers, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
-from extract.worklists import iter_worklist_contexts, worklist_queue_name
+from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.scope_manifest import ScopeManifest
     from extract.session import ExtractSession
 
 type QualifiedNameSet = Collection[QualifiedName] | Callable[[], Collection[QualifiedName]]
-type Row = dict[str, object]
-
 CST_LINE_BASE = 1
 CST_COL_UNIT = "utf32"
 CST_END_EXCLUSIVE = True
@@ -1436,45 +1436,57 @@ def _cst_file_row(
     }
 
 
-def _collect_cst_file_rows(
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None,
-    *,
-    options: CSTExtractOptions,
-    evidence_plan: EvidencePlan | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> list[dict[str, object]]:
+@dataclass(frozen=True)
+class _CstRowRequest:
+    repo_files: TableLike
+    file_contexts: Iterable[FileContext] | None
+    scope_manifest: ScopeManifest | None
+    options: CSTExtractOptions
+    evidence_plan: EvidencePlan | None
+    runtime_profile: DataFusionRuntimeProfile | None
+
+
+def _collect_cst_file_rows(request: _CstRowRequest) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     contexts = list(
         iter_worklist_contexts(
-            repo_files,
-            output_table="libcst_files_v1",
-            runtime_profile=runtime_profile,
-            file_contexts=file_contexts,
-            queue_name=(
-                worklist_queue_name(output_table="libcst_files_v1", repo_id=options.repo_id)
-                if options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=request.repo_files,
+                output_table="libcst_files_v1",
+                runtime_profile=request.runtime_profile,
+                file_contexts=request.file_contexts,
+                queue_name=(
+                    worklist_queue_name(
+                        output_table="libcst_files_v1", repo_id=request.options.repo_id
+                    )
+                    if request.options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=request.scope_manifest,
+            )
         )
     )
-    repo_manager = _build_repo_manager(options, contexts)
+    repo_manager = _build_repo_manager(request.options, contexts)
     if not contexts:
         return rows
-    use_parallel = options.parallel
+    use_parallel = request.options.parallel
     if repo_manager is not None and not supports_fork():
         use_parallel = False
     if use_parallel:
         _warm_cst_parser()
         _set_worker_repo_manager(repo_manager)
-        runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
+        runner = partial(
+            _cst_row_worker,
+            options=request.options,
+            evidence_plan=request.evidence_plan,
+        )
         try:
             rows.extend(
                 row
                 for row in parallel_map(
                     contexts,
                     runner,
-                    max_workers=resolve_max_workers(options.max_workers, kind="cpu"),
+                    max_workers=resolve_max_workers(request.options.max_workers, kind="cpu"),
                 )
                 if row is not None
             )
@@ -1484,8 +1496,8 @@ def _collect_cst_file_rows(
     for file_ctx in contexts:
         row = _cst_file_row(
             file_ctx,
-            options=options,
-            evidence_plan=evidence_plan,
+            options=request.options,
+            evidence_plan=request.evidence_plan,
             repo_manager=repo_manager,
         )
         if row is not None:
@@ -1524,6 +1536,7 @@ def _build_cst_file_plan(
 class _CstBatchContext:
     repo_files: TableLike
     file_contexts: Iterable[FileContext] | None
+    scope_manifest: ScopeManifest | None
     options: CSTExtractOptions
     evidence_plan: EvidencePlan | None
     runtime_profile: DataFusionRuntimeProfile | None
@@ -1535,18 +1548,21 @@ def _iter_cst_row_batches(
 ) -> Iterable[Sequence[Mapping[str, object]]]:
     contexts = list(
         iter_worklist_contexts(
-            context.repo_files,
-            output_table="libcst_files_v1",
-            runtime_profile=context.runtime_profile,
-            file_contexts=context.file_contexts,
-            queue_name=(
-                worklist_queue_name(
-                    output_table="libcst_files_v1",
-                    repo_id=context.options.repo_id,
-                )
-                if context.options.use_worklist_queue
-                else None
-            ),
+            WorklistRequest(
+                repo_files=context.repo_files,
+                output_table="libcst_files_v1",
+                runtime_profile=context.runtime_profile,
+                file_contexts=context.file_contexts,
+                queue_name=(
+                    worklist_queue_name(
+                        output_table="libcst_files_v1",
+                        repo_id=context.options.repo_id,
+                    )
+                    if context.options.use_worklist_queue
+                    else None
+                ),
+                scope_manifest=context.scope_manifest,
+            )
         )
     )
     if not contexts:
@@ -1643,17 +1659,21 @@ def extract_cst(
     batch_size = _resolve_batch_size(normalized_options)
     if batch_size is None:
         rows = _collect_cst_file_rows(
-            repo_files,
-            exec_context.file_contexts,
-            options=normalized_options,
-            evidence_plan=exec_context.evidence_plan,
-            runtime_profile=runtime_profile,
+            _CstRowRequest(
+                repo_files=repo_files,
+                file_contexts=exec_context.file_contexts,
+                scope_manifest=exec_context.scope_manifest,
+                options=normalized_options,
+                evidence_plan=exec_context.evidence_plan,
+                runtime_profile=runtime_profile,
+            )
         )
     else:
         row_batches = _iter_cst_row_batches(
             _CstBatchContext(
                 repo_files=repo_files,
                 file_contexts=exec_context.file_contexts,
+                scope_manifest=exec_context.scope_manifest,
                 options=normalized_options,
                 evidence_plan=exec_context.evidence_plan,
                 runtime_profile=runtime_profile,
@@ -1708,17 +1728,21 @@ def extract_cst_plans(
     batch_size = _resolve_batch_size(normalized_options)
     if batch_size is None:
         rows = _collect_cst_file_rows(
-            repo_files,
-            exec_context.file_contexts,
-            options=normalized_options,
-            evidence_plan=exec_context.evidence_plan,
-            runtime_profile=runtime_profile,
+            _CstRowRequest(
+                repo_files=repo_files,
+                file_contexts=exec_context.file_contexts,
+                scope_manifest=exec_context.scope_manifest,
+                options=normalized_options,
+                evidence_plan=exec_context.evidence_plan,
+                runtime_profile=runtime_profile,
+            )
         )
     else:
         row_batches = _iter_cst_row_batches(
             _CstBatchContext(
                 repo_files=repo_files,
                 file_contexts=exec_context.file_contexts,
+                scope_manifest=exec_context.scope_manifest,
                 options=normalized_options,
                 evidence_plan=exec_context.evidence_plan,
                 runtime_profile=runtime_profile,
@@ -1741,6 +1765,7 @@ class _CstTablesKwargs(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: bool
@@ -1751,6 +1776,7 @@ class _CstTablesKwargsTable(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Literal[False]
@@ -1761,6 +1787,7 @@ class _CstTablesKwargsReader(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    scope_manifest: ScopeManifest | None
     session: ExtractSession | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -1809,6 +1836,7 @@ def extract_cst_tables(
         exec_context = ExtractExecutionContext(
             file_contexts=file_contexts,
             evidence_plan=evidence_plan,
+            scope_manifest=kwargs.get("scope_manifest"),
             session=kwargs.get("session"),
             profile=profile,
         )

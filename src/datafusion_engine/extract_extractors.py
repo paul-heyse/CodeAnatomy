@@ -15,6 +15,7 @@ _REQUIRED_INPUTS: dict[str, tuple[str, ...]] = {
     "symtable": ("repo_files",),
     "scip": ("scip_index_path", "repo_root"),
     "repo_scan": ("repo_root",),
+    "python_external": ("python_imports", "repo_root"),
 }
 
 _SUPPORTS_PLAN: dict[str, bool] = {
@@ -25,6 +26,7 @@ _SUPPORTS_PLAN: dict[str, bool] = {
     "symtable": True,
     "scip": True,
     "repo_scan": False,
+    "python_external": True,
 }
 
 

@@ -3,28 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 import datafusion_engine.arrow_interop as interop
+from schema_spec.contract_row import ContractRow
 from schema_spec.specs import ArrowFieldSpec
 from schema_spec.system import TableSpecConstraints
 
-if TYPE_CHECKING:
-    from schema_spec.system import DedupeSpecSpec, SortKeySpec
-
 SCHEMA_VERSION = 1
-
-
-@dataclass(frozen=True)
-class ContractRow:
-    """Row configuration for a dataset contract."""
-
-    dedupe: DedupeSpecSpec | None = None
-    canonical_sort: tuple[SortKeySpec, ...] = ()
-    constraints: tuple[str, ...] = ()
-    version: int | None = None
 
 
 @dataclass(frozen=True)

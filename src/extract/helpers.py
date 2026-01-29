@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
+    from extract.scope_manifest import ScopeManifest
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,7 @@ class ExtractExecutionContext:
 
     file_contexts: Iterable[FileContext] | None = None
     evidence_plan: EvidencePlan | None = None
+    scope_manifest: ScopeManifest | None = None
     session: ExtractSession | None = None
     runtime_spec: RuntimeProfileSpec | None = None
     profile: str = "default"

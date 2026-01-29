@@ -8,10 +8,12 @@ from pathlib import Path
 
 from hamilton.function_modifiers import dataloader, inject, resolve_from_config, source, tag
 
-from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from engine.runtime_profile import RuntimeProfileSpec
 from extract.helpers import ExtractExecutionContext
-from extract.repo_scan import RepoScanOptions, scan_repo
+from extract.python_scope import PythonScopePolicy
+from extract.repo_scan import RepoScanOptions, scan_repo_tables
+from extract.repo_scope import RepoScopeOptions
 from extract.scip_extract import (
     ScipExtractContext,
     ScipExtractOptions,
@@ -28,7 +30,9 @@ from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrid
 from incremental.types import IncrementalConfig
 
 
-def _rows(table: TableLike) -> int:
+def _rows(table: TableLike | RecordBatchReaderLike) -> int:
+    if isinstance(table, RecordBatchReaderLike):
+        table = table.read_all()
     value = getattr(table, "num_rows", 0)
     if isinstance(value, bool):
         return 0
@@ -46,10 +50,19 @@ def _repo_scan_options(
     repo_id = incremental.repo_id if incremental is not None else None
     if cache_salt:
         repo_id = f"{repo_id}:{cache_salt}" if repo_id else cache_salt
+    scope_config = config.scope_config
+    scope_policy = RepoScopeOptions(
+        python_scope=PythonScopePolicy(extra_extensions=scope_config.python_extensions),
+        include_globs=scope_config.include_globs,
+        exclude_globs=scope_config.exclude_globs,
+        include_untracked=scope_config.include_untracked,
+        include_submodules=scope_config.include_submodules,
+        include_worktrees=scope_config.include_worktrees,
+        follow_symlinks=scope_config.follow_symlinks,
+    )
     return RepoScanOptions(
         repo_id=repo_id,
-        include_globs=config.include_globs,
-        exclude_globs=config.exclude_globs,
+        scope_policy=scope_policy,
         max_files=config.max_files,
         diff_base_ref=config.diff_base_ref,
         diff_head_ref=config.diff_head_ref,
@@ -135,12 +148,19 @@ def repo_files(
         cache_salt=cache_salt,
     )
     exec_ctx = ExtractExecutionContext(runtime_spec=runtime_profile_spec)
-    table = scan_repo(repo_scan_config.repo_root, options=options, context=exec_ctx)
+    tables = scan_repo_tables(repo_scan_config.repo_root, options=options, context=exec_ctx)
+    table = tables["repo_files_v1"]
+    if isinstance(table, RecordBatchReaderLike):
+        table = table.read_all()
     metadata: dict[str, object] = {
         "repo_root": repo_scan_config.repo_root,
         "rows": _rows(table),
-        "include_globs": list(repo_scan_config.include_globs),
-        "exclude_globs": list(repo_scan_config.exclude_globs),
+        "include_globs": list(repo_scan_config.scope_config.include_globs),
+        "exclude_globs": list(repo_scan_config.scope_config.exclude_globs),
+        "python_extensions": list(repo_scan_config.scope_config.python_extensions),
+        "include_untracked": repo_scan_config.scope_config.include_untracked,
+        "include_submodules": repo_scan_config.scope_config.include_submodules,
+        "include_worktrees": repo_scan_config.scope_config.include_worktrees,
         "changed_only": options.changed_only,
         "diff_base_ref": options.diff_base_ref,
         "diff_head_ref": options.diff_head_ref,

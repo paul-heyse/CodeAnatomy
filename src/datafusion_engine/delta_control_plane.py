@@ -19,7 +19,10 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.arrow_schema.abi import schema_to_dict
-from datafusion_engine.delta_protocol import DeltaFeatureGate
+from datafusion_engine.delta_protocol import (
+    DeltaFeatureGate,
+    delta_feature_gate_rust_payload,
+)
 from schema_spec.system import DeltaScanOptions
 
 if TYPE_CHECKING:
@@ -369,23 +372,6 @@ def _decode_schema_ipc(payload: bytes) -> pa.Schema:
         raise ValueError(msg) from exc
 
 
-def _gate_payload(
-    gate: DeltaFeatureGate | None,
-) -> tuple[int | None, int | None, list[str] | None, list[str] | None]:
-    """Convert a feature gate into Rust-compatible payload values.
-
-    Returns
-    -------
-    tuple[int | None, int | None, list[str] | None, list[str] | None]
-        Reader/writer versions and feature lists for the Rust interface.
-    """
-    if gate is None:
-        return None, None, None, None
-    reader_features = list(gate.required_reader_features) or None
-    writer_features = list(gate.required_writer_features) or None
-    return gate.min_reader_version, gate.min_writer_version, reader_features, writer_features
-
-
 def _commit_payload(
     options: DeltaCommitOptions | None,
 ) -> tuple[
@@ -552,7 +538,7 @@ def delta_provider_from_session(
         raise TypeError(msg)
     schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
         ctx,
         request.table_uri,
@@ -621,7 +607,7 @@ def delta_provider_with_files(
         raise TypeError(msg)
     schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
         ctx,
         request.table_uri,
@@ -682,7 +668,7 @@ def delta_cdf_provider(
         msg = "datafusion_ext.delta_cdf_table_provider is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     ext_options = _cdf_options_to_ext(module, request.options)
     response = provider_factory(
         request.table_uri,
@@ -734,7 +720,7 @@ def delta_snapshot_info(
         msg = "datafusion_ext.delta_snapshot_info is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = snapshot_factory(
         request.table_uri,
         storage_payload,
@@ -774,7 +760,7 @@ def delta_add_actions(
         msg = "datafusion_ext.delta_add_actions is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = add_actions_factory(
         request.table_uri,
         storage_payload,
@@ -818,7 +804,7 @@ def delta_write_ipc(
         msg = "datafusion_ext.delta_write_ipc is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     partitions_payload = list(request.partition_columns) if request.partition_columns else None
@@ -878,7 +864,7 @@ def delta_delete(
         msg = "datafusion_ext.delta_delete is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     response = delete_fn(
@@ -995,7 +981,7 @@ def delta_update(
         msg = "datafusion_ext.delta_update is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     updates_payload = sorted((str(key), str(value)) for key, value in request.updates.items())
@@ -1052,7 +1038,7 @@ def delta_merge(
         msg = "datafusion_ext.delta_merge is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     matched_payload = sorted(
@@ -1122,7 +1108,7 @@ def delta_optimize_compact(
         msg = "datafusion_ext.delta_optimize_compact is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
     response = optimize_fn(
@@ -1177,7 +1163,7 @@ def delta_vacuum(
         msg = "datafusion_ext.delta_vacuum is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     response = vacuum_fn(
         ctx,
@@ -1233,7 +1219,7 @@ def delta_restore(
         msg = "datafusion_ext.delta_restore is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     response = restore_fn(
         ctx,
@@ -1292,7 +1278,7 @@ def delta_set_properties(
         msg = "datafusion_ext.delta_set_properties is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
     response = set_fn(
@@ -1351,7 +1337,7 @@ def delta_add_features(
         msg = "datafusion_ext.delta_add_features is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     features_payload = [str(feature) for feature in request.features]
     response = add_fn(
@@ -1404,7 +1390,7 @@ def delta_add_constraints(
         msg = "datafusion_ext.delta_add_constraints is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     constraints_payload = sorted(
         (str(name), str(expr)) for name, expr in request.constraints.items()
@@ -1458,7 +1444,7 @@ def delta_drop_constraints(
         msg = "datafusion_ext.delta_drop_constraints is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload = _commit_payload(request.commit_options)
     response = drop_fn(
         ctx,
@@ -1505,7 +1491,7 @@ def delta_create_checkpoint(
         msg = "datafusion_ext.delta_create_checkpoint is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = checkpoint_fn(
         ctx,
         request.table_uri,
@@ -1543,7 +1529,7 @@ def delta_cleanup_metadata(
         msg = "datafusion_ext.delta_cleanup_metadata is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = _gate_payload(request.gate)
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = cleanup_fn(
         ctx,
         request.table_uri,

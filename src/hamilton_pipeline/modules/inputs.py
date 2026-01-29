@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -16,7 +15,7 @@ from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
-from extract.repo_scan import default_repo_scan_options, repo_scan_globs_from_options
+from extract.repo_scan import default_repo_scan_options
 from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
 from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
 from hamilton_pipeline.pipeline_types import (
@@ -25,6 +24,7 @@ from hamilton_pipeline.pipeline_types import (
     OutputStoragePolicy,
     RelspecConfig,
     RepoScanConfig,
+    RepoScopeConfig,
     ScipIdentityOverrides,
     ScipIndexConfig,
     TreeSitterConfig,
@@ -34,25 +34,14 @@ from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc_utils import IpcWriteConfig
+from utils.env_utils import env_bool, env_value
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
     if config is not None:
         return bool(config.enabled)
-    mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
+    mode = (env_value("CODEANATOMY_PIPELINE_MODE") or "").lower()
     return mode in {"incremental", "streaming"}
-
-
-def _env_bool(name: str) -> bool | None:
-    raw = os.environ.get(name)
-    if raw is None:
-        return None
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "y"}:
-        return True
-    if normalized in {"0", "false", "no", "n"}:
-        return False
-    return None
 
 
 def _determinism_from_str(value: str) -> DeterminismTier | None:
@@ -73,7 +62,7 @@ def _cache_path_from_inputs(cache_path: str | None) -> str | None:
     if isinstance(cache_path, str) and cache_path.strip():
         return cache_path.strip()
     for name in ("CODEANATOMY_HAMILTON_CACHE_PATH", "HAMILTON_CACHE_PATH"):
-        value = os.environ.get(name, "").strip()
+        value = env_value(name) or ""
         if value:
             return value
     return None
@@ -83,7 +72,7 @@ def _cache_policy_profile_from_inputs(cache_policy_profile: str | None) -> str |
     if isinstance(cache_policy_profile, str) and cache_policy_profile.strip():
         return cache_policy_profile.strip()
     for name in ("CODEANATOMY_CACHE_POLICY_PROFILE", "HAMILTON_CACHE_POLICY_PROFILE"):
-        value = os.environ.get(name, "").strip()
+        value = env_value(name) or ""
         if value:
             return value
     return None
@@ -100,7 +89,7 @@ def runtime_profile_name(runtime_profile_name_override: str | None = None) -> st
     """
     if isinstance(runtime_profile_name_override, str) and runtime_profile_name_override.strip():
         return runtime_profile_name_override.strip()
-    return os.environ.get("CODEANATOMY_RUNTIME_PROFILE", "").strip() or "default"
+    return env_value("CODEANATOMY_RUNTIME_PROFILE") or "default"
 
 
 @tag(layer="inputs", kind="runtime")
@@ -121,11 +110,11 @@ def determinism_override(
         resolved = _determinism_from_str(override)
         if resolved is not None:
             return resolved
-    force_flag = os.environ.get("CODEANATOMY_FORCE_TIER2", "").strip().lower()
-    if force_flag in {"1", "true", "yes", "y"}:
+    force_flag = env_bool("CODEANATOMY_FORCE_TIER2", default=False, on_invalid="false")
+    if force_flag:
         return DeterminismTier.CANONICAL
-    tier = os.environ.get("CODEANATOMY_DETERMINISM_TIER", "").strip().lower()
-    return _determinism_from_str(tier)
+    tier = env_value("CODEANATOMY_DETERMINISM_TIER")
+    return _determinism_from_str(tier or "")
 
 
 @cache(behavior="ignore")
@@ -209,8 +198,8 @@ def streaming_table_provider(incremental_config: IncrementalConfig) -> object | 
     """
     if not _incremental_pipeline_enabled(incremental_config):
         return None
-    flag = os.environ.get("CODEANATOMY_ENABLE_STREAMING_TABLES", "").strip().lower()
-    if flag not in {"1", "true", "yes", "y"}:
+    flag = env_bool("CODEANATOMY_ENABLE_STREAMING_TABLES", default=False, on_invalid="false")
+    if not flag:
         return None
     return None
 
@@ -266,33 +255,77 @@ def param_table_delta_paths() -> Mapping[str, str] | None:
 
 
 @tag(layer="inputs", kind="scalar")
-def include_globs() -> list[str]:
-    """Return default include globs for repo scanning.
+def python_extensions() -> list[str]:
+    """Return explicit Python extensions for repo scope rules.
 
-    Override via execute(overrides={"include_globs": [...]}).
+    Override via execute(overrides={"python_extensions": [...]}).
 
     Returns
     -------
     list[str]
-        Glob patterns to include.
+        Explicit Python extensions to add to discovery.
     """
-    include, _ = repo_scan_globs_from_options(default_repo_scan_options())
-    return include
+    return []
 
 
 @tag(layer="inputs", kind="scalar")
-def exclude_globs() -> list[str]:
-    """Return default exclude globs for repo scanning.
-
-    Override via execute(overrides={"exclude_globs": [...]}).
+def include_untracked() -> bool:
+    """Return whether to include untracked files in repo scope.
 
     Returns
     -------
-    list[str]
-        Glob patterns to exclude.
+    bool
+        True to include untracked files.
     """
-    _, exclude = repo_scan_globs_from_options(default_repo_scan_options())
-    return exclude
+    return True
+
+
+@tag(layer="inputs", kind="scalar")
+def include_submodules() -> bool:
+    """Return whether to include submodules in repo scope.
+
+    Returns
+    -------
+    bool
+        True to include submodules.
+    """
+    return False
+
+
+@tag(layer="inputs", kind="scalar")
+def include_worktrees() -> bool:
+    """Return whether to include worktrees in repo scope.
+
+    Returns
+    -------
+    bool
+        True to include worktrees.
+    """
+    return False
+
+
+@tag(layer="inputs", kind="scalar")
+def follow_symlinks() -> bool:
+    """Return whether to follow symlinks in repo scope.
+
+    Returns
+    -------
+    bool
+        True to follow symlinks.
+    """
+    return False
+
+
+@tag(layer="inputs", kind="scalar")
+def external_interface_depth() -> Literal["metadata", "full"]:
+    """Return the external interface extraction depth.
+
+    Returns
+    -------
+    str
+        Depth policy for external interface extraction.
+    """
+    return "metadata"
 
 
 @tag(layer="inputs", kind="scalar")
@@ -448,11 +481,89 @@ def overwrite_intermediate_datasets() -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class RepoScopeGlobs:
+    """Bundle include/exclude globs for repo scope."""
+
+    include_globs: tuple[str, ...]
+    exclude_globs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RepoScopeFlags:
+    """Bundle boolean flags for repo scope."""
+
+    include_untracked: bool
+    include_submodules: bool
+    include_worktrees: bool
+    follow_symlinks: bool
+
+
+@tag(layer="inputs", kind="object")
+def repo_scope_globs() -> RepoScopeGlobs:
+    """Bundle repository scope globs.
+
+    Returns
+    -------
+    RepoScopeGlobs
+        Include/exclude glob bundle.
+    """
+    return RepoScopeGlobs(include_globs=(), exclude_globs=())
+
+
+@tag(layer="inputs", kind="object")
+def repo_scope_flags(
+    *,
+    include_untracked: bool,
+    include_submodules: bool,
+    include_worktrees: bool,
+    follow_symlinks: bool,
+) -> RepoScopeFlags:
+    """Bundle repository scope flags.
+
+    Returns
+    -------
+    RepoScopeFlags
+        Boolean scope flags.
+    """
+    return RepoScopeFlags(
+        include_untracked=include_untracked,
+        include_submodules=include_submodules,
+        include_worktrees=include_worktrees,
+        follow_symlinks=follow_symlinks,
+    )
+
+
+@tag(layer="inputs", kind="object")
+def repo_scope_config(
+    python_extensions: list[str],
+    repo_scope_globs: RepoScopeGlobs,
+    repo_scope_flags: RepoScopeFlags,
+    external_interface_depth: Literal["metadata", "full"],
+) -> RepoScopeConfig:
+    """Bundle repository scope configuration.
+
+    Returns
+    -------
+    RepoScopeConfig
+        Repository scope configuration bundle.
+    """
+    return RepoScopeConfig(
+        include_untracked=repo_scope_flags.include_untracked,
+        python_extensions=tuple(python_extensions),
+        include_globs=repo_scope_globs.include_globs,
+        exclude_globs=repo_scope_globs.exclude_globs,
+        include_submodules=repo_scope_flags.include_submodules,
+        include_worktrees=repo_scope_flags.include_worktrees,
+        follow_symlinks=repo_scope_flags.follow_symlinks,
+        external_interface_depth=external_interface_depth,
+    )
+
+
 @tag(layer="inputs", kind="object")
 def repo_scan_config(
     repo_root: str,
-    include_globs: list[str],
-    exclude_globs: list[str],
+    repo_scope_config: RepoScopeConfig,
     max_files: int,
     incremental_config: IncrementalConfig | None = None,
 ) -> RepoScanConfig:
@@ -476,8 +587,7 @@ def repo_scan_config(
         changed_only = False
     return RepoScanConfig(
         repo_root=repo_root,
-        include_globs=tuple(include_globs),
-        exclude_globs=tuple(exclude_globs),
+        scope_config=repo_scope_config,
         max_files=int(max_files),
         diff_base_ref=diff_base_ref,
         diff_head_ref=diff_head_ref,
@@ -695,20 +805,16 @@ def incremental_config(
         Raised when the impact strategy is unsupported.
     """
     enabled = bool(kwargs.get("incremental_enabled")) or _incremental_pipeline_enabled()
-    state_dir = kwargs.get("incremental_state_dir") or os.environ.get("CODEANATOMY_STATE_DIR")
-    repo_id = kwargs.get("incremental_repo_id") or os.environ.get("CODEANATOMY_REPO_ID")
+    state_dir = kwargs.get("incremental_state_dir") or env_value("CODEANATOMY_STATE_DIR")
+    repo_id = kwargs.get("incremental_repo_id") or env_value("CODEANATOMY_REPO_ID")
     impact_strategy = (
         kwargs.get("incremental_impact_strategy")
-        or os.environ.get("CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY")
+        or env_value("CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY")
         or "hybrid"
     )
-    git_base_ref = kwargs.get("incremental_git_base_ref") or os.environ.get(
-        "CODEANATOMY_GIT_BASE_REF"
-    )
-    git_head_ref = kwargs.get("incremental_git_head_ref") or os.environ.get(
-        "CODEANATOMY_GIT_HEAD_REF"
-    )
-    git_changed_only_env = _env_bool("CODEANATOMY_GIT_CHANGED_ONLY")
+    git_base_ref = kwargs.get("incremental_git_base_ref") or env_value("CODEANATOMY_GIT_BASE_REF")
+    git_head_ref = kwargs.get("incremental_git_head_ref") or env_value("CODEANATOMY_GIT_HEAD_REF")
+    git_changed_only_env = env_bool("CODEANATOMY_GIT_CHANGED_ONLY")
     git_changed_only = (
         git_changed_only_env
         if git_changed_only_env is not None

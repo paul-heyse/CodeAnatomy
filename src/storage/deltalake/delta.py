@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import importlib
-import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -16,9 +14,12 @@ from deltalake import CommitProperties, Transaction, WriterProperties
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
 from storage.ipc_utils import ipc_bytes
+from utils.hashing import hash_storage_options
+from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -117,17 +118,6 @@ def _plugin_manager_for_profile(
     return DataFusionPluginManager(runtime_profile.plugin_specs)
 
 
-def _delta_gate_payload(gate: DeltaFeatureGate | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    return {
-        "min_reader_version": getattr(gate, "min_reader_version", None),
-        "min_writer_version": getattr(gate, "min_writer_version", None),
-        "required_reader_features": list(getattr(gate, "required_reader_features", ())),
-        "required_writer_features": list(getattr(gate, "required_writer_features", ())),
-    }
-
-
 def _delta_provider_options(
     *,
     path: str,
@@ -142,7 +132,7 @@ def _delta_provider_options(
         "version": version,
         "timestamp": timestamp,
     }
-    gate_payload = _delta_gate_payload(gate)
+    gate_payload = delta_feature_gate_payload(gate)
     if gate_payload is not None:
         options.update(gate_payload)
     return options
@@ -2261,6 +2251,11 @@ def delta_delete_where(
             commit_options=commit_options,
         ),
     )
+    storage_options, log_storage_options = normalize_storage_options(
+        request.storage_options,
+        request.log_storage_options,
+    )
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_mutation_artifact(
         _MutationArtifactRequest(
             profile=request.runtime_profile,
@@ -2272,10 +2267,7 @@ def delta_delete_where(
             commit_properties=request.commit_properties,
             constraint_status=_constraint_status(request.extra_constraints, checked=False),
             constraint_violations=(),
-            storage_options_hash=_storage_options_hash(
-                request.storage_options,
-                request.log_storage_options,
-            ),
+            storage_options_hash=storage_hash,
             dataset_name=request.dataset_name,
         )
     )
@@ -2343,6 +2335,11 @@ def delta_merge_arrow(
                 commit_options=commit_options,
             ),
         )
+        storage_options, log_storage_options = normalize_storage_options(
+            request.storage_options,
+            request.log_storage_options,
+        )
+        storage_hash = hash_storage_options(storage_options, log_storage_options)
         _record_mutation_artifact(
             _MutationArtifactRequest(
                 profile=request.runtime_profile,
@@ -2354,10 +2351,7 @@ def delta_merge_arrow(
                 commit_properties=request.commit_properties,
                 constraint_status=_constraint_status(request.extra_constraints, checked=True),
                 constraint_violations=(),
-                storage_options_hash=_storage_options_hash(
-                    request.storage_options,
-                    request.log_storage_options,
-                ),
+                storage_options_hash=storage_hash,
                 dataset_name=request.dataset_name,
             )
         )
@@ -2448,17 +2442,6 @@ def _log_storage_dict(
     return merged or None
 
 
-def _storage_options_hash(
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
-) -> str | None:
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not storage:
-        return None
-    payload = json.dumps(sorted(storage.items()), sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
     if request.runtime_profile is None:
         return
@@ -2467,6 +2450,11 @@ def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None
         record_delta_mutation,
     )
 
+    storage_options, log_storage_options = normalize_storage_options(
+        request.storage_options,
+        request.log_storage_options,
+    )
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     record_delta_mutation(
         request.runtime_profile,
         artifact=DeltaMutationArtifact(
@@ -2475,10 +2463,7 @@ def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None
             report=request.report,
             dataset_name=request.dataset_name,
             commit_metadata=request.commit_metadata,
-            storage_options_hash=_storage_options_hash(
-                request.storage_options,
-                request.log_storage_options,
-            ),
+            storage_options_hash=storage_hash,
         ),
     )
 
@@ -2498,6 +2483,11 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
         record_delta_maintenance,
     )
 
+    storage_options, log_storage_options = normalize_storage_options(
+        request.storage_options,
+        request.log_storage_options,
+    )
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     record_delta_maintenance(
         request.runtime_profile,
         artifact=DeltaMaintenanceArtifact(
@@ -2507,10 +2497,7 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
             dataset_name=request.dataset_name,
             retention_hours=request.retention_hours,
             dry_run=request.dry_run,
-            storage_options_hash=_storage_options_hash(
-                request.storage_options,
-                request.log_storage_options,
-            ),
+            storage_options_hash=storage_hash,
             commit_metadata=request.commit_metadata,
         ),
     )

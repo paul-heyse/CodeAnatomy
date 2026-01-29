@@ -6,10 +6,13 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 
-from opentelemetry import trace
+from opentelemetry import _logs, trace
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.trace import Span
+from opentelemetry.util.types import AttributeValue
 
-from obs.otel.attributes import normalize_attributes
+from obs.otel.attributes import normalize_attributes, normalize_log_attributes
+from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_DIAGNOSTICS
 
 _LOGGER = logging.getLogger(SCOPE_DIAGNOSTICS)
@@ -30,7 +33,9 @@ def _flatten_attributes(payload: Mapping[str, object]) -> dict[str, object]:
         if isinstance(value, Mapping):
             flattened[key] = _serialize_payload(value)
             continue
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray, memoryview)
+        ):
             flattened[key] = _serialize_payload(list(value))
             continue
         flattened[key] = value
@@ -60,14 +65,13 @@ def emit_diagnostics_event(
     attributes: dict[str, object] = {"event.name": name}
     if event_kind is not None:
         attributes["event.kind"] = event_kind
-    span = trace.get_current_span()
-    context = span.get_span_context()
-    if context.is_valid:
-        attributes["trace_id"] = f"{context.trace_id:032x}"
-        attributes["span_id"] = f"{context.span_id:016x}"
     attributes.update(_flatten_attributes(payload))
-    normalized = normalize_attributes(attributes)
-    _LOGGER.log(level, name, extra=normalized)
+    normalized = normalize_log_attributes(attributes)
+    if _otel_logging_enabled():
+        _emit_otel_log(name=name, attributes=normalized, level=level)
+    else:
+        _LOGGER.log(level, name, extra=normalized)
+    span = trace.get_current_span()
     _emit_span_event(span, name=name, event_kind=event_kind, payload=payload)
 
 
@@ -83,6 +87,41 @@ def _emit_span_event(
     event_attrs: dict[str, object] = {"event.kind": event_kind} if event_kind else {}
     event_attrs.update(_flatten_attributes(payload))
     span.add_event(name, attributes=normalize_attributes(event_attrs))
+
+
+def _otel_logging_enabled() -> bool:
+    provider = _logs.get_logger_provider()
+    return provider.__class__.__name__ != "ProxyLoggerProvider"
+
+
+def _emit_otel_log(*, name: str, attributes: Mapping[str, AttributeValue], level: int) -> None:
+    version_value = instrumentation_version()
+    version = version_value if version_value is not None else "unknown"
+    logger = _logs.get_logger(
+        SCOPE_DIAGNOSTICS,
+        version,
+        schema_url=instrumentation_schema_url(),
+    )
+    severity_number = _severity_from_level(level)
+    logger.emit(
+        severity_number=severity_number,
+        severity_text=logging.getLevelName(level),
+        body=name,
+        attributes=attributes,
+        event_name=name,
+    )
+
+
+def _severity_from_level(level: int) -> SeverityNumber:
+    if level >= logging.CRITICAL:
+        return SeverityNumber.FATAL
+    if level >= logging.ERROR:
+        return SeverityNumber.ERROR
+    if level >= logging.WARNING:
+        return SeverityNumber.WARN
+    if level >= logging.INFO:
+        return SeverityNumber.INFO
+    return SeverityNumber.DEBUG
 
 
 __all__ = ["emit_diagnostics_event"]

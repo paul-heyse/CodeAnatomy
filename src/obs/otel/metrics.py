@@ -12,12 +12,14 @@ from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, V
 from opentelemetry.util.types import AttributeValue
 
 from obs.otel.attributes import normalize_attributes
+from obs.otel.run_context import get_run_id
+from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_OBS
 
-_STAGE_DURATION = "codeanatomy.stage.duration_ms"
-_TASK_DURATION = "codeanatomy.task.duration_ms"
-_DATAFUSION_DURATION = "codeanatomy.datafusion.execute.duration_ms"
-_WRITE_DURATION = "codeanatomy.datafusion.write.duration_ms"
+_STAGE_DURATION = "codeanatomy.stage.duration"
+_TASK_DURATION = "codeanatomy.task.duration"
+_DATAFUSION_DURATION = "codeanatomy.datafusion.execute.duration"
+_WRITE_DURATION = "codeanatomy.datafusion.write.duration"
 _ARTIFACT_COUNT = "codeanatomy.artifact.count"
 _ERROR_COUNT = "codeanatomy.error.count"
 _DATASET_ROWS = "codeanatomy.dataset.rows"
@@ -25,19 +27,19 @@ _DATASET_COLUMNS = "codeanatomy.dataset.columns"
 _SCAN_ROW_GROUPS = "codeanatomy.scan.row_groups"
 _SCAN_FRAGMENTS = "codeanatomy.scan.fragments"
 
-_DEFAULT_BUCKETS_MS = (
-    5,
-    10,
-    25,
-    50,
-    100,
-    250,
-    500,
-    1000,
-    2000,
-    5000,
-    10000,
-    20000,
+_DEFAULT_BUCKETS_S = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
 )
 
 
@@ -93,7 +95,20 @@ _REGISTRY_CACHE: dict[str, MetricsRegistry | None] = {"value": None}
 
 
 def _meter() -> metrics.Meter:
-    return metrics.get_meter(SCOPE_OBS)
+    version_value = instrumentation_version()
+    version = version_value if version_value is not None else "unknown"
+    return metrics.get_meter(
+        SCOPE_OBS,
+        version,
+        schema_url=instrumentation_schema_url(),
+    )
+
+
+def _with_run_id(payload: dict[str, object]) -> dict[str, object]:
+    run_id = get_run_id()
+    if run_id:
+        payload["codeanatomy.run_id"] = run_id
+    return payload
 
 
 def metric_views() -> list[View]:
@@ -104,35 +119,35 @@ def metric_views() -> list[View]:
     list[View]
         Configured metric views for CodeAnatomy instruments.
     """
-    histogram = ExplicitBucketHistogramAggregation(list(_DEFAULT_BUCKETS_MS))
+    histogram = ExplicitBucketHistogramAggregation(list(_DEFAULT_BUCKETS_S))
     return [
         View(
             instrument_name=_STAGE_DURATION,
             aggregation=histogram,
-            attribute_keys={"stage", "status"},
+            attribute_keys={"codeanatomy.run_id", "stage", "status"},
         ),
         View(
             instrument_name=_TASK_DURATION,
             aggregation=histogram,
-            attribute_keys={"task_kind", "status"},
+            attribute_keys={"codeanatomy.run_id", "task_kind", "status"},
         ),
         View(
             instrument_name=_DATAFUSION_DURATION,
             aggregation=histogram,
-            attribute_keys={"status", "plan_kind"},
+            attribute_keys={"codeanatomy.run_id", "status", "plan_kind"},
         ),
         View(
             instrument_name=_WRITE_DURATION,
             aggregation=histogram,
-            attribute_keys={"status", "destination"},
+            attribute_keys={"codeanatomy.run_id", "status", "destination"},
         ),
         View(
             instrument_name=_ARTIFACT_COUNT,
-            attribute_keys={"artifact_kind", "status"},
+            attribute_keys={"artifact_kind", "codeanatomy.run_id", "status"},
         ),
         View(
             instrument_name=_ERROR_COUNT,
-            attribute_keys={"stage", "error_type"},
+            attribute_keys={"codeanatomy.run_id", "error_type", "stage"},
         ),
     ]
 
@@ -150,23 +165,23 @@ def _registry() -> MetricsRegistry:
     registry = MetricsRegistry(
         stage_duration=meter.create_histogram(
             _STAGE_DURATION,
-            unit="ms",
-            description="Stage execution duration.",
+            unit="s",
+            description="Stage execution duration (seconds).",
         ),
         task_duration=meter.create_histogram(
             _TASK_DURATION,
-            unit="ms",
-            description="Hamilton task execution duration.",
+            unit="s",
+            description="Hamilton task execution duration (seconds).",
         ),
         datafusion_duration=meter.create_histogram(
             _DATAFUSION_DURATION,
-            unit="ms",
-            description="DataFusion execution duration.",
+            unit="s",
+            description="DataFusion execution duration (seconds).",
         ),
         write_duration=meter.create_histogram(
             _WRITE_DURATION,
-            unit="ms",
-            description="DataFusion write duration.",
+            unit="s",
+            description="DataFusion write duration (seconds).",
         ),
         artifact_count=meter.create_counter(
             _ARTIFACT_COUNT,
@@ -229,7 +244,7 @@ def _registry() -> MetricsRegistry:
 
 def record_stage_duration(
     stage: str,
-    duration_ms: float,
+    duration_s: float,
     *,
     status: str,
     attributes: Mapping[str, object] | None = None,
@@ -239,12 +254,12 @@ def record_stage_duration(
     payload: dict[str, object] = {"stage": stage, "status": status}
     if attributes:
         payload.update(attributes)
-    registry.stage_duration.record(duration_ms, normalize_attributes(payload))
+    registry.stage_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
 
 
 def record_task_duration(
     task_kind: str,
-    duration_ms: float,
+    duration_s: float,
     *,
     status: str,
     attributes: Mapping[str, object] | None = None,
@@ -254,11 +269,11 @@ def record_task_duration(
     payload: dict[str, object] = {"task_kind": task_kind, "status": status}
     if attributes:
         payload.update(attributes)
-    registry.task_duration.record(duration_ms, normalize_attributes(payload))
+    registry.task_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
 
 
 def record_datafusion_duration(
-    duration_ms: float,
+    duration_s: float,
     *,
     status: str,
     plan_kind: str,
@@ -269,11 +284,11 @@ def record_datafusion_duration(
     payload: dict[str, object] = {"status": status, "plan_kind": plan_kind}
     if attributes:
         payload.update(attributes)
-    registry.datafusion_duration.record(duration_ms, normalize_attributes(payload))
+    registry.datafusion_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
 
 
 def record_write_duration(
-    duration_ms: float,
+    duration_s: float,
     *,
     status: str,
     destination: str,
@@ -284,7 +299,7 @@ def record_write_duration(
     payload: dict[str, object] = {"status": status, "destination": destination}
     if attributes:
         payload.update(attributes)
-    registry.write_duration.record(duration_ms, normalize_attributes(payload))
+    registry.write_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
 
 
 def record_artifact_count(
@@ -298,7 +313,7 @@ def record_artifact_count(
     payload: dict[str, object] = {"artifact_kind": artifact_kind, "status": status}
     if attributes:
         payload.update(attributes)
-    registry.artifact_count.add(1, normalize_attributes(payload))
+    registry.artifact_count.add(1, normalize_attributes(_with_run_id(payload)))
 
 
 def record_error(
@@ -312,7 +327,7 @@ def record_error(
     payload: dict[str, object] = {"stage": stage, "error_type": error_type}
     if attributes:
         payload.update(attributes)
-    registry.error_count.add(1, normalize_attributes(payload))
+    registry.error_count.add(1, normalize_attributes(_with_run_id(payload)))
 
 
 def set_dataset_stats(
@@ -323,7 +338,7 @@ def set_dataset_stats(
 ) -> None:
     """Set dataset row and column gauge values."""
     registry = _registry()
-    attrs = normalize_attributes({"dataset": dataset})
+    attrs = normalize_attributes(_with_run_id({"dataset": dataset}))
     registry.dataset_rows.set_value(float(rows), attrs)
     registry.dataset_columns.set_value(float(columns), attrs)
 
@@ -336,7 +351,7 @@ def set_scan_telemetry(
 ) -> None:
     """Set scan telemetry gauge values."""
     registry = _registry()
-    attrs = normalize_attributes({"dataset": dataset})
+    attrs = normalize_attributes(_with_run_id({"dataset": dataset}))
     registry.scan_fragments.set_value(float(fragment_count), attrs)
     registry.scan_row_groups.set_value(float(row_group_count), attrs)
 

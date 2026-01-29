@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from incremental.state_store import StateStore
+from utils.hashing import hash_file_sha256
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -18,12 +18,7 @@ def scip_index_fingerprint(path: Path) -> str:
     str
         Hex-encoded fingerprint of the file contents.
     """
-    # Read in chunks to avoid loading large index files into memory.
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_CHUNK_SIZE), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+    return hash_file_sha256(path, chunk_size=_CHUNK_SIZE)
 
 
 def read_scip_fingerprint(state_store: StateStore) -> str | None:

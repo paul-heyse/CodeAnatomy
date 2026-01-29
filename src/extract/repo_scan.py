@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload
 
@@ -23,7 +22,6 @@ from extract.cache_utils import (
     stable_cache_key,
 )
 from extract.git_authorship import blame_hunks
-from extract.git_context import open_git_context
 from extract.git_delta import diff_paths
 from extract.git_remotes import remote_callbacks_from_env
 from extract.git_submodules import submodule_roots, update_submodules, worktree_roots
@@ -34,16 +32,23 @@ from extract.helpers import (
     extract_plan_from_rows,
     materialize_extract_plan,
 )
-from extract.repo_scan_fs import iter_repo_files_fs
-from extract.repo_scan_pygit2 import iter_repo_files_pygit2
+from extract.repo_scan_pygit2 import repo_status_paths
+from extract.repo_scope import (
+    RepoScope,
+    RepoScopeOptions,
+    default_repo_scope_options,
+    resolve_repo_scope,
+)
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.scope_manifest import ScopeManifest, ScopeManifestOptions, build_scope_manifest
+from extract.scope_rules import ScopeRuleSet, build_scope_rules
 from extract.session import ExtractSession
-from obs.otel.scopes import SCOPE_EXTRACT
-from obs.otel.tracing import stage_span
 from serde_msgspec import to_builtins
+from utils.hashing import hash_file_sha256
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
+
 
 SCHEMA_VERSION = 1
 
@@ -53,29 +58,15 @@ class RepoScanOptions:
     """Configure repository scanning behavior."""
 
     repo_id: str | None = None
-    include_globs: Sequence[str] = ("**/*.py",)
-    exclude_dirs: Sequence[str] = (
-        ".git",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "node_modules",
-        "dist",
-        "build",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
+    scope_policy: RepoScopeOptions | Mapping[str, object] = field(
+        default_factory=default_repo_scope_options
     )
-    exclude_globs: Sequence[str] = ()
-    follow_symlinks: bool = False
     include_sha256: bool = True
     max_file_bytes: int | None = None
     max_files: int | None = 200_000
     diff_base_ref: str | None = None
     diff_head_ref: str | None = None
     changed_only: bool = False
-    include_submodules: bool = False
-    include_worktrees: bool = False
     update_submodules: bool = False
     submodule_update_init: bool = True
     submodule_update_depth: int | None = None
@@ -83,6 +74,16 @@ class RepoScanOptions:
     record_blame: bool = False
     blame_max_files: int | None = None
     blame_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class RepoScanBundle:
+    """Bundle of repo scan outputs."""
+
+    repo_rows: tuple[dict[str, object], ...]
+    scope_manifest_rows: tuple[dict[str, str | None], ...]
+    python_extension_rows: tuple[dict[str, str], ...]
+    scope_hash: str
 
 
 def default_repo_scan_options() -> RepoScanOptions:
@@ -94,20 +95,6 @@ def default_repo_scan_options() -> RepoScanOptions:
         Default repo scan options.
     """
     return RepoScanOptions()
-
-
-def repo_scan_globs_from_options(options: RepoScanOptions) -> tuple[list[str], list[str]]:
-    """Return include/exclude globs derived from RepoScanOptions.
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Include and exclude globs.
-    """
-    include_globs = list(options.include_globs)
-    exclude_globs = [f"**/{name}/**" for name in options.exclude_dirs]
-    exclude_globs.extend(options.exclude_globs)
-    return include_globs, exclude_globs
 
 
 def repo_files_query(repo_id: str | None) -> QuerySpec:
@@ -122,8 +109,7 @@ def repo_files_query(repo_id: str | None) -> QuerySpec:
 
 
 def _sha256_path(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+    return hash_file_sha256(path)
 
 
 def _diff_filter_paths(
@@ -145,48 +131,74 @@ def _diff_filter_paths(
     return diff_result.changed_paths
 
 
-def _iter_repo_root_files(
-    root: Path,
-    *,
-    include_globs: Sequence[str],
-    exclude_globs: Sequence[str],
-    options: RepoScanOptions,
-    diff_filter: frozenset[str] | None,
-) -> Iterator[Path]:
-    git_files = iter_repo_files_pygit2(
-        root,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        exclude_dirs=options.exclude_dirs,
-        follow_symlinks=options.follow_symlinks,
-    )
-    repo_iter = (
-        iter(git_files)
-        if git_files is not None
-        else iter_repo_files_fs(
-            root,
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            exclude_dirs=options.exclude_dirs,
-            follow_symlinks=options.follow_symlinks,
-        )
-    )
-    for rel in repo_iter:
-        if diff_filter is not None and rel.as_posix() not in diff_filter:
-            continue
-        yield rel
+def _resolve_scope_policy(options: RepoScanOptions) -> RepoScopeOptions:
+    policy = options.scope_policy
+    if isinstance(policy, RepoScopeOptions):
+        return policy
+    if policy is None:
+        return default_repo_scope_options()
+    if isinstance(policy, Mapping):
+        return _coerce_scope_policy(policy)
+    msg = "scope_policy must be RepoScopeOptions or a mapping"
+    raise TypeError(msg)
 
 
-def _record_if_new(seen: set[str], rel: Path) -> bool:
-    rel_posix = rel.as_posix()
-    if rel_posix in seen:
-        return False
-    seen.add(rel_posix)
-    return True
+def _coerce_scope_policy(values: Mapping[str, object]) -> RepoScopeOptions:
+    from extract.python_scope import PythonScopePolicy
+
+    python_scope = values.get("python_scope")
+    if python_scope is None:
+        python_scope_value = PythonScopePolicy()
+    elif isinstance(python_scope, Mapping):
+        python_scope_value = PythonScopePolicy(**dict(python_scope))
+    elif isinstance(python_scope, PythonScopePolicy):
+        python_scope_value = python_scope
+    else:
+        python_scope_value = PythonScopePolicy()
+    include_globs = values.get("include_globs")
+    if include_globs is None:
+        include_globs_value = ()
+    elif isinstance(include_globs, str):
+        include_globs_value = (include_globs,)
+    elif isinstance(include_globs, Sequence) and not isinstance(
+        include_globs, (str, bytes, bytearray)
+    ):
+        include_globs_value = tuple(str(item) for item in include_globs)
+    else:
+        include_globs_value = ()
+    exclude_globs = values.get("exclude_globs")
+    if exclude_globs is None:
+        exclude_globs_value = ()
+    elif isinstance(exclude_globs, str):
+        exclude_globs_value = (exclude_globs,)
+    elif isinstance(exclude_globs, Sequence) and not isinstance(
+        exclude_globs, (str, bytes, bytearray)
+    ):
+        exclude_globs_value = tuple(str(item) for item in exclude_globs)
+    else:
+        exclude_globs_value = ()
+    include_untracked = values.get("include_untracked")
+    include_untracked_value = bool(include_untracked) if include_untracked is not None else True
+    include_submodules = values.get("include_submodules")
+    include_submodules_value = bool(include_submodules) if include_submodules is not None else False
+    include_worktrees = values.get("include_worktrees")
+    include_worktrees_value = bool(include_worktrees) if include_worktrees is not None else False
+    follow_symlinks = values.get("follow_symlinks")
+    follow_symlinks_value = bool(follow_symlinks) if follow_symlinks is not None else False
+    return RepoScopeOptions(
+        python_scope=python_scope_value,
+        include_globs=include_globs_value,
+        exclude_globs=exclude_globs_value,
+        include_untracked=include_untracked_value,
+        include_submodules=include_submodules_value,
+        include_worktrees=include_worktrees_value,
+        follow_symlinks=follow_symlinks_value,
+    )
 
 
 def _maybe_update_submodules(repo_root: Path, options: RepoScanOptions) -> None:
-    if not options.include_submodules or not options.update_submodules or options.changed_only:
+    scope_policy = _resolve_scope_policy(options)
+    if not scope_policy.include_submodules or not options.update_submodules or options.changed_only:
         return
     callbacks = remote_callbacks_from_env() if options.submodule_use_remote_auth else None
     update_submodules(
@@ -197,111 +209,103 @@ def _maybe_update_submodules(repo_root: Path, options: RepoScanOptions) -> None:
     )
 
 
-@dataclass
-class _RepoIterContext:
-    include_globs: Sequence[str]
-    exclude_globs: Sequence[str]
-    options: RepoScanOptions
-    seen: set[str]
+@dataclass(frozen=True)
+class _ScopedRoot:
+    scope: RepoScope
+    prefix: Path
     diff_filter: frozenset[str] | None
+    rules: ScopeRuleSet
+    status_flags: Mapping[str, int]
 
 
-def _iter_prefixed_roots(
-    roots: Iterable[tuple[Path, Path]],
+def _build_scope_rules(scope: RepoScope, options: RepoScopeOptions) -> ScopeRuleSet:
+    include_lines, exclude_lines = _scope_rule_lines(scope, options)
+    return build_scope_rules(include_lines=include_lines, exclude_lines=exclude_lines)
+
+
+def _build_scoped_root(
+    scope: RepoScope,
     *,
-    context: _RepoIterContext,
-) -> Iterator[Path]:
-    for root, prefix in roots:
-        for rel in _iter_repo_root_files(
-            root,
-            include_globs=context.include_globs,
-            exclude_globs=context.exclude_globs,
-            options=context.options,
-            diff_filter=context.diff_filter,
-        ):
-            prefixed = prefix / rel if prefix.parts else rel
-            if _record_if_new(context.seen, prefixed):
-                yield prefixed
-
-
-def _submodule_prefixes(repo_root: Path, options: RepoScanOptions) -> list[tuple[Path, Path]]:
-    if not options.include_submodules or options.changed_only:
-        return []
-    return [(submodule.repo_root, submodule.prefix) for submodule in submodule_roots(repo_root)]
-
-
-def _worktree_prefixes(repo_root: Path, options: RepoScanOptions) -> list[tuple[Path, Path]]:
-    if not options.include_worktrees:
-        return []
-    prefixes: list[tuple[Path, Path]] = []
-    for worktree in worktree_roots(repo_root):
-        if worktree.repo_root == repo_root:
-            continue
-        prefixes.append((worktree.repo_root, Path(".worktrees") / worktree.name))
-    return prefixes
-
-
-def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]:
-    """Iterate over repo files that match include/exclude rules.
-
-    Parameters
-    ----------
-    repo_root:
-        Repository root path.
-    options:
-        Scan options.
-
-    Yields
-    ------
-    pathlib.Path
-        Relative paths for matching files.
-    """
-    repo_root = repo_root.resolve()
-    include_globs, exclude_globs = repo_scan_globs_from_options(options)
-    diff_paths_set = _diff_filter_paths(repo_root, options=options)
-    _maybe_update_submodules(repo_root, options)
-    seen: set[str] = set()
-    base_context = _RepoIterContext(
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        options=options,
-        seen=seen,
-        diff_filter=diff_paths_set,
+    prefix: Path,
+    diff_filter: frozenset[str] | None,
+    rules: ScopeRuleSet,
+) -> _ScopedRoot:
+    return _ScopedRoot(
+        scope=scope,
+        prefix=prefix,
+        diff_filter=diff_filter,
+        rules=rules,
+        status_flags=repo_status_paths(scope),
     )
-    yield from _iter_prefixed_roots([(repo_root, Path())], context=base_context)
-    if options.include_submodules:
-        submodule_context = _RepoIterContext(
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            options=options,
-            seen=seen,
-            diff_filter=None,
+
+
+def _candidate_paths_for_root(scoped_root: _ScopedRoot) -> list[str]:
+    paths: set[str] = set(scoped_root.status_flags)
+    paths.update(entry.path for entry in scoped_root.scope.repo.index)
+    return sorted(paths)
+
+
+def _scoped_roots(repo_root: Path, *, options: RepoScanOptions) -> list[_ScopedRoot]:
+    scope_policy = _resolve_scope_policy(options)
+    base_scope = resolve_repo_scope(repo_root, scope_policy)
+    rules = _build_scope_rules(base_scope, scope_policy)
+    diff_filter = _diff_filter_paths(base_scope.repo_root, options=options)
+    scopes: list[_ScopedRoot] = [
+        _build_scoped_root(
+            base_scope,
+            prefix=Path(),
+            diff_filter=diff_filter,
+            rules=rules,
         )
-        yield from _iter_prefixed_roots(
-            _submodule_prefixes(repo_root, options),
-            context=submodule_context,
-        )
-    if options.include_worktrees:
-        worktree_context = _RepoIterContext(
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            options=options,
-            seen=seen,
-            diff_filter=None,
-        )
-        yield from _iter_prefixed_roots(
-            _worktree_prefixes(repo_root, options),
-            context=worktree_context,
-        )
+    ]
+    if scope_policy.include_submodules:
+        sub_policy = replace(scope_policy, include_submodules=False, include_worktrees=False)
+        for submodule in submodule_roots(base_scope.repo_root):
+            sub_scope = resolve_repo_scope(submodule.repo_root, sub_policy)
+            scopes.append(
+                _build_scoped_root(
+                    sub_scope,
+                    prefix=submodule.prefix,
+                    diff_filter=None,
+                    rules=_build_scope_rules(sub_scope, sub_policy),
+                )
+            )
+    if scope_policy.include_worktrees:
+        worktree_policy = replace(scope_policy, include_submodules=False, include_worktrees=False)
+        for worktree in worktree_roots(base_scope.repo_root):
+            if worktree.repo_root == base_scope.repo_root:
+                continue
+            work_scope = resolve_repo_scope(worktree.repo_root, worktree_policy)
+            scopes.append(
+                _build_scoped_root(
+                    work_scope,
+                    prefix=Path(".worktrees") / worktree.name,
+                    diff_filter=None,
+                    rules=_build_scope_rules(work_scope, worktree_policy),
+                )
+            )
+    return scopes
+
+
+def _scope_rule_lines(
+    scope: RepoScope, scope_policy: RepoScopeOptions
+) -> tuple[list[str], list[str]]:
+    from extract.repo_scope import scope_rule_lines
+
+    return scope_rule_lines(scope, scope_policy)
 
 
 def _build_repo_file_row(
     *,
     rel: Path,
-    repo_root: Path,
+    abs_path: Path,
     options: RepoScanOptions,
+    follow_symlinks: bool,
 ) -> dict[str, object] | None:
-    abs_path = (repo_root / rel).resolve()
+    if abs_path.is_dir():
+        return None
+    if not follow_symlinks and abs_path.is_symlink():
+        return None
     rel_posix = rel.as_posix()
     try:
         stat = abs_path.stat()
@@ -317,7 +321,6 @@ def _build_repo_file_row(
             file_sha256 = _sha256_path(abs_path)
         except OSError:
             return None
-
     return {
         "file_id": None,
         "path": rel_posix,
@@ -357,65 +360,83 @@ def scan_repo(
 ) -> TableLike | RecordBatchReaderLike:
     """Scan the repo for Python files and return a repo_files table.
 
-    Parameters
-    ----------
-    repo_root:
-        Repository root path.
-    options:
-        Scan options.
-    context:
-        Optional extract execution context for session and profile resolution.
-    prefer_reader:
-        When True, return a streaming reader when possible.
-
     Returns
     -------
     TableLike | RecordBatchReaderLike
         Repo file metadata output.
     """
-    with stage_span(
-        "extract.repo_scan",
-        stage="extract",
-        scope_name=SCOPE_EXTRACT,
-        attributes={
-            "codeanatomy.extractor": "repo_scan",
-            "codeanatomy.repo_root": str(repo_root),
-            "codeanatomy.prefer_reader": prefer_reader,
-        },
-    ):
-        normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
-        exec_context = context or ExtractExecutionContext()
-        session = exec_context.ensure_session()
-        exec_context = replace(exec_context, session=session)
-        runtime_profile = exec_context.ensure_runtime_profile()
-        determinism_tier = exec_context.determinism_tier()
-        normalize = ExtractNormalizeOptions(
-            options=normalized_options,
-            repo_id=normalized_options.repo_id,
+    normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
+    normalize = ExtractNormalizeOptions(
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
+    )
+    max_files = normalized_options.max_files
+    if max_files is not None and max_files <= 0:
+        empty_plan = extract_plan_from_rows(
+            "repo_files_v1",
+            [],
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
         )
-        max_files = normalized_options.max_files
-        if max_files is not None and max_files <= 0:
-            empty_plan = extract_plan_from_rows(
-                "repo_files_v1",
-                [],
-                session=session,
-                options=ExtractPlanOptions(normalize=normalize),
-            )
-            return materialize_extract_plan(
-                "repo_files_v1",
-                empty_plan,
-                runtime_profile=runtime_profile,
-                determinism_tier=determinism_tier,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    prefer_reader=prefer_reader,
-                    apply_post_kernels=True,
-                ),
-            )
-
-        plan = scan_repo_plan(repo_root, options=normalized_options, session=session)
         return materialize_extract_plan(
             "repo_files_v1",
+            empty_plan,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        )
+    plan = scan_repo_plan(repo_root, options=normalized_options, session=session)
+    return materialize_extract_plan(
+        "repo_files_v1",
+        plan,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )
+
+
+def scan_repo_tables(
+    repo_root: PathLike,
+    options: RepoScanOptions | None = None,
+    *,
+    context: ExtractExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
+    """Scan the repo and return repo scope tables.
+
+    Returns
+    -------
+    Mapping[str, TableLike | RecordBatchReaderLike]
+        Mapping of output table names to data.
+    """
+    normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
+    normalize = ExtractNormalizeOptions(
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
+    )
+    plans = scan_repo_plans(repo_root, options=normalized_options, session=session)
+    outputs: dict[str, TableLike | RecordBatchReaderLike] = {}
+    for name, plan in plans.items():
+        outputs[name] = materialize_extract_plan(
+            name,
             plan,
             runtime_profile=runtime_profile,
             determinism_tier=determinism_tier,
@@ -425,6 +446,7 @@ def scan_repo(
                 apply_post_kernels=True,
             ),
         )
+    return outputs
 
 
 def scan_repo_plan(
@@ -454,23 +476,84 @@ def scan_repo_plan(
         repo_root_path,
         options=options,
     )
-    rows = _load_repo_scan_rows(
+    bundle = _load_repo_scan_bundle(
         repo_root_path,
         options=options,
         cache_options=cache_options,
     )
+    _record_repo_scope_stats(
+        repo_root_path,
+        bundle,
+        options=options,
+        session=session,
+    )
     _record_repo_blame(
         repo_root_path,
-        rows,
+        bundle.repo_rows,
         options=options,
         session=session,
     )
     return extract_plan_from_rows(
         "repo_files_v1",
-        rows,
+        bundle.repo_rows,
         session=session,
         options=ExtractPlanOptions(normalize=normalize),
     )
+
+
+def scan_repo_plans(
+    repo_root: PathLike,
+    *,
+    options: RepoScanOptions,
+    session: ExtractSession,
+) -> Mapping[str, DataFusionPlanBundle]:
+    """Build plan bundles for repo scope datasets.
+
+    Returns
+    -------
+    Mapping[str, DataFusionPlanBundle]
+        Mapping of dataset name to plan bundle.
+    """
+    repo_root_path = ensure_path(repo_root).resolve()
+    normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
+    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
+    cache_options = RepoScanCacheOptions(
+        cache=cache_for_kind_optional(cache_profile, "repo_scan"),
+        coord_cache=cache_for_kind_optional(cache_profile, "coordination"),
+        cache_key=None,
+        cache_ttl=cache_ttl_seconds(cache_profile, "repo_scan"),
+    )
+    cache_options = _with_repo_scan_cache_key(
+        cache_options,
+        repo_root_path,
+        options=options,
+    )
+    bundle = _load_repo_scan_bundle(
+        repo_root_path,
+        options=options,
+        cache_options=cache_options,
+    )
+    plans: dict[str, DataFusionPlanBundle] = {
+        "repo_files_v1": extract_plan_from_rows(
+            "repo_files_v1",
+            bundle.repo_rows,
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        ),
+        "scope_manifest_v1": extract_plan_from_rows(
+            "scope_manifest_v1",
+            bundle.scope_manifest_rows,
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        ),
+        "python_extensions_v1": extract_plan_from_rows(
+            "python_extensions_v1",
+            bundle.python_extension_rows,
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        ),
+    }
+    return plans
 
 
 @dataclass(frozen=True)
@@ -483,6 +566,54 @@ class RepoScanCacheOptions:
     cache_ttl: float | None
 
 
+def _collect_included_paths(
+    scoped_roots: Sequence[_ScopedRoot],
+    *,
+    max_files: int | None,
+) -> list[str]:
+    included_paths: list[str] = []
+    seen: set[str] = set()
+    for scoped_root in scoped_roots:
+        candidate_paths = _candidate_paths_for_root(scoped_root)
+        manifest = build_scope_manifest(
+            candidate_paths,
+            options=ScopeManifestOptions(
+                repo=scoped_root.scope.repo,
+                rules=scoped_root.rules,
+                scope_kind="repo",
+                prefix=scoped_root.prefix,
+                repo_root=scoped_root.scope.repo_root,
+                status_flags=scoped_root.status_flags,
+            ),
+        )
+        for entry in manifest.entries:
+            if not entry.included:
+                continue
+            if scoped_root.diff_filter is not None and entry.path not in scoped_root.diff_filter:
+                continue
+            if entry.path in seen:
+                continue
+            included_paths.append(entry.path)
+            seen.add(entry.path)
+            if max_files is not None and len(included_paths) >= max_files:
+                break
+        if max_files is not None and len(included_paths) >= max_files:
+            break
+    return included_paths
+
+
+def _scope_signature(scoped_roots: Sequence[_ScopedRoot]) -> list[dict[str, object]]:
+    return [
+        {
+            "repo_root": str(root.scope.repo_root),
+            "prefix": root.prefix.as_posix(),
+            "extensions": sorted(root.scope.python_extensions),
+            "rules": root.rules.signature(),
+        }
+        for root in scoped_roots
+    ]
+
+
 def _with_repo_scan_cache_key(
     cache_options: RepoScanCacheOptions,
     repo_root_path: Path,
@@ -491,30 +622,36 @@ def _with_repo_scan_cache_key(
 ) -> RepoScanCacheOptions:
     if cache_options.cache is None:
         return cache_options
+    scoped_roots = _scoped_roots(repo_root_path, options=options)
+    included_paths = _collect_included_paths(scoped_roots, max_files=options.max_files)
+    scope_hash = _scope_hash(scoped_roots, included_paths)
+    scope_signature = _scope_signature(scoped_roots)
     cache_key = stable_cache_key(
         "repo_scan",
         {
             "repo_root": str(repo_root_path),
             "schema_fingerprint": schema_fingerprint(dataset_schema("repo_files_v1")),
             "options": to_builtins(options),
+            "scope_signature": scope_signature,
+            "scope_hash": scope_hash,
         },
     )
     return replace(cache_options, cache_key=cache_key)
 
 
-def _load_repo_scan_rows(
+def _load_repo_scan_bundle(
     repo_root_path: Path,
     *,
     options: RepoScanOptions,
     cache_options: RepoScanCacheOptions,
-) -> list[dict[str, object]]:
-    compute_rows = _select_row_loader(
+) -> RepoScanBundle:
+    compute_bundle = _select_bundle_loader(
         repo_root_path,
         options=options,
         cache_options=cache_options,
     )
     if cache_options.cache is None or cache_options.cache_key is None:
-        return compute_rows()
+        return compute_bundle()
 
     @memoize_stampede(
         cache_options.cache,
@@ -522,24 +659,24 @@ def _load_repo_scan_rows(
         tag=options.repo_id,
         name="repo_scan",
     )
-    def _cached_scan(key: str) -> list[dict[str, object]]:
+    def _cached_scan(key: str) -> RepoScanBundle:
         _ = key
-        return compute_rows()
+        return compute_bundle()
 
     return _cached_scan(cache_options.cache_key)
 
 
-def _select_row_loader(
+def _select_bundle_loader(
     repo_root_path: Path,
     *,
     options: RepoScanOptions,
     cache_options: RepoScanCacheOptions,
-) -> Callable[[], list[dict[str, object]]]:
-    def _compute_rows() -> list[dict[str, object]]:
-        return list(_iter_repo_scan_rows(repo_root_path, options=options))
+) -> Callable[[], RepoScanBundle]:
+    def _compute_bundle() -> RepoScanBundle:
+        return _build_repo_scope_bundle(repo_root_path, options=options)
 
     if cache_options.coord_cache is None or cache_options.cache_key is None:
-        return _compute_rows
+        return _compute_bundle
 
     @throttle(
         cache_options.coord_cache,
@@ -548,26 +685,267 @@ def _select_row_loader(
         name=f"repo_scan:{cache_options.cache_key}",
         expire=cache_options.cache_ttl,
     )
-    def _throttled_rows() -> list[dict[str, object]]:
-        return _compute_rows()
+    def _throttled_bundle() -> RepoScanBundle:
+        return _compute_bundle()
 
-    return _throttled_rows
+    return _throttled_bundle
 
 
-def _iter_repo_scan_rows(
-    repo_root_path: Path,
+def _build_repo_scope_bundle(repo_root_path: Path, *, options: RepoScanOptions) -> RepoScanBundle:
+    _maybe_update_submodules(repo_root_path, options)
+    scoped_roots = _scoped_roots(repo_root_path, options=options)
+    repo_rows: list[dict[str, object]] = []
+    manifest_entries: list[ScopeManifest] = []
+    extension_rows: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    max_files = options.max_files
+    for scoped_root in scoped_roots:
+        extension_rows.extend(_extension_rows_for_scope(scoped_root.scope))
+        candidate_paths = _candidate_paths_for_root(scoped_root)
+        manifest = build_scope_manifest(
+            candidate_paths,
+            options=ScopeManifestOptions(
+                repo=scoped_root.scope.repo,
+                rules=scoped_root.rules,
+                scope_kind="repo",
+                prefix=scoped_root.prefix,
+                repo_root=scoped_root.scope.repo_root,
+                status_flags=scoped_root.status_flags,
+            ),
+        )
+        manifest_entries.append(manifest)
+        for entry in manifest.entries:
+            if not entry.included:
+                continue
+            if scoped_root.diff_filter is not None and entry.path not in scoped_root.diff_filter:
+                continue
+            if entry.path in seen_paths:
+                continue
+            rel_in_scope = _rel_path_for_entry(entry.path, scoped_root.prefix)
+            abs_path = scoped_root.scope.repo_root / rel_in_scope
+            row = _build_repo_file_row(
+                rel=Path(entry.path),
+                abs_path=abs_path,
+                options=options,
+                follow_symlinks=scoped_root.scope.follow_symlinks,
+            )
+            if row is None:
+                continue
+            repo_rows.append(row)
+            seen_paths.add(entry.path)
+            if max_files is not None and len(repo_rows) >= max_files:
+                break
+        if max_files is not None and len(repo_rows) >= max_files:
+            break
+    manifest_rows: list[dict[str, str | None]] = []
+    for manifest in manifest_entries:
+        manifest_rows.extend(manifest.rows())
+    scope_hash = _scope_hash(scoped_roots, _repo_row_paths(repo_rows))
+    return RepoScanBundle(
+        repo_rows=tuple(repo_rows),
+        scope_manifest_rows=tuple(manifest_rows),
+        python_extension_rows=tuple(extension_rows),
+        scope_hash=scope_hash,
+    )
+
+
+def _rel_path_for_entry(path: str, prefix: Path) -> Path:
+    rel = Path(path)
+    if not prefix.parts:
+        return rel
+    try:
+        return rel.relative_to(prefix)
+    except ValueError:
+        return rel
+
+
+def _extension_rows_for_scope(scope: RepoScope) -> list[dict[str, str]]:
+    rows = scope.extension_catalog.rows()
+    for row in rows:
+        row["repo_root"] = str(scope.repo_root)
+    return rows
+
+
+def _repo_row_paths(rows: Sequence[Mapping[str, object]]) -> list[str]:
+    paths: list[str] = []
+    for row in rows:
+        path = row.get("path")
+        if isinstance(path, str):
+            paths.append(path)
+    return paths
+
+
+def _scope_hash(scoped_roots: Sequence[_ScopedRoot], paths: Sequence[str]) -> str:
+    roots_payload = [
+        {
+            "repo_root": str(root.scope.repo_root),
+            "prefix": root.prefix.as_posix(),
+            "extensions": sorted(root.scope.python_extensions),
+            "rules": root.rules.signature(),
+        }
+        for root in scoped_roots
+    ]
+    return stable_cache_key(
+        "repo_scope",
+        {
+            "roots": roots_payload,
+            "paths": sorted(path for path in paths if path),
+        },
+    )
+
+
+def _parse_optional_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _pattern_counts_payload(
+    counts: Mapping[int, int],
+    patterns: Sequence[str],
+    *,
+    top_limit: int,
+) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for idx, count in counts.items():
+        if idx < 0 or idx >= len(patterns):
+            continue
+        items.append({"index": idx, "pattern": patterns[idx], "count": count})
+    return sorted(items, key=_pattern_sort_key)[:top_limit]
+
+
+def _pattern_sort_key(item: Mapping[str, object]) -> tuple[int, int]:
+    count = item.get("count")
+    index = item.get("index")
+    count_value = count if isinstance(count, int) else 0
+    index_value = index if isinstance(index, int) else 0
+    return (-count_value, index_value)
+
+
+def _pathspec_stats(
+    manifest_rows: Sequence[Mapping[str, object]],
+    rules_by_root: Mapping[str, ScopeRuleSet],
+    *,
+    top_limit: int = 10,
+) -> list[dict[str, object]]:
+    rows_by_root: dict[str, list[Mapping[str, object]]] = {}
+    for row in manifest_rows:
+        repo_root = row.get("repo_root")
+        if not isinstance(repo_root, str) or not repo_root:
+            continue
+        rows_by_root.setdefault(repo_root, []).append(row)
+    stats: list[dict[str, object]] = []
+    for repo_root, rows in rows_by_root.items():
+        rules = rules_by_root.get(repo_root)
+        if rules is None:
+            continue
+        include_counts: dict[int, int] = {}
+        exclude_counts: dict[int, int] = {}
+        include_unmatched = 0
+        exclude_unmatched = 0
+        for row in rows:
+            include_idx = _parse_optional_int(row.get("include_index"))
+            exclude_idx = _parse_optional_int(row.get("exclude_index"))
+            if rules.include_spec is not None:
+                if include_idx is None:
+                    include_unmatched += 1
+                else:
+                    include_counts[include_idx] = include_counts.get(include_idx, 0) + 1
+            if rules.exclude_spec is not None:
+                if exclude_idx is None:
+                    exclude_unmatched += 1
+                else:
+                    exclude_counts[exclude_idx] = exclude_counts.get(exclude_idx, 0) + 1
+        stats.append(
+            {
+                "repo_root": repo_root,
+                "include_patterns": _pattern_counts_payload(
+                    include_counts,
+                    rules.include_lines,
+                    top_limit=top_limit,
+                ),
+                "exclude_patterns": _pattern_counts_payload(
+                    exclude_counts,
+                    rules.exclude_lines,
+                    top_limit=top_limit,
+                ),
+                "include_unmatched": include_unmatched,
+                "exclude_unmatched": exclude_unmatched,
+                "include_pattern_total": len(rules.include_lines),
+                "exclude_pattern_total": len(rules.exclude_lines),
+            }
+        )
+    return stats
+
+
+def _rules_by_repo_root(
+    repo_roots: Iterable[str],
+    *,
+    scope_policy: RepoScopeOptions,
+) -> dict[str, ScopeRuleSet]:
+    rules_by_root: dict[str, ScopeRuleSet] = {}
+    for root in repo_roots:
+        try:
+            scope = resolve_repo_scope(Path(root), scope_policy)
+        except ValueError:
+            continue
+        include_lines, exclude_lines = _scope_rule_lines(scope, scope_policy)
+        rules_by_root[root] = build_scope_rules(
+            include_lines=include_lines,
+            exclude_lines=exclude_lines,
+        )
+    return rules_by_root
+
+
+def _record_repo_scope_stats(
+    repo_root: Path,
+    bundle: RepoScanBundle,
     *,
     options: RepoScanOptions,
-) -> Iterator[dict[str, object]]:
-    count = 0
-    for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
-        row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
-        if row is None:
-            continue
-        yield row
-        count += 1
-        if options.max_files is not None and count >= options.max_files:
-            break
+    session: ExtractSession,
+) -> None:
+    runtime_profile = session.engine_session.datafusion_profile
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    scope_policy = _resolve_scope_policy(options)
+    repo_roots = {
+        row.get("repo_root")
+        for row in bundle.scope_manifest_rows
+        if isinstance(row.get("repo_root"), str)
+    }
+    rules_by_root = _rules_by_repo_root(
+        {root for root in repo_roots if isinstance(root, str)},
+        scope_policy=scope_policy,
+    )
+    pathspec_stats = _pathspec_stats(bundle.scope_manifest_rows, rules_by_root)
+    total = len(bundle.scope_manifest_rows)
+    included = sum(1 for row in bundle.scope_manifest_rows if str(row.get("included")) == "True")
+    ignored = sum(
+        1 for row in bundle.scope_manifest_rows if str(row.get("ignored_by_git")) == "True"
+    )
+    untracked = sum(
+        1 for row in bundle.scope_manifest_rows if str(row.get("is_untracked")) == "True"
+    )
+    payload = {
+        "repo_root": str(repo_root),
+        "scope_hash": bundle.scope_hash,
+        "total_candidates": total,
+        "included": included,
+        "ignored_by_git": ignored,
+        "untracked": untracked,
+        "repo_rows": len(bundle.repo_rows),
+        "python_extensions": len(bundle.python_extension_rows),
+        "repo_id": options.repo_id,
+        "pathspec_stats": pathspec_stats,
+    }
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime_profile, "repo_scope_stats_v1", payload)
 
 
 @dataclass
@@ -590,15 +968,16 @@ def _record_repo_blame(
     runtime_profile = session.engine_session.datafusion_profile
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
-    git_ctx = open_git_context(repo_root)
-    if git_ctx is None:
-        return
     paths = _blame_paths(entries, limit=options.blame_max_files)
     if not paths:
         return
+    try:
+        git_scope = resolve_repo_scope(repo_root, _resolve_scope_policy(options))
+    except ValueError:
+        return
     author_stats: dict[str, _AuthorStat] = {}
     for path_posix in paths:
-        for hunk in blame_hunks(git_ctx.repo, path_posix=path_posix, ref=options.blame_ref):
+        for hunk in blame_hunks(git_scope.repo, path_posix=path_posix, ref=options.blame_ref):
             key = hunk.author_email or hunk.author_name
             if not key:
                 continue
@@ -654,3 +1033,15 @@ def _path_from_entry(entry: Path | Mapping[str, object]) -> str | None:
     if isinstance(path_value, str):
         return path_value
     return None
+
+
+__all__ = [
+    "RepoScanBundle",
+    "RepoScanOptions",
+    "default_repo_scan_options",
+    "repo_files_query",
+    "scan_repo",
+    "scan_repo_plan",
+    "scan_repo_plans",
+    "scan_repo_tables",
+]

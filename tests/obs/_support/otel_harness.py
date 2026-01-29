@@ -15,8 +15,10 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
 from obs.otel.metrics import metric_views, reset_metrics_registry
+from obs.otel.sampling import wrap_sampler
 
 
 @dataclass
@@ -60,7 +62,8 @@ def get_otel_harness() -> OtelTestHarness:
     resource = Resource.create({"service.name": "codeanatomy-tests"})
 
     span_exporter = InMemorySpanExporter()
-    tracer_provider = TracerProvider(resource=resource)
+    sampler = wrap_sampler(ALWAYS_ON, rule="test")
+    tracer_provider = TracerProvider(resource=resource, sampler=sampler)
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     trace.set_tracer_provider(tracer_provider)
 

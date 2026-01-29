@@ -30,10 +30,8 @@ write_table, and streaming Delta writes via provider inserts).
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import inspect
-import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -69,6 +67,7 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import (
@@ -104,6 +103,8 @@ from schema_spec.system import (
 from serde_artifacts import DeltaScanConfigSnapshot
 from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
+from utils.hashing import hash_storage_options
+from utils.storage_options import merged_storage_options, normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
@@ -1036,14 +1037,14 @@ def _build_delta_provider_registration(
     ):
         enable_view_types = _schema_hardening_view_types(context.runtime_profile)
         delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
-    merged_storage_options = _merged_storage_options(
+    merged_storage = merged_storage_options(
         location.storage_options,
         resolve_delta_log_storage_options(location),
     )
     request = _DeltaProviderRequest(
         ctx=context.ctx,
         path=str(location.path),
-        log_storage_options=merged_storage_options,
+        log_storage_options=merged_storage,
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         delta_scan=delta_scan,
@@ -1058,7 +1059,7 @@ def _build_delta_provider_registration(
         options=_delta_plugin_options(
             request=_DeltaPluginOptionsRequest(
                 path=str(location.path),
-                storage_options=merged_storage_options,
+                storage_options=merged_storage,
                 version=location.delta_version,
                 timestamp=location.delta_timestamp,
                 delta_scan=delta_scan,
@@ -1070,7 +1071,7 @@ def _build_delta_provider_registration(
     return _DeltaProviderRegistration(
         provider=provider,
         response=response,
-        merged_storage_options=merged_storage_options,
+        merged_storage_options=merged_storage,
         delta_scan=delta_scan,
         predicate_sql=predicate_sql,
         predicate_error=predicate_error,
@@ -1085,11 +1086,11 @@ def _build_delta_cdf_registration(
 ) -> _DeltaCdfRegistration:
     resolved = options or DeltaCdfRegistrationOptions()
     cdf_options = resolved.cdf_options
-    explicit_log_storage_options = _merged_storage_options(
+    explicit_log_storage_options = merged_storage_options(
         None,
         resolved.log_storage_options,
     )
-    storage_options = _merged_storage_options(
+    storage_options = merged_storage_options(
         resolved.storage_options,
         explicit_log_storage_options or resolved.storage_options,
     )
@@ -1148,9 +1149,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             snapshot=registration.response.snapshot,
             registration_path="provider",
             predicate=registration.predicate_sql,
-            predicate_error=(
-                registration.predicate_error or registration.response.predicate_error
-            ),
+            predicate_error=(registration.predicate_error or registration.response.predicate_error),
             add_actions=registration.response.add_actions,
         ),
     )
@@ -1172,15 +1171,18 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             record_delta_snapshot,
         )
 
+        storage_options, log_storage_options = normalize_storage_options(
+            location.storage_options,
+            resolve_delta_log_storage_options(location),
+        )
+        storage_hash = hash_storage_options(storage_options, log_storage_options)
         record_delta_snapshot(
             context.runtime_profile,
             artifact=DeltaSnapshotArtifact(
                 table_uri=str(location.path),
                 snapshot=registration.response.snapshot,
                 dataset_name=context.name,
-                storage_options_hash=_storage_options_hash(
-                    registration.merged_storage_options
-                ),
+                storage_options_hash=storage_hash,
                 schema_fingerprint=schema_fingerprint_value,
                 ddl_fingerprint=ddl_fingerprint,
             ),
@@ -1300,7 +1302,7 @@ def _delta_plugin_options(
             request.delta_scan.wrap_partition_values if request.delta_scan else None
         ),
     }
-    gate_payload = _delta_gate_payload(request.gate)
+    gate_payload = delta_feature_gate_payload(request.gate)
     if gate_payload is not None:
         payload.update(gate_payload)
     if request.scan_files:
@@ -1324,7 +1326,7 @@ def _delta_cdf_plugin_options(
         "ending_timestamp": cdf_payload.get("ending_timestamp"),
         "allow_out_of_range": cdf_payload.get("allow_out_of_range"),
     }
-    gate_payload = _delta_gate_payload(request.gate)
+    gate_payload = delta_feature_gate_payload(request.gate)
     if gate_payload is not None:
         payload.update(gate_payload)
     return payload
@@ -1335,12 +1337,17 @@ def _delta_provider_artifact_payload(
     *,
     context: _DeltaProviderArtifactContext,
 ) -> dict[str, object]:
-    explicit_log_storage = _merged_storage_options(
+    explicit_log_storage = merged_storage_options(
         None,
         location.delta_log_storage_options,
     )
     resolved_log_storage = resolve_delta_log_storage_options(location)
-    merged_storage = _merged_storage_options(location.storage_options, resolved_log_storage)
+    storage_options, log_storage_options = normalize_storage_options(
+        location.storage_options,
+        resolved_log_storage,
+    )
+    merged_storage = merged_storage_options(storage_options, log_storage_options)
+    storage_hash = hash_storage_options(storage_options, log_storage_options)
     gate = resolve_delta_feature_gate(location)
     pruned_files_count = len(context.add_actions) if context.add_actions is not None else None
     pruning_applied = context.add_actions is not None
@@ -1352,10 +1359,10 @@ def _delta_provider_artifact_payload(
         "delta_timestamp": location.delta_timestamp,
         "delta_log_storage_options": (dict(explicit_log_storage) if explicit_log_storage else None),
         "delta_storage_options": dict(merged_storage) if merged_storage else None,
-        "delta_storage_options_hash": _storage_options_hash(merged_storage),
+        "delta_storage_options_hash": storage_hash,
         "delta_scan": _delta_scan_payload(context.delta_scan),
         "delta_scan_effective": context.delta_scan_effective,
-        "delta_feature_gate": _delta_gate_payload(gate),
+        "delta_feature_gate": delta_feature_gate_payload(gate),
         "delta_snapshot": context.snapshot,
         "delta_scan_ignored": delta_scan_ignored,
         "delta_pruning_predicate": context.predicate,
@@ -1363,40 +1370,6 @@ def _delta_provider_artifact_payload(
         "delta_pruning_applied": pruning_applied,
         "delta_pruned_files": pruned_files_count,
     }
-
-
-def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
-
-
-def _merged_storage_options(
-    storage_options: Mapping[str, str] | None,
-    log_storage_options: Mapping[str, str] | None,
-) -> dict[str, str] | None:
-    merged: dict[str, str] = {}
-    if storage_options:
-        merged.update({str(key): str(value) for key, value in storage_options.items()})
-    if log_storage_options:
-        merged.update({str(key): str(value) for key, value in log_storage_options.items()})
-    return merged or None
-
-
-def _storage_options_hash(storage_options: Mapping[str, str] | None) -> str | None:
-    if not storage_options:
-        return None
-    payload = json.dumps(sorted(storage_options.items()), sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] | None:
@@ -2468,8 +2441,9 @@ def register_delta_cdf_df(
         "delta_storage_options": (
             dict(registration.storage_options) if registration.storage_options is not None else None
         ),
-        "delta_storage_options_hash": _storage_options_hash(
-            registration.storage_options
+        "delta_storage_options_hash": hash_storage_options(
+            registration.storage_options,
+            registration.log_storage_options,
         ),
         "delta_snapshot": registration.bundle.snapshot,
         "cdf_options": _cdf_options_payload(registration.cdf_options),
@@ -2500,7 +2474,10 @@ def register_delta_cdf_df(
             options=registration.cdf_options,
             log_storage_options=registration.log_storage_options,
             snapshot=registration.bundle.snapshot,
-            storage_options_hash=_storage_options_hash(registration.storage_options),
+            storage_options_hash=hash_storage_options(
+                registration.storage_options,
+                registration.log_storage_options,
+            ),
         ),
     )
     _invalidate_information_schema_cache(runtime_profile, ctx)

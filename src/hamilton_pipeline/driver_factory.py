@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -41,6 +40,7 @@ from hamilton_pipeline.task_module_builder import (
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
 from relspec.view_defs import RELATION_OUTPUT_NAME
+from utils.env_utils import env_bool, env_value
 
 if TYPE_CHECKING:
     from hamilton.base import HamiltonGraphAdapter
@@ -125,7 +125,7 @@ def _runtime_profile_name(config: Mapping[str, JsonValue]) -> str:
     value = config.get("runtime_profile_name")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    return os.environ.get("CODEANATOMY_RUNTIME_PROFILE", "").strip() or "default"
+    return env_value("CODEANATOMY_RUNTIME_PROFILE") or "default"
 
 
 def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | None:
@@ -143,10 +143,10 @@ def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | 
             "best_effort": DeterminismTier.BEST_EFFORT,
         }
         return mapping.get(normalized)
-    force_flag = os.environ.get("CODEANATOMY_FORCE_TIER2", "").strip().lower()
-    if force_flag in {"1", "true", "yes", "y"}:
+    force_flag = env_bool("CODEANATOMY_FORCE_TIER2", default=False, on_invalid="false")
+    if force_flag:
         return DeterminismTier.CANONICAL
-    tier = os.environ.get("CODEANATOMY_DETERMINISM_TIER", "").strip().lower()
+    tier = (env_value("CODEANATOMY_DETERMINISM_TIER") or "").lower()
     mapping = {
         "tier2": DeterminismTier.CANONICAL,
         "canonical": DeterminismTier.CANONICAL,
@@ -278,7 +278,7 @@ def _compile_plan(
 def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
     if bool(config.get("incremental_enabled")):
         return True
-    mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
+    mode = (env_value("CODEANATOMY_PIPELINE_MODE") or "").lower()
     return mode in {"incremental", "streaming"}
 
 
@@ -290,7 +290,7 @@ def _resolve_incremental_state_dir(config: Mapping[str, JsonValue]) -> Path | No
         return None
     repo_root = Path(repo_root_value).expanduser()
     state_dir_value = config.get("incremental_state_dir")
-    state_dir_env = os.environ.get("CODEANATOMY_STATE_DIR")
+    state_dir_env = env_value("CODEANATOMY_STATE_DIR")
     state_dir = state_dir_value if isinstance(state_dir_value, str) else state_dir_env
     if isinstance(state_dir, str) and state_dir.strip():
         return repo_root / Path(state_dir)
@@ -401,7 +401,7 @@ def _tracker_value(
     """
     value = config.get(config_key)
     if value is None:
-        value = os.environ.get(env_key)
+        value = env_value(env_key)
     return value
 
 
@@ -645,12 +645,12 @@ def _with_graph_tags(
     merged_tags["plan_reduction_removed_edge_count"] = str(plan.reduction_removed_edge_count)
     runtime_env = _string_override(config_payload, "runtime_environment")
     if runtime_env is None:
-        runtime_env = os.environ.get("CODEANATOMY_ENV", "").strip() or None
+        runtime_env = env_value("CODEANATOMY_ENV")
     if runtime_env:
         merged_tags.setdefault("environment", runtime_env)
     team_value = _string_override(config_payload, "runtime_team")
     if team_value is None:
-        team_value = os.environ.get("CODEANATOMY_TEAM", "").strip() or None
+        team_value = env_value("CODEANATOMY_TEAM")
     if team_value:
         merged_tags.setdefault("team", team_value)
     merged_tags.setdefault("runtime_profile", _runtime_profile_name(config_payload))
@@ -1163,9 +1163,9 @@ def _cache_path_from_config(config: Mapping[str, JsonValue]) -> str | None:
     if not isinstance(value, str) or not value.strip():
         value = config.get("hamilton_cache_path")
     if not isinstance(value, str) or not value.strip():
-        value = os.environ.get("CODEANATOMY_HAMILTON_CACHE_PATH")
+        value = env_value("CODEANATOMY_HAMILTON_CACHE_PATH")
     if not isinstance(value, str) or not value.strip():
-        value = os.environ.get("HAMILTON_CACHE_PATH")
+        value = env_value("HAMILTON_CACHE_PATH")
     if not isinstance(value, str) or not value.strip():
         return None
     return value.strip()

@@ -13,8 +13,8 @@ from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike, co
 
 
 @dataclass(frozen=True)
-class ViewReference:
-    """Reference a DataFusion-registered view by name."""
+class SimpleViewRef:
+    """Simple reference to a DataFusion-registered view by name."""
 
     name: str
 
@@ -51,7 +51,7 @@ def register_nested_table(
 
 def materialize_view_reference(
     ctx: SessionContext | None,
-    view: ViewReference,
+    view: SimpleViewRef,
 ) -> pa.Table:
     """Materialize a DataFusion view into a pyarrow table.
 
@@ -73,4 +73,4 @@ def materialize_view_reference(
     return pa.Table.from_batches(batches)
 
 
-__all__ = ["ViewReference", "materialize_view_reference", "register_nested_table"]
+__all__ = ["SimpleViewRef", "materialize_view_reference", "register_nested_table"]

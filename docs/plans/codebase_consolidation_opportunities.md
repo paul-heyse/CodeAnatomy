@@ -14,6 +14,7 @@ This document identifies consolidation opportunities across the CodeAnatomy code
 6. [Configuration Class Standardization](#6-configuration-class-standardization)
 7. [Factory Simplification](#7-factory-simplification)
 8. [Cross-Scope Dependencies](#8-cross-scope-dependencies)
+9. [Additional Consolidation Opportunities](#9-additional-consolidation-opportunities)
 
 ---
 
@@ -21,16 +22,17 @@ This document identifies consolidation opportunities across the CodeAnatomy code
 
 ### Architecture Overview
 
-The codebase contains **46+ hash/fingerprint function implementations** scattered across modules. Most use SHA-256, with a few using BLAKE2b for compact hashes.
+The codebase contains **46+ hash/fingerprint function implementations** scattered across modules. Most use SHA-256, with a few using BLAKE2b for compact hashes. **These implementations are not equivalent**: they differ in serialization format (msgpack vs JSON), encoder configuration (msgspec default vs canonical encoder), and hash truncation (full hex vs first 16 chars). Consolidation must preserve these semantics to avoid breaking cache keys and artifact identities.
 
-### Current State: Duplicated Implementations
+### Current State: Duplicated Implementations (Semantics Differ)
 
 | Pattern | Files with Duplicates | Count |
 |---------|----------------------|-------|
-| `_hash_payload(payload) -> str` (msgpack + SHA-256) | 8 files | 8 |
-| `_settings_hash(settings) -> str` | 4 files | 4 |
-| `_storage_options_hash(options) -> str` | 4 files | 4 |
-| `_payload_hash(payload) -> str` (JSON + SHA-256) | 3 files | 3 |
+| `_hash_payload(payload) -> str` (msgpack + SHA-256) | 6+ files | 6+ |
+| `_payload_hash(payload) -> str` (JSON + SHA-256 via msgspec encode_json_into) | 2 files | 2 |
+| `_storage_options_hash(...) -> str` (JSON + SHA-256) | 5 files | 5 |
+| `_settings_hash(settings) -> str` (msgpack + SHA-256) | 2 files | 2 |
+| Short hash variants (SHA-256 hex truncated to 16) | 2 files | 2 |
 
 #### Example: `_hash_payload` implementations
 
@@ -55,6 +57,20 @@ def _hash_payload(payload: object) -> str:
     return hashlib.sha256(raw).hexdigest()
 ```
 
+#### Short Hash Variants (truncated SHA-256)
+
+**Location 1:** `src/datafusion_engine/scan_overrides.py:330`
+```python
+def _hash_payload(payload: object) -> str:
+    digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return digest[:16]
+```
+
+**Location 2:** `src/datafusion_engine/scan_planner.py:90`
+```python
+digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()[:16]
+```
+
 #### Storage Options Hash Duplicates
 
 **Location 1:** `src/storage/deltalake/delta.py:2459`
@@ -77,65 +93,71 @@ def _storage_options_hash(storage: Mapping[str, str] | None) -> str | None:
     return hashlib.sha256(json.dumps(dict(storage), sort_keys=True).encode()).hexdigest()
 ```
 
-### Target Implementation: Consolidated Hash Module
+### Target Implementation: Explicit Hash Semantics Module
 
-Create `src/utils/hash_utils.py`:
+**Key change**: consolidate into explicit helpers that **preserve current semantics**, rather than a single “hash_payload” that might alter encoding or output length. Keep `src/datafusion_engine/hash_utils.py` in place (re-export from the new module) to avoid breaking imports during migration.
+
+Create `src/utils/hashing.py` and re-export (or wrap) from `src/datafusion_engine/hash_utils.py`:
 
 ```python
-"""Unified hash utilities for content, payload, and configuration fingerprinting."""
+"""Explicit hash utilities with stable serialization semantics."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-import msgspec.msgpack
+import msgspec
+
+from serde_msgspec import JSON_ENCODER_SORTED, MSGPACK_ENCODER, to_builtins
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 # -----------------------------------------------------------------------------
-# Core Primitives
+# Core primitives
 # -----------------------------------------------------------------------------
 
-def hash64_from_text(value: str) -> int:
-    """Return a deterministic signed 64-bit hash for a string (BLAKE2b)."""
-    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest()
-    unsigned = int.from_bytes(digest, "big", signed=False)
-    return unsigned & ((1 << 63) - 1)
-
-
-def hash128_from_text(value: str) -> str:
-    """Return a deterministic 128-bit hex string for a string (BLAKE2b)."""
-    return hashlib.blake2b(value.encode("utf-8"), digest_size=16).hexdigest()
+def hash_sha256_hex(payload: bytes, *, length: int | None = None) -> str:
+    """Return SHA-256 hex digest, optionally truncated."""
+    digest = hashlib.sha256(payload).hexdigest()
+    return digest if length is None else digest[:length]
 
 
 # -----------------------------------------------------------------------------
-# Payload Hashing (msgpack serialization)
+# Payload hashing (msgpack)
 # -----------------------------------------------------------------------------
 
-def hash_payload_msgpack(payload: object) -> str:
-    """Return SHA-256 hexdigest of msgpack-encoded payload."""
-    raw = msgspec.msgpack.encode(payload)
-    return hashlib.sha256(raw).hexdigest()
+def hash_msgpack_default(payload: object) -> str:
+    """Return SHA-256 hexdigest using msgspec.msgpack.encode."""
+    return hash_sha256_hex(msgspec.msgpack.encode(payload))
 
 
-def hash_payload_json(payload: object) -> str:
-    """Return SHA-256 hexdigest of JSON-encoded payload (sorted keys)."""
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def hash_msgpack_canonical(payload: object) -> str:
+    """Return SHA-256 hexdigest using MSGPACK_ENCODER (deterministic order)."""
+    return hash_sha256_hex(MSGPACK_ENCODER.encode(payload))
 
 
 # -----------------------------------------------------------------------------
-# Settings/Config Hashing
+# Payload hashing (JSON via msgspec encoders)
+# -----------------------------------------------------------------------------
+
+def hash_json_canonical(payload: object, *, str_keys: bool = False) -> str:
+    """Return SHA-256 hexdigest using JSON_ENCODER_SORTED."""
+    buffer = bytearray()
+    JSON_ENCODER_SORTED.encode_into(to_builtins(payload, str_keys=str_keys), buffer)
+    return hash_sha256_hex(buffer)
+
+
+# -----------------------------------------------------------------------------
+# Settings/Config hashing
 # -----------------------------------------------------------------------------
 
 def hash_settings(settings: Mapping[str, str]) -> str:
     """Return SHA-256 hexdigest of sorted settings mapping."""
     payload = tuple(sorted(settings.items()))
-    return hash_payload_msgpack(payload)
+    return hash_msgpack_canonical(payload)
 
 
 def hash_storage_options(
@@ -149,11 +171,11 @@ def hash_storage_options(
         "storage": dict(storage_options or {}),
         "log_storage": dict(log_storage_options or {}),
     }
-    return hash_payload_json(payload)
+    return hash_json_canonical(payload, str_keys=True)
 
 
 # -----------------------------------------------------------------------------
-# File Content Hashing
+# File content hashing
 # -----------------------------------------------------------------------------
 
 def hash_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -166,19 +188,21 @@ def hash_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 
 __all__ = [
-    "hash64_from_text",
-    "hash128_from_text",
-    "hash_payload_msgpack",
-    "hash_payload_json",
+    "hash_sha256_hex",
+    "hash_msgpack_default",
+    "hash_msgpack_canonical",
+    "hash_json_canonical",
     "hash_settings",
     "hash_storage_options",
     "hash_file_sha256",
 ]
 ```
 
+Retain `hash64_from_text` and `hash128_from_text` in `src/datafusion_engine/hash_utils.py` (or re-export them from `src/utils/hashing.py`) to avoid breaking existing callers.
+
 ### Target File List
 
-Files to modify (import from `utils.hash_utils`):
+Files to modify (import from `utils.hashing` and preserve existing semantics):
 
 | File | Functions to Replace |
 |------|---------------------|
@@ -188,6 +212,7 @@ Files to modify (import from `utils.hash_utils`):
 | `src/datafusion_engine/plan_bundle.py` | `_planning_env_hash`, `_rulepack_hash`, `_payload_hash`, `_settings_hash`, `_function_registry_hash`, `_information_schema_hash` |
 | `src/datafusion_engine/plan_artifact_store.py` | `_payload_hash_json`, `_payload_hash_bytes` |
 | `src/datafusion_engine/scan_planner.py` | `_scan_unit_key`, `_delta_scan_config_hash`, `_storage_options_hash_from_request` |
+| `src/datafusion_engine/scan_overrides.py` | `_hash_payload` (truncated) |
 | `src/datafusion_engine/registry_bridge.py` | `_storage_options_hash` |
 | `src/datafusion_engine/udf_runtime.py` | `rust_udf_snapshot_hash` |
 | `src/datafusion_engine/param_tables.py` | `column_param_signature`, `scalar_param_signature` |
@@ -201,13 +226,18 @@ Files to modify (import from `utils.hash_utils`):
 | `src/serde_schema_registry.py` | `schema_contract_hash` |
 | `src/extract/repo_scan.py` | `_sha256_path` |
 | `src/incremental/scip_fingerprint.py` | `scip_index_fingerprint` |
+| `src/datafusion_engine/write_pipeline.py` | `_storage_options_hash` |
+| `src/datafusion_engine/table_spec.py` | truncated SHA-256 fingerprints |
+| `src/datafusion_engine/planning_pipeline.py` | truncated SHA-256 digests |
 
 ### Implementation Checklist
 
 - [ ] Create `src/utils/__init__.py` if not exists
-- [ ] Create `src/utils/hash_utils.py` with consolidated implementations
-- [ ] Add comprehensive unit tests in `tests/unit/utils/test_hash_utils.py`
-- [ ] Update each target file to import from `utils.hash_utils`
+- [ ] Create `src/utils/hashing.py` with **explicit semantic helpers**
+- [ ] Re-export or wrap new helpers from `src/datafusion_engine/hash_utils.py`
+- [ ] Add comprehensive unit tests in `tests/unit/utils/test_hashing.py`
+- [ ] Add **compatibility tests** that compare legacy hashes to new helpers per call-site
+- [ ] Update each target file to import the correct helper for its semantics
 - [ ] Verify all tests pass after each file migration
 - [ ] Remove duplicate implementations from target files
 - [ ] Update `__all__` exports in affected modules
@@ -215,10 +245,10 @@ Files to modify (import from `utils.hash_utils`):
 ### Decommissioning List
 
 Delete after migration:
-- `src/datafusion_engine/hash_utils.py` (move to `src/utils/hash_utils.py`)
-- Remove local `_hash_payload` from 8 files
-- Remove local `_storage_options_hash` from 4 files
-- Remove local `_settings_hash` from 4 files
+- **Do not delete** `src/datafusion_engine/hash_utils.py` immediately; convert to a thin re-export wrapper
+- Remove local `_hash_payload` helpers from target files
+- Remove local `_storage_options_hash` helpers from target files
+- Remove local `_settings_hash` helpers from target files
 
 ---
 
@@ -226,7 +256,7 @@ Delete after migration:
 
 ### Architecture Overview
 
-The codebase has **8+ duplicate implementations** of environment variable parsing helpers, particularly for boolean, integer, and float conversion with error handling.
+The codebase has **8+ duplicate implementations** of environment variable parsing helpers, particularly for boolean, integer, and float conversion with error handling. **Semantics diverge today**: some helpers return `None` for invalid booleans, while others fall back to `False` or a default without distinguishing invalid input. Consolidation must preserve these behaviors on a per-call-site basis.
 
 ### Current State: Duplicated Implementations
 
@@ -302,7 +332,7 @@ def _env_int(name: str, *, default: int) -> int:
 **Location 2:** `src/engine/runtime_profile.py:94-99`
 **Location 3:** `src/extract/git_settings.py:77-84`
 
-### Target Implementation: Consolidated Env Utils Module
+### Target Implementation: Consolidated Env Utils Module (Semantics-Preserving)
 
 Create `src/utils/env_utils.py`:
 
@@ -313,11 +343,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TypeVar, overload
+from typing import Literal, overload
 
 _LOGGER = logging.getLogger(__name__)
 
-T = TypeVar("T")
+OnInvalid = Literal["default", "none", "false"]
 
 # -----------------------------------------------------------------------------
 # String Helpers
@@ -346,7 +376,13 @@ def env_bool(name: str) -> bool | None: ...
 def env_bool(name: str, *, default: bool) -> bool: ...
 
 
-def env_bool(name: str, *, default: bool | None = None) -> bool | None:
+def env_bool(
+    name: str,
+    *,
+    default: bool | None = None,
+    on_invalid: OnInvalid = "default",
+    log_invalid: bool = False,
+) -> bool | None:
     """Parse environment variable as boolean.
 
     Parameters
@@ -368,6 +404,12 @@ def env_bool(name: str, *, default: bool | None = None) -> bool | None:
     if value in _TRUE_VALUES:
         return True
     if value in _FALSE_VALUES:
+        return False
+    if log_invalid:
+        _LOGGER.warning("Invalid boolean for %s: %r", name, raw)
+    if on_invalid == "none":
+        return None
+    if on_invalid == "false":
         return False
     return default
 
@@ -442,11 +484,17 @@ def env_float(name: str, *, default: float | None = None) -> float | None:
         return default
 
 
+def env_truthy(value: str | None) -> bool:
+    """Return True when the raw env value is 'true' (case-insensitive)."""
+    return value is not None and value.strip().lower() == "true"
+
+
 __all__ = [
     "env_value",
     "env_bool",
     "env_int",
     "env_float",
+    "env_truthy",
 ]
 ```
 
@@ -458,6 +506,7 @@ Files to modify (import from `utils.env_utils`):
 |------|---------------------|
 | `src/obs/otel/config.py` | `_env_bool`, `_env_int`, `_env_float`, `_env_optional_int`, `_exporter_enabled` |
 | `src/obs/otel/resources.py` | `_env_value` |
+| `src/obs/otel/bootstrap.py` | env string resolution |
 | `src/hamilton_pipeline/driver_factory.py` | `_runtime_profile_name`, `_determinism_override`, `_incremental_enabled`, `_tracker_value` |
 | `src/hamilton_pipeline/modules/inputs.py` | `_env_bool`, `_incremental_pipeline_enabled`, `_determinism_from_str`, `_cache_path_from_inputs` |
 | `src/engine/runtime_profile.py` | `_env_value`, `_env_int` |
@@ -477,11 +526,12 @@ Files to modify (import from `utils.env_utils`):
 - [ ] Update `src/extract/git_settings.py`
 - [ ] Update `src/cache/diskcache_factory.py`
 - [ ] Verify all tests pass after migration
+- [ ] Add coverage for invalid/ambiguous env values to preserve legacy behavior
 
 ### Decommissioning List
 
 Delete after migration (local functions in each file):
-- `src/obs/otel/config.py`: `_env_bool`, `_env_int`, `_env_float`, `_env_optional_int`
+- `src/obs/otel/config.py`: `_env_bool`, `_env_int`, `_env_float`, `_env_optional_int`, `_env_truthy`
 - `src/obs/otel/resources.py`: `_env_value`
 - `src/hamilton_pipeline/modules/inputs.py`: `_env_bool`
 - `src/engine/runtime_profile.py`: `_env_value`, `_env_int`
@@ -588,9 +638,9 @@ type RowStrict = dict[str, RowValueStrict]
 type RowRich = dict[str, RowValueRich]
 type RowPermissive = dict[str, object]
 
-# Backward compatibility aliases
-type Row = RowPermissive  # Default to permissive
-type RowValue = RowValueRich  # Default to rich
+# Legacy aliases (avoid in new code; keep for compatibility)
+type Row = RowPermissive
+type RowValue = RowValueRich
 
 # -----------------------------------------------------------------------------
 # Strictness and Determinism
@@ -660,7 +710,7 @@ __all__ = [
 - [ ] Add type alias documentation
 - [ ] Update `src/storage/dataset_sources.py` to import `PathLike`
 - [ ] Update `src/serde_artifacts.py` to use `JsonValueLax`
-- [ ] Update extraction modules to use appropriate `Row*` aliases
+- [ ] Update extraction modules to use appropriate `Row*` aliases (avoid `Row`/`RowValue` defaults)
 - [ ] Update `src/obs/metrics.py` for strict row types
 - [ ] Verify all type checks pass with `pyright`
 
@@ -686,12 +736,17 @@ The codebase has **8 dataclasses with duplicate definitions** across different m
 |-----------|-----------|---------|--------|
 | `ViewReference` | `src/relspec/runtime_artifacts.py:38`, `src/datafusion_engine/nested_tables.py:15` | Low (1 vs 6 fields) | Keep both, rename minimal one |
 | `QuerySpec` | `src/datafusion_engine/query_spec.py:23`, `src/extract/tree_sitter_queries.py:12` | None | Keep both (different domains) |
-| `PlanCacheEntry` | `src/datafusion_engine/plan_cache.py:18`, `src/engine/plan_cache.py:55` | Low | Consolidate to single location |
-| `FunctionCatalog` | `src/datafusion_engine/schema_registry.py:3010`, `src/datafusion_engine/udf_catalog.py:216` | Medium | Consolidate with interface |
 | `DeltaVacuumRequest` | `src/datafusion_engine/delta_control_plane.py:189`, `src/engine/delta_tools.py:61` | Low | Keep both (Rust vs Python layers) |
 | `DatasetRegistration` | `src/datafusion_engine/registry_bridge.py:732`, `src/schema_spec/registration.py:28` | None | Keep both (different purposes) |
 | `ContractRow` | `src/incremental/registry_rows.py:20`, `src/normalize/dataset_rows.py:79` | High | Consolidate to shared module |
-| `DatasetRow` | `src/incremental/registry_rows.py:30`, `src/normalize/dataset_rows.py:91` | Medium | Consolidate with context variants |
+| `DatasetRow` | `src/incremental/registry_rows.py:30`, `src/normalize/dataset_rows.py:91` | Medium | Defer until contract row consolidation stabilizes |
+
+#### Non-candidates (Do Not Consolidate)
+
+| Dataclass | Locations | Rationale |
+|-----------|-----------|-----------|
+| `PlanCacheEntry` | `src/datafusion_engine/plan_cache.py:18`, `src/engine/plan_cache.py:55` | Different semantics/fields; not a safe unification |
+| `FunctionCatalog` | `src/datafusion_engine/schema_registry.py:3010`, `src/datafusion_engine/udf_catalog.py:216` | Different data model and usage patterns |
 
 #### `ContractRow` Consolidation (HIGH OVERLAP)
 
@@ -772,14 +827,19 @@ class SimpleViewRef:
 |--------|------|
 | Create | `src/schema_spec/contract_row.py` |
 | Modify | `src/incremental/registry_rows.py` (import from schema_spec) |
+| Modify | `src/incremental/registry_builders.py` (import from schema_spec) |
 | Modify | `src/normalize/dataset_rows.py` (import from schema_spec) |
+| Modify | `src/normalize/dataset_builders.py` (import from schema_spec) |
 | Modify | `src/datafusion_engine/nested_tables.py` (rename to `SimpleViewRef`) |
+| Modify | `src/hamilton_pipeline/pipeline_types.py` (update `ViewReference` imports/usage) |
 
 ### Implementation Checklist
 
 - [ ] Create `src/schema_spec/contract_row.py` with unified `ContractRow`
 - [ ] Update `src/incremental/registry_rows.py` to import `ContractRow`
+- [ ] Update `src/incremental/registry_builders.py` to import `ContractRow`
 - [ ] Update `src/normalize/dataset_rows.py` to import `ContractRow`
+- [ ] Update `src/normalize/dataset_builders.py` to import `ContractRow`
 - [ ] Rename `ViewReference` to `SimpleViewRef` in `src/datafusion_engine/nested_tables.py`
 - [ ] Update all usages of minimal `ViewReference` to `SimpleViewRef`
 - [ ] Verify no import conflicts exist
@@ -816,9 +876,9 @@ The codebase has **14+ registry implementations** with varying patterns:
 | `_REGISTRY_CACHE` | `otel/metrics.py` | Global dict | Singleton cache |
 | `DATASET_ROWS` | `registry_rows.py` | Module constant | Static tuple |
 
-### Target Implementation: Registry Protocol
+### Target Implementation: Registry Protocol (Type-First, Limited Inheritance)
 
-Create `src/utils/registry_protocol.py`:
+Create `src/utils/registry_protocol.py` with a protocol and optional base classes. **Do not force inheritance** for registries with richer behavior (e.g., `ProviderRegistry`, `ParamTableRegistry`) unless their APIs are explicitly refactored.
 
 ```python
 """Standard registry protocols and base implementations."""
@@ -931,30 +991,27 @@ __all__ = [
 
 ### Target File List
 
-Registries to refactor to use standard protocol:
+Registries to align with the protocol (typing first, inheritance optional):
 
 | File | Registry | Migration |
 |------|----------|-----------|
-| `src/datafusion_engine/provider_registry.py` | `ProviderRegistry` | Inherit from `MutableRegistry` |
-| `src/datafusion_engine/schema_contracts.py` | `ContractRegistry` | Inherit from `MutableRegistry` |
-| `src/datafusion_engine/runtime.py` | `DataFusionViewRegistry` | Inherit from `MutableRegistry` |
-| `src/datafusion_engine/param_tables.py` | `ParamTableRegistry` | Inherit from `MutableRegistry` |
-| `src/datafusion_engine/dataset_registry.py` | `DatasetCatalog` | Inherit from `MutableRegistry` |
+| `src/datafusion_engine/schema_contracts.py` | `ContractRegistry` | Add `Registry` typing; consider `MutableRegistry` only if behavior matches |
+| `src/datafusion_engine/dataset_registry.py` | `DatasetCatalog` | Evaluate compatibility; migrate only if minimal |
+| `src/datafusion_engine/runtime.py` | `DataFusionViewRegistry` | Evaluate compatibility; avoid forcing base class |
+| `src/datafusion_engine/provider_registry.py` | `ProviderRegistry` | **Do not inherit** without redesign |
+| `src/datafusion_engine/param_tables.py` | `ParamTableRegistry` | **Do not inherit** without redesign |
 
 ### Implementation Checklist
 
 - [ ] Create `src/utils/registry_protocol.py`
 - [ ] Add comprehensive tests for registry protocol
-- [ ] Migrate `ProviderRegistry` to use `MutableRegistry` base
-- [ ] Migrate `ContractRegistry` to use `MutableRegistry` base
-- [ ] Migrate `DataFusionViewRegistry` to use `MutableRegistry` base
-- [ ] Migrate `ParamTableRegistry` to use `MutableRegistry` base
-- [ ] Migrate `DatasetCatalog` to use `MutableRegistry` base
-- [ ] Document registry usage patterns
+- [ ] Add protocol typing to existing registries where appropriate
+- [ ] Migrate only registries that are **pure key/value stores**
+- [ ] Document registry usage patterns and criteria for inheritance
 
 ### Decommissioning List
 
-After migration, remove redundant implementations:
+After selective migration, remove redundant implementations only where a base class is adopted:
 - Remove custom `__contains__` and `__iter__` from migrated registries
 - Remove duplicate snapshot logic where `MutableRegistry.snapshot()` suffices
 
@@ -976,81 +1033,25 @@ The codebase has **50+ configuration classes** using two primary patterns:
 | Duplicate factory patterns | `resolve_otel_config()`, `git_settings_from_env()` | 10+ |
 | Mixed validation approaches | msgspec Meta vs post-init vs external | 15+ |
 
-### Target Implementation: Configuration Base Classes
+### Target Implementation: Configuration Utilities (No New Base Class)
 
-Create `src/utils/config_base.py`:
+`src/serde_msgspec.py` already provides `StructBaseStrict`, `StructBaseCompat`, and `StructBaseHotPath`. Creating a new `config_base.py` would duplicate these and introduce conflicting “canonical” bases.
+
+Instead, add a small helper for **stable fingerprints** that uses the existing hash utilities and does not assume JSON-serializability (e.g., `OtelConfig.sampler` cannot be serialized safely by default).
+
+Add to `src/utils/hashing.py` (or create a small `src/utils/config_utils.py` that wraps it):
 
 ```python
-"""Base configuration classes with standardized patterns."""
-
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass, fields
-from typing import Self, TypeVar
+from collections.abc import Mapping
 
-import msgspec
-
-T = TypeVar("T")
+from utils.hashing import hash_json_canonical
 
 
-@dataclass(frozen=True)
-class ConfigBase:
-    """Base class for configuration dataclasses.
-
-    Provides standardized fingerprinting and serialization.
-    """
-
-    def fingerprint(self) -> str:
-        """Return stable SHA-256 fingerprint of configuration."""
-        payload = {f.name: getattr(self, f.name) for f in fields(self)}
-        raw = json.dumps(payload, sort_keys=True, default=str)
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-    def to_dict(self) -> dict[str, object]:
-        """Return dictionary representation."""
-        return {f.name: getattr(self, f.name) for f in fields(self)}
-
-    @classmethod
-    def field_names(cls) -> tuple[str, ...]:
-        """Return tuple of field names."""
-        return tuple(f.name for f in fields(cls))
-
-
-class StructBaseStrict(
-    msgspec.Struct,
-    frozen=True,
-    kw_only=True,
-    forbid_unknown_fields=True,
-    omit_defaults=True,
-):
-    """Strict msgspec base for configuration contracts.
-
-    Use for configurations that must reject unknown fields.
-    """
-    pass
-
-
-class StructBaseCompat(
-    msgspec.Struct,
-    frozen=True,
-    kw_only=True,
-    forbid_unknown_fields=False,
-    omit_defaults=True,
-):
-    """Compatible msgspec base for forward-compatible configurations.
-
-    Use for persisted artifacts that may evolve over time.
-    """
-    pass
-
-
-__all__ = [
-    "ConfigBase",
-    "StructBaseStrict",
-    "StructBaseCompat",
-]
+def config_fingerprint(payload: Mapping[str, object]) -> str:
+    """Return a stable fingerprint for configuration payloads."""
+    return hash_json_canonical(payload, str_keys=True)
 ```
 
 ### Naming Convention
@@ -1067,33 +1068,26 @@ Establish and document naming convention:
 
 ### Target File List
 
-High-priority classes to standardize:
+Only migrate configurations that have **simple, JSON-compatible payloads**. Keep custom fingerprinting for complex objects.
 
 | File | Class | Action |
 |------|-------|--------|
-| `src/obs/otel/config.py` | `OtelConfig` | Inherit from `ConfigBase` |
-| `src/cache/diskcache_factory.py` | `DiskCacheSettings` | Inherit from `ConfigBase` |
-| `src/cache/diskcache_factory.py` | `DiskCacheProfile` | Inherit from `ConfigBase` |
-| `src/engine/runtime_profile.py` | `HamiltonTrackerConfig` | Inherit from `ConfigBase` |
-| `src/engine/runtime_profile.py` | `RuntimeProfileSpec` | Inherit from `ConfigBase` |
-| `src/incremental/types.py` | `IncrementalSettings` | Inherit from `ConfigBase` |
+| `src/obs/otel/config.py` | `OtelConfig` | **Do not migrate** (contains `Sampler` objects) |
+| `src/cache/diskcache_factory.py` | `DiskCacheSettings`, `DiskCacheProfile` | Keep custom fingerprints |
+| `src/engine/runtime_profile.py` | `HamiltonTrackerConfig`, `RuntimeProfileSpec` | Keep current logic |
+| `src/incremental/types.py` | `IncrementalSettings` | Optional: use `config_fingerprint` if needed |
 
 ### Implementation Checklist
 
-- [ ] Create `src/utils/config_base.py`
-- [ ] Add tests for `ConfigBase` fingerprinting
+- [ ] Add `config_fingerprint` helper (in `src/utils/hashing.py` or `src/utils/config_utils.py`)
+- [ ] Add tests for config fingerprinting behavior
 - [ ] Document naming conventions in CLAUDE.md or CONTRIBUTING.md
-- [ ] Migrate `OtelConfig` to inherit from `ConfigBase`
-- [ ] Migrate `DiskCacheSettings` and `DiskCacheProfile`
-- [ ] Migrate `HamiltonTrackerConfig` and `RuntimeProfileSpec`
-- [ ] Migrate `IncrementalSettings`
-- [ ] Audit remaining config classes for consistency
+- [ ] Audit config classes for JSON-compatibility before applying shared helpers
 
 ### Decommissioning List
 
-Remove duplicate implementations:
-- Custom `fingerprint()` methods that duplicate `ConfigBase.fingerprint()`
-- Custom `to_dict()` methods that duplicate `ConfigBase.to_dict()`
+Remove duplicate implementations **only when behavior is identical**:
+- Avoid removing custom `fingerprint()` when semantics differ or payloads are non-JSON
 
 ---
 
@@ -1128,69 +1122,13 @@ build_driver()
     └── _apply_adapters()
 ```
 
-### Target Implementation: Factory Composition
+### Target Implementation: Incremental Refactor (Context Exists)
 
-Create intermediate result types to break up the chain:
+`ViewGraphContext` already exists in `src/hamilton_pipeline/driver_factory.py`, so avoid creating a new `driver_context.py`. Instead, focus on incremental extraction of builder configuration and cache/adapters logic into smaller, testable helpers **inside the same module**.
 
-```python
-# src/hamilton_pipeline/driver_context.py
-"""Intermediate context objects for driver building."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from types import ModuleType
-
-from hamilton import driver
-
-
-@dataclass(frozen=True)
-class ViewGraphContext:
-    """Context from view graph initialization."""
-    profile: DataFusionRuntimeProfile
-    session_runtime: SessionRuntime
-    determinism_tier: DeterminismTier
-    snapshot: Mapping[str, object]
-    view_nodes: tuple[ViewNode, ...]
-    runtime_profile_spec: RuntimeProfileSpec
-
-
-@dataclass(frozen=True)
-class PlanContext:
-    """Context from plan compilation."""
-    view_ctx: ViewGraphContext
-    execution_plan: ExecutionPlan
-    modules: tuple[ModuleType, ...]
-
-
-@dataclass(frozen=True)
-class BuilderContext:
-    """Context for builder configuration."""
-    plan_ctx: PlanContext
-    builder: driver.Builder
-    diagnostics: DiagnosticsCollector | None
-
-
-# Factory functions with clear single responsibility
-def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
-    """Build view graph context from configuration."""
-    ...
-
-
-def build_plan_context(view_ctx: ViewGraphContext, config: Mapping[str, JsonValue]) -> PlanContext:
-    """Build plan context from view graph context."""
-    ...
-
-
-def build_builder_context(plan_ctx: PlanContext, config: Mapping[str, JsonValue]) -> BuilderContext:
-    """Build builder context from plan context."""
-    ...
-
-
-def finalize_driver(builder_ctx: BuilderContext) -> driver.Driver:
-    """Finalize driver from builder context."""
-    ...
-```
+Suggested extraction targets (only if it improves testability):
+- `_apply_*` builder steps (`_apply_dynamic_execution`, `_apply_graph_adapter`, etc.)
+- Config payload normalization for cache key computation
 
 ### Simplified Chain
 
@@ -1206,16 +1144,13 @@ build_driver()
 
 | File | Action |
 |------|--------|
-| `src/hamilton_pipeline/driver_factory.py` | Refactor to use context objects |
-| Create | `src/hamilton_pipeline/driver_context.py` |
+| `src/hamilton_pipeline/driver_factory.py` | Extract helper functions; keep context types local |
 
 ### Implementation Checklist
 
-- [ ] Create `src/hamilton_pipeline/driver_context.py` with context dataclasses
-- [ ] Extract `build_view_graph_context()` from `_view_graph_context()`
-- [ ] Extract `build_plan_context()` from inline logic
-- [ ] Extract `build_builder_context()` to consolidate `_apply_*` functions
-- [ ] Refactor `build_driver()` to use new factory functions
+- [ ] Extract builder configuration helpers within `src/hamilton_pipeline/driver_factory.py`
+- [ ] Keep `ViewGraphContext` in place; avoid new module unless reuse demands it
+- [ ] Refactor `build_driver()` only if readability or testability improves
 - [ ] Maintain backward compatibility for existing callers
 - [ ] Add integration tests for factory chain
 
@@ -1235,13 +1170,13 @@ This section documents which decommissioning items depend on multiple scope comp
 
 | Decommission Target | Required Scopes | Notes |
 |--------------------|-----------------|-------|
-| `src/datafusion_engine/hash_utils.py` | #1 (Hash) | Move to `src/utils/hash_utils.py` |
+| `src/datafusion_engine/hash_utils.py` | #1 (Hash) | Keep as re-export wrapper until migration completes |
 | Local `_env_bool` (8 files) | #2 (Env Vars) | All must migrate together |
 | `PathLike` in `dataset_sources.py` | #3 (Type Aliases) | Simple import change |
 | `ContractRow` duplicates | #4 (Dataclasses) | Create shared module first |
-| Custom registry methods | #5 (Registries), #1 (Hash) | Registries may use custom hashing |
-| Custom fingerprint methods | #6 (Config), #1 (Hash) | Config fingerprinting depends on hash utils |
-| Factory helper functions | #7 (Factory), #6 (Config) | Factories create configs |
+| Custom registry methods | #5 (Registries) | Only when base class adoption occurs |
+| Config fingerprint helper | #6 (Config), #1 (Hash) | Depends on hashing utilities |
+| Factory helper functions | #7 (Factory) | Independent of config changes |
 
 ### Recommended Implementation Order
 
@@ -1255,10 +1190,13 @@ This section documents which decommissioning items depend on multiple scope comp
    - Scope #5: Registry Pattern Standardization (uses hash utils)
 
 3. **Phase 3: Configuration** (depends on Phase 1, 2)
-   - Scope #6: Configuration Class Standardization (uses hash utils, may use registries)
+   - Scope #6: Configuration Utilities (uses hash utils)
 
 4. **Phase 4: Orchestration** (depends on all)
-   - Scope #7: Factory Simplification (uses configs, registries)
+   - Scope #7: Factory Simplification (no hard dependency on config changes)
+
+5. **Phase 5: Additional Opportunities**
+   - Scope #9: Additional Consolidations (after Phase 1/2 to preserve hash semantics)
 
 ### Verification Steps
 
@@ -1273,6 +1211,52 @@ After completing all scopes:
 
 ---
 
+## 9. Additional Consolidation Opportunities
+
+This section captures **additional consolidation candidates** identified during review that are not covered in the original plan. These should be scheduled **after Phase 1** to ensure hash semantics and payload formats are stable.
+
+### 9.1 Delta Feature Gate Payload Normalization
+
+Multiple modules serialize Delta feature gates using near-identical helpers:
+- `src/datafusion_engine/plan_bundle.py`
+- `src/datafusion_engine/execution_helpers.py`
+- `src/datafusion_engine/scan_overrides.py`
+- `src/relspec/execution_plan.py`
+- `src/datafusion_engine/registry_bridge.py`
+- `src/datafusion_engine/delta_control_plane.py`
+- `src/storage/deltalake/delta.py`
+
+**Target:** introduce a single helper (e.g., `delta_feature_gate_payload`) in a shared module (likely `src/datafusion_engine/delta_protocol.py` or a small `src/utils/delta_utils.py`) and reuse it across these call sites.
+
+### 9.2 Storage Options Normalization + Hashing
+
+Storage options normalization and hashing are duplicated with slight differences in:
+- `src/datafusion_engine/scan_planner.py`
+- `src/datafusion_engine/write_pipeline.py`
+- `src/datafusion_engine/registry_bridge.py`
+- `src/storage/deltalake/delta.py`
+- `src/engine/delta_tools.py`
+
+**Target:** standardize `normalize_storage_options()` and reuse `hash_storage_options()` from `src/utils/hashing.py` to avoid divergent hashes for identical inputs.
+
+### 9.3 Determinism Tier Parsing
+
+Determinism tier parsing logic is duplicated in:
+- `src/hamilton_pipeline/modules/inputs.py`
+- `src/hamilton_pipeline/driver_factory.py`
+
+**Target:** move parsing to a shared helper (e.g., `core_types.parse_determinism_tier()`), and use it in both modules.
+
+### 9.4 JSON Payload Hashing for Plan Identity
+
+JSON hashing logic in:
+- `src/datafusion_engine/plan_bundle.py`
+- `src/datafusion_engine/plan_artifact_store.py`
+
+is nearly identical (msgspec JSON encoding + SHA-256). Consolidate into a single helper (likely in `src/utils/hashing.py`) without changing serialization behavior.
+
+---
+
 ## Appendix: File Path Verification
 
 All file paths referenced in this document have been verified to exist in the codebase:
@@ -1281,20 +1265,26 @@ All file paths referenced in this document have been verified to exist in the co
 - `src/core_types.py`
 - `src/datafusion_engine/hash_utils.py`
 - `src/obs/otel/config.py`
+- `src/obs/otel/bootstrap.py`
 - `src/extract/git_remotes.py`
 - `src/extract/git_settings.py`
 - `src/storage/dataset_sources.py`
 - `src/datafusion_engine/provider_registry.py`
 - `src/hamilton_pipeline/driver_factory.py`
+- `src/hamilton_pipeline/pipeline_types.py`
 - `src/cache/diskcache_factory.py`
+- `src/incremental/registry_builders.py`
 - `src/incremental/registry_rows.py`
+- `src/normalize/dataset_builders.py`
 - `src/normalize/dataset_rows.py`
+- `src/datafusion_engine/write_pipeline.py`
+- `src/datafusion_engine/table_spec.py`
+- `src/datafusion_engine/planning_pipeline.py`
 
 **New Files to Create:**
 - `src/utils/__init__.py`
-- `src/utils/hash_utils.py`
+- `src/utils/hashing.py`
 - `src/utils/env_utils.py`
 - `src/utils/registry_protocol.py`
-- `src/utils/config_base.py`
 - `src/schema_spec/contract_row.py`
-- `src/hamilton_pipeline/driver_context.py`
+  (Optional) `src/utils/config_utils.py` if not embedding config helpers in `src/utils/hashing.py`

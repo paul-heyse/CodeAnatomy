@@ -8,6 +8,8 @@ from functools import cache
 
 import pygit2
 
+from utils.env_utils import env_bool, env_int
+
 
 @dataclass(frozen=True)
 class GitSettingsSpec:
@@ -50,8 +52,8 @@ def git_settings_from_env() -> GitSettingsSpec | None:
     GitSettingsSpec | None
         Settings derived from environment variables.
     """
-    owner_validation = _env_bool("CODEANATOMY_GIT_OWNER_VALIDATION")
-    server_timeout_ms = _env_int("CODEANATOMY_GIT_SERVER_TIMEOUT_MS")
+    owner_validation = env_bool("CODEANATOMY_GIT_OWNER_VALIDATION")
+    server_timeout_ms = env_int("CODEANATOMY_GIT_SERVER_TIMEOUT_MS")
     ssl_cert_file = os.getenv("CODEANATOMY_GIT_SSL_CERT_FILE")
     if owner_validation is None and server_timeout_ms is None and not ssl_cert_file:
         return None
@@ -60,28 +62,6 @@ def git_settings_from_env() -> GitSettingsSpec | None:
         server_timeout_ms=server_timeout_ms,
         ssl_cert_file=ssl_cert_file or None,
     )
-
-
-def _env_bool(name: str) -> bool | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "y"}:
-        return True
-    if normalized in {"0", "false", "no", "n"}:
-        return False
-    return None
-
-
-def _env_int(name: str) -> int | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
 
 
 __all__ = [

@@ -134,6 +134,20 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
             ),
         ),
     ),
+    "python_external": ExtractorTemplate(
+        extractor_name="python_external",
+        evidence_rank=7,
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="python_external",
+                coordinate_system="module",
+                ambiguity_policy="preserve",
+                superior_rank=7,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
+    ),
     "scip": ExtractorTemplate(
         extractor_name="scip",
         evidence_rank=1,
@@ -219,7 +233,7 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "include_imports": True,
             "include_docstrings": True,
             "include_stats": True,
-            "extensions": (".py", ".pyi"),
+            "extensions": None,
             "parser_timeout_micros": None,
             "query_match_limit": 10_000,
             "query_timeout_micros": None,
@@ -259,29 +273,13 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
         extractor_name="repo_scan",
         defaults={
             "repo_id": None,
-            "include_globs": ("**/*.py",),
-            "exclude_dirs": (
-                ".git",
-                "__pycache__",
-                ".venv",
-                "venv",
-                "node_modules",
-                "dist",
-                "build",
-                ".mypy_cache",
-                ".pytest_cache",
-                ".ruff_cache",
-            ),
-            "exclude_globs": (),
-            "follow_symlinks": False,
+            "scope_policy": {},
             "include_sha256": True,
             "max_file_bytes": None,
             "max_files": 200_000,
             "diff_base_ref": None,
             "diff_head_ref": None,
             "changed_only": False,
-            "include_submodules": False,
-            "include_worktrees": False,
             "update_submodules": False,
             "submodule_update_init": True,
             "submodule_update_depth": None,
@@ -289,6 +287,16 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "record_blame": False,
             "blame_max_files": None,
             "blame_ref": None,
+        },
+    ),
+    "python_external": ExtractorConfigSpec(
+        extractor_name="python_external",
+        defaults={
+            "repo_id": None,
+            "include_stdlib": True,
+            "include_unresolved": True,
+            "max_imports": None,
+            "depth": "metadata",
         },
     ),
     "repo_blobs": ExtractorConfigSpec(
@@ -354,6 +362,45 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
             "name": "repo_files_v1",
             "fields": ["abs_path", "size_bytes", "mtime_ns"],
             "derived": _derived_specs(("file_id", "repo_file_id", "hash", None)),
+            "row_fields": None,
+            "row_extras": None,
+            "ordering_keys": [{"column": "path", "order": "ascending"}],
+            "join_keys": ["path"],
+            "enabled_when": None,
+            "feature_flag": None,
+            "postprocess": None,
+            "metadata_extra": None,
+            "evidence_required_columns": None,
+        },
+        {
+            **base,
+            "name": "python_extensions_v1",
+            "fields": ["extension", "source", "repo_root"],
+            "derived": None,
+            "row_fields": None,
+            "row_extras": None,
+            "ordering_keys": [{"column": "extension", "order": "ascending"}],
+            "join_keys": ["extension", "source", "repo_root"],
+            "enabled_when": None,
+            "feature_flag": None,
+            "postprocess": None,
+            "metadata_extra": None,
+            "evidence_required_columns": None,
+        },
+        {
+            **base,
+            "name": "scope_manifest_v1",
+            "fields": [
+                "path",
+                "included",
+                "ignored_by_git",
+                "include_index",
+                "exclude_index",
+                "scope_kind",
+                "repo_root",
+                "is_untracked",
+            ],
+            "derived": None,
             "row_fields": None,
             "row_extras": None,
             "ordering_keys": [{"column": "path", "order": "ascending"}],
@@ -546,6 +593,39 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
     )
 
 
+def _python_external_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
+    version = _param_int(spec, "version", default=1)
+    base = {
+        "version": version,
+        "template": spec.template,
+    }
+    return (
+        {
+            **base,
+            "name": "python_external_interfaces_v1",
+            "bundles": None,
+            "fields": [
+                "name",
+                "status",
+                "origin",
+                "dist_name",
+                "dist_version",
+                "is_stdlib",
+            ],
+            "derived": None,
+            "row_fields": None,
+            "row_extras": None,
+            "ordering_keys": [{"column": "name", "order": "ascending"}],
+            "join_keys": ["name"],
+            "enabled_when": None,
+            "feature_flag": None,
+            "postprocess": None,
+            "metadata_extra": None,
+            "evidence_required_columns": None,
+        },
+    )
+
+
 def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
     version = _param_int(spec, "version", default=1)
     base = {
@@ -581,6 +661,7 @@ _DATASET_TEMPLATE_REGISTRY: Mapping[
     "bytecode": _bytecode_records,
     "symtable": _symtable_records,
     "scip": _scip_records,
+    "python_external": _python_external_records,
     "tree_sitter": _tree_sitter_records,
 }
 

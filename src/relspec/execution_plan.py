@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
+from datafusion_engine.delta_protocol import delta_feature_gate_tuple
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.planning_pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
@@ -55,7 +55,8 @@ from relspec.view_defs import (
     REL_NAME_SYMBOL_OUTPUT,
     RELATION_OUTPUT_NAME,
 )
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import to_builtins
+from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -1233,7 +1234,7 @@ def _session_runtime_hash(runtime: SessionRuntime | None) -> str | None:
 
 
 def _hash_payload(payload: object) -> str:
-    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+    return hash_msgpack_canonical(payload)
 
 
 def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
@@ -1280,29 +1281,12 @@ def _delta_inputs_payload(
                 dataset_name,
                 version_value,
                 timestamp_value,
-                _delta_gate_payload(gate),
+                delta_feature_gate_tuple(gate),
                 _protocol_payload(protocol),
                 str(storage_hash) if isinstance(storage_hash, str) else None,
             )
         )
     return tuple(sorted(payload, key=lambda entry: entry[0]))
-
-
-def _delta_gate_payload(
-    gate: object | None,
-) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = tuple(getattr(gate, "required_reader_features", ()))
-    required_writer_features = tuple(getattr(gate, "required_writer_features", ()))
-    return (
-        min_reader_version,
-        min_writer_version,
-        required_reader_features,
-        required_writer_features,
-    )
 
 
 def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> str:
@@ -1315,7 +1299,7 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
         ("delta_version", scan_unit.delta_version),
         ("delta_timestamp", scan_unit.delta_timestamp),
         ("snapshot_timestamp", scan_unit.snapshot_timestamp),
-        ("delta_feature_gate", _delta_gate_payload(scan_unit.delta_feature_gate)),
+        ("delta_feature_gate", delta_feature_gate_tuple(scan_unit.delta_feature_gate)),
         ("delta_protocol", _protocol_payload(scan_unit.delta_protocol)),
         ("storage_options_hash", scan_unit.storage_options_hash),
         ("total_files", scan_unit.total_files),
@@ -1364,7 +1348,7 @@ def _scan_unit_delta_inputs_payload(
                 unit.dataset_name,
                 unit.delta_version,
                 timestamp,
-                _delta_gate_payload(unit.delta_feature_gate),
+                delta_feature_gate_tuple(unit.delta_feature_gate),
                 _protocol_payload(unit.delta_protocol),
                 unit.storage_options_hash,
             )

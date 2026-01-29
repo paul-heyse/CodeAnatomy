@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -42,6 +41,7 @@ from serde_artifacts import (
 )
 from serde_msgspec import dumps_msgpack
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
+from utils.hashing import hash_sha256_hex
 
 SCHEMA_TYPES = (
     PlanArtifacts,
@@ -243,7 +243,7 @@ def schema_contract_hash() -> str:
         Hash of the schema registry payload.
     """
     payload = dumps_msgpack(schema_contract_payload())
-    return hashlib.sha256(payload).hexdigest()
+    return hash_sha256_hex(payload)
 
 
 def write_schema_docs(path: Path) -> None:

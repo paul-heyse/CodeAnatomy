@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from utils.hashing import hash_sha256_hex
+
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
     from schema_spec.system import DatasetSpec
@@ -96,8 +98,6 @@ class TableSpec:
         str
             Stable identifier for caching and comparison.
         """
-        import hashlib
-
         from serde_msgspec import dumps_json, to_builtins
 
         payload = {
@@ -110,7 +110,7 @@ class TableSpec:
             "partition_columns": list(self.partition_columns),
         }
         raw = dumps_json(to_builtins(payload))
-        return hashlib.sha256(raw).hexdigest()[:16]
+        return hash_sha256_hex(raw, length=16)
 
 
 def table_spec_from_location(

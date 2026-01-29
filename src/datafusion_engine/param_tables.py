@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid
 from collections.abc import Mapping, Sequence
@@ -19,6 +18,7 @@ from arrow_utils.core.array_iter import iter_array_values
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from storage.ipc_utils import payload_hash
+from utils.hashing import hash_sha256_hex
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
 _PARAM_SIGNATURE_SEPARATOR = "\x1f"
@@ -211,14 +211,14 @@ def param_signature_from_array(
     resolved = cast("pa.Array", normalized)
     if resolved.num_rows == 0:
         payload = logical_name
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return hash_sha256_hex(payload.encode("utf-8"))
     raw_values = [value for value in resolved.to_pylist() if value is not None]
     if not raw_values:
         payload = logical_name
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return hash_sha256_hex(payload.encode("utf-8"))
     distinct = sorted({str(value) for value in raw_values})
     payload = _PARAM_SIGNATURE_SEPARATOR.join([logical_name, *distinct])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hash_sha256_hex(payload.encode("utf-8"))
 
 
 def scalar_param_signature(values: Mapping[str, object]) -> str:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 from collections.abc import Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
 
@@ -11,6 +10,7 @@ from datafusion import SessionContext
 
 import datafusion_ext
 from serde_msgspec import dumps_msgpack
+from utils.hashing import hash_sha256_hex
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
@@ -473,7 +473,7 @@ def rust_udf_snapshot_hash(snapshot: Mapping[str, object]) -> str:
         SHA-256 hash of the snapshot payload.
     """
     payload = rust_udf_snapshot_bytes(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+    return hash_sha256_hex(payload)
 
 
 def _async_udf_policy(

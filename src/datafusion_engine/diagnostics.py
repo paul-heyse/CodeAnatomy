@@ -44,8 +44,8 @@ if TYPE_CHECKING:
 class DiagnosticsSink(Protocol):
     """Protocol for diagnostics sinks.
 
-    All diagnostics sinks must implement these three methods to capture
-    artifacts, metrics, and events from DataFusion operations.
+    All diagnostics sinks must implement these methods to capture
+    artifacts and events from DataFusion operations.
     """
 
     def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
@@ -57,20 +57,6 @@ class DiagnosticsSink(Protocol):
             Artifact type identifier (e.g., "sql_compilation", "write_operation").
         payload : Mapping[str, Any]
             Artifact payload with type-specific fields.
-        """
-        ...
-
-    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
-        """Record a metric value.
-
-        Parameters
-        ----------
-        name : str
-            Metric name (e.g., "cache_hit_rate", "execution_duration_ms").
-        value : float
-            Metric value.
-        tags : Mapping[str, str]
-            Tags for metric categorization.
         """
         ...
 
@@ -154,21 +140,18 @@ class WriteRecord:
 class InMemoryDiagnosticsSink:
     """In-memory diagnostics sink for testing and debugging.
 
-    Stores all artifacts, metrics, and events in memory for inspection.
+    Stores all artifacts and events in memory for inspection.
     Useful for unit tests and local debugging.
 
     Attributes
     ----------
     artifacts : list[tuple[str, dict]]
         List of (name, payload) tuples for recorded artifacts.
-    metrics : list[tuple[str, float, dict]]
-        List of (name, value, tags) tuples for recorded metrics.
     events : list[tuple[str, dict]]
         List of (name, properties) tuples for recorded events.
     """
 
     artifacts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
-    metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
@@ -182,20 +165,6 @@ class InMemoryDiagnosticsSink:
             Artifact payload.
         """
         self.artifacts.append((name, dict(payload)))
-
-    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
-        """Record a metric value.
-
-        Parameters
-        ----------
-        name : str
-            Metric name.
-        value : float
-            Metric value.
-        tags : dict[str, str]
-            Tags for metric categorization.
-        """
-        self.metrics.append((name, value, dict(tags)))
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record an event.
@@ -383,22 +352,6 @@ class DiagnosticsRecorder:
             return
         self._sink.record_events(name, rows)
 
-    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
-        """Record a metric through the recorder.
-
-        Parameters
-        ----------
-        name : str
-            Metric name.
-        value : float
-            Metric value.
-        tags : dict[str, str]
-            Metric tags.
-        """
-        if not self.enabled or self._sink is None:
-            return
-        self._sink.record_metric(name, value, tags)
-
     def record_compilation(self, record: CompilationRecord) -> None:
         """Record SQL compilation diagnostics.
 
@@ -557,43 +510,6 @@ class DiagnosticsRecorder:
             },
         )
 
-    def record_cache_event(
-        self,
-        *,
-        key: str,
-        hit: bool,
-        fingerprint: str | None = None,
-    ) -> None:
-        """Record cache hit/miss event.
-
-        Parameters
-        ----------
-        key : str
-            Cache key.
-        hit : bool
-            True if cache hit, False if cache miss.
-        fingerprint : str | None, optional
-            Fingerprint of the cached artifact.
-        """
-        if not self.enabled or self._sink is None:
-            return
-
-        self._sink.record_event(
-            "cache_access",
-            {
-                "session_id": self._context.session_id,
-                "key": key,
-                "hit": hit,
-                "fingerprint": fingerprint,
-            },
-        )
-
-        self._sink.record_metric(
-            "cache_hit_rate",
-            1.0 if hit else 0.0,
-            self._context.tags,
-        )
-
 
 @dataclass(frozen=True)
 class DiagnosticsRecorderAdapter:
@@ -614,10 +530,6 @@ class DiagnosticsRecorderAdapter:
     def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact via DiagnosticsRecorder."""
         self._recorder(name).record_artifact(name, payload)
-
-    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
-        """Record a metric via DiagnosticsRecorder."""
-        self._recorder(name).record_metric(name, value, tags)
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record a single event via DiagnosticsRecorder."""

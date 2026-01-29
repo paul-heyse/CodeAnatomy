@@ -27,7 +27,7 @@ from hamilton.function_modifiers.dependencies import ParametrizedDependency
 from core_types import JsonDict, JsonValue
 from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.delta_protocol import DeltaFeatureGate
+from datafusion_engine.delta_protocol import DeltaFeatureGate, delta_feature_gate_payload
 from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
@@ -95,6 +95,16 @@ class OutputPlanContext:
     run_id: str
     artifact_ids: Mapping[str, str]
     materialized_outputs: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class OutputMaterializationSpec:
+    """Materialization metadata for Hamilton UI artifact capture."""
+
+    table_node: str
+    dataset_name: str
+    materialized_name: str
+    materialization: str = "delta"
 
 
 @dataclass(frozen=True)
@@ -495,21 +505,6 @@ def _delta_write(
     }
 
 
-def _delta_feature_gate_payload(gate: object | None) -> dict[str, object] | None:
-    if gate is None:
-        return None
-    min_reader_version = getattr(gate, "min_reader_version", None)
-    min_writer_version = getattr(gate, "min_writer_version", None)
-    required_reader_features = getattr(gate, "required_reader_features", ())
-    required_writer_features = getattr(gate, "required_writer_features", ())
-    return {
-        "min_reader_version": min_reader_version,
-        "min_writer_version": min_writer_version,
-        "required_reader_features": list(required_reader_features),
-        "required_writer_features": list(required_writer_features),
-    }
-
-
 def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None:
     if not isinstance(protocol, Mapping):
         return None
@@ -541,7 +536,7 @@ def _delta_inputs_payload(
                     "dataset_name": pin.dataset_name,
                     "version": pin.version,
                     "timestamp": pin.timestamp,
-                    "feature_gate": _delta_feature_gate_payload(pin.feature_gate),
+                    "feature_gate": delta_feature_gate_payload(pin.feature_gate),
                     "protocol": _delta_protocol_payload(pin.protocol),
                     "storage_options_hash": pin.storage_options_hash,
                     "delta_scan_config": pin.delta_scan_config,
@@ -618,6 +613,60 @@ _OUTPUT_PLAN_FINGERPRINTS: dict[str, str] = {
     "cpg_edges_by_src": "cpg_edges_by_src_v1",
     "cpg_edges_by_dst": "cpg_edges_by_dst_v1",
 }
+
+_DELTA_OUTPUT_SPECS: tuple[OutputMaterializationSpec, ...] = (
+    OutputMaterializationSpec(
+        table_node="cpg_nodes",
+        dataset_name="cpg_nodes",
+        materialized_name="semantic.cpg_nodes_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_edges",
+        dataset_name="cpg_edges",
+        materialized_name="semantic.cpg_edges_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_props",
+        dataset_name="cpg_props",
+        materialized_name="semantic.cpg_props_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_nodes_quality",
+        dataset_name="cpg_nodes_quality",
+        materialized_name="semantic.cpg_nodes_quality_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_props_quality",
+        dataset_name="cpg_props_quality",
+        materialized_name="semantic.cpg_props_quality_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_props_map_v1",
+        dataset_name="cpg_props_map",
+        materialized_name="semantic.cpg_props_map_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_edges_by_src_v1",
+        dataset_name="cpg_edges_by_src",
+        materialized_name="semantic.cpg_edges_by_src_v1",
+    ),
+    OutputMaterializationSpec(
+        table_node="cpg_edges_by_dst_v1",
+        dataset_name="cpg_edges_by_dst",
+        materialized_name="semantic.cpg_edges_by_dst_v1",
+    ),
+)
+
+
+def delta_output_specs() -> tuple[OutputMaterializationSpec, ...]:
+    """Return the canonical delta output materialization specs.
+
+    Returns
+    -------
+    tuple[OutputMaterializationSpec, ...]
+        Ordered output materialization specs.
+    """
+    return _DELTA_OUTPUT_SPECS
 _NORMALIZE_OUTPUTS_TABLE_NAME = "normalize_outputs_v1"
 _EXTRACT_ERRORS_TABLE_NAME = "extract_errors_v1"
 
@@ -1512,6 +1561,7 @@ __all__ = [
     "cpg_edges",
     "cpg_nodes",
     "cpg_props",
+    "delta_output_specs",
     "write_cpg_delta_output",
     "write_extract_error_artifacts_delta",
     "write_normalize_outputs_delta",

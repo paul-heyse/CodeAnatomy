@@ -19,6 +19,7 @@ from hamilton_pipeline.driver_factory import (
     build_async_driver,
     build_driver,
 )
+from hamilton_pipeline.materializers import build_hamilton_materializers
 from hamilton_pipeline.pipeline_types import (
     ExecutionMode,
     ExecutorConfig,
@@ -210,25 +211,14 @@ def execute_pipeline(
         options=options,
     )
     run_id = _resolve_run_id(execute_overrides)
-
-    driver_instance = (
-        options.pipeline_driver
-        if options.pipeline_driver is not None
-        else build_driver(
-            request=DriverBuildRequest(
-                config=options.config,
-                execution_mode=options.execution_mode,
-                executor_config=options.executor_config,
-                graph_adapter_config=options.graph_adapter_config,
-            )
-        )
-    )
-    output_nodes = cast(
-        "list[PipelineFinalVar]",
-        list(options.outputs or FULL_PIPELINE_OUTPUTS),
-    )
-    execute_overrides.setdefault("materialized_outputs", _output_names(output_nodes))
-    output_names = cast("list[str]", _output_names(output_nodes))
+    driver_instance = _resolve_driver_instance(options)
+    (
+        output_names,
+        execution_outputs,
+        materializer_ids,
+        materialized_outputs,
+    ) = _resolve_execution_outputs(options)
+    execute_overrides.setdefault("materialized_outputs", materialized_outputs)
     tracer = get_tracer(SCOPE_PIPELINE)
     run_token = set_run_id(run_id)
     try:
@@ -245,19 +235,23 @@ def execute_pipeline(
             try:
                 if options.use_materialize:
                     _materialized, results = driver_instance.materialize(
-                        additional_vars=output_nodes,
+                        additional_vars=execution_outputs,
                         inputs={"repo_root": str(repo_root_path)},
                         overrides=execute_overrides,
                     )
                 elif isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
-                    results = driver_instance.execute(
+                    async_output_names = _execution_output_names(
                         output_names,
+                        materializer_ids,
+                    )
+                    results = driver_instance.execute(
+                        async_output_names,
                         inputs={"repo_root": str(repo_root_path)},
                         overrides=execute_overrides,
                     )
                 else:
                     results = driver_instance.execute(
-                        output_nodes,
+                        execution_outputs,
                         inputs={"repo_root": str(repo_root_path)},
                         overrides=execute_overrides,
                     )
@@ -265,9 +259,72 @@ def execute_pipeline(
                 record_exception(span, exc)
                 raise
             set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
-            return cast("Mapping[str, JsonDict | None]", results)
+            results_map = cast("Mapping[str, JsonDict | None]", results)
+            return {name: results_map.get(name) for name in output_names}
     finally:
         reset_run_id(run_token)
+
+
+def _resolve_driver_instance(
+    options: PipelineExecutionOptions,
+) -> hamilton_driver.Driver | hamilton_async_driver.AsyncDriver:
+    if options.pipeline_driver is not None:
+        return options.pipeline_driver
+    return build_driver(
+        request=DriverBuildRequest(
+            config=options.config,
+            execution_mode=options.execution_mode,
+            executor_config=options.executor_config,
+            graph_adapter_config=options.graph_adapter_config,
+        )
+    )
+
+
+def _resolve_execution_outputs(
+    options: PipelineExecutionOptions,
+) -> tuple[
+    list[str],
+    list[PipelineFinalVar | str],
+    list[str],
+    tuple[str, ...],
+]:
+    output_nodes = cast(
+        "list[PipelineFinalVar]",
+        list(options.outputs or FULL_PIPELINE_OUTPUTS),
+    )
+    materializer_ids = [materializer.id for materializer in build_hamilton_materializers()]
+    output_names = list(_output_names(output_nodes))
+    execution_outputs = list(output_nodes) + materializer_ids
+    materialized_outputs = tuple(dict.fromkeys((*output_names, *materializer_ids)))
+    return output_names, execution_outputs, materializer_ids, materialized_outputs
+
+
+def _execution_output_names(
+    output_names: list[str],
+    materializer_ids: list[str],
+) -> list[str]:
+    return list(dict.fromkeys((*output_names, *materializer_ids)))
+
+
+async def _resolve_async_driver_instance(
+    options: PipelineExecutionOptions,
+) -> hamilton_async_driver.AsyncDriver:
+    driver_instance = (
+        options.pipeline_driver
+        if options.pipeline_driver is not None
+        else await build_async_driver(
+            request=DriverBuildRequest(
+                config=options.config,
+                execution_mode=options.execution_mode,
+                executor_config=options.executor_config,
+                graph_adapter_config=options.graph_adapter_config,
+            )
+        )
+    )
+    if not isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
+        msg = "Async pipeline execution requires an async Hamilton driver."
+        raise TypeError(msg)
+    return driver_instance
 
 
 async def execute_pipeline_async(
@@ -286,8 +343,6 @@ async def execute_pipeline_async(
     ------
     ValueError
         Raised when materialize() is requested for async execution.
-    TypeError
-        Raised when a non-async driver is provided.
     """
     repo_root_path = ensure_path(repo_root).resolve()
     options = options or PipelineExecutionOptions()
@@ -298,27 +353,14 @@ async def execute_pipeline_async(
         repo_root_path=repo_root_path,
         options=options,
     )
-    output_nodes = cast(
-        "list[PipelineFinalVar]",
-        list(options.outputs or FULL_PIPELINE_OUTPUTS),
-    )
-    execute_overrides.setdefault("materialized_outputs", _output_names(output_nodes))
-    driver_instance = (
-        options.pipeline_driver
-        if options.pipeline_driver is not None
-        else await build_async_driver(
-            request=DriverBuildRequest(
-                config=options.config,
-                execution_mode=options.execution_mode,
-                executor_config=options.executor_config,
-                graph_adapter_config=options.graph_adapter_config,
-            )
-        )
-    )
-    if not isinstance(driver_instance, hamilton_async_driver.AsyncDriver):
-        msg = "Async pipeline execution requires an async Hamilton driver."
-        raise TypeError(msg)
-    output_names = cast("list[str]", _output_names(output_nodes))
+    (
+        output_names,
+        execution_outputs,
+        materializer_ids,
+        materialized_outputs,
+    ) = _resolve_execution_outputs(options)
+    execute_overrides.setdefault("materialized_outputs", materialized_outputs)
+    driver_instance = await _resolve_async_driver_instance(options)
     tracer = get_tracer(SCOPE_PIPELINE)
     run_id = _resolve_run_id(execute_overrides)
     run_token = set_run_id(run_id)
@@ -337,8 +379,12 @@ async def execute_pipeline_async(
                 current_context = otel_context.get_current()
                 token = otel_context.attach(current_context)
                 try:
-                    result = await driver_instance.execute(
+                    async_output_names = _execution_output_names(
                         output_names,
+                        materializer_ids,
+                    )
+                    result = await driver_instance.execute(
+                        async_output_names,
                         inputs={"repo_root": str(repo_root_path)},
                         overrides=execute_overrides,
                     )
@@ -348,7 +394,8 @@ async def execute_pipeline_async(
                 record_exception(span, exc)
                 raise
             set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
-            return cast("Mapping[str, JsonDict | None]", result)
+            results_map = cast("Mapping[str, JsonDict | None]", result)
+            return {name: results_map.get(name) for name in output_names}
     finally:
         reset_run_id(run_token)
 

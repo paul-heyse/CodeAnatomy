@@ -56,7 +56,7 @@ from relspec.view_defs import (
     RELATION_OUTPUT_NAME,
 )
 from serde_msgspec import to_builtins
-from utils.hashing import hash_msgpack_canonical
+from utils.hashing import hash_msgpack_canonical, hash_settings
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -1233,15 +1233,6 @@ def _session_runtime_hash(runtime: SessionRuntime | None) -> str | None:
     return session_runtime_hash(runtime)
 
 
-def _hash_payload(payload: object) -> str:
-    return hash_msgpack_canonical(payload)
-
-
-def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
-    entries = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
-    return _hash_payload(entries)
-
-
 DeltaInputPayload = tuple[
     str,
     int | None,
@@ -1309,7 +1300,7 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
         ("pushed_filters", tuple(sorted(scan_unit.pushed_filters))),
         ("projected_columns", tuple(sorted(scan_unit.projected_columns))),
     )
-    return _hash_payload(payload)
+    return hash_msgpack_canonical(payload)
 
 
 def _protocol_payload(
@@ -1441,7 +1432,7 @@ def _plan_bundle_task_signature(
     rewrite_tags = tuple(sorted(getattr(artifacts, "rewrite_tags", ())))
     domain_planner_names = tuple(sorted(getattr(artifacts, "domain_planner_names", ())))
     df_settings = getattr(artifacts, "df_settings", {})
-    df_settings_hash = _df_settings_hash(df_settings) if isinstance(df_settings, Mapping) else ""
+    df_settings_hash = hash_settings(df_settings) if isinstance(df_settings, Mapping) else ""
     info_schema_hash = getattr(artifacts, "information_schema_hash", "")
     required_udfs = tuple(sorted(getattr(bundle, "required_udfs", ())))
     required_rewrite_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
@@ -1461,7 +1452,7 @@ def _plan_bundle_task_signature(
         ("delta_inputs", delta_inputs_payload),
         ("scan_signatures", tuple(sorted(scan_signatures))),
     )
-    return _hash_payload(payload)
+    return hash_msgpack_canonical(payload)
 
 
 def _plan_task_signature_map(

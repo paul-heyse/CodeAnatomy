@@ -16,7 +16,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
-from utils.env_utils import env_int, env_value
+from utils.env_utils import env_bool, env_int, env_value
 
 if TYPE_CHECKING:
     from datafusion_engine.udf_runtime import RustUdfSnapshot
@@ -41,6 +41,7 @@ class RuntimeProfileSpec:
     datafusion: DataFusionRuntimeProfile
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
     tracker_config: HamiltonTrackerConfig | None = None
+    hamilton_telemetry: HamiltonTelemetryProfile | None = None
 
     @property
     def datafusion_settings_hash(self) -> str:
@@ -103,6 +104,17 @@ class HamiltonTrackerConfig:
         return self.project_id is not None and self.username is not None
 
 
+@dataclass(frozen=True)
+class HamiltonTelemetryProfile:
+    """Telemetry profile for Hamilton tracker capture controls."""
+
+    name: str
+    enable_tracker: bool
+    capture_data_statistics: bool
+    max_list_length_capture: int
+    max_dict_length_capture: int
+
+
 def _tracker_config_from_env() -> HamiltonTrackerConfig | None:
     project_id = env_int("CODEANATOMY_HAMILTON_PROJECT_ID")
     if project_id is None:
@@ -127,6 +139,92 @@ def _tracker_config_from_env() -> HamiltonTrackerConfig | None:
         dag_name=dag_name,
         api_url=api_url,
         ui_url=ui_url,
+    )
+
+
+def _resolve_hamilton_telemetry_profile() -> HamiltonTelemetryProfile:
+    profile_name = _resolve_hamilton_telemetry_profile_name()
+    enable_tracker, capture_stats, max_list, max_dict = _resolve_hamilton_profile_defaults(
+        profile_name
+    )
+    overrides = _resolve_hamilton_telemetry_overrides()
+    enable_tracker = overrides.enable_tracker if overrides.enable_tracker is not None else enable_tracker
+    capture_stats = (
+        overrides.capture_stats if overrides.capture_stats is not None else capture_stats
+    )
+    max_list = overrides.max_list if overrides.max_list is not None else max_list
+    max_dict = overrides.max_dict if overrides.max_dict is not None else max_dict
+    return HamiltonTelemetryProfile(
+        name=profile_name,
+        enable_tracker=enable_tracker,
+        capture_data_statistics=capture_stats,
+        max_list_length_capture=max_list,
+        max_dict_length_capture=max_dict,
+    )
+
+
+def _resolve_hamilton_telemetry_profile_name() -> str:
+    profile_name = (
+        env_value("CODEANATOMY_HAMILTON_TELEMETRY_PROFILE")
+        or env_value("HAMILTON_TELEMETRY_PROFILE")
+        or env_value("CODEANATOMY_ENV")
+        or "dev"
+    )
+    return profile_name.strip().lower()
+
+
+def _resolve_hamilton_profile_defaults(
+    profile_name: str,
+) -> tuple[bool, bool, int, int]:
+    if profile_name in {"prod", "production"}:
+        return True, False, 20, 50
+    if profile_name in {"ci", "test"}:
+        return False, False, 5, 10
+    return True, True, 200, 200
+
+
+@dataclass(frozen=True)
+class _HamiltonTelemetryOverrides:
+    enable_tracker: bool | None
+    capture_stats: bool | None
+    max_list: int | None
+    max_dict: int | None
+
+
+def _resolve_hamilton_telemetry_overrides() -> _HamiltonTelemetryOverrides:
+    tracker_override = env_bool(
+        "CODEANATOMY_HAMILTON_TRACKER_ENABLED",
+        default=None,
+        on_invalid="none",
+    )
+    if tracker_override is None:
+        tracker_override = env_bool(
+            "HAMILTON_TRACKER_ENABLED",
+            default=None,
+            on_invalid="none",
+        )
+    capture_override = env_bool(
+        "CODEANATOMY_HAMILTON_CAPTURE_DATA_STATISTICS",
+        default=None,
+        on_invalid="none",
+    )
+    if capture_override is None:
+        capture_override = env_bool(
+            "HAMILTON_CAPTURE_DATA_STATISTICS",
+            default=None,
+            on_invalid="none",
+        )
+    max_list_override = env_int("CODEANATOMY_HAMILTON_MAX_LIST_LENGTH_CAPTURE", default=None)
+    if max_list_override is None:
+        max_list_override = env_int("HAMILTON_MAX_LIST_LENGTH_CAPTURE", default=None)
+    max_dict_override = env_int("CODEANATOMY_HAMILTON_MAX_DICT_LENGTH_CAPTURE", default=None)
+    if max_dict_override is None:
+        max_dict_override = env_int("HAMILTON_MAX_DICT_LENGTH_CAPTURE", default=None)
+    return _HamiltonTelemetryOverrides(
+        enable_tracker=tracker_override,
+        capture_stats=capture_override,
+        max_list=max_list_override,
+        max_dict=max_dict_override,
     )
 
 
@@ -335,11 +433,13 @@ def resolve_runtime_profile(
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
     tracker_config = _tracker_config_from_env()
+    telemetry_profile = _resolve_hamilton_telemetry_profile()
     return RuntimeProfileSpec(
         name=profile,
         datafusion=df_profile,
         determinism_tier=determinism or DeterminismTier.BEST_EFFORT,
         tracker_config=tracker_config,
+        hamilton_telemetry=telemetry_profile,
     )
 
 
@@ -361,6 +461,7 @@ def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[
 
 
 __all__ = [
+    "HamiltonTelemetryProfile",
     "HamiltonTrackerConfig",
     "RuntimeProfileSnapshot",
     "RuntimeProfileSpec",

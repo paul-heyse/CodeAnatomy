@@ -33,10 +33,6 @@ def _default_cache_root() -> Path:
     return Path.home() / ".cache" / "codeanatomy" / "diskcache"
 
 
-def _hash_payload(payload: object) -> str:
-    return hash_msgpack_canonical(to_builtins(payload))
-
-
 @dataclass(frozen=True)
 class DiskCacheSettings:
     """Settings shared by DiskCache instances."""
@@ -61,21 +57,20 @@ class DiskCacheSettings:
         str
             Stable fingerprint for settings.
         """
-        return _hash_payload(
-            {
-                "size_limit_bytes": self.size_limit_bytes,
-                "cull_limit": self.cull_limit,
-                "eviction_policy": self.eviction_policy,
-                "statistics": self.statistics,
-                "tag_index": self.tag_index,
-                "shards": self.shards,
-                "timeout_seconds": self.timeout_seconds,
-                "disk_min_file_size": self.disk_min_file_size,
-                "sqlite_journal_mode": self.sqlite_journal_mode,
-                "sqlite_mmap_size": self.sqlite_mmap_size,
-                "sqlite_synchronous": self.sqlite_synchronous,
-            }
-        )
+        payload = {
+            "size_limit_bytes": self.size_limit_bytes,
+            "cull_limit": self.cull_limit,
+            "eviction_policy": self.eviction_policy,
+            "statistics": self.statistics,
+            "tag_index": self.tag_index,
+            "shards": self.shards,
+            "timeout_seconds": self.timeout_seconds,
+            "disk_min_file_size": self.disk_min_file_size,
+            "sqlite_journal_mode": self.sqlite_journal_mode,
+            "sqlite_mmap_size": self.sqlite_mmap_size,
+            "sqlite_synchronous": self.sqlite_synchronous,
+        }
+        return hash_msgpack_canonical(to_builtins(payload))
 
 
 class DiskCacheKwargs(TypedDict, total=False):
@@ -135,7 +130,7 @@ class DiskCacheProfile:
             "settings": self.settings_for(kind).fingerprint(),
             "ttl_seconds": self.ttl_for(kind),
         }
-        return _hash_payload(payload)
+        return hash_msgpack_canonical(to_builtins(payload))
 
 
 @cache

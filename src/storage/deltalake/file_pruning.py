@@ -13,7 +13,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
 from datafusion_engine.expr_udf_shims import list_extract, map_extract
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.session_helpers import deregister_table
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -187,7 +187,7 @@ def evaluate_filters_against_index(
         return df.to_arrow_table()
     finally:
         # Deregister temporary table
-        _deregister_table(ctx, temp_table_name)
+        deregister_table(ctx, temp_table_name)
 
 
 def select_candidate_files(
@@ -412,23 +412,6 @@ def _matches_stats_filters(
             matched = False
             continue
     return matched
-
-
-def _deregister_table(ctx: SessionContext, table_name: str) -> None:
-    """Safely deregister a table from the context.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context.
-    table_name : str
-        Name of the table to deregister.
-    """
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister(table_name)
-            invalidate_introspection_cache(ctx)
 
 
 __all__ = [

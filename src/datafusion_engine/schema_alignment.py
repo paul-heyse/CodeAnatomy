@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict, cast
+from typing import Literal, TypedDict
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_interop import SchemaLike, TableLike, coerce_table_like
+from datafusion_engine.arrow_interop import SchemaLike, TableLike
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
+from utils.validation import find_missing
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -49,15 +51,10 @@ def align_to_schema(
         raise ValueError(msg)
     _ = safe_cast
     resolved_schema = pa.schema(schema)
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("pa.RecordBatchReader", resolved)
-        resolved_table = pa.Table.from_batches(list(reader))
-    else:
-        resolved_table = cast("pa.Table", resolved)
+    resolved_table = to_arrow_table(table)
     input_cols = list(resolved_table.column_names)
     target_names = [field.name for field in resolved_schema]
-    missing = [name for name in target_names if name not in input_cols]
+    missing = find_missing(target_names, set(input_cols))
     extra = [name for name in input_cols if name not in target_names]
     casted = [
         name

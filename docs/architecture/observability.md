@@ -104,6 +104,21 @@ Manual instrumentation should always set attributes at span creation to allow sa
 
 ---
 
+## Hamilton UI Telemetry
+Hamilton UI run tracking is enabled via the Hamilton tracker adapter. CodeAnatomy enforces capture governance through telemetry profiles (dev/ci/prod) and SDK constants:
+
+- **prod**: tracker enabled, statistics capture disabled, small list/dict limits.
+- **ci**: tracker disabled by default, minimal capture.
+- **dev**: tracker enabled, statistics capture enabled, larger list/dict limits.
+
+Profiles can be overridden via environment variables or config.
+
+Correlation fields:
+- Hamilton tracker tags include `codeanatomy.run_id`, `otel.trace_id`, and `otel.span_id`.
+- OTel spans include `codeanatomy.run_id` and `hamilton.execution_run_id`.
+
+---
+
 ## Concurrency and Fork Safety
 Extraction uses process-based parallelism. OTel is initialized inside worker processes to avoid fork-safety issues with batch processors. Threaded execution propagates context explicitly where needed.
 
@@ -133,6 +148,11 @@ Reference configuration: `tools/otel/collector.yaml`.
 - `OTEL_METRICS_EXEMPLAR_FILTER`
 - `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
 - `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`
+- `CODEANATOMY_HAMILTON_TELEMETRY_PROFILE`, `HAMILTON_TELEMETRY_PROFILE`
+- `CODEANATOMY_HAMILTON_TRACKER_ENABLED`, `HAMILTON_TRACKER_ENABLED`
+- `CODEANATOMY_HAMILTON_CAPTURE_DATA_STATISTICS`, `HAMILTON_CAPTURE_DATA_STATISTICS`
+- `CODEANATOMY_HAMILTON_MAX_LIST_LENGTH_CAPTURE`, `HAMILTON_MAX_LIST_LENGTH_CAPTURE`
+- `CODEANATOMY_HAMILTON_MAX_DICT_LENGTH_CAPTURE`, `HAMILTON_MAX_DICT_LENGTH_CAPTURE`
 
 ---
 

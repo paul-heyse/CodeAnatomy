@@ -66,6 +66,7 @@ dependencies = [
     "opentelemetry-instrumentation-asyncio>=0.60b1",
     "opentelemetry-instrumentation-threading>=0.60b1",
     "opentelemetry-instrumentation-system-metrics>=0.60b1",
+    "uuid6>=2025.0.1",
 ]
 
 [tool.uv.sources]

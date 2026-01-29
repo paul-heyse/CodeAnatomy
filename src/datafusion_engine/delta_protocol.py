@@ -337,12 +337,8 @@ def _delta_gate_values(
         )
     min_reader_version = _coerce_int(getattr(gate, "min_reader_version", None))
     min_writer_version = _coerce_int(getattr(gate, "min_writer_version", None))
-    required_reader_features = _feature_tuple(
-        getattr(gate, "required_reader_features", ())
-    )
-    required_writer_features = _feature_tuple(
-        getattr(gate, "required_writer_features", ())
-    )
+    required_reader_features = _feature_tuple(getattr(gate, "required_reader_features", ()))
+    required_writer_features = _feature_tuple(getattr(gate, "required_writer_features", ()))
     return (
         min_reader_version,
         min_writer_version,

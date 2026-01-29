@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 
 def _stringify_mapping(values: Mapping[str, object] | None) -> dict[str, str]:
-    if not values:
+    if not isinstance(values, Mapping) or not values:
         return {}
     return {str(key): str(value) for key, value in values.items()}
 

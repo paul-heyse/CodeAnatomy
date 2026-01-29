@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 import uuid
 from collections import Counter
@@ -19,16 +18,10 @@ from datafusion.expr import Expr
 from arrow_utils.core.array_iter import iter_array_values
 from arrow_utils.core.schema_constants import PROVENANCE_COLS
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import (
-    ArrayLike,
-    DataTypeLike,
-    RecordBatchReaderLike,
-    SchemaLike,
-    TableLike,
-    coerce_table_like,
-)
+from datafusion_engine.arrow_interop import ArrayLike, DataTypeLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.build import ColumnDefaultsSpec, ConstExpr
 from datafusion_engine.arrow_schema.chunking import ChunkPolicy
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.expr_udf_shims import stable_hash64
@@ -38,6 +31,7 @@ from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema_validation import ArrowValidationOptions
+from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
@@ -316,12 +310,7 @@ def _required_non_null_results(
     """
     if not cols:
         return [], pa.array([False] * table.num_rows, type=pa.bool_())
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("RecordBatchReaderLike", resolved)
-        resolved_table = pa.Table.from_batches(list(reader))
-    else:
-        resolved_table = cast("pa.Table", resolved)
+    resolved_table = to_arrow_table(table)
     masks: list[ArrayLike] = []
     for column_name in cols:
         if column_name in resolved_table.column_names:
@@ -398,12 +387,7 @@ def _filter_good_rows(
 ) -> TableLike:
     if table.num_rows == 0:
         return table
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("RecordBatchReaderLike", resolved)
-        resolved_table = pa.Table.from_batches(list(reader))
-    else:
-        resolved_table = cast("pa.Table", resolved)
+    resolved_table = to_arrow_table(table)
     filtered_mask = _invert_mask(_fill_null(bad_any, fill_value=False))
     return resolved_table.filter(filtered_mask)
 
@@ -457,12 +441,7 @@ def _raise_on_errors_if_strict(
 
 
 def _error_code_counts_table(errors: TableLike) -> pa.Table:
-    resolved = coerce_table_like(errors)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("RecordBatchReaderLike", resolved)
-        table = pa.Table.from_batches(list(reader))
-    else:
-        table = cast("pa.Table", resolved)
+    table = to_arrow_table(errors)
     counts = _value_counts(table["error_code"])
     return pa.table(
         {
@@ -584,12 +563,7 @@ def _row_id_for_errors(
         if df_ctx is None:
             msg = "DataFusion SessionContext required to compute error row ids."
             raise TypeError(msg)
-        resolved = coerce_table_like(errors)
-        if isinstance(resolved, pa.RecordBatchReader):
-            reader = cast("RecordBatchReaderLike", resolved)
-            resolved_table = pa.Table.from_batches(list(reader))
-        else:
-            resolved_table = cast("pa.Table", resolved)
+        resolved_table = to_arrow_table(errors)
         table_name = f"_finalize_errors_{uuid.uuid4().hex}"
         from datafusion_engine.ingest import datafusion_from_arrow
 
@@ -608,10 +582,7 @@ def _row_id_for_errors(
             concat_expr = f.concat_ws(_HASH_JOIN_SEPARATOR, *parts)
             result = df.select(stable_hash64(concat_expr).alias("row_id")).to_arrow_table()
         finally:
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                deregister = getattr(df_ctx, "deregister_table", None)
-                if callable(deregister):
-                    deregister(table_name)
+            deregister_table(df_ctx, table_name)
         return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 
@@ -680,27 +651,6 @@ def _datafusion_context(runtime_profile: DataFusionRuntimeProfile | None) -> Ses
         return None
 
 
-def _register_temp_table(
-    ctx: SessionContext,
-    table: TableLike,
-    *,
-    prefix: str,
-) -> tuple[str, pa.Table]:
-    resolved = coerce_table_like(table)
-    if isinstance(resolved, pa.RecordBatchReader):
-        reader = cast("RecordBatchReaderLike", resolved)
-        resolved_table = pa.Table.from_batches(list(reader))
-    else:
-        resolved_table = cast("pa.Table", resolved)
-    table_name = f"_{prefix}_{uuid.uuid4().hex}"
-    from_arrow = getattr(ctx, "from_arrow", None)
-    if not callable(from_arrow):
-        msg = "SessionContext does not support from_arrow ingestion."
-        raise NotImplementedError(msg)
-    from_arrow(resolved_table, name=table_name)
-    return table_name, resolved_table
-
-
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
     from datafusion_engine.runtime import sql_options_for_profile
 
@@ -719,7 +669,8 @@ def _aggregate_error_detail_lists_df(
     group_cols: Sequence[str],
     detail_field_names: Sequence[str],
 ) -> pa.Table:
-    table_name, resolved = _register_temp_table(ctx, table, prefix="finalize_errors")
+    resolved = to_arrow_table(table)
+    table_name = register_temp_table(ctx, resolved, prefix="finalize_errors")
     try:
         df = ctx.table(table_name)
         exprs: list[Expr] = []
@@ -738,9 +689,7 @@ def _aggregate_error_detail_lists_df(
         )
         return aggregated.to_arrow_table()
     finally:
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
+        deregister_table(ctx, table_name)
 
 
 def _build_alignment_table(

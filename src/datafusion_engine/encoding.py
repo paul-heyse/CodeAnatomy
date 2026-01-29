@@ -14,13 +14,12 @@ from datafusion import functions as f
 
 from datafusion_engine.arrow_interop import (
     DataTypeLike,
-    RecordBatchReaderLike,
     TableLike,
-    coerce_table_like,
 )
 from datafusion_engine.arrow_schema.chunking import ChunkPolicy
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.session_helpers import deregister_table
+from utils.validation import ensure_table
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -60,7 +59,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     from datafusion_engine.ingest import datafusion_from_arrow
 
     df_ctx = _datafusion_context()
-    resolved = _ensure_table(table)
+    resolved = ensure_table(table, label="table")
     table_name = f"_encoding_{uuid.uuid4().hex}"
     df = datafusion_from_arrow(df_ctx, name=table_name, value=resolved)
     try:
@@ -71,10 +70,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
         )
         return df.select(*selections).to_arrow_table()
     finally:
-        deregister = getattr(df_ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
-            invalidate_introspection_cache(df_ctx)
+        deregister_table(df_ctx, table_name)
 
 
 def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
@@ -127,15 +123,6 @@ def _datafusion_context() -> SessionContext:
     return profile.session_runtime().ctx
 
 
-def _ensure_table(value: TableLike) -> pa.Table:
-    resolved = coerce_table_like(value)
-    if isinstance(resolved, RecordBatchReaderLike):
-        return pa.Table.from_batches(list(resolved))
-    if isinstance(resolved, pa.Table):
-        return resolved
-    return pa.table(resolved.to_pydict())
-
-
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
@@ -146,9 +133,7 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
         df = df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
         value = df.to_arrow_table()["dtype"][0].as_py()
     finally:
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(temp_name)
+        deregister_table(ctx, temp_name)
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)

@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING, Literal, overload
 
 from arrow_utils.core.array_iter import iter_table_rows
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
-from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
+from datafusion_engine.extract_registry import dataset_query, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec
 from extract.cache_utils import (
@@ -35,6 +34,7 @@ from extract.helpers import (
     materialize_extract_plan,
 )
 from extract.repo_blobs_git import open_repo_for_path, read_blob_at_ref
+from extract.schema_cache import repo_file_blobs_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
 from serde_msgspec import to_builtins
@@ -112,10 +112,6 @@ def _detect_encoding(data: bytes) -> str:
 
 
 @cache
-def _repo_blob_schema_fingerprint() -> str:
-    return schema_fingerprint(dataset_schema("repo_file_blobs_v1"))
-
-
 def _repo_blob_cache_key(
     file_ctx: FileContext,
     *,
@@ -128,7 +124,7 @@ def _repo_blob_cache_key(
         {
             "file_id": file_ctx.file_id,
             "file_sha256": file_ctx.file_sha256,
-            "schema_fingerprint": _repo_blob_schema_fingerprint(),
+            "schema_fingerprint": repo_file_blobs_fingerprint(),
             "options": to_builtins(options),
         },
     )

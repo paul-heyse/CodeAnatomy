@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
@@ -17,6 +15,7 @@ from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
+from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
 from utils.hashing import hash_storage_options
 from utils.storage_options import normalize_storage_options
@@ -189,24 +188,6 @@ def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
         return delta_snapshot_info(snapshot_request)
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-
-
-def _register_temp_table(ctx: SessionContext, table: pa.Table) -> str:
-    name = f"__delta_temp_{uuid.uuid4().hex}"
-    from_arrow = getattr(ctx, "from_arrow", None)
-    if not callable(from_arrow):
-        msg = "SessionContext does not support from_arrow ingestion."
-        raise NotImplementedError(msg)
-    from_arrow(table, name=name)
-    return name
-
-
-def _deregister_table(ctx: SessionContext, name: str) -> None:
-    deregister = getattr(ctx, "deregister_table", None)
-    if not callable(deregister):
-        return
-    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-        deregister(name)
 
 
 @dataclass(frozen=True)
@@ -2304,7 +2285,7 @@ def delta_merge_arrow(
     if request.insert_all:
         for name in request.source.schema.names:
             resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
-    source_table = _register_temp_table(ctx, request.source)
+    source_table = register_temp_table(ctx, request.source)
     commit_options = _delta_commit_options(
         commit_properties=request.commit_properties,
         commit_metadata=request.commit_metadata,
@@ -2357,7 +2338,7 @@ def delta_merge_arrow(
         )
         return report
     finally:
-        _deregister_table(ctx, source_table)
+        deregister_table(ctx, source_table)
 
 
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:

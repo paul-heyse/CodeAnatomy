@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import configparser
-import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +17,7 @@ from extract.python_scope import (
     globs_for_extensions,
     resolve_python_extension_catalog,
 )
+from utils.file_io import read_pyproject_toml
 
 DEFAULT_EXCLUDE_GLOBS: tuple[str, ...] = (
     "**/.git/**",
@@ -142,8 +142,8 @@ def _scope_globs_from_pyproject(repo_root: Path) -> tuple[list[str], list[str]]:
     if not path.is_file():
         return [], []
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+        data = read_pyproject_toml(path)
+    except (OSError, ValueError):
         return [], []
     tool = data.get("tool")
     if not isinstance(tool, dict):

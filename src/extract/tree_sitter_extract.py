@@ -43,6 +43,7 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
+from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
@@ -63,7 +64,7 @@ SEMVER_PARTS = 3
 
 
 @dataclass(frozen=True)
-class TreeSitterExtractOptions:
+class TreeSitterExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
     """Configure tree-sitter extraction options."""
 
     include_nodes: bool = True
@@ -84,14 +85,9 @@ class TreeSitterExtractOptions:
     max_docstring_bytes: int = 2048
     incremental: bool = False
     incremental_cache_size: int = 256
-    repo_id: str | None = None
-    batch_size: int | None = 512
-    parallel: bool = True
-    max_workers: int | None = None
     included_ranges: tuple[tuple[int, int], ...] | None = None
     parse_callback_threshold_bytes: int | None = 5_000_000
     parse_callback_chunk_size: int = 65_536
-    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)

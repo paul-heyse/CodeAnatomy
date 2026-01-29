@@ -23,6 +23,7 @@ _TEMPLATE_NAMES: tuple[str, ...] = (
     "symtable",
     "scip",
     "tree_sitter",
+    "python_imports",
     "python_external",
 )
 

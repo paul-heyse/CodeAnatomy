@@ -232,15 +232,15 @@ Files to modify (import from `utils.hashing` and preserve existing semantics):
 
 ### Implementation Checklist
 
-- [ ] Create `src/utils/__init__.py` if not exists
-- [ ] Create `src/utils/hashing.py` with **explicit semantic helpers**
-- [ ] Re-export or wrap new helpers from `src/datafusion_engine/hash_utils.py`
-- [ ] Add comprehensive unit tests in `tests/unit/utils/test_hashing.py`
+- [x] Create `src/utils/__init__.py` if not exists
+- [x] Create `src/utils/hashing.py` with **explicit semantic helpers**
+- [x] Re-export or wrap new helpers from `src/datafusion_engine/hash_utils.py`
+- [x] Add comprehensive unit tests in `tests/unit/utils/test_hashing.py`
 - [ ] Add **compatibility tests** that compare legacy hashes to new helpers per call-site
-- [ ] Update each target file to import the correct helper for its semantics
-- [ ] Verify all tests pass after each file migration
-- [ ] Remove duplicate implementations from target files
-- [ ] Update `__all__` exports in affected modules
+- [x] Update each target file to import the correct helper for its semantics
+- [ ] Verify all tests pass after each file migration (full suite currently failing)
+- [x] Remove duplicate implementations from target files
+- [x] Update `__all__` exports in affected modules
 
 ### Decommissioning List
 
@@ -516,17 +516,17 @@ Files to modify (import from `utils.env_utils`):
 
 ### Implementation Checklist
 
-- [ ] Create `src/utils/env_utils.py` with consolidated implementations
-- [ ] Add unit tests in `tests/unit/utils/test_env_utils.py`
-- [ ] Update `src/obs/otel/config.py` to import from `utils.env_utils`
-- [ ] Update `src/hamilton_pipeline/modules/inputs.py`
-- [ ] Update `src/hamilton_pipeline/driver_factory.py`
-- [ ] Update `src/engine/runtime_profile.py`
-- [ ] Update `src/extract/git_remotes.py`
-- [ ] Update `src/extract/git_settings.py`
-- [ ] Update `src/cache/diskcache_factory.py`
-- [ ] Verify all tests pass after migration
-- [ ] Add coverage for invalid/ambiguous env values to preserve legacy behavior
+- [x] Create `src/utils/env_utils.py` with consolidated implementations
+- [x] Add unit tests in `tests/unit/utils/test_env_utils.py`
+- [x] Update `src/obs/otel/config.py` to import from `utils.env_utils`
+- [x] Update `src/hamilton_pipeline/modules/inputs.py`
+- [x] Update `src/hamilton_pipeline/driver_factory.py`
+- [x] Update `src/engine/runtime_profile.py`
+- [x] Update `src/extract/git_remotes.py`
+- [x] Update `src/extract/git_settings.py`
+- [x] Update `src/cache/diskcache_factory.py`
+- [ ] Verify all tests pass after migration (full suite currently failing)
+- [x] Add coverage for invalid/ambiguous env values to preserve legacy behavior
 
 ### Decommissioning List
 
@@ -706,13 +706,13 @@ __all__ = [
 
 ### Implementation Checklist
 
-- [ ] Update `src/core_types.py` with expanded type alias definitions
-- [ ] Add type alias documentation
-- [ ] Update `src/storage/dataset_sources.py` to import `PathLike`
-- [ ] Update `src/serde_artifacts.py` to use `JsonValueLax`
-- [ ] Update extraction modules to use appropriate `Row*` aliases (avoid `Row`/`RowValue` defaults)
-- [ ] Update `src/obs/metrics.py` for strict row types
-- [ ] Verify all type checks pass with `pyright`
+- [x] Update `src/core_types.py` with expanded type alias definitions
+- [x] Add type alias documentation
+- [x] Update `src/storage/dataset_sources.py` to import `PathLike`
+- [x] Update `src/serde_artifacts.py` to use `JsonValueLax`
+- [x] Update extraction modules to use appropriate `Row*` aliases (avoid `Row`/`RowValue` defaults)
+- [x] Update `src/obs/metrics.py` for strict row types
+- [x] Verify all type checks pass with `pyright`
 
 ### Decommissioning List
 
@@ -835,14 +835,14 @@ class SimpleViewRef:
 
 ### Implementation Checklist
 
-- [ ] Create `src/schema_spec/contract_row.py` with unified `ContractRow`
-- [ ] Update `src/incremental/registry_rows.py` to import `ContractRow`
-- [ ] Update `src/incremental/registry_builders.py` to import `ContractRow`
-- [ ] Update `src/normalize/dataset_rows.py` to import `ContractRow`
-- [ ] Update `src/normalize/dataset_builders.py` to import `ContractRow`
-- [ ] Rename `ViewReference` to `SimpleViewRef` in `src/datafusion_engine/nested_tables.py`
-- [ ] Update all usages of minimal `ViewReference` to `SimpleViewRef`
-- [ ] Verify no import conflicts exist
+- [x] Create `src/schema_spec/contract_row.py` with unified `ContractRow`
+- [x] Update `src/incremental/registry_rows.py` to import `ContractRow`
+- [x] Update `src/incremental/registry_builders.py` to import `ContractRow`
+- [x] Update `src/normalize/dataset_rows.py` to import `ContractRow`
+- [x] Update `src/normalize/dataset_builders.py` to import `ContractRow`
+- [x] Rename `ViewReference` to `SimpleViewRef` in `src/datafusion_engine/nested_tables.py`
+- [x] Update all usages of minimal `ViewReference` to `SimpleViewRef`
+- [x] Verify no import conflicts exist
 
 ### Decommissioning List
 
@@ -1003,11 +1003,11 @@ Registries to align with the protocol (typing first, inheritance optional):
 
 ### Implementation Checklist
 
-- [ ] Create `src/utils/registry_protocol.py`
-- [ ] Add comprehensive tests for registry protocol
+- [x] Create `src/utils/registry_protocol.py`
+- [x] Add comprehensive tests for registry protocol
 - [ ] Add protocol typing to existing registries where appropriate
-- [ ] Migrate only registries that are **pure key/value stores**
-- [ ] Document registry usage patterns and criteria for inheritance
+- [ ] Migrate only registries that are **pure key/value stores** (adopted `ImmutableRegistry` for `_DATASET_TEMPLATE_REGISTRY`)
+- [x] Document registry usage patterns and criteria for inheritance
 
 ### Decommissioning List
 
@@ -1079,9 +1079,9 @@ Only migrate configurations that have **simple, JSON-compatible payloads**. Keep
 
 ### Implementation Checklist
 
-- [ ] Add `config_fingerprint` helper (in `src/utils/hashing.py` or `src/utils/config_utils.py`)
-- [ ] Add tests for config fingerprinting behavior
-- [ ] Document naming conventions in CLAUDE.md or CONTRIBUTING.md
+- [x] Add `config_fingerprint` helper (in `src/utils/hashing.py` or `src/utils/config_utils.py`)
+- [x] Add tests for config fingerprinting behavior
+- [x] Document naming conventions in CLAUDE.md or CONTRIBUTING.md
 - [ ] Audit config classes for JSON-compatibility before applying shared helpers
 
 ### Decommissioning List
@@ -1148,10 +1148,10 @@ build_driver()
 
 ### Implementation Checklist
 
-- [ ] Extract builder configuration helpers within `src/hamilton_pipeline/driver_factory.py`
-- [ ] Keep `ViewGraphContext` in place; avoid new module unless reuse demands it
-- [ ] Refactor `build_driver()` only if readability or testability improves
-- [ ] Maintain backward compatibility for existing callers
+- [x] Extract builder configuration helpers within `src/hamilton_pipeline/driver_factory.py`
+- [x] Keep `ViewGraphContext` in place; avoid new module unless reuse demands it
+- [x] Refactor `build_driver()` only if readability or testability improves
+- [x] Maintain backward compatibility for existing callers
 - [ ] Add integration tests for factory chain
 
 ### Decommissioning List
@@ -1202,12 +1202,12 @@ This section documents which decommissioning items depend on multiple scope comp
 
 After completing all scopes:
 
-- [ ] Run full test suite: `uv run pytest tests/`
-- [ ] Run type checking: `uv run pyright --warnings`
-- [ ] Run linting: `uv run ruff check`
+- [ ] Run full test suite: `uv run pytest tests/` (run; failures remain)
+- [x] Run type checking: `uv run pyright --warnings`
+- [x] Run linting: `uv run ruff check`
 - [ ] Verify no circular imports
 - [ ] Verify all file paths referenced exist
-- [ ] Update CLAUDE.md with new utility module documentation
+- [x] Update CLAUDE.md with new utility module documentation
 
 ---
 
@@ -1228,6 +1228,8 @@ Multiple modules serialize Delta feature gates using near-identical helpers:
 
 **Target:** introduce a single helper (e.g., `delta_feature_gate_payload`) in a shared module (likely `src/datafusion_engine/delta_protocol.py` or a small `src/utils/delta_utils.py`) and reuse it across these call sites.
 
+**Status:** Implemented via shared helpers in `datafusion_engine.delta_protocol`; all listed call sites migrated.
+
 ### 9.2 Storage Options Normalization + Hashing
 
 Storage options normalization and hashing are duplicated with slight differences in:
@@ -1239,6 +1241,8 @@ Storage options normalization and hashing are duplicated with slight differences
 
 **Target:** standardize `normalize_storage_options()` and reuse `hash_storage_options()` from `src/utils/hashing.py` to avoid divergent hashes for identical inputs.
 
+**Status:** Implemented via `src/utils/storage_options.py` and applied across scan planning, registry bridge, Delta tools, and Delta Lake helpers.
+
 ### 9.3 Determinism Tier Parsing
 
 Determinism tier parsing logic is duplicated in:
@@ -1247,6 +1251,8 @@ Determinism tier parsing logic is duplicated in:
 
 **Target:** move parsing to a shared helper (e.g., `core_types.parse_determinism_tier()`), and use it in both modules.
 
+**Status:** Implemented via `core_types.parse_determinism_tier()` and adopted in both modules.
+
 ### 9.4 JSON Payload Hashing for Plan Identity
 
 JSON hashing logic in:
@@ -1254,6 +1260,8 @@ JSON hashing logic in:
 - `src/datafusion_engine/plan_artifact_store.py`
 
 is nearly identical (msgspec JSON encoding + SHA-256). Consolidate into a single helper (likely in `src/utils/hashing.py`) without changing serialization behavior.
+
+**Status:** Consolidated by routing plan identity hashing through shared JSON hash helpers and removing local payload hash wrappers.
 
 ---
 
@@ -1286,5 +1294,6 @@ All file paths referenced in this document have been verified to exist in the co
 - `src/utils/hashing.py`
 - `src/utils/env_utils.py`
 - `src/utils/registry_protocol.py`
+- `src/utils/storage_options.py`
 - `src/schema_spec/contract_row.py`
   (Optional) `src/utils/config_utils.py` if not embedding config helpers in `src/utils/hashing.py`

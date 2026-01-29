@@ -177,7 +177,11 @@ def plan_scan_unit(
         },
     ):
         delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
-        storage_options_hash = _storage_options_hash(location)
+        storage_options, log_storage_options = normalize_storage_options(
+            location.storage_options if location is not None else None,
+            location.delta_log_storage_options if location is not None else None,
+        )
+        storage_options_hash = hash_storage_options(storage_options, log_storage_options)
         delta_scan_config = _delta_scan_config_snapshot(location)
         delta_scan_config_hash = _delta_scan_config_hash(delta_scan_config)
         datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
@@ -653,16 +657,6 @@ def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | Non
     )
 
 
-def _storage_options_hash(location: DatasetLocation | None) -> str | None:
-    if location is None:
-        return None
-    storage_options, log_storage_options = normalize_storage_options(
-        location.storage_options,
-        location.delta_log_storage_options,
-    )
-    return hash_storage_options(storage_options, log_storage_options)
-
-
 def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
     if request.runtime_profile is None:
         return
@@ -688,7 +682,12 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
             projected_columns=request.lineage.projected_columns,
             delta_protocol=request.payload.delta_protocol,
             delta_feature_gate=resolve_delta_feature_gate(request.location),
-            storage_options_hash=_storage_options_hash(request.location),
+            storage_options_hash=hash_storage_options(
+                *normalize_storage_options(
+                    request.location.storage_options,
+                    request.location.delta_log_storage_options,
+                )
+            ),
         ),
     )
 

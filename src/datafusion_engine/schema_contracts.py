@@ -9,6 +9,7 @@ schema evolution policies.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, cast
@@ -19,6 +20,7 @@ from datafusion import SessionContext
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.schema_introspection import schema_from_table
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
+from utils.registry_protocol import Registry
 
 SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
@@ -398,7 +400,8 @@ class SchemaContract:
 
 
 @dataclass
-class ContractRegistry:
+@dataclass
+class ContractRegistry(Registry[str, SchemaContract]):
     """
     Registry of schema contracts for validation.
 
@@ -413,16 +416,78 @@ class ContractRegistry:
 
     contracts: dict[str, SchemaContract] = field(default_factory=dict)
 
-    def register(self, contract: SchemaContract) -> None:
+    def register(self, key: str, value: SchemaContract) -> None:
         """
         Register a schema contract.
 
         Parameters
         ----------
-        contract : SchemaContract
-            Contract to register
+        key : str
+            Contract name.
+        value : SchemaContract
+            Contract to register.
         """
-        self.contracts[contract.table_name] = contract
+        self.contracts[key] = value
+
+    def register_contract(self, contract: SchemaContract) -> None:
+        """Register a schema contract by table name.
+
+        Parameters
+        ----------
+        contract
+            Contract to register.
+        """
+        self.register(contract.table_name, contract)
+
+    def get(self, key: str) -> SchemaContract | None:
+        """Return a registered contract when present.
+
+        Parameters
+        ----------
+        key
+            Contract key to look up.
+
+        Returns
+        -------
+        SchemaContract | None
+            Registered contract when present.
+        """
+        return self.contracts.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a contract is registered for the key.
+
+        Parameters
+        ----------
+        key
+            Contract key to check.
+
+        Returns
+        -------
+        bool
+            ``True`` when the contract is registered.
+        """
+        return key in self.contracts
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered contract keys.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator of registered contract keys.
+        """
+        return iter(self.contracts)
+
+    def __len__(self) -> int:
+        """Return the number of registered contracts.
+
+        Returns
+        -------
+        int
+            Count of registered contracts.
+        """
+        return len(self.contracts)
 
     def validate_all(
         self,

@@ -43,6 +43,32 @@ class DeterminismTier(StrEnum):
     STABLE = "stable_set"
 
 
+def parse_determinism_tier(value: DeterminismTier | str | None) -> DeterminismTier | None:
+    """Parse a determinism tier from string or enum input.
+
+    Returns
+    -------
+    DeterminismTier | None
+        Parsed determinism tier when available.
+    """
+    if isinstance(value, DeterminismTier):
+        return value
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    mapping: dict[str, DeterminismTier] = {
+        "tier2": DeterminismTier.CANONICAL,
+        "canonical": DeterminismTier.CANONICAL,
+        "tier1": DeterminismTier.STABLE_SET,
+        "stable": DeterminismTier.STABLE_SET,
+        "stable_set": DeterminismTier.STABLE_SET,
+        "tier0": DeterminismTier.BEST_EFFORT,
+        "fast": DeterminismTier.BEST_EFFORT,
+        "best_effort": DeterminismTier.BEST_EFFORT,
+    }
+    return mapping.get(normalized)
+
+
 def ensure_path(p: PathLike) -> Path:
     """Return a normalized ``Path`` for the provided value.
 
@@ -81,4 +107,5 @@ __all__ = [
     "RowValueStrict",
     "StrictnessMode",
     "ensure_path",
+    "parse_determinism_tier",
 ]

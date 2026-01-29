@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
+
+from utils.hashing import config_fingerprint
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -96,8 +96,7 @@ def delta_store_policy_hash(policy: DeltaStorePolicy | None) -> str | None:
         ),
         "require_local_paths": policy.require_local_paths,
     }
-    encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return config_fingerprint(payload)
 
 
 __all__ = [

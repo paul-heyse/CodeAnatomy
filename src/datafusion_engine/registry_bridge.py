@@ -105,6 +105,7 @@ from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
 from utils.hashing import hash_storage_options
 from utils.storage_options import merged_storage_options, normalize_storage_options
+from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
@@ -652,13 +653,13 @@ def _validate_constraints_and_defaults(
             if row.get("constraint_type") in {"PRIMARY KEY", "UNIQUE"}
             and row.get("column_name") is not None
         }
-        missing = [name for name in key_fields if name not in key_columns]
+        missing = find_missing(key_fields, key_columns)
         if missing:
             msg = f"{context.name} missing DataFusion constraints for key fields {missing}."
             raise ValueError(msg)
     if expected_defaults:
         column_defaults = introspector.table_column_defaults(context.name)
-        missing = [name for name in expected_defaults if name not in column_defaults]
+        missing = find_missing(expected_defaults, column_defaults)
         if missing:
             msg = f"{context.name} missing column defaults for {missing}."
             raise ValueError(msg)
@@ -2257,7 +2258,7 @@ def _table_schema_partition_snapshot(
     if table_schema is None:
         return {}, [], []
     table_schema_types = {field.name: str(field.type) for field in table_schema}
-    missing = [name for name in expected_names if name not in table_schema_types]
+    missing = find_missing(expected_names, table_schema_types)
     mismatches = _partition_type_mismatches(
         expected_types,
         table_schema_types,
@@ -2302,7 +2303,7 @@ def _partition_schema_validation(
         }
     actual_order, actual_types = _partition_columns_from_rows(rows)
     actual_partition_cols = [name for name in actual_order if name in expected_types]
-    missing = [name for name in expected_names if name not in actual_types]
+    missing = find_missing(expected_names, actual_types)
     order_matches = actual_partition_cols == expected_names if actual_partition_cols else None
     type_mismatches = _partition_type_mismatches(
         expected_types,

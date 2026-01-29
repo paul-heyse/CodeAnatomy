@@ -30,7 +30,6 @@ from libcst.metadata import (
 
 from core_types import RowPermissive as Row
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -50,7 +49,9 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
+from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers, supports_fork
+from extract.schema_cache import libcst_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
@@ -68,17 +69,10 @@ CST_COL_UNIT = "utf32"
 CST_END_EXCLUSIVE = True
 
 
-@cache
-def _libcst_schema_fingerprint() -> str:
-    schema = dataset_schema("libcst_files_v1")
-    return schema_fingerprint(schema)
-
-
 @dataclass(frozen=True)
-class CSTExtractOptions:
+class CstExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
     """Define LibCST extraction options."""
 
-    repo_id: str | None = None
     repo_root: Path | None = None
     include_parse_manifest: bool = True
     include_parse_errors: bool = True
@@ -96,14 +90,10 @@ class CSTExtractOptions:
     compute_scope: bool = True
     compute_type_inference: bool = False
     matcher_templates: tuple[str, ...] = ()
-    batch_size: int | None = 512
-    parallel: bool = True
-    max_workers: int | None = None
-    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
-class CSTExtractResult:
+class CstExtractResult:
     """Hold extracted CST nested file table."""
 
     libcst_files: TableLike
@@ -123,7 +113,7 @@ class CSTFileContext:
     """Per-file context for CST extraction."""
 
     file_ctx: FileContext
-    options: CSTExtractOptions
+    options: CstExtractOptions
 
     @property
     def file_id(self) -> str:
@@ -163,7 +153,7 @@ class CSTFileContext:
 class CSTExtractContext:
     """Shared extraction context and output buffers."""
 
-    options: CSTExtractOptions
+    options: CstExtractOptions
     manifest_rows: list[Row]
     error_rows: list[Row]
     ref_rows: list[Row]
@@ -180,7 +170,7 @@ class CSTExtractContext:
     @classmethod
     def build(
         cls,
-        options: CSTExtractOptions,
+        options: CstExtractOptions,
         *,
         evidence_plan: EvidencePlan | None = None,
         repo_manager: FullRepoManager | None = None,
@@ -294,7 +284,7 @@ def _parse_module(
 def _module_package_names(
     *,
     abs_path: str | Path | None,
-    options: CSTExtractOptions,
+    options: CstExtractOptions,
     path: str,
 ) -> tuple[str | None, str | None]:
     if options.repo_root is None:
@@ -367,13 +357,13 @@ def _manifest_row(
         "libcst_version": getattr(cst, "__version__", None),
         "parser_backend": parser_backend,
         "parsed_python_version": parsed_python_version,
-        "schema_fingerprint": _libcst_schema_fingerprint(),
+        "schema_fingerprint": libcst_files_fingerprint(),
     }
 
 
 def _resolve_metadata_maps(
     wrapper: MetadataWrapper,
-    options: CSTExtractOptions,
+    options: CstExtractOptions,
     *,
     repo_manager: FullRepoManager | None,
 ) -> tuple[
@@ -450,7 +440,7 @@ def _parse_matcher_template(
         return None
 
 
-def _matcher_counts(module: cst.Module, options: CSTExtractOptions) -> dict[str, str]:
+def _matcher_counts(module: cst.Module, options: CstExtractOptions) -> dict[str, str]:
     if not options.matcher_templates:
         return {}
     config = module.config_for_parsing
@@ -1328,7 +1318,7 @@ def _extract_cst_for_context(
 
 
 def _build_repo_manager(
-    options: CSTExtractOptions,
+    options: CstExtractOptions,
     file_contexts: Sequence[FileContext],
 ) -> FullRepoManager | None:
     if options.repo_root is None:
@@ -1381,7 +1371,7 @@ def _warm_cst_parser() -> None:
 def _cst_row_worker(
     file_ctx: FileContext,
     *,
-    options: CSTExtractOptions,
+    options: CstExtractOptions,
     evidence_plan: EvidencePlan | None,
 ) -> dict[str, object] | None:
     repo_manager = _resolve_worker_repo_manager(None)
@@ -1396,7 +1386,7 @@ def _cst_row_worker(
 def _cst_file_row(
     file_ctx: FileContext,
     *,
-    options: CSTExtractOptions,
+    options: CstExtractOptions,
     evidence_plan: EvidencePlan | None,
     repo_manager: FullRepoManager | None,
 ) -> dict[str, object] | None:
@@ -1441,7 +1431,7 @@ class _CstRowRequest:
     repo_files: TableLike
     file_contexts: Iterable[FileContext] | None
     scope_manifest: ScopeManifest | None
-    options: CSTExtractOptions
+    options: CstExtractOptions
     evidence_plan: EvidencePlan | None
     runtime_profile: DataFusionRuntimeProfile | None
 
@@ -1537,7 +1527,7 @@ class _CstBatchContext:
     repo_files: TableLike
     file_contexts: Iterable[FileContext] | None
     scope_manifest: ScopeManifest | None
-    options: CSTExtractOptions
+    options: CstExtractOptions
     evidence_plan: EvidencePlan | None
     runtime_profile: DataFusionRuntimeProfile | None
     batch_size: int
@@ -1622,7 +1612,7 @@ def _iter_cst_batches_for_contexts(
         yield batch
 
 
-def _resolve_batch_size(options: CSTExtractOptions) -> int | None:
+def _resolve_batch_size(options: CstExtractOptions) -> int | None:
     if options.batch_size is None:
         return None
     if options.batch_size <= 0:
@@ -1633,18 +1623,18 @@ def _resolve_batch_size(options: CSTExtractOptions) -> int | None:
 
 def extract_cst(
     repo_files: TableLike,
-    options: CSTExtractOptions | None = None,
+    options: CstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> CSTExtractResult:
+) -> CstExtractResult:
     """Extract LibCST-derived structures from repo files.
 
     Returns
     -------
-    CSTExtractResult
+    CstExtractResult
         Tables derived from LibCST parsing and metadata providers.
     """
-    normalized_options = normalize_options("cst", options, CSTExtractOptions)
+    normalized_options = normalize_options("cst", options, CstExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
     exec_context = replace(exec_context, session=session)
@@ -1687,7 +1677,7 @@ def extract_cst(
         evidence_plan=exec_context.evidence_plan,
         session=session,
     )
-    return CSTExtractResult(
+    return CstExtractResult(
         libcst_files=materialize_extract_plan(
             "libcst_files_v1",
             plan,
@@ -1703,7 +1693,7 @@ def extract_cst(
 
 def extract_cst_plans(
     repo_files: TableLike,
-    options: CSTExtractOptions | None = None,
+    options: CstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
 ) -> dict[str, DataFusionPlanBundle]:
@@ -1714,7 +1704,7 @@ def extract_cst_plans(
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by ``libcst_files``.
     """
-    normalized_options = normalize_options("cst", options, CSTExtractOptions)
+    normalized_options = normalize_options("cst", options, CstExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
     exec_context = replace(exec_context, session=session)
@@ -1762,7 +1752,7 @@ def extract_cst_plans(
 
 class _CstTablesKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: CSTExtractOptions | None
+    options: CstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1773,7 +1763,7 @@ class _CstTablesKwargs(TypedDict, total=False):
 
 class _CstTablesKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: CSTExtractOptions | None
+    options: CstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1784,7 +1774,7 @@ class _CstTablesKwargsTable(TypedDict, total=False):
 
 class _CstTablesKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
-    options: CSTExtractOptions | None
+    options: CstExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     scope_manifest: ScopeManifest | None
@@ -1828,7 +1818,7 @@ def extract_cst_tables(
         attributes={"codeanatomy.extractor": "cst"},
     ):
         repo_files = kwargs["repo_files"]
-        normalized_options = normalize_options("cst", kwargs.get("options"), CSTExtractOptions)
+        normalized_options = normalize_options("cst", kwargs.get("options"), CstExtractOptions)
         file_contexts = kwargs.get("file_contexts")
         evidence_plan = kwargs.get("evidence_plan")
         profile = kwargs.get("profile", "default")

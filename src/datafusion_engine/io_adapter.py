@@ -16,6 +16,7 @@ import pyarrow.dataset as ds
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.arrow_schema.coercion import storage_schema
 from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.introspection import invalidate_introspection_cache
 
@@ -24,36 +25,6 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
-
-
-def _storage_type(data_type: pa.DataType) -> pa.DataType:
-    if isinstance(data_type, pa.ExtensionType):
-        return _storage_type(data_type.storage_type)
-    if pa.types.is_struct(data_type):
-        fields = [_storage_field(field) for field in data_type]
-        return pa.struct(fields)
-    if pa.types.is_list(data_type):
-        value_field = data_type.value_field
-        value = _storage_type(value_field.type)
-        return pa.list_(pa.field(value_field.name, value, nullable=value_field.nullable))
-    if pa.types.is_large_list(data_type):
-        value_field = data_type.value_field
-        value = _storage_type(value_field.type)
-        return pa.large_list(pa.field(value_field.name, value, nullable=value_field.nullable))
-    if pa.types.is_map(data_type):
-        key_type = _storage_type(data_type.key_type)
-        item_type = _storage_type(data_type.item_type)
-        return pa.map_(key_type, item_type, keys_sorted=data_type.keys_sorted)
-    return data_type
-
-
-def _storage_field(field: pa.Field) -> pa.Field:
-    return pa.field(field.name, _storage_type(field.type), nullable=field.nullable)
-
-
-def _storage_schema(schema: pa.Schema) -> pa.Schema:
-    fields = [_storage_field(field) for field in schema]
-    return pa.schema(fields)
 
 
 def _convert_struct_array(array: pa.StructArray, target_type: pa.StructType) -> pa.StructArray:
@@ -105,7 +76,7 @@ def _convert_chunked_array(column: pa.ChunkedArray, target_type: pa.DataType) ->
 
 
 def _datafusion_compatible_table(table: pa.Table) -> pa.Table:
-    target_schema = _storage_schema(table.schema)
+    target_schema = storage_schema(table.schema)
     arrays = [
         _convert_chunked_array(table.column(field.name), field.type) for field in target_schema
     ]

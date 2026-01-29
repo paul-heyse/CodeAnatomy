@@ -15,6 +15,7 @@ from opentelemetry.trace import Link, Span
 
 from obs.otel.attributes import normalize_attributes
 from obs.otel.metrics import record_error, record_stage_duration, record_task_duration
+from obs.otel.run_context import get_run_id
 from obs.otel.scopes import scope_for_layer
 from obs.otel.tracing import get_tracer, root_span_link, set_span_attributes
 
@@ -127,9 +128,13 @@ class OtelPlanHook(lifecycle_api.GraphExecutionHook):
         """Start a graph execution span for the Hamilton run."""
         _ = kwargs
         tracer = get_tracer(scope_for_layer("execution"))
+        attributes: dict[str, object] = {"run_id": run_id, "hamilton.execution_run_id": run_id}
+        pipeline_run_id = get_run_id()
+        if pipeline_run_id is not None:
+            attributes["codeanatomy.run_id"] = pipeline_run_id
         span = tracer.start_span(
             "hamilton.graph",
-            attributes=normalize_attributes({"run_id": run_id}),
+            attributes=normalize_attributes(attributes),
         )
         token = context.attach(trace.set_span_in_context(span))
         self.run_span = span
@@ -143,7 +148,11 @@ class OtelPlanHook(lifecycle_api.GraphExecutionHook):
         if span is None or token is None:
             return
         context.detach(token)
-        set_span_attributes(span, {"run_id": run_id})
+        attributes: dict[str, object] = {"run_id": run_id, "hamilton.execution_run_id": run_id}
+        pipeline_run_id = get_run_id()
+        if pipeline_run_id is not None:
+            attributes["codeanatomy.run_id"] = pipeline_run_id
+        set_span_attributes(span, attributes)
         span.end()
 
 
@@ -171,6 +180,10 @@ def _span_attributes(
         "run_id": run_id,
         "node_name": node_name,
     }
+    pipeline_run_id = get_run_id()
+    if pipeline_run_id is not None:
+        attributes["codeanatomy.run_id"] = pipeline_run_id
+    attributes["hamilton.execution_run_id"] = run_id
     if task_id is not None:
         attributes["task_id"] = task_id
     for key in (

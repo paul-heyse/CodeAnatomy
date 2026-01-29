@@ -11,6 +11,7 @@ from datafusion import SessionContext
 import datafusion_ext
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
+from utils.validation import find_missing
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
@@ -180,7 +181,7 @@ def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
 
 
 def _validate_required_snapshot_keys(snapshot: Mapping[str, object]) -> None:
-    missing = [key for key in _REQUIRED_SNAPSHOT_KEYS if key not in snapshot]
+    missing = find_missing(_REQUIRED_SNAPSHOT_KEYS, snapshot)
     if missing:
         msg = f"Rust UDF snapshot missing required keys: {missing}."
         raise ValueError(msg)
@@ -295,7 +296,7 @@ def validate_required_udfs(
     if not required:
         return
     names = _snapshot_names(snapshot)
-    missing = [name for name in required if name not in names]
+    missing = find_missing(required, names)
     if missing:
         msg = f"Missing required Rust UDFs: {sorted(missing)}."
         raise ValueError(msg)

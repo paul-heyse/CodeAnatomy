@@ -18,7 +18,7 @@ from serde_msgspec import (
     to_builtins,
     validation_error_payload,
 )
-from utils.hashing import hash_msgpack_canonical
+from utils.hashing import hash_msgpack_canonical, hash_settings
 
 if TYPE_CHECKING:
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -107,15 +107,6 @@ class DataFusionViewArtifact:
 _PLAN_TASK_SIGNATURE_VERSION = 2
 
 
-def _hash_payload(payload: object) -> str:
-    return hash_msgpack_canonical(payload)
-
-
-def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
-    entries = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
-    return _hash_payload(entries)
-
-
 def _delta_inputs_payload(
     bundle: DataFusionPlanBundle,
 ) -> tuple[tuple[str, int | None, str | None], ...]:
@@ -131,9 +122,7 @@ def _delta_inputs_payload(
 def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | None) -> str:
     artifacts = bundle.artifacts
     df_settings_hash = (
-        _df_settings_hash(artifacts.df_settings)
-        if isinstance(artifacts.df_settings, Mapping)
-        else ""
+        hash_settings(artifacts.df_settings) if isinstance(artifacts.df_settings, Mapping) else ""
     )
     payload = (
         ("version", _PLAN_TASK_SIGNATURE_VERSION),
@@ -151,7 +140,7 @@ def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | No
         ("required_rewrite_tags", tuple(sorted(bundle.required_rewrite_tags))),
         ("delta_inputs", _delta_inputs_payload(bundle)),
     )
-    return _hash_payload(payload)
+    return hash_msgpack_canonical(payload)
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,12 @@ from serde_msgspec_ext import (
     OptimizedPlanProtoBytes,
 )
 from serde_schema_registry import schema_contract_hash
-from utils.hashing import hash_json_default, hash_msgpack_canonical, hash_sha256_hex
+from utils.hashing import (
+    hash_json_default,
+    hash_msgpack_canonical,
+    hash_settings,
+    hash_sha256_hex,
+)
 
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
@@ -1060,7 +1065,7 @@ def _bundle_components(
                 profile=options.session_runtime.profile,
             )
         )
-        plan_identity_hash = _payload_hash(plan_identity_payload)
+        plan_identity_hash = hash_json_default(plan_identity_payload, str_keys=True)
     detail_inputs = PlanDetailInputs(
         artifacts=artifacts,
         plan_fingerprint=fingerprint,
@@ -1247,11 +1252,6 @@ def _plan_identity_payload(inputs: _PlanIdentityInputs) -> Mapping[str, object]:
         "profile_settings_hash": inputs.profile.settings_hash(),
         "profile_context_key": inputs.profile.context_cache_key(),
     }
-
-
-def _payload_hash(payload: object) -> str:
-    _ = to_builtins
-    return hash_json_default(payload, str_keys=True)
 
 
 def _safe_logical_plan(df: DataFrame) -> object | None:
@@ -2000,16 +2000,11 @@ def _determinism_audit_bundle(
         "planning_env_hash": artifacts.planning_env_hash,
         "rulepack_hash": artifacts.rulepack_hash,
         "information_schema_hash": context.information_schema_hash,
-        "df_settings_hash": _settings_hash(artifacts.df_settings),
+        "df_settings_hash": hash_settings(artifacts.df_settings),
         "udf_snapshot_hash": artifacts.udf_snapshot_hash,
         "function_registry_hash": artifacts.function_registry_hash,
         "schema_contract_hash": schema_contract_hash(),
     }
-
-
-def _settings_hash(df_settings: Mapping[str, str]) -> str:
-    payload = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
-    return hash_msgpack_canonical(payload)
 
 
 def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:

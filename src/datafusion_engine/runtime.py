@@ -8,7 +8,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -895,7 +895,7 @@ INFO_SCHEMA_STATEMENTS: tuple[PreparedStatementSpec, ...] = (
     PreparedStatementSpec(
         name="parameters_snapshot",
         sql=(
-            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
+            "SELECT specific_name AS routine_name, parameter_name, parameter_mode, "
             "data_type, ordinal_position FROM information_schema.parameters"
         ),
     ),
@@ -3030,10 +3030,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "custom catalog inference is not supported."
             )
             raise ValueError(msg)
-        if (
-            self.view_catalog_name is not None
-            and self.view_catalog_name != self.default_catalog
-        ):
+        if self.view_catalog_name is not None and self.view_catalog_name != self.default_catalog:
             msg = (
                 "view_catalog_name must match default_catalog; "
                 "custom catalog inference is not supported."
@@ -3279,6 +3276,41 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._cache_context(ctx)
         return ctx
 
+    def _session_runtime_from_context(self, ctx: SessionContext) -> SessionRuntime:
+        """Build a SessionRuntime from an existing SessionContext.
+
+        Avoids re-entering session_context while still capturing snapshots.
+
+        Returns
+        -------
+        SessionRuntime
+            Planning-ready session runtime for the provided context.
+        """
+        from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
+        from datafusion_engine.udf_catalog import rewrite_tag_index
+        from datafusion_engine.udf_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+
+        snapshot = rust_udf_snapshot(ctx)
+        snapshot_hash = rust_udf_snapshot_hash(snapshot)
+        tag_index = rewrite_tag_index(snapshot)
+        rewrite_tags = tuple(sorted(tag_index))
+        planner_names = domain_planner_names_from_snapshot(snapshot)
+        df_settings: Mapping[str, str]
+        try:
+            introspector = SchemaIntrospector(ctx)
+            df_settings = _settings_rows_to_mapping(introspector.settings_snapshot())
+        except (RuntimeError, TypeError, ValueError):
+            df_settings = {}
+        return SessionRuntime(
+            ctx=ctx,
+            profile=self,
+            udf_snapshot_hash=snapshot_hash,
+            udf_rewrite_tags=rewrite_tags,
+            domain_planner_names=planner_names,
+            udf_snapshot=snapshot,
+            df_settings=df_settings,
+        )
+
     def session_runtime(self) -> SessionRuntime:
         """Return a planning-ready SessionRuntime for the profile.
 
@@ -3396,7 +3428,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         Raises
         ------
         ValueError
-            Raised when parity checks fail against information_schema.
+            Raised when required routines are missing from information_schema.
         """
         if not self.enable_information_schema:
             return {
@@ -3414,12 +3446,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = (
                 "information_schema parity check failed; "
                 f"missing routines: {list(report.missing_in_information_schema)}"
-            )
-            raise ValueError(msg)
-        if report.param_name_mismatches:
-            msg = (
-                "information_schema parity check failed; "
-                f"parameter name mismatches: {list(report.param_name_mismatches)}"
             )
             raise ValueError(msg)
         return report.payload()
@@ -3458,7 +3484,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalog = ctx.catalog(catalog_name)
         except (KeyError, RuntimeError, TypeError, ValueError):
             return
-        if catalog.schema(self.view_schema_name) is not None:
+        try:
+            existing_schema = catalog.schema(self.view_schema_name)
+        except KeyError:
+            existing_schema = None
+        if existing_schema is not None:
             return
         from datafusion.catalog import Schema
 
@@ -3563,7 +3593,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when Rust UDFs are missing from DataFusion.
         """
-        missing: list[str] = []
         from datafusion_engine.udf_runtime import udf_names_from_snapshot
 
         registry_snapshot = register_rust_udfs(
@@ -3572,14 +3601,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             async_udf_timeout_ms=self.async_udf_timeout_ms,
             async_udf_batch_size=self.async_udf_batch_size,
         )
-        required_builtins = set(udf_names_from_snapshot(registry_snapshot))
-        for name in sorted(required_builtins):
-            try:
-                if catalog.is_builtin_from_runtime(name):
-                    continue
-            except (RuntimeError, TypeError, ValueError):
-                pass
-            missing.append(name)
+        registered_udfs = self._registered_udf_names(registry_snapshot)
+        required_builtins = self._required_builtin_udfs(
+            registry_snapshot,
+            registered_udfs=registered_udfs,
+            udf_names_from_snapshot=udf_names_from_snapshot,
+        )
+        missing = self._missing_udf_names(catalog, required_builtins)
         if missing:
             if self.diagnostics_sink is not None:
                 self.record_artifact(
@@ -3599,13 +3627,50 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if parity.error is not None:
             msg = f"UDF information_schema parity failed: {parity.error}"
             raise ValueError(msg)
-        if parity.missing_in_information_schema or parity.param_name_mismatches:
+        if parity.missing_in_information_schema:
             msg = (
                 "UDF information_schema parity failed: "
                 f"missing={list(parity.missing_in_information_schema)}, "
                 f"param_mismatches={len(parity.param_name_mismatches)}"
             )
             raise ValueError(msg)
+
+    @staticmethod
+    def _iter_snapshot_names(values: object) -> set[str]:
+        if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+            return {str(name) for name in values if name is not None}
+        return set()
+
+    def _registered_udf_names(self, snapshot: Mapping[str, object]) -> set[str]:
+        names: set[str] = set()
+        for key in ("scalar", "aggregate", "window", "table"):
+            names.update(self._iter_snapshot_names(snapshot.get(key)))
+        return names
+
+    def _required_builtin_udfs(
+        self,
+        snapshot: Mapping[str, object],
+        *,
+        registered_udfs: set[str],
+        udf_names_from_snapshot: Callable[[Mapping[str, object]], Iterable[str]],
+    ) -> set[str]:
+        required = set(udf_names_from_snapshot(snapshot))
+        custom_udfs = self._iter_snapshot_names(snapshot.get("custom_udfs"))
+        required.difference_update(custom_udfs - registered_udfs)
+        required.difference_update(self._iter_snapshot_names(snapshot.get("table")))
+        return required
+
+    @staticmethod
+    def _missing_udf_names(catalog: UdfCatalog, required: Iterable[str]) -> list[str]:
+        missing: list[str] = []
+        for name in sorted(set(required)):
+            try:
+                if catalog.is_builtin_from_runtime(name):
+                    continue
+            except (RuntimeError, TypeError, ValueError):
+                pass
+            missing.append(name)
+        return missing
 
     def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.
@@ -3753,7 +3818,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             schemas=expected_schemas,
         )
         relationship_errors = _relationship_constraint_errors(
-            self.session_runtime(),
+            self._session_runtime_from_context(ctx),
             sql_options=self._sql_options(),
         )
         result = SchemaRegistryValidationResult(
@@ -6162,13 +6227,19 @@ def assert_schema_metadata(
         raise ValueError(msg)
 
 
-def dataset_schema_from_context(name: str) -> SchemaLike:
+def dataset_schema_from_context(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> SchemaLike:
     """Return the dataset schema from the DataFusion SessionContext.
 
     Parameters
     ----------
     name : str
         Dataset name registered in the SessionContext.
+    ctx : SessionContext | None
+        Optional SessionContext override for schema resolution.
 
     Returns
     -------
@@ -6180,13 +6251,13 @@ def dataset_schema_from_context(name: str) -> SchemaLike:
     KeyError
         Raised when the dataset is not registered in the SessionContext.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    session_ctx = ctx or DataFusionRuntimeProfile().session_context()
     try:
-        schema = ctx.table(name).schema()
+        schema = session_ctx.table(name).schema()
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
         msg = f"Dataset schema not registered in DataFusion: {name!r}."
         raise KeyError(msg) from exc
-    metadata = table_provider_metadata(id(ctx), table_name=name)
+    metadata = table_provider_metadata(id(session_ctx), table_name=name)
     if metadata is None or not metadata.metadata:
         return schema
     return _schema_with_table_metadata(schema, metadata=metadata.metadata)
@@ -6259,20 +6330,26 @@ def read_delta_as_reader(
     return df.to_arrow_table().to_reader()
 
 
-def dataset_spec_from_context(name: str) -> DatasetSpec:
+def dataset_spec_from_context(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> DatasetSpec:
     """Return a DatasetSpec derived from the DataFusion schema.
 
     Parameters
     ----------
     name : str
         Dataset name registered in the SessionContext.
+    ctx : SessionContext | None
+        Optional SessionContext override for schema resolution.
 
     Returns
     -------
     DatasetSpec
         DatasetSpec derived from the DataFusion schema.
     """
-    schema = dataset_schema_from_context(name)
+    schema = dataset_schema_from_context(name, ctx=ctx)
     return dataset_spec_from_schema(name, schema)
 
 

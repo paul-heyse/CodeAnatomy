@@ -31,13 +31,13 @@ from datafusion_engine.arrow_schema.build import ColumnDefaultsSpec, ConstExpr
 from datafusion_engine.arrow_schema.chunking import ChunkPolicy
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.expr_udf_shims import stable_hash64
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema_validation import ArrowValidationOptions
-from datafusion_ext import stable_hash64
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:

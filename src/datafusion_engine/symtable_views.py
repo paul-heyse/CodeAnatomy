@@ -8,7 +8,7 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_engine.expr_udf_shims import prefixed_hash_parts64 as prefixed_hash64
 
 MAX_SCOPE_PARENT_DEPTH = 16
 

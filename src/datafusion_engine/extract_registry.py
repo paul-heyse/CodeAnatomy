@@ -16,7 +16,12 @@ from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata
 from datafusion_engine.extract_templates import config
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from schema_spec.system import DatasetSpec, DeltaCdfPolicy, dataset_spec_from_schema
+from schema_spec.system import (
+    DatasetSpec,
+    DeltaCdfPolicy,
+    DeltaMaintenancePolicy,
+    dataset_spec_from_schema,
+)
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 _EXTRACT_DELTA_FEATURES: tuple[
@@ -42,6 +47,14 @@ _EXTRACT_SCHEMA_POLICY = DeltaSchemaPolicy(column_mapping_mode="name")
 _EXTRACT_WRITE_POLICY = DeltaWritePolicy(
     stats_policy="auto",
     enable_features=_EXTRACT_DELTA_FEATURES,
+)
+_EXTRACT_OPTIMIZE_TARGET_BYTES = 256 * 1024 * 1024
+_EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
+    "file_id",
+    "path",
+    "node_id",
+    "edge_id",
+    "span_id",
 )
 
 
@@ -89,13 +102,28 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    spec = dataset_spec_from_schema(name, dataset_schema(name))
+    schema = dataset_schema(name)
+    spec = dataset_spec_from_schema(name, schema)
     return replace(
         spec,
         delta_cdf_policy=_EXTRACT_CDF_POLICY,
+        delta_maintenance_policy=_extract_maintenance_policy(schema),
         delta_write_policy=_EXTRACT_WRITE_POLICY,
         delta_schema_policy=_EXTRACT_SCHEMA_POLICY,
         delta_feature_gate=_EXTRACT_FEATURE_GATE,
+    )
+
+
+def _extract_maintenance_policy(schema: SchemaLike) -> DeltaMaintenancePolicy:
+    resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
+    z_order_cols = tuple(name for name in _EXTRACT_ZORDER_CANDIDATES if name in resolved.names)
+    z_order_when = "after_partition_complete" if z_order_cols else "never"
+    return DeltaMaintenancePolicy(
+        optimize_on_write=True,
+        optimize_target_size=_EXTRACT_OPTIMIZE_TARGET_BYTES,
+        z_order_cols=z_order_cols,
+        z_order_when=z_order_when,
+        vacuum_on_write=False,
     )
 
 

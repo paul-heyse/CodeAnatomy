@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +17,7 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
@@ -25,6 +28,7 @@ from schema_spec.system import DeltaScanOptions
 from storage.deltalake import DeltaCdfOptions, StorageOptions, delta_table_version
 
 if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from incremental.runtime import IncrementalRuntime
     from schema_spec.system import DeltaCdfPolicy
 
@@ -57,6 +61,18 @@ class _CdfReadState:
     inputs: CdfReadInputs
     current_version: int
     cdf_options: DeltaCdfOptions
+
+
+@dataclass(frozen=True)
+class _CdfReadRecord:
+    dataset_name: str
+    dataset_path: str
+    status: str
+    inputs: CdfReadInputs | None
+    state: _CdfReadState | None
+    table: pa.Table | None
+    error: str | None
+    filter_policy: CdfFilterPolicy | None
 
 
 def _resolve_cdf_inputs(
@@ -165,13 +181,40 @@ def read_cdf_changes(
     ValueError
         Raised when Delta CDF is required but unavailable or registration fails.
     """
-    profile_location = context.runtime.profile.dataset_location(dataset_name)
+    profile = context.runtime.profile
+    profile_location = profile.dataset_location(dataset_name)
     cdf_policy = resolve_delta_cdf_policy(profile_location) if profile_location else None
     inputs = _resolve_cdf_inputs(context, dataset_path=dataset_path, dataset_name=dataset_name)
     if inputs is None:
         if cdf_policy is not None and cdf_policy.required:
             msg = f"Delta CDF is required for dataset {dataset_name!r} but is unavailable."
+            _record_cdf_read(
+                profile,
+                record=_CdfReadRecord(
+                    dataset_name=dataset_name,
+                    dataset_path=dataset_path,
+                    status="unavailable",
+                    inputs=None,
+                    state=None,
+                    table=None,
+                    error=msg,
+                    filter_policy=filter_policy,
+                ),
+            )
             raise ValueError(msg)
+        _record_cdf_read(
+            profile,
+            record=_CdfReadRecord(
+                dataset_name=dataset_name,
+                dataset_path=dataset_path,
+                status="unavailable",
+                inputs=None,
+                state=None,
+                table=None,
+                error=None,
+                filter_policy=filter_policy,
+            ),
+        )
         return None
     state = _prepare_cdf_read_state(
         context,
@@ -180,6 +223,19 @@ def read_cdf_changes(
         cursor_store=cursor_store,
     )
     if state is None:
+        _record_cdf_read(
+            profile,
+            record=_CdfReadRecord(
+                dataset_name=dataset_name,
+                dataset_path=dataset_path,
+                status="no_changes",
+                inputs=inputs,
+                state=None,
+                table=None,
+                error=None,
+                filter_policy=filter_policy,
+            ),
+        )
         return None
     with TempTableRegistry(state.runtime) as registry:
         cdf_name = f"__cdf_{uuid.uuid4().hex}"
@@ -202,14 +258,104 @@ def read_cdf_changes(
                 msg = (
                     f"Delta CDF provider registration failed for required dataset {dataset_name!r}."
                 )
+                _record_cdf_read(
+                    profile,
+                    record=_CdfReadRecord(
+                        dataset_name=dataset_name,
+                        dataset_path=dataset_path,
+                        status="error",
+                        inputs=inputs,
+                        state=state,
+                        table=None,
+                        error=msg,
+                        filter_policy=filter_policy,
+                    ),
+                )
                 raise ValueError(msg) from exc
+            _record_cdf_read(
+                profile,
+                record=_CdfReadRecord(
+                    dataset_name=dataset_name,
+                    dataset_path=dataset_path,
+                    status="error",
+                    inputs=inputs,
+                    state=state,
+                    table=None,
+                    error=str(exc),
+                    filter_policy=filter_policy,
+                ),
+            )
             return None
         registry.track(cdf_name)
         table = _read_cdf_table(state.runtime, table_name=cdf_name, filter_policy=filter_policy)
     cursor_store.save_cursor(
         CdfCursor(dataset_name=dataset_name, last_version=state.current_version)
     )
+    _record_cdf_read(
+        profile,
+        record=_CdfReadRecord(
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            status="read",
+            inputs=inputs,
+            state=state,
+            table=table,
+            error=None,
+            filter_policy=filter_policy,
+        ),
+    )
     return CdfReadResult(table=table, updated_version=state.current_version)
+
+
+def _record_cdf_read(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    record: _CdfReadRecord,
+) -> None:
+    change_counts: dict[str, int] | None = None
+    if record.table is not None:
+        change_counts = _cdf_change_counts(record.table)
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "dataset": record.dataset_name,
+        "path": record.dataset_path,
+        "status": record.status,
+        "required": (
+            record.inputs.cdf_policy.required
+            if record.inputs is not None and record.inputs.cdf_policy is not None
+            else False
+        ),
+        "current_version": record.inputs.current_version if record.inputs else None,
+        "starting_version": (
+            record.state.cdf_options.starting_version if record.state is not None else None
+        ),
+        "ending_version": (
+            record.state.cdf_options.ending_version if record.state is not None else None
+        ),
+        "rows": record.table.num_rows if record.table is not None else 0,
+        "change_counts": change_counts,
+        "filter_policy": _cdf_filter_payload(record.filter_policy),
+        "error": record.error,
+    }
+    record_artifact(profile, "incremental_cdf_read_v1", payload)
+
+
+def _cdf_filter_payload(filter_policy: CdfFilterPolicy | None) -> dict[str, bool] | None:
+    if filter_policy is None:
+        return None
+    return {
+        "include_insert": filter_policy.include_insert,
+        "include_update_postimage": filter_policy.include_update_postimage,
+        "include_delete": filter_policy.include_delete,
+    }
+
+
+def _cdf_change_counts(table: pa.Table) -> dict[str, int]:
+    if "_change_type" not in table.column_names:
+        return {}
+    values = table["_change_type"].to_pylist()
+    counts = Counter(value for value in values if value is not None)
+    return {str(key): int(value) for key, value in counts.items()}
 
 
 __all__ = ["CdfReadResult", "read_cdf_changes"]

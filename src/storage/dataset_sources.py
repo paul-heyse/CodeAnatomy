@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TypeGuard, runtime_checkable
@@ -13,7 +13,12 @@ import pyarrow.fs as pafs
 
 from arrow_utils.core.streaming import to_reader
 from core_types import JsonDict
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
+from datafusion_engine.arrow_interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    coerce_table_like,
+)
 
 type PathLike = str | Path
 
@@ -253,34 +258,57 @@ def normalize_dataset_source(
     if resolved.dataset_format == "delta":
         msg = "Delta datasets must be registered via DataFusion TableProvider."
         raise ValueError(msg)
-    if resolved.dataset_format == "parquet":
-        msg = "Parquet dataset sources are not supported in delta-only IO."
-        raise ValueError(msg)
-    dataset: DatasetLike | None = None
-    if _is_dataset_sequence(source):
-        datasets = list(source)
-        if not datasets:
-            msg = "UnionDataset requires at least one dataset."
-            raise ValueError(msg)
-        dataset = union_dataset(datasets)
-    elif isinstance(source, ds.Dataset) or is_one_shot_dataset(source):
-        dataset = source
-    elif isinstance(source, _DatasetFactory):
-        builder = source
-        dataset = builder.build(schema=resolved.schema)
-    elif isinstance(source, TableLike):
-        dataset = ds.dataset(source, schema=resolved.schema)
-    elif isinstance(source, RecordBatchReaderLike) or _has_arrow_capsule(source):
-        reader = to_reader(source, schema=resolved.schema)
-        dataset = OneShotDataset.from_reader(reader)
-    else:
-        path = _coerce_pathlike(source)
-        file_format = _resolve_file_format(resolved)
-        dataset = _dataset_from_path(path, options=resolved, file_format=file_format)
+    dataset = _dataset_from_inputs(source, options=resolved)
     if dataset is None:
         msg = "Failed to normalize dataset source."
         raise ValueError(msg)
     return dataset
+
+
+def _dataset_from_inputs(
+    source: PathLike | DatasetLike | _DatasetFactory | TableLike | RecordBatchReaderLike | object,
+    *,
+    options: DatasetSourceOptions,
+) -> DatasetLike | None:
+    dataset: DatasetLike | None = None
+    if _is_dataset_sequence(source):
+        dataset = _dataset_from_sequence(source)
+    elif isinstance(source, ds.Dataset) or is_one_shot_dataset(source):
+        dataset = source
+    elif isinstance(source, _DatasetFactory):
+        dataset = source.build(schema=options.schema)
+    elif isinstance(source, TableLike):
+        dataset = ds.dataset(source, schema=options.schema)
+    elif isinstance(source, RecordBatchReaderLike):
+        reader = to_reader(source, schema=options.schema)
+        dataset = OneShotDataset.from_reader(reader)
+    elif _has_arrow_capsule(source):
+        dataset = _dataset_from_capsule(source, options=options)
+    else:
+        path = _coerce_pathlike(source)
+        file_format = _resolve_file_format(options)
+        dataset = _dataset_from_path(path, options=options, file_format=file_format)
+    return dataset
+
+
+def _dataset_from_sequence(source: Iterable[DatasetLike]) -> DatasetLike:
+    datasets = list(source)
+    if not datasets:
+        msg = "UnionDataset requires at least one dataset."
+        raise ValueError(msg)
+    return union_dataset(datasets)
+
+
+def _dataset_from_capsule(
+    source: object,
+    *,
+    options: DatasetSourceOptions,
+) -> DatasetLike:
+    coerced = coerce_table_like(source, requested_schema=options.schema)
+    if isinstance(coerced, RecordBatchReaderLike):
+        reader = to_reader(coerced, schema=options.schema)
+        return OneShotDataset.from_reader(reader)
+    return ds.dataset(coerced, schema=options.schema)
 
 
 def _coerce_pathlike(source: object) -> PathLike:

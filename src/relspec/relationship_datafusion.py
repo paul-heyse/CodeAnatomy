@@ -17,7 +17,7 @@ from cpg.kind_catalog import (
     EDGE_KIND_PY_IMPORTS_SYMBOL,
     EDGE_KIND_PY_REFERENCES_SYMBOL,
 )
-from datafusion_ext import stable_id_parts
+from datafusion_engine.expr_udf_shims import stable_id_parts
 
 
 def build_rel_name_symbol_df(

@@ -14,6 +14,12 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.expr_udf_shims import (
+    span_make,
+    stable_id_parts,
+    utf8_normalize,
+    utf8_null_if_blank,
+)
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -28,7 +34,6 @@ from datafusion_engine.plan_bundle import (
 )
 from datafusion_engine.runtime import SessionRuntime
 from datafusion_engine.sql_guard import safe_sql
-from datafusion_ext import span_make, stable_id_parts, utf8_normalize, utf8_null_if_blank
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

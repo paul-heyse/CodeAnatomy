@@ -273,7 +273,9 @@ def function_factory_policy_from_snapshot(
     from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
     from datafusion_engine.udf_catalog import datafusion_udf_specs
 
-    specs = datafusion_udf_specs(registry_snapshot=snapshot)
+    specs = tuple(
+        spec for spec in datafusion_udf_specs(registry_snapshot=snapshot) if spec.kind == "scalar"
+    )
     primitives = tuple(_rule_primitive_from_spec(spec) for spec in specs)
     param_names = snapshot.get("parameter_names")
     prefer_named = isinstance(param_names, Mapping) and bool(param_names)

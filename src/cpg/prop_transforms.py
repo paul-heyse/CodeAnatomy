@@ -6,7 +6,7 @@ from datafusion import functions as f
 from datafusion import lit
 from datafusion.expr import Expr
 
-from datafusion_ext import utf8_normalize, utf8_null_if_blank
+from datafusion_engine.expr_udf_shims import utf8_normalize, utf8_null_if_blank
 
 
 def expr_context_value(value: object) -> str | None:

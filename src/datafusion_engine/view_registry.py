@@ -14,14 +14,7 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.schema_registry import (
-    SCIP_VIEW_NAMES,
-    extract_nested_dataset_names,
-    nested_base_df,
-)
-from datafusion_engine.view_graph_registry import ViewNode
-from datafusion_ext import (
+from datafusion_engine.expr_udf_shims import (
     arrow_metadata,
     list_extract,
     map_entries,
@@ -32,8 +25,16 @@ from datafusion_ext import (
     union_extract,
     union_tag,
 )
-from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
-from datafusion_ext import stable_id_parts as stable_id
+from datafusion_engine.expr_udf_shims import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_engine.expr_udf_shims import stable_id_parts as stable_id
+from datafusion_engine.schema_introspection import table_names_snapshot
+from datafusion_engine.schema_registry import (
+    SCIP_VIEW_NAMES,
+    extract_nested_dataset_names,
+    nested_base_df,
+    nested_path_for,
+)
+from datafusion_engine.view_graph_registry import ViewNode
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 
 if TYPE_CHECKING:
@@ -2754,6 +2755,49 @@ def _register_builder_map() -> dict[str, Callable[[SessionContext], DataFrame]]:
 
 _CUSTOM_BUILDERS: Final[dict[str, Callable[[SessionContext], DataFrame]]] = _register_builder_map()
 
+_CUSTOM_VIEW_DEPENDENCIES: Final[dict[str, tuple[str, ...]]] = {
+    "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
+    "ts_ast_calls_check": ("ts_calls", "ast_calls"),
+    "ts_ast_defs_check": ("ts_defs", "ast_defs"),
+    "ts_ast_imports_check": ("ts_imports", "ast_imports"),
+    "ts_cst_docstrings_check": ("ts_docstrings", "cst_docstrings"),
+}
+
+
+def _resolve_root_table(name: str) -> str:
+    visited: set[str] = set()
+    current = name
+    while True:
+        if current in visited:
+            msg = f"Cycle detected while resolving base table for view {name!r}."
+            raise ValueError(msg)
+        visited.add(current)
+        if current in NESTED_VIEW_NAMES:
+            root, _path = nested_path_for(current)
+            return root
+        base_table = (
+            VIEW_BASE_TABLE.get(current)
+            or ATTRS_VIEW_BASE.get(current)
+            or MAP_KEYS_VIEW_BASE.get(current)
+            or MAP_VALUES_VIEW_BASE.get(current)
+            or CST_SPAN_UNNEST_BASE.get(current)
+        )
+        if base_table is None:
+            return current
+        current = base_table
+
+
+def _required_root_tables(name: str) -> tuple[str, ...]:
+    dependencies = _CUSTOM_VIEW_DEPENDENCIES.get(name)
+    if dependencies is None:
+        return (_resolve_root_table(name),)
+    roots = {_resolve_root_table(dep) for dep in dependencies}
+    return tuple(sorted(roots))
+
+
+def _required_roots_available(ctx: SessionContext, name: str) -> bool:
+    return all(ctx.table_exist(root) for root in _required_root_tables(name))
+
 
 def registry_view_specs(
     ctx: SessionContext,
@@ -2778,6 +2822,8 @@ def registry_view_specs(
     specs: list[ViewSpec] = []
     for name in sorted(VIEW_SELECT_EXPRS):
         if name in excluded:
+            continue
+        if not _required_roots_available(ctx, name):
             continue
         builder = partial(_view_df, name=name)
         specs.append(

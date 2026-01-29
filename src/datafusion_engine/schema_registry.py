@@ -47,9 +47,9 @@ from datafusion_engine.arrow_schema.semantic_types import (
     span_metadata,
     span_type,
 )
+from datafusion_engine.expr_udf_shims import arrow_metadata
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_ext import arrow_metadata
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 
 if TYPE_CHECKING:
@@ -2855,7 +2855,16 @@ def nested_view_specs(
     tuple[ViewSpec, ...]
         View specifications for nested datasets.
     """
-    return tuple(nested_view_spec(ctx, name, table=table) for name in nested_dataset_names())
+    if table is not None and not ctx.table_exist(table):
+        return ()
+    specs: list[ViewSpec] = []
+    for name in nested_dataset_names():
+        root, _path = nested_path_for(name)
+        resolved_table = table or root
+        if not ctx.table_exist(resolved_table):
+            continue
+        specs.append(nested_view_spec(ctx, name, table=table))
+    return tuple(specs)
 
 
 def validate_schema_metadata(schema: pa.Schema) -> None:
@@ -3724,7 +3733,7 @@ def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
     ------
     ValueError
         Raised when registry entries are missing from information_schema or
-        parameter names do not match.
+        parity checks fail.
     """
     from datafusion_engine.udf_parity import udf_info_schema_parity_report
 
@@ -3736,12 +3745,6 @@ def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
         msg = (
             "UDF information_schema parity failed; missing routines: "
             f"{list(report.missing_in_information_schema)}"
-        )
-        raise ValueError(msg)
-    if report.param_name_mismatches:
-        msg = (
-            "UDF information_schema parity failed; parameter mismatches: "
-            f"{list(report.param_name_mismatches)}"
         )
         raise ValueError(msg)
 

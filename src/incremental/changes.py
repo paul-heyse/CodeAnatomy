@@ -111,7 +111,7 @@ def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
     Expr
         Filter predicate for the specified CDF change types.
     """
-    from datafusion_ext import cdf_is_delete, cdf_is_upsert
+    from datafusion_engine.expr_udf_shims import cdf_is_delete, cdf_is_upsert
 
     change_type_col = col("_change_type")
     upsert_types = {

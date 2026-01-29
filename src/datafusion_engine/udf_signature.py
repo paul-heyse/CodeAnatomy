@@ -22,6 +22,8 @@ _SIMPLE_TYPES: Mapping[str, pa.DataType] = {
     "float64": pa.float64(),
     "float": pa.float32(),
     "double": pa.float64(),
+    "binary": pa.binary(),
+    "largebinary": pa.large_binary(),
     "string": pa.string(),
     "utf8": pa.string(),
     "largeutf8": pa.large_string(),

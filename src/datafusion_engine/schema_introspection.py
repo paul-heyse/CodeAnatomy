@@ -530,7 +530,7 @@ def _information_schema_table(
     query = f"select * from information_schema.{name}"
     resolved_options = sql_options or _read_only_sql_options()
     try:
-        df = ctx.sql(query, options=resolved_options)
+        df = ctx.sql_with_options(query, resolved_options)
         return df.to_arrow_table()
     except (RuntimeError, TypeError, ValueError, AttributeError, panic_exception_type):
         return None

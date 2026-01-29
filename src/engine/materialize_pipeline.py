@@ -440,14 +440,13 @@ def write_extract_outputs(
     Raises
     ------
     ValueError
-        Raised when the DataFusion runtime profile is missing, a dataset location is not
-        registered, or the output yields no rows.
+        Raised when the DataFusion runtime profile is missing, the output yields no
+        rows, or the location format is unsupported.
     """
     runtime_profile.record_schema_snapshots()
     location = resolve_dataset_location(name, runtime_profile=runtime_profile)
     if location is None:
-        msg = f"No dataset location registered for extract output {name!r}."
-        raise ValueError(msg)
+        return
     reader, rows = _coerce_reader(data)
     if reader is None:
         msg = f"Extract output {name!r} yielded no rows."

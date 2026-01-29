@@ -27,6 +27,7 @@ from datafusion_engine.arrow_interop import (
     ArrayLike,
     DataTypeLike,
     FieldLike,
+    ScalarLike,
     SchemaLike,
     TableLike,
 )
@@ -46,7 +47,6 @@ from storage.ipc_utils import ipc_hash, ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
     from arrow_utils.core.expr_types import ScalarValue
-    from datafusion_engine.arrow_interop import ScalarLike
     from schema_spec.specs import TableSchemaSpec
 
 _POSITION_COLS: tuple[str, ...] = (

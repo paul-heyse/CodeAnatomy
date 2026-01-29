@@ -12,8 +12,8 @@ import pyarrow as pa
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
+from datafusion_engine.expr_udf_shims import list_extract, map_extract
 from datafusion_engine.introspection import invalidate_introspection_cache
-from datafusion_ext import list_extract, map_extract
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

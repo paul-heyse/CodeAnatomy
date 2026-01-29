@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from functools import cache
+from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
@@ -18,83 +19,157 @@ from schema_spec.system import (
     make_contract_spec,
 )
 
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
 RELATIONSHIP_SCHEMA_VERSION: int = 1
 
 
 @cache
-def rel_name_symbol_spec() -> DatasetSpec:
+def _rel_name_symbol_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("rel_name_symbol_v1")
+
+
+def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for name-to-symbol relationships.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for name-to-symbol relationship rows.
     """
-    return dataset_spec_from_context("rel_name_symbol_v1")
+    if ctx is None:
+        return _rel_name_symbol_spec_cached()
+    return dataset_spec_from_context("rel_name_symbol_v1", ctx=ctx)
 
 
 @cache
-def rel_import_symbol_spec() -> DatasetSpec:
+def _rel_import_symbol_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("rel_import_symbol_v1")
+
+
+def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for import-to-symbol relationships.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for import-to-symbol relationship rows.
     """
-    return dataset_spec_from_context("rel_import_symbol_v1")
+    if ctx is None:
+        return _rel_import_symbol_spec_cached()
+    return dataset_spec_from_context("rel_import_symbol_v1", ctx=ctx)
 
 
 @cache
-def rel_def_symbol_spec() -> DatasetSpec:
+def _rel_def_symbol_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("rel_def_symbol_v1")
+
+
+def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for definition-to-symbol relationships.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for definition-to-symbol relationship rows.
     """
-    return dataset_spec_from_context("rel_def_symbol_v1")
+    if ctx is None:
+        return _rel_def_symbol_spec_cached()
+    return dataset_spec_from_context("rel_def_symbol_v1", ctx=ctx)
 
 
 @cache
-def rel_callsite_symbol_spec() -> DatasetSpec:
+def _rel_callsite_symbol_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("rel_callsite_symbol_v1")
+
+
+def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for callsite-to-symbol relationships.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for callsite-to-symbol relationship rows.
     """
-    return dataset_spec_from_context("rel_callsite_symbol_v1")
+    if ctx is None:
+        return _rel_callsite_symbol_spec_cached()
+    return dataset_spec_from_context("rel_callsite_symbol_v1", ctx=ctx)
 
 
 @cache
-def rel_callsite_qname_spec() -> DatasetSpec:
+def _rel_callsite_qname_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("rel_callsite_qname_v1")
+
+
+def rel_callsite_qname_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for callsite-to-qname relationships.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for callsite-to-qname relationship rows.
     """
-    return dataset_spec_from_context("rel_callsite_qname_v1")
+    if ctx is None:
+        return _rel_callsite_qname_spec_cached()
+    return dataset_spec_from_context("rel_callsite_qname_v1", ctx=ctx)
 
 
 @cache
-def relation_output_spec() -> DatasetSpec:
+def _relation_output_spec_cached() -> DatasetSpec:
+    return dataset_spec_from_context("relation_output_v1")
+
+
+def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """Return the dataset spec for canonical relationship outputs.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     DatasetSpec
         Dataset spec for relation_output rows.
     """
-    return dataset_spec_from_context("relation_output_v1")
+    if ctx is None:
+        return _relation_output_spec_cached()
+    return dataset_spec_from_context("relation_output_v1", ctx=ctx)
 
 
-def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:
+def relationship_dataset_specs(ctx: SessionContext | None = None) -> tuple[DatasetSpec, ...]:
     """Return relationship dataset specs.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
@@ -102,29 +177,34 @@ def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:
         Relationship dataset specs sorted by name.
     """
     specs = (
-        rel_name_symbol_spec(),
-        rel_import_symbol_spec(),
-        rel_def_symbol_spec(),
-        rel_callsite_symbol_spec(),
-        rel_callsite_qname_spec(),
-        relation_output_spec(),
+        rel_name_symbol_spec(ctx),
+        rel_import_symbol_spec(ctx),
+        rel_def_symbol_spec(ctx),
+        rel_callsite_symbol_spec(ctx),
+        rel_callsite_qname_spec(ctx),
+        relation_output_spec(ctx),
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))
 
 
-def relationship_contract_spec() -> ContractCatalogSpec:
+def relationship_contract_spec(ctx: SessionContext | None = None) -> ContractCatalogSpec:
     """Build the contract spec catalog for relationship datasets.
+
+    Parameters
+    ----------
+    ctx:
+        Optional SessionContext to resolve the schema.
 
     Returns
     -------
     ContractCatalogSpec
         Contract catalog for relationship datasets.
     """
-    rel_name_symbol = rel_name_symbol_spec()
-    rel_import_symbol = rel_import_symbol_spec()
-    rel_def_symbol = rel_def_symbol_spec()
-    rel_callsite_symbol = rel_callsite_symbol_spec()
-    rel_callsite_qname = rel_callsite_qname_spec()
+    rel_name_symbol = rel_name_symbol_spec(ctx)
+    rel_import_symbol = rel_import_symbol_spec(ctx)
+    rel_def_symbol = rel_def_symbol_spec(ctx)
+    rel_callsite_symbol = rel_callsite_symbol_spec(ctx)
+    rel_callsite_qname = rel_callsite_qname_spec(ctx)
     return ContractCatalogSpec(
         contracts={
             "rel_name_symbol_v1": make_contract_spec(
@@ -250,8 +330,8 @@ def _constraint_key_sets(rows: Sequence[Mapping[str, object]]) -> list[tuple[str
     ]
 
 
-def _expected_dedupe_keys() -> dict[str, tuple[str, ...]]:
-    contracts = relationship_contract_spec().contracts
+def _expected_dedupe_keys(ctx: SessionContext | None) -> dict[str, tuple[str, ...]]:
+    contracts = relationship_contract_spec(ctx=ctx).contracts
     return {
         name: contract.dedupe.keys
         for name, contract in contracts.items()
@@ -271,7 +351,10 @@ def relationship_constraint_errors(
     dict[str, object]
         Mapping of dataset name to constraint error details.
     """
-    expected = _expected_dedupe_keys()
+    try:
+        expected = _expected_dedupe_keys(session_runtime.ctx)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return {}
     if not expected:
         return {}
     errors: dict[str, object] = {}

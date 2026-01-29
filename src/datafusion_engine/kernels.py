@@ -749,7 +749,7 @@ def _interval_best_matches(
     cfg: IntervalAlignOptions,
     right_name_map: Mapping[str, str],
 ) -> DataFrame:
-    from datafusion_ext import interval_align_score
+    from datafusion_engine.expr_udf_shims import interval_align_score
 
     left_start = _normalize_span_expr(cfg.left_start_col)
     left_end = _normalize_span_expr(cfg.left_end_col)

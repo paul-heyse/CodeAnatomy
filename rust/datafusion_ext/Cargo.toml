@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "datafusion_ext"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 arrow = "57.1.0"

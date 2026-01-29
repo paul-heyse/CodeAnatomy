@@ -136,6 +136,8 @@ def udf_info_schema_parity_report(
     """
     resolved_snapshot = snapshot or rust_udf_snapshot(ctx)
     registry_names = _rust_function_names(resolved_snapshot)
+    table_names = _rust_table_function_names(resolved_snapshot)
+    registry_names.difference_update(table_names)
     try:
         from datafusion_engine.introspection import introspection_cache_for_ctx
     except ImportError as exc:
@@ -182,8 +184,15 @@ def udf_info_schema_parity_report(
             error="information_schema.parameters unavailable",
         )
     param_rows = list(parameters_table.to_pylist())
+    registry_params = _rust_param_names(resolved_snapshot)
+    allowed_names = {name.lower() for name in registry_names}
+    filtered_params = {
+        name: params
+        for name, params in registry_params.items()
+        if name.lower() in info_names and name.lower() in allowed_names
+    }
     param_mismatches = _parameter_name_mismatches(
-        registry_params=_rust_param_names(resolved_snapshot),
+        registry_params=filtered_params,
         routines=routines,
         parameters=param_rows,
     )
@@ -199,20 +208,38 @@ def udf_info_schema_parity_report(
 def _rust_function_names(snapshot: Mapping[str, object]) -> set[str]:
     names: set[str] = set()
     for key in ("scalar", "aggregate", "window", "table"):
-        values = snapshot.get(key)
-        if isinstance(values, Iterable):
-            for value in values:
-                if value is None:
-                    continue
-                names.add(str(value))
-    aliases = snapshot.get("aliases")
-    if isinstance(aliases, Mapping):
-        for alias, target in aliases.items():
-            if alias is not None:
-                names.add(str(alias))
-            if target is not None:
-                names.add(str(target))
+        names.update(_iter_snapshot_names(snapshot.get(key)))
+    names.update(_alias_names(snapshot.get("aliases")))
     return names
+
+
+def _iter_snapshot_names(values: object) -> set[str]:
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return {str(value) for value in values if value is not None}
+    return set()
+
+
+def _alias_names(aliases: object) -> set[str]:
+    if not isinstance(aliases, Mapping):
+        return set()
+    names: set[str] = set()
+    for alias, target in aliases.items():
+        if alias is not None:
+            names.add(str(alias))
+        if target is None:
+            continue
+        if isinstance(target, str):
+            names.add(target)
+        elif isinstance(target, Sequence) and not isinstance(target, (str, bytes)):
+            names.update({str(value) for value in target if value is not None})
+    return names
+
+
+def _rust_table_function_names(snapshot: Mapping[str, object]) -> set[str]:
+    values = snapshot.get("table")
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return {str(value) for value in values if value is not None}
+    return set()
 
 
 def _rust_param_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:

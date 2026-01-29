@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pyarrow as pa
 
 from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from datafusion_engine.schema_registry import registered_table_names
-from schema_spec.system import DatasetSpec, dataset_spec_from_schema
+from schema_spec.system import DatasetSpec, DeltaMaintenancePolicy, dataset_spec_from_schema
 
 
 def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
@@ -27,7 +29,11 @@ def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
             continue
         if not _is_incremental_schema(schema):
             continue
-        specs.append(dataset_spec_from_schema(name, schema))
+        spec = dataset_spec_from_schema(name, schema)
+        maintenance = _incremental_maintenance_policy(spec)
+        if maintenance is not None:
+            spec = replace(spec, delta_maintenance_policy=maintenance)
+        specs.append(spec)
     return tuple(specs)
 
 
@@ -35,6 +41,22 @@ def _is_incremental_schema(schema: SchemaLike) -> bool:
     resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
     metadata = resolved.metadata or {}
     return metadata.get(b"incremental_stage") == b"incremental"
+
+
+def _incremental_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy | None:
+    schema = spec.schema()
+    resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
+    candidates = ("file_id", "path", "node_id", "edge_id", "span_id")
+    z_order_cols = tuple(name for name in candidates if name in resolved.names)
+    if not z_order_cols:
+        return None
+    return DeltaMaintenancePolicy(
+        optimize_on_write=True,
+        optimize_target_size=256 * 1024 * 1024,
+        z_order_cols=z_order_cols,
+        z_order_when="after_partition_complete",
+        vacuum_on_write=False,
+    )
 
 
 __all__ = ["incremental_dataset_specs"]

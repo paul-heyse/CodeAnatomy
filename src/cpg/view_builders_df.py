@@ -26,10 +26,10 @@ from cpg.spec_registry import (
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
 from datafusion_engine.arrow_schema.semantic_types import SEMANTIC_TYPE_META
 from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.expr_udf_shims import semantic_tag, span_id, stable_id_parts
 from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_ext import semantic_tag, span_id, stable_id_parts
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from serde_artifacts import (
     SemanticValidationArtifact,
@@ -426,7 +426,7 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     base_id = _stable_id_from_parts("edge", base_id_parts)
 
     valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
-    span_id_expr = span_id("edge", col("path"), col("bstart"), col("bend"), edge_kind)
+    span_id_expr = span_id("edge", col("path"), col("bstart"), col("bend"), kind=edge_kind)
 
     edge_id = (
         f.case(valid_nodes)

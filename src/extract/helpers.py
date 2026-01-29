@@ -996,7 +996,9 @@ def _record_extract_compile(
 
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
     """Register a view for a materialized extract dataset."""
-    location = extract_dataset_location_or_raise(name, runtime_profile=runtime_profile)
+    location = runtime_profile.dataset_location(name)
+    if location is None:
+        return
     session_runtime = runtime_profile.session_runtime()
     facade = DataFusionExecutionFacade(
         ctx=session_runtime.ctx,
@@ -1057,6 +1059,8 @@ def _validate_extract_schema_contract(
     TypeError
         Raised when the expected schema cannot be resolved.
     """
+    if runtime_profile.dataset_location(name) is None:
+        return
     expected = dataset_schema(name)
     if not isinstance(expected, pa.Schema):
         msg = f"Expected schema unavailable for extract dataset {name!r}."

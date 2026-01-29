@@ -280,33 +280,33 @@ def _expr_binary_join(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_stable_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_id_parts
+    from datafusion_engine.expr_udf_shims import stable_id_parts
 
     prefix = _literal_prefix(ir_args, name="stable_id")
     return stable_id_parts(prefix, args[1])
 
 
 def _expr_stable_hash64(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_hash64
+    from datafusion_engine.expr_udf_shims import stable_hash64
 
     return stable_hash64(args[0])
 
 
 def _expr_stable_hash128(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_hash128
+    from datafusion_engine.expr_udf_shims import stable_hash128
 
     return stable_hash128(args[0])
 
 
 def _expr_prefixed_hash64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import prefixed_hash_parts64
+    from datafusion_engine.expr_udf_shims import prefixed_hash_parts64
 
     prefix = _literal_prefix(ir_args, name="prefixed_hash64")
     return prefixed_hash_parts64(prefix, args[1])
 
 
 def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_id_parts
+    from datafusion_engine.expr_udf_shims import stable_id_parts
 
     prefix = _literal_prefix(ir_args, name="stable_id_parts")
     if len(args) > _MAX_STABLE_ID_PART_ARGS:
@@ -317,7 +317,7 @@ def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Ex
 
 
 def _expr_prefixed_hash_parts64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import prefixed_hash_parts64
+    from datafusion_engine.expr_udf_shims import prefixed_hash_parts64
 
     prefix = _literal_prefix(ir_args, name="prefixed_hash_parts64")
     if len(args) > _MAX_STABLE_ID_PART_ARGS:
@@ -328,7 +328,7 @@ def _expr_prefixed_hash_parts64(args: Sequence[Expr], ir_args: Sequence[ExprIR])
 
 
 def _expr_stable_hash_any(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_hash_any
+    from datafusion_engine.expr_udf_shims import stable_hash_any
 
     canonical = None
     null_sentinel = None
@@ -340,7 +340,7 @@ def _expr_stable_hash_any(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Ex
 
 
 def _expr_span_make(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import span_make
+    from datafusion_engine.expr_udf_shims import span_make
 
     if len(args) > _MAX_SPAN_MAKE_ARGS:
         msg = "span_make supports up to five arguments."
@@ -349,25 +349,25 @@ def _expr_span_make(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_span_len(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import span_len
+    from datafusion_engine.expr_udf_shims import span_len
 
     return span_len(args[0])
 
 
 def _expr_span_overlaps(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import span_overlaps
+    from datafusion_engine.expr_udf_shims import span_overlaps
 
     return span_overlaps(args[0], args[1])
 
 
 def _expr_span_contains(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import span_contains
+    from datafusion_engine.expr_udf_shims import span_contains
 
     return span_contains(args[0], args[1])
 
 
 def _expr_span_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import span_id
+    from datafusion_engine.expr_udf_shims import span_id
 
     prefix = _literal_prefix(ir_args, name="span_id")
     kind = args[4] if len(args) >= _SPAN_ID_KIND_ARG_COUNT else None
@@ -375,7 +375,7 @@ def _expr_span_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_utf8_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import utf8_normalize as udf_utf8_normalize
+    from datafusion_engine.expr_udf_shims import utf8_normalize as udf_utf8_normalize
 
     form = None
     casefold = None
@@ -390,13 +390,13 @@ def _expr_utf8_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Exp
 
 
 def _expr_utf8_null_if_blank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import utf8_null_if_blank
+    from datafusion_engine.expr_udf_shims import utf8_null_if_blank
 
     return utf8_null_if_blank(args[0])
 
 
 def _expr_qname_normalize(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import qname_normalize
+    from datafusion_engine.expr_udf_shims import qname_normalize
 
     module = args[1] if len(args) > 1 else None
     lang = args[2] if len(args) >= _MIN_QNAME_LANG_ARGS else None
@@ -404,14 +404,14 @@ def _expr_qname_normalize(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> E
 
 
 def _expr_map_get_default(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import map_get_default
+    from datafusion_engine.expr_udf_shims import map_get_default
 
     key = _literal_string_arg(ir_args, name="map_get_default", index=1)
     return map_get_default(args[0], key, args[2])
 
 
 def _expr_map_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import map_normalize
+    from datafusion_engine.expr_udf_shims import map_normalize
 
     key_case = None
     sort_keys = None
@@ -423,19 +423,19 @@ def _expr_map_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr
 
 
 def _expr_list_compact(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import list_compact
+    from datafusion_engine.expr_udf_shims import list_compact
 
     return list_compact(args[0])
 
 
 def _expr_list_unique_sorted(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import list_unique_sorted
+    from datafusion_engine.expr_udf_shims import list_unique_sorted
 
     return list_unique_sorted(args[0])
 
 
 def _expr_struct_pick(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import struct_pick
+    from datafusion_engine.expr_udf_shims import struct_pick
 
     field_names = [
         _literal_string_arg(ir_args, name="struct_pick", index=index)
@@ -451,43 +451,43 @@ def _expr_struct_pick(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_cdf_change_rank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import cdf_change_rank
+    from datafusion_engine.expr_udf_shims import cdf_change_rank
 
     return cdf_change_rank(args[0])
 
 
 def _expr_cdf_is_upsert(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import cdf_is_upsert
+    from datafusion_engine.expr_udf_shims import cdf_is_upsert
 
     return cdf_is_upsert(args[0])
 
 
 def _expr_cdf_is_delete(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import cdf_is_delete
+    from datafusion_engine.expr_udf_shims import cdf_is_delete
 
     return cdf_is_delete(args[0])
 
 
 def _expr_first_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import first_value_agg
+    from datafusion_engine.expr_udf_shims import first_value_agg
 
     return first_value_agg(args[0])
 
 
 def _expr_last_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import last_value_agg
+    from datafusion_engine.expr_udf_shims import last_value_agg
 
     return last_value_agg(args[0])
 
 
 def _expr_count_distinct_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import count_distinct_agg
+    from datafusion_engine.expr_udf_shims import count_distinct_agg
 
     return count_distinct_agg(args[0])
 
 
 def _expr_string_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import string_agg
+    from datafusion_engine.expr_udf_shims import string_agg
 
     if len(args) == 1:
         from datafusion import lit

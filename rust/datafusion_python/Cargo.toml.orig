@@ -78,6 +78,7 @@ object_store = { version = "0.12.4", features = [
 url = "2"
 log = "0.4.27"
 parking_lot = "0.12"
+datafusion_ext = { path = "../datafusion_ext" }
 
 [build-dependencies]
 prost-types = "0.14.1"     # keep in line with `datafusion-substrait`

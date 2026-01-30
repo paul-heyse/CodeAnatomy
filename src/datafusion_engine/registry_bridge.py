@@ -77,6 +77,7 @@ from datafusion_engine.introspection import (
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plugin_discovery import assert_plugin_available
 from datafusion_engine.runtime import schema_introspector_for_profile
 from datafusion_engine.schema_contracts import schema_contract_from_table_schema_contract
 from datafusion_engine.schema_introspection import (
@@ -105,7 +106,7 @@ from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
 from utils.hashing import hash_storage_options
 from utils.storage_options import merged_storage_options, normalize_storage_options
-from utils.validation import find_missing
+from utils.validation import find_missing, validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
@@ -653,27 +654,31 @@ def _validate_constraints_and_defaults(
             if row.get("constraint_type") in {"PRIMARY KEY", "UNIQUE"}
             and row.get("column_name") is not None
         }
-        missing = find_missing(key_fields, key_columns)
-        if missing:
-            msg = f"{context.name} missing DataFusion constraints for key fields {missing}."
-            raise ValueError(msg)
+        validate_required_items(
+            key_fields,
+            key_columns,
+            item_label=f"{context.name} DataFusion constraints for key fields",
+            error_type=ValueError,
+        )
     if expected_defaults:
         column_defaults = introspector.table_column_defaults(context.name)
-        missing = find_missing(expected_defaults, column_defaults)
-        if missing:
-            msg = f"{context.name} missing column defaults for {missing}."
-            raise ValueError(msg)
+        validate_required_items(
+            expected_defaults,
+            column_defaults,
+            item_label=f"{context.name} column defaults",
+            error_type=ValueError,
+        )
 
 
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion._internal."
         raise RuntimeError(msg) from exc
     installer = getattr(module, "install_schema_evolution_adapter_factory", None)
     if not callable(installer):
-        msg = "Schema evolution adapter installer is unavailable in datafusion_ext."
+        msg = "Schema evolution adapter installer is unavailable in datafusion._internal."
         raise TypeError(msg)
     installer(ctx)
 
@@ -1255,6 +1260,8 @@ def _plugin_manager_for_profile(
     if not runtime_profile.plugin_specs:
         msg = "Plugin-based Delta registration requires plugin specs."
         raise RuntimeError(msg)
+    for spec in runtime_profile.plugin_specs:
+        assert_plugin_available(Path(spec.path))
     return DataFusionPluginManager(runtime_profile.plugin_specs)
 
 
@@ -2044,13 +2051,13 @@ def _requires_schema_evolution_adapter(evolution: object) -> bool:
 
 def _schema_evolution_adapter_factory() -> object:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:
-        msg = "Schema evolution adapter requires datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion._internal."
         raise RuntimeError(msg) from exc
     factory = getattr(module, "schema_evolution_adapter_factory", None)
     if not callable(factory):
-        msg = "schema_evolution_adapter_factory is not available in datafusion_ext."
+        msg = "schema_evolution_adapter_factory is not available in datafusion._internal."
         raise TypeError(msg)
     return factory()
 

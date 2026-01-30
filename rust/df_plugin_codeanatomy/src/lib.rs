@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::mem::size_of;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use abi_stable::export_root_module;
+use abi_stable::prefix_type::PrefixTypeTrait;
 use abi_stable::std_types::{ROption, RResult, RString, RStr, RVec};
+use datafusion::arrow;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use datafusion_ffi::udaf::FFI_AggregateUDF;
 use datafusion_ffi::udf::FFI_ScalarUDF;
@@ -27,7 +29,6 @@ use datafusion_ext::udf_registry::{self, UdfHandle, UdfKind};
 #[cfg(feature = "async-udf")]
 use datafusion_ext::udf_async;
 
-static ASYNC_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 struct DeltaProviderOptions {
@@ -72,7 +73,7 @@ struct PluginUdfOptions {
 }
 
 fn async_runtime() -> &'static Runtime {
-    ASYNC_RUNTIME.get_or_init(|| Runtime::new().expect("plugin async runtime"))
+    datafusion_ext::async_runtime::shared_runtime()
 }
 
 fn parse_major(version: &str) -> Result<u16, String> {
@@ -188,6 +189,8 @@ fn build_udf_bundle_from_specs(specs: Vec<udf_registry::UdfSpec>) -> DfUdfBundle
 
 fn build_udf_bundle_with_options(options: PluginUdfOptions) -> Result<DfUdfBundleV1, String> {
     let (enable_async, timeout_ms, batch_size) = resolve_udf_policy(&options)?;
+    #[cfg(not(feature = "async-udf"))]
+    let _ = (timeout_ms, batch_size);
     if enable_async {
         #[cfg(feature = "async-udf")]
         {
@@ -275,8 +278,8 @@ fn build_delta_provider(options: DeltaProviderOptions) -> Result<FFI_TableProvid
     let gate = gate_from_parts(
         options.min_reader_version,
         options.min_writer_version,
-        options.required_reader_features,
-        options.required_writer_features,
+        options.required_reader_features.clone(),
+        options.required_writer_features.clone(),
     );
     let result: Result<DeltaTableProvider, DeltaTableError> = runtime.block_on(async {
         let table = load_delta_table(
@@ -284,6 +287,7 @@ fn build_delta_provider(options: DeltaProviderOptions) -> Result<FFI_TableProvid
             options.storage_options.clone(),
             options.version,
             options.timestamp.clone(),
+            None,
         )
         .await?;
         let snapshot = datafusion_ext::delta_protocol::delta_snapshot_info(

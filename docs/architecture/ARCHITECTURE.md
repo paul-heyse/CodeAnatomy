@@ -75,10 +75,10 @@ CodeAnatomy enforces five architectural invariants across all subsystems:
 
 | Component | Technology | Version | Purpose |
 |-----------|------------|---------|---------|
-| Query Engine | Apache DataFusion | 50.1+ | SQL execution, plan optimization, lineage extraction |
+| Query Engine | Apache DataFusion | 51.0.0+ | SQL execution, plan optimization, lineage extraction |
 | Graph Engine | rustworkx | 0.17+ | Task DAG construction, scheduling |
 | Pipeline Orchestration | Hamilton | 1.89+ | DAG execution, caching, materialization |
-| Data Format | PyArrow | - | Columnar data interchange |
+| Data Format | PyArrow | 18.1.0+ | Columnar data interchange |
 | Storage | Delta Lake (deltalake) | 1.3+ | Versioned table storage with CDF |
 | Python Parsing | LibCST, ast, symtable | - | CST/AST/symbol extraction |
 | Python Bytecode | dis module | 3.13 | Instruction/CFG extraction |
@@ -148,26 +148,99 @@ src/
 │   ├── cdf_*.py             # Change Data Feed
 │   └── state_store.py       # State management
 │
+├── utils/             # Cross-cutting utilities
+│   ├── hashing.py           # Deterministic hashing functions
+│   ├── registry_protocol.py # Registry abstractions
+│   ├── env_utils.py         # Environment variable parsing
+│   ├── storage_options.py   # Storage config normalization
+│   ├── validation.py        # Type validation helpers
+│   ├── uuid_factory.py      # Time-ordered UUID generation
+│   └── file_io.py           # File reading utilities
+│
 └── graph/             # Public API
     └── product_build.py     # Entry point
+
+rust/                  # Rust components
+├── datafusion_ext/    # Core DataFusion extensions (UDFs, Delta integration)
+├── datafusion_ext_py/ # Thin PyO3 wrapper for datafusion_ext
+├── datafusion_python/ # Apache DataFusion Python bindings with CodeAnatomy extensions
+├── df_plugin_api/     # ABI-stable plugin interface definitions
+├── df_plugin_host/    # Plugin loading and validation
+└── df_plugin_codeanatomy/ # CodeAnatomy plugin implementation
 ```
 
 ### 1.6 Entry Point
 
 ```python
-from graph import GraphProductBuildRequest, build_graph_product
+from graph.product_build import GraphProductBuildRequest, build_graph_product
 
+# Minimal invocation (all defaults)
 result = build_graph_product(
-    GraphProductBuildRequest(repo_root=".")
+    GraphProductBuildRequest(repo_root="/path/to/repository")
 )
 
-# Access outputs
-print(f"Nodes: {result.cpg_nodes.paths.data} ({result.cpg_nodes.rows} rows)")
-print(f"Edges: {result.cpg_edges.paths.data} ({result.cpg_edges.rows} rows)")
-print(f"Props: {result.cpg_props.paths.data} ({result.cpg_props.rows} rows)")
-print(f"Props map: {result.cpg_props_map.path} ({result.cpg_props_map.rows} rows)")
-print(f"Edges by src: {result.cpg_edges_by_src.path} ({result.cpg_edges_by_src.rows} rows)")
-print(f"Edges by dst: {result.cpg_edges_by_dst.path} ({result.cpg_edges_by_dst.rows} rows)")
+# Access core outputs
+print(f"Product: {result.product} v{result.product_version}")
+print(f"Run ID: {result.run_id}")
+print(f"Output directory: {result.output_dir}")
+
+# Access CPG tables
+print(f"\nCPG Tables:")
+print(f"  Nodes: {result.cpg_nodes.paths.data} ({result.cpg_nodes.rows} rows, {result.cpg_nodes.error_rows} errors)")
+print(f"  Edges: {result.cpg_edges.paths.data} ({result.cpg_edges.rows} rows)")
+print(f"  Props: {result.cpg_props.paths.data} ({result.cpg_props.rows} rows)")
+
+# Access index tables
+print(f"\nIndex Tables:")
+print(f"  Props map: {result.cpg_props_map.path} ({result.cpg_props_map.rows} rows)")
+print(f"  Edges by src: {result.cpg_edges_by_src.path} ({result.cpg_edges_by_src.rows} rows)")
+print(f"  Edges by dst: {result.cpg_edges_by_dst.path} ({result.cpg_edges_by_dst.rows} rows)")
+
+# Access optional outputs
+if result.cpg_nodes_quality:
+    print(f"\nQuality validation failures: {result.cpg_nodes_quality.rows}")
+if result.manifest_path:
+    print(f"Run manifest: {result.manifest_path}")
+if result.run_bundle_dir:
+    print(f"Run bundle: {result.run_bundle_dir}")
+```
+
+**Advanced Configuration Example:**
+
+```python
+from graph.product_build import GraphProductBuildRequest, build_graph_product
+from hamilton_pipeline.pipeline_types import ExecutionMode, ExecutorConfig, ScipIndexConfig
+from incremental.types import IncrementalConfig
+from core_types import DeterminismTier
+
+result = build_graph_product(
+    GraphProductBuildRequest(
+        repo_root="/path/to/large/repository",
+        output_dir="/mnt/storage/cpg_outputs",
+
+        # Parallel execution with 16 workers
+        execution_mode=ExecutionMode.PLAN_PARALLEL,
+        executor_config=ExecutorConfig(kind="multiprocessing", max_tasks=16),
+
+        # Deterministic output for testing
+        determinism_override=DeterminismTier.CANONICAL,
+
+        # Enable SCIP indexing
+        scip_index_config=ScipIndexConfig(enabled=True, run_scip_test=True),
+
+        # Incremental processing
+        incremental_config=IncrementalConfig(
+            enabled=True,
+            state_dir="/mnt/storage/state",
+            impact_strategy="hybrid",
+        ),
+
+        # Include all diagnostics
+        include_quality=True,
+        include_manifest=True,
+        include_run_bundle=True,
+    )
+)
 ```
 
 ### 1.7 Observability (OpenTelemetry)
@@ -404,6 +477,35 @@ The CPG Build subsystem transforms normalized evidence into a queryable Code Pro
 | `src/hamilton_pipeline/driver_factory.py` | ~830 | Hamilton driver |
 | `src/hamilton_pipeline/task_module_builder.py` | ~200 | Dynamic modules |
 | `src/engine/materialize_pipeline.py` | ~510 | View materialization |
+
+---
+
+## Document Index
+
+This architecture reference is organized into the following documents:
+
+### Core Architecture Parts
+
+- **[Part I: System Overview](#part-i-system-overview)** - High-level architecture, pipeline stages, technology stack
+- **[Part II: Extraction Stage](part_ii_extraction.md)** - Multi-source evidence extraction (AST, CST, bytecode, SCIP)
+- **[Part III: DataFusion Engine](datafusion_engine_core.md)** - Query planning, execution, and lineage
+- **[Part IV: Normalization and Scheduling](part_iv_normalization_and_scheduling.md)** - Inference-driven task scheduling
+- **[Part V: Storage and Incremental](part_v_storage_and_incremental.md)** - Delta Lake integration and incremental processing
+- **[Part VI: CPG Build and Orchestration](part_vi_cpg_build_and_orchestration.md)** - CPG emission and Hamilton orchestration
+- **[Part VII: Observability](observability.md)** - OpenTelemetry instrumentation and diagnostics
+- **[Part VIII: Rust Architecture](part_viii_rust_architecture.md)** - Rust DataFusion extensions, UDFs, and plugin system
+- **[Part IX: Public API Reference](part_ix_public_api.md)** - Public entry points and configuration types
+- **[Part X: Hamilton Pipeline Integration](part_4_hamilton_pipeline.md)** - Hamilton DAG orchestration details
+
+### Reference Guides
+
+- **[Configuration Reference](configuration_reference.md)** - Environment variables, runtime profiles, and policies
+- **[Utilities Reference](utilities_reference.md)** - Cross-cutting utilities (hashing, registries, validation, UUID)
+
+### See Also
+
+- **CLAUDE.md** (project root) - Development guidelines and code conventions
+- **README.md** (project root) - Project overview and quick start
 
 ---
 

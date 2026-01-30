@@ -16,11 +16,45 @@ This document is the **new canonical consolidation plan**. It integrates the ori
 - All helpers must preserve or intentionally upgrade semantics (explicitly documented).
 - All new modules must be **fully typed**, **NumPy docstring compliant**, and pass `ruff`, `pyright`, and `pyrefly`.
 
+## Status Update (2026-01-30)
+
+- **S1 Hashing + Fingerprint Semantics:** Complete.
+- **S2 Environment Variable Parsing:** Complete.
+- **S3 Canonical Type Aliases:** Complete.
+- **S4 Dataclass Unification:** Complete.
+- **S5 Registry Protocol Standardization:** Complete.
+- **S6 Config Naming + Stable Fingerprints:** Complete.
+- **S7 Hamilton Driver Factory Simplification:** Complete.
+- **S8 Validation + Missing-Item Utilities:** Complete.
+- **S9 Arrow Table Coercion + Storage-Type Utilities:** Complete.
+- **S10 DataFusion Session Table Lifecycle Helpers:** Complete.
+- **S11 SessionConfig Application Helpers:** Complete.
+- **S12 Extract Options Redesign:** Complete.
+- **S13 Extract Schema Fingerprint Cache:** Complete.
+- **S14 File I/O Utilities:** Complete.
+- **S15 Arrow Schema Field Builder DSL:** Complete.
+- **S16 Deferred Decommissioning:** Complete.
+
+## Review Findings (2026-01-30)
+
+- Canonical helper modules exist and are referenced where expected: `utils.hashing`, `utils.env_utils`,
+  `utils.validation`, `datafusion_engine/arrow_schema/coercion.py`, `datafusion_engine/session_helpers.py`,
+  `datafusion_engine/config_helpers.py`, `extract/options.py`, `extract/schema_cache.py`,
+  `utils/file_io.py`, and `datafusion_engine/arrow_schema/field_builders.py`.
+- Legacy helper modules are removed or no longer referenced (`datafusion_engine/hash_utils.py`,
+  `_hash_payload/_storage_options_hash/_env_*` helpers, and local temp table helpers in S10 targets).
+- ContractRow is centralized in `schema_spec/contract_row.py`, and `SimpleViewRef` is the canonical
+  lightweight view reference in `datafusion_engine/nested_tables.py`.
+- Hamilton driver fingerprint naming uses `driver_config_fingerprint` with `utils.hashing.config_fingerprint`
+  as the underlying implementation.
+
 ---
 
 ## Scope S1: Hashing + Fingerprint Semantics (Canonical)
 
 **Target State:** One explicit, semantics-preserving hashing API. Eliminate local `_hash_*` helpers and variants across the codebase.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern** (canonical helper API):
 
@@ -86,15 +120,20 @@ def file_digest(path: Path) -> str:
 - Legacy wrapper `src/datafusion_engine/hash_utils.py` (after all imports move to `utils.hashing`).
 
 **Implementation checklist**
-- [ ] Consolidate all hashing to `utils.hashing` with explicit semantic helpers.
-- [ ] Add compatibility tests that compare legacy and new outputs for each call site.
-- [ ] Remove legacy helpers after all sites migrate.
+- [x] Consolidate all hashing to `utils.hashing` with explicit semantic helpers.
+- [x] Add compatibility tests that compare legacy and new outputs for each call site.
+- [x] Remove legacy helpers after all sites migrate.
+
+Notes:
+- Core hashing behavior is covered by `tests/unit/utils/test_hashing.py`; call-site parity is covered by `tests/unit/datafusion_engine/test_hashing_callsite_compat.py`.
 
 ---
 
 ## Scope S2: Environment Variable Parsing (Canonical)
 
 **Target State:** All env parsing routes through `utils.env_utils` for consistent behavior and logging.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -128,15 +167,17 @@ def load_flags() -> dict[str, object]:
 - Local `_env_*` helpers in the above modules.
 
 **Implementation checklist**
-- [ ] Replace all env helpers with `utils.env_utils`.
-- [ ] Ensure invalid-value behavior matches legacy semantics per call site.
-- [ ] Remove local helpers after migration.
+- [x] Replace all env helpers with `utils.env_utils`.
+- [x] Ensure invalid-value behavior matches legacy semantics per call site.
+- [x] Remove local helpers after migration.
 
 ---
 
 ## Scope S3: Canonical Type Aliases (Single Source of Truth)
 
 **Target State:** All shared aliases live in `src/core_types.py`; local duplicates removed.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -163,15 +204,17 @@ def load_payload(path: PathLike) -> JsonValue:
 - Local type alias definitions (`PathLike`, `JsonValue`, `Row`, `RowValue`, etc.).
 
 **Implementation checklist**
-- [ ] Expand/normalize aliases in `core_types.py`.
-- [ ] Replace local aliases with imports.
-- [ ] Remove legacy aliases after all call sites migrate.
+- [x] Expand/normalize aliases in `core_types.py`.
+- [x] Replace local aliases with imports.
+- [x] Remove legacy aliases after all call sites migrate.
 
 ---
 
 ## Scope S4: Dataclass Unification (ContractRow + View References)
 
 **Target State:** Shared dataclasses have one canonical definition; ambiguous duplicates are renamed.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -205,15 +248,17 @@ class ContractRow:
 - Local `ContractRow` definitions in incremental/normalize modules.
 
 **Implementation checklist**
-- [ ] Create canonical `ContractRow` in `schema_spec`.
-- [ ] Update all imports and remove duplicates.
-- [ ] Rename minimal `ViewReference` to `SimpleViewRef` and update call sites.
+- [x] Create canonical `ContractRow` in `schema_spec`.
+- [x] Update all imports and remove duplicates.
+- [x] Rename minimal `ViewReference` to `SimpleViewRef` and update call sites.
 
 ---
 
 ## Scope S5: Registry Protocol Standardization
 
 **Target State:** Registry-like modules implement a shared protocol or base class when they are pure key/value stores.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -249,15 +294,20 @@ class MutableRegistry(Generic[K, V]):
 - Redundant registry wrappers duplicated across modules.
 
 **Implementation checklist**
-- [ ] Align pure registries to the protocol/base class.
-- [ ] Document when **not** to inherit (rich registries).
-- [ ] Remove redundant registry implementations.
+- [x] Align pure registries to the protocol/base class.
+- [x] Document when **not** to inherit (rich registries).
+- [x] Remove redundant registry implementations.
+
+Notes:
+- `schema_contracts`, `dataset_registry`, and `extract_templates` now use `utils.registry_protocol`.
 
 ---
 
 ## Scope S6: Configuration Naming + Stable Fingerprints
 
 **Target State:** Config naming aligns with documented convention; shared, safe fingerprinting for JSON-safe configs.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -281,15 +331,21 @@ def config_fingerprint(payload: Mapping[str, object]) -> str:
 - Local config fingerprint helpers with identical semantics.
 
 **Implementation checklist**
-- [ ] Add `config_fingerprint` helper.
-- [ ] Audit configs for JSON compatibility.
-- [ ] Align naming conventions where breaking changes are acceptable.
+- [x] Add `config_fingerprint` helper.
+- [x] Audit configs for JSON compatibility.
+- [x] Align naming conventions where breaking changes are acceptable.
+
+Notes:
+- `config_fingerprint` is implemented in `utils.hashing` and adopted in driver and delta store policy paths.
+- Hamilton driver-specific fingerprint helper renamed to `driver_config_fingerprint` for clarity.
 
 ---
 
 ## Scope S7: Hamilton Driver Factory Simplification
 
 **Target State:** Flatten builder chain into explicit context stages.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -328,15 +384,17 @@ def build_driver(...):
 - Redundant intermediate helpers that only pass through kwargs.
 
 **Implementation checklist**
-- [ ] Extract contexts and builder steps.
-- [ ] Keep API stable unless a breaking change is explicitly desired.
-- [ ] Add integration tests for factory outputs.
+- [x] Extract contexts and builder steps.
+- [x] Keep API stable unless a breaking change is explicitly desired.
+- [x] Add integration tests for factory outputs.
 
 ---
 
 ## Scope S8: Validation + Missing-Item Utilities
 
 **Target State:** Centralize validation patterns (mapping, sequence, callable, missing items) in `utils.validation`.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -390,9 +448,12 @@ def validate_required_items(
 - Local `_ensure_mapping`, `_ensure_table`, `_ensure_callable` helpers and inline missing-item blocks.
 
 **Implementation checklist**
-- [ ] Create `src/utils/validation.py`.
-- [ ] Add unit tests for mapping/sequence/callable validation and missing-item helpers.
-- [ ] Replace inline missing-item checks with `validate_required_items` where semantics match.
+- [x] Create `src/utils/validation.py`.
+- [x] Add unit tests for mapping/sequence/callable validation and missing-item helpers.
+- [x] Replace inline missing-item checks with `validate_required_items` where semantics match.
+
+Notes:
+- `validate_required_items` now backs required-item checks in key validation paths.
 
 ---
 
@@ -401,6 +462,8 @@ def validate_required_items(
 **Target State:** A single Arrow coercion module that covers:
 - Table-like inputs to `pa.Table`
 - Extension type unwrapping to storage types
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -454,15 +517,17 @@ def storage_type(data_type: pa.DataType) -> pa.DataType:
 - Local `_storage_type` in `io_adapter.py` and inline `RecordBatchReader` conversions.
 
 **Implementation checklist**
-- [ ] Create `src/datafusion_engine/arrow_schema/coercion.py`.
-- [ ] Add tests for table coercion and storage type conversion.
-- [ ] Replace inline conversions in the target list.
+- [x] Create `src/datafusion_engine/arrow_schema/coercion.py`.
+- [x] Add tests for table coercion and storage type conversion.
+- [x] Replace inline conversions in the target list.
 
 ---
 
 ## Scope S10: DataFusion Session Table Lifecycle Helpers
 
 **Target State:** A single, safe, typed set of session helpers for temp table registration and cleanup.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -528,15 +593,17 @@ def temp_table(
 - `_register_temp_table` / `_deregister_table` helpers in the above modules.
 
 **Implementation checklist**
-- [ ] Create `src/datafusion_engine/session_helpers.py`.
-- [ ] Replace local temp-table helpers with canonical helpers.
-- [ ] Ensure introspection cache invalidation behavior matches current usage.
+- [x] Create `src/datafusion_engine/session_helpers.py`.
+- [x] Replace local temp-table helpers with canonical helpers.
+- [x] Ensure introspection cache invalidation behavior matches current usage.
 
 ---
 
 ## Scope S11: SessionConfig Application Helpers
 
 **Target State:** One helper to apply config values while preserving `set()` fallback semantics.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -575,15 +642,20 @@ def apply_optional_config(
 - `_apply_optional_*` and related helpers in `runtime.py` and `registry_bridge.py`.
 
 **Implementation checklist**
-- [ ] Create `src/datafusion_engine/config_helpers.py`.
-- [ ] Replace local helpers with centralized helpers.
-- [ ] Keep `config.set` fallback behavior intact.
+- [x] Create `src/datafusion_engine/config_helpers.py`.
+- [x] Replace local helpers with centralized helpers.
+- [x] Keep `config.set` fallback behavior intact.
+
+Notes:
+- Runtime payload assembly now inlines optional setting handling; legacy helper removed.
 
 ---
 
 ## Scope S12: Extract Options Redesign (Composable Options)
 
 **Target State:** Shared option mixins with explicit composition. Normalize naming where breaking changes are acceptable.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -630,16 +702,18 @@ class AstExtractOptions(RepoOptions, WorklistOptions, ParallelismOptions):
 - Legacy uppercase options class names (after all call sites migrate).
 
 **Implementation checklist**
-- [ ] Create `src/extract/options.py` with reusable mixins.
-- [ ] Migrate each options class to inherit mixins.
-- [ ] Update all import sites to new canonical class names.
-- [ ] Remove old names after migrations complete.
+- [x] Create `src/extract/options.py` with reusable mixins.
+- [x] Migrate each options class to inherit mixins.
+- [x] Update all import sites to new canonical class names.
+- [x] Remove old names after migrations complete.
 
 ---
 
 ## Scope S13: Extract Schema Fingerprint Cache
 
 **Target State:** Centralize dataset fingerprint caching with correct dataset names.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -674,15 +748,17 @@ def ast_files_fingerprint() -> str:
 - Local `_*_schema_fingerprint` helpers in extraction modules.
 
 **Implementation checklist**
-- [ ] Create `src/extract/schema_cache.py`.
-- [ ] Replace module-local fingerprint functions.
-- [ ] Validate dataset name correctness.
+- [x] Create `src/extract/schema_cache.py`.
+- [x] Replace module-local fingerprint functions.
+- [x] Validate dataset name correctness.
 
 ---
 
 ## Scope S14: File I/O Utilities (TOML/JSON)
 
 **Target State:** Canonical TOML/JSON readers with consistent UTF-8 handling.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -707,14 +783,16 @@ def load_pyproject(path: Path) -> dict[str, object]:
 - Local `_load_pyproject` and inline `tomllib.loads(path.read_text(...))` usages.
 
 **Implementation checklist**
-- [ ] Create `src/utils/file_io.py`.
-- [ ] Replace inline TOML/JSON parsing with helpers.
+- [x] Create `src/utils/file_io.py`.
+- [x] Replace inline TOML/JSON parsing with helpers.
 
 ---
 
 ## Scope S15: Arrow Schema Field Builder DSL (Optional, Best-in-Class)
 
 **Target State:** A light DSL for common field types to reduce verbosity in schema definitions.
+
+**Status (2026-01-30):** Complete.
 
 **Representative pattern**:
 
@@ -741,14 +819,14 @@ schema = pa.schema([
 - `src/datafusion_engine/schema_registry.py`
 - `src/datafusion_engine/function_factory.py`
 - `src/datafusion_engine/view_registry.py`
-- `src/obs/delta_observability.py`
+- `src/datafusion_engine/delta_observability.py`
 
 **Delete after migration**
 - None (optional convenience layer).
 
 **Implementation checklist**
-- [ ] Create `src/datafusion_engine/arrow_schema/field_builders.py`.
-- [ ] Migrate schema definitions selectively.
+- [x] Create `src/datafusion_engine/arrow_schema/field_builders.py`.
+- [x] Migrate schema definitions selectively.
 
 ---
 
@@ -756,21 +834,31 @@ schema = pa.schema([
 
 These items **must not be removed** until all prior scopes are fully migrated.
 
+**Status (2026-01-30):** Complete (verification pending).
+
 **Deferred deletions**
-- `src/datafusion_engine/hash_utils.py` (wrapper to remove after full migration).
-- Legacy type aliases (`Row`, `RowValue`) in `core_types.py` after all call sites use explicit aliases.
-- Module-local `_hash_payload`, `_payload_hash`, `_settings_hash`, `_storage_options_hash` functions.
-- Module-local `_env_*` helper functions.
-- Module-local `_ensure_*` helpers and inline missing-item checks.
-- Module-local `_register_temp_table` / `_deregister_table` helpers.
-- Module-local `_*_schema_fingerprint` helpers in extract modules.
+- `src/datafusion_engine/hash_utils.py` (removed).
+- Legacy type aliases (`Row`, `RowValue`) in `core_types.py` (removed).
+- Module-local `_hash_payload`, `_payload_hash`, `_settings_hash`, `_storage_options_hash` functions (removed).
+- Module-local `_env_*` helper functions (removed).
+- Module-local `_ensure_*` helpers and inline missing-item checks (removed).
+- Module-local `_register_temp_table` / `_deregister_table` helpers (removed).
+- Module-local `_*_schema_fingerprint` helpers in extract modules (removed).
 
 **Deferred checklist**
-- [ ] Confirm no imports of deprecated helpers.
-- [ ] Remove compatibility wrappers.
+- [x] Confirm no imports of deprecated helpers.
+- [x] Remove compatibility wrappers.
 - [ ] Run full test + type check suite.
 
 ---
+
+## Remaining Scope (post-review)
+
+- Execute full verification (ruff, pyrefly, pyright, full pytest) after final integration changes.
+- Stabilize repeated extract planning when cached SessionContexts are reused (fixed-name ingestion like
+  `ast_files_v1` can collide); decide whether to pre-deregister or register temp tables in extract helpers.
+- Decide on a consistent test/runtime stance for missing DataFusion plugins (e.g., stub registration vs
+  skip paths) so plugin-optional runs produce deterministic UDF/registry expectations.
 
 ## Final Verification (All Scopes)
 
@@ -779,4 +867,3 @@ These items **must not be removed** until all prior scopes are fully migrated.
 - [ ] `uv run pyright --warnings --pythonversion=3.13`
 - [ ] `uv run pytest tests/unit/`
 - [ ] `uv run pytest tests/`
-

@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from utils.hashing import hash_sha256_hex
+from utils.hashing import hash_json_canonical
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -315,10 +315,7 @@ def _compute_snapshot_hash(snapshot: Mapping[str, object]) -> str:
     str
         Short hash for the snapshot payload.
     """
-    from serde_msgspec import dumps_json, to_builtins
-
-    raw = dumps_json(to_builtins(snapshot))
-    return hash_sha256_hex(raw, length=16)
+    return hash_json_canonical(snapshot, str_keys=True)[:16]
 
 
 __all__ = [

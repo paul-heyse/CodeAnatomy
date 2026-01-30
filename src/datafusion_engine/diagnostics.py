@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from utils.uuid_factory import uuid7_str
+
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
@@ -252,8 +254,8 @@ class DiagnosticsContext:
         Additional tags for categorization (defaults to empty dict).
     """
 
-    session_id: str
-    operation_id: str
+    session_id: str = field(default_factory=uuid7_str)
+    operation_id: str = field(default_factory=uuid7_str)
     start_time: datetime = field(default_factory=lambda: datetime.now().astimezone())
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -294,10 +296,7 @@ class DiagnosticsRecorder:
             Context information for this recorder.
         """
         self._sink = sink
-        self._context = context or DiagnosticsContext(
-            session_id="default",
-            operation_id="default",
-        )
+        self._context = context or DiagnosticsContext()
 
     @property
     def enabled(self) -> bool:

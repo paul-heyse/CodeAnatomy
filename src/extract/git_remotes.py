@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import pygit2
 
-from utils.env_utils import env_bool
+from utils.env_utils import env_bool, env_value
 
 
 @dataclass(frozen=True)
@@ -56,11 +55,11 @@ def remote_auth_from_env() -> RemoteAuthSpec | None:
     RemoteAuthSpec | None
         Resolved authentication spec when any env values are set.
     """
-    username = os.getenv("CODEANATOMY_GIT_USERNAME")
-    password = os.getenv("CODEANATOMY_GIT_PASSWORD")
-    ssh_pubkey_path = os.getenv("CODEANATOMY_GIT_SSH_PUBKEY")
-    ssh_key_path = os.getenv("CODEANATOMY_GIT_SSH_KEY")
-    ssh_passphrase = os.getenv("CODEANATOMY_GIT_SSH_PASSPHRASE")
+    username = env_value("CODEANATOMY_GIT_USERNAME")
+    password = env_value("CODEANATOMY_GIT_PASSWORD")
+    ssh_pubkey_path = env_value("CODEANATOMY_GIT_SSH_PUBKEY")
+    ssh_key_path = env_value("CODEANATOMY_GIT_SSH_KEY")
+    ssh_passphrase = env_value("CODEANATOMY_GIT_SSH_PASSPHRASE")
     allow_invalid_certs = env_bool("CODEANATOMY_GIT_ALLOW_INVALID_CERTS") or False
     if any(
         (

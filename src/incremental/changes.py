@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
 
 from datafusion import col, lit
@@ -10,6 +9,7 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.ingest import datafusion_from_arrow
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -47,7 +47,7 @@ def file_changes_from_cdf(
 
     ctx = runtime.session_runtime().ctx
     with TempTableRegistry(runtime) as registry:
-        cdf_name = f"__cdf_changes_{uuid.uuid4().hex}"
+        cdf_name = f"__cdf_changes_{uuid7_hex()}"
         _ = datafusion_from_arrow(ctx, name=cdf_name, value=cdf_result.table)
         registry.track(cdf_name)
         df = ctx.table(cdf_name)

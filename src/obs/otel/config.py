@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
@@ -32,7 +31,7 @@ from opentelemetry.sdk.trace.sampling import (
     TraceIdRatioBased,
 )
 
-from utils.env_utils import env_bool, env_bool_strict, env_float, env_int, env_value
+from utils.env_utils import env_bool, env_bool_strict, env_float, env_int, env_text, env_value
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,12 +111,10 @@ _LOG_LEVEL_MAP = {
 
 
 def _resolve_exemplar_filter() -> ExemplarFilter | None:
-    raw = os.environ.get("OTEL_METRICS_EXEMPLAR_FILTER")
+    raw = env_value("OTEL_METRICS_EXEMPLAR_FILTER")
     if raw is None:
         return None
-    name = raw.strip().lower()
-    if not name:
-        return None
+    name = raw.lower()
     if name == "always_on":
         return AlwaysOnExemplarFilter()
     if name == "always_off":
@@ -129,12 +126,10 @@ def _resolve_exemplar_filter() -> ExemplarFilter | None:
 
 
 def _resolve_metrics_temporality() -> AggregationTemporality | None:
-    raw = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
+    raw = env_value("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
     if raw is None:
         return None
-    name = raw.strip().lower()
-    if not name:
-        return None
+    name = raw.lower()
     if name == "cumulative":
         return AggregationTemporality.CUMULATIVE
     if name == "delta":
@@ -149,12 +144,10 @@ def _resolve_metrics_temporality() -> AggregationTemporality | None:
 
 
 def _resolve_metrics_histogram_aggregation() -> Aggregation | None:
-    raw = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION")
+    raw = env_value("OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION")
     if raw is None:
         return None
-    name = raw.strip().lower()
-    if not name:
-        return None
+    name = raw.lower()
     if name == "explicit_bucket_histogram":
         return ExplicitBucketHistogramAggregation()
     if name in {"base2_exponential_bucket_histogram", "exponential_bucket_histogram"}:
@@ -167,8 +160,8 @@ def _resolve_metrics_histogram_aggregation() -> Aggregation | None:
 
 
 def _resolve_id_generator() -> IdGenerator | None:
-    raw = os.environ.get("OTEL_PYTHON_ID_GENERATOR")
-    name = raw.strip().lower() if raw is not None else ""
+    raw = env_value("OTEL_PYTHON_ID_GENERATOR")
+    name = raw.lower() if raw is not None else ""
     if not name:
         return None
     if name in {"random", "default"}:
@@ -226,19 +219,23 @@ def _resolve_batch_sizes(
 
 
 def _exporter_enabled(env_name: str, *, default: bool = True) -> bool:
-    value = os.environ.get(env_name)
+    value = env_value(env_name)
     if value is None:
         return default
-    return value.strip().lower() != "none"
+    return value.lower() != "none"
 
 
 def _resolve_sampler() -> Sampler:
-    sampler_name = os.environ.get("OTEL_TRACES_SAMPLER", "parentbased_traceidratio")
-    name = sampler_name.strip().lower()
+    sampler_name = env_text(
+        "OTEL_TRACES_SAMPLER",
+        default="parentbased_traceidratio",
+        allow_empty=True,
+    )
+    name = sampler_name.strip().lower() if sampler_name is not None else ""
     ratio = env_float("OTEL_TRACES_SAMPLER_ARG", default=0.1)
     sampler = _resolve_builtin_sampler(name, ratio)
     if sampler is None:
-        sampler = _resolve_entrypoint_sampler(name, os.environ.get("OTEL_TRACES_SAMPLER_ARG"))
+        sampler = _resolve_entrypoint_sampler(name, env_value("OTEL_TRACES_SAMPLER_ARG"))
     if sampler is None:
         _LOGGER.warning(
             "Unsupported sampler %s; defaulting to parentbased_traceidratio.",
@@ -347,7 +344,7 @@ def _resolve_disabled_config() -> OtelConfig:
         metrics_exemplar_filter=None,
         metrics_temporality_preference=None,
         metrics_histogram_aggregation=None,
-        otel_log_level=_parse_log_level(os.environ.get("OTEL_LOG_LEVEL")),
+        otel_log_level=_parse_log_level(env_value("OTEL_LOG_LEVEL")),
         python_context=env_value("OTEL_PYTHON_CONTEXT"),
         id_generator=_resolve_id_generator(),
         test_mode=env_bool("CODEANATOMY_OTEL_TEST_MODE", default=False, on_invalid="false"),
@@ -356,7 +353,7 @@ def _resolve_disabled_config() -> OtelConfig:
             default=False,
             on_invalid="false",
         ),
-        config_file=os.environ.get("OTEL_EXPERIMENTAL_CONFIG_FILE"),
+        config_file=env_value("OTEL_EXPERIMENTAL_CONFIG_FILE"),
     )
 
 
@@ -423,7 +420,7 @@ def _resolve_enabled_config() -> OtelConfig:
         metrics_exemplar_filter=_resolve_exemplar_filter(),
         metrics_temporality_preference=_resolve_metrics_temporality(),
         metrics_histogram_aggregation=_resolve_metrics_histogram_aggregation(),
-        otel_log_level=_parse_log_level(os.environ.get("OTEL_LOG_LEVEL")),
+        otel_log_level=_parse_log_level(env_value("OTEL_LOG_LEVEL")),
         python_context=env_value("OTEL_PYTHON_CONTEXT"),
         id_generator=_resolve_id_generator(),
         test_mode=env_bool("CODEANATOMY_OTEL_TEST_MODE", default=False, on_invalid="false"),
@@ -432,7 +429,7 @@ def _resolve_enabled_config() -> OtelConfig:
             default=False,
             on_invalid="false",
         ),
-        config_file=os.environ.get("OTEL_EXPERIMENTAL_CONFIG_FILE"),
+        config_file=env_value("OTEL_EXPERIMENTAL_CONFIG_FILE"),
     )
 
 

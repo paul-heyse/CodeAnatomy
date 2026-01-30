@@ -6,13 +6,12 @@ import contextlib
 import importlib
 import logging
 import os
-import sys
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import datafusion
 import pyarrow as pa
@@ -73,6 +72,7 @@ from datafusion_engine.diagnostics import (
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.plan_cache import PlanProtoCache
+from datafusion_engine.plugin_discovery import assert_plugin_available, resolve_plugin_path
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -97,10 +97,12 @@ from datafusion_engine.session_helpers import deregister_table, register_temp_ta
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf_runtime import register_rust_udfs
+from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from engine.plan_cache import PlanCache
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
+from utils.uuid_factory import uuid7_str
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
@@ -114,7 +116,6 @@ if TYPE_CHECKING:
         DataFusionPluginSpec,
     )
     from datafusion_engine.udf_catalog import UdfCatalog
-    from datafusion_engine.view_artifacts import DataFusionViewArtifact
     from datafusion_engine.view_graph_registry import ViewNode
     from obs.datafusion_runs import DataFusionRun
     from storage.deltalake.delta import IdempotentWriteOptions
@@ -155,31 +156,6 @@ def _encode_telemetry_msgpack(payload: object) -> bytes:
     return bytes(buf)
 
 
-def _plugin_library_filename(crate_name: str) -> str:
-    if sys.platform == "win32":
-        return f"{crate_name}.dll"
-    if sys.platform == "darwin":
-        return f"lib{crate_name}.dylib"
-    return f"lib{crate_name}.so"
-
-
-def _default_df_plugin_path() -> Path:
-    env_path = os.environ.get("CODEANATOMY_DF_PLUGIN_PATH")
-    if env_path:
-        return Path(env_path)
-    root = Path(__file__).resolve().parents[2]
-    lib_name = _plugin_library_filename("df_plugin_codeanatomy")
-    for profile in ("release", "debug"):
-        candidate = root / "rust" / "df_plugin_codeanatomy" / "target" / profile / lib_name
-        if candidate.exists():
-            return candidate
-    msg = (
-        "DataFusion plugin library not found. Set CODEANATOMY_DF_PLUGIN_PATH or build "
-        "rust/df_plugin_codeanatomy to produce the shared library."
-    )
-    raise FileNotFoundError(msg)
-
-
 def _default_udf_plugin_options(profile: DataFusionRuntimeProfile) -> dict[str, object]:
     options: dict[str, object] = {
         "enable_async": profile.enable_async_udfs,
@@ -194,7 +170,7 @@ def _default_udf_plugin_options(profile: DataFusionRuntimeProfile) -> dict[str, 
 def _default_plugin_spec(profile: DataFusionRuntimeProfile) -> DataFusionPluginSpec:
     from datafusion_engine.plugin_manager import DataFusionPluginSpec
 
-    plugin_path = _default_df_plugin_path()
+    plugin_path = resolve_plugin_path()
     return DataFusionPluginSpec(
         path=str(plugin_path),
         udf_options=_default_udf_plugin_options(profile),
@@ -207,6 +183,7 @@ def _default_plugin_spec(profile: DataFusionRuntimeProfile) -> DataFusionPluginS
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
 logger = logging.getLogger(__name__)
+_RUNTIME_SESSION_ID: Final[str] = uuid7_str()
 
 KIB: int = 1024
 MIB: int = 1024 * KIB
@@ -1048,7 +1025,7 @@ def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
 
 def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError:
         module = None
     if module is not None:
@@ -1061,7 +1038,7 @@ def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
 
 def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError:
         module = None
     if module is not None:
@@ -1489,13 +1466,13 @@ def _load_schema_evolution_adapter_factory() -> object:
         Raised when the adapter factory is not callable.
     """
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion._internal."
         raise RuntimeError(msg) from exc
     factory = getattr(module, "schema_evolution_adapter_factory", None)
     if not callable(factory):
-        msg = "Schema evolution adapter factory is not available in datafusion_ext."
+        msg = "Schema evolution adapter factory is not available in datafusion._internal."
         raise TypeError(msg)
     return factory()
 
@@ -1522,13 +1499,13 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         Raised when the native installer is not callable.
     """
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion._internal."
         raise RuntimeError(msg) from exc
     installer = getattr(module, "install_schema_evolution_adapter_factory", None)
     if not callable(installer):
-        msg = "Schema evolution adapter installer is not available in datafusion_ext."
+        msg = "Schema evolution adapter installer is not available in datafusion._internal."
         raise TypeError(msg)
     installer(ctx)
 
@@ -1961,7 +1938,7 @@ def diagnostics_substrait_fallback_hook(
     """
 
     def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         recorder_sink.record_events(
             "substrait_fallbacks_v1",
             [
@@ -1993,7 +1970,7 @@ def diagnostics_explain_hook(
     """
 
     def _hook(sql: str, rows: ExplainRows) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         recorder_sink.record_events(
             "datafusion_explains_v1",
             [
@@ -2021,7 +1998,7 @@ def diagnostics_plan_artifacts_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         normalized = dict(payload)
         if "plan_identity_hash" not in normalized:
             fingerprint_value = normalized.get("plan_fingerprint")
@@ -2046,7 +2023,7 @@ def diagnostics_semantic_diff_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         recorder_sink.record_artifact("datafusion_semantic_diff_v1", payload)
 
     return _hook
@@ -2064,7 +2041,7 @@ def diagnostics_sql_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         recorder_sink.record_artifact("datafusion_sql_ingest_v1", payload)
 
     return _hook
@@ -2082,7 +2059,7 @@ def diagnostics_arrow_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
         recorder_sink.record_artifact("datafusion_arrow_ingest_v1", payload)
 
     return _hook
@@ -2332,19 +2309,6 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
     }
 
 
-def _apply_optional_settings(
-    payload: dict[str, str],
-    entries: Mapping[str, object | None],
-) -> None:
-    for key, value in entries.items():
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            payload[key] = str(value).lower()
-        else:
-            payload[key] = str(value)
-
-
 def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]:
     enable_ident_normalization = _effective_ident_normalization(profile)
     payload: dict[str, str] = {
@@ -2362,7 +2326,13 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
         ),
         "datafusion.execution.objectstore_writer_buffer_size": profile.objectstore_writer_buffer_size,
     }
-    _apply_optional_settings(payload, optional_values)
+    for key, value in optional_values.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            payload[key] = str(value).lower()
+        else:
+            payload[key] = str(value)
     return payload
 
 
@@ -3089,6 +3059,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _resolve_plugin_specs(self) -> tuple[DataFusionPluginSpec, ...]:
         if self.plugin_specs:
+            for spec in self.plugin_specs:
+                assert_plugin_available(Path(spec.path))
             defaults = _default_udf_plugin_options(self)
             return tuple(
                 replace(spec, udf_options=defaults)
@@ -3096,6 +3068,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 else spec
                 for spec in self.plugin_specs
             )
+        assert_plugin_available()
         return (_default_plugin_spec(self),)
 
     def _resolve_plugin_manager(
@@ -3280,26 +3253,26 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         Returns
         -------
         _DeltaRuntimeEnvOptions | None
-            Delta runtime env options object for datafusion_ext, or ``None`` when
+            Delta runtime env options object for datafusion._internal, or ``None`` when
             no delta-specific overrides are configured.
 
         Raises
         ------
         RuntimeError
-            Raised when datafusion_ext is unavailable.
+            Raised when datafusion._internal is unavailable.
         TypeError
             Raised when the delta runtime env options class is unavailable.
         """
         if self.delta_max_spill_size is None and self.delta_max_temp_directory_size is None:
             return None
         try:
-            module = importlib.import_module("datafusion_ext")
+            module = importlib.import_module("datafusion._internal")
         except ImportError as exc:
-            msg = "Delta runtime env options require datafusion_ext."
+            msg = "Delta runtime env options require datafusion._internal."
             raise RuntimeError(msg) from exc
         options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
         if not callable(options_cls):
-            msg = "datafusion_ext.DeltaRuntimeEnvOptions is unavailable."
+            msg = "datafusion._internal.DeltaRuntimeEnvOptions is unavailable."
             raise TypeError(msg)
         options = cast("_DeltaRuntimeEnvOptions", options_cls())
         if self.delta_max_spill_size is not None:
@@ -4914,7 +4887,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ctx: SessionContext,
     ) -> tuple[bool, bool]:
         try:
-            module = importlib.import_module("datafusion_ext")
+            module = importlib.import_module("datafusion._internal")
         except ImportError:
             return False, False
         installer = getattr(module, "install_delta_plan_codecs", None)
@@ -5083,7 +5056,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         try:
             _register_cache_introspection_functions(ctx)
         except ImportError as exc:
-            msg = "Cache table functions require datafusion_ext."
+            msg = "Cache table functions require datafusion._internal."
             raise RuntimeError(msg) from exc
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Cache table function registration failed: {exc}"
@@ -5122,7 +5095,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         cause: Exception | None = None
         ctx: SessionContext | None = None
         try:
-            module = importlib.import_module("datafusion_ext")
+            module = importlib.import_module("datafusion._internal")
         except ImportError as exc:
             available = False
             error = str(exc)
@@ -5130,7 +5103,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         else:
             builder = getattr(module, "delta_session_context", None)
             if not callable(builder):
-                error = "datafusion_ext.delta_session_context is unavailable."
+                error = "datafusion._internal.delta_session_context is unavailable."
                 cause = TypeError(error)
             else:
                 builder_fn = cast(
@@ -5153,7 +5126,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     cause = exc
                 else:
                     if not isinstance(ctx, SessionContext):
-                        error = "datafusion_ext.delta_session_context must return a SessionContext."
+                        error = "datafusion._internal.delta_session_context must return a SessionContext."
                         cause = TypeError(error)
                         ctx = None
                     else:
@@ -5164,7 +5137,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             error=error,
         )
         if error is not None:
-            msg = "Delta session defaults require datafusion_ext."
+            msg = "Delta session defaults require datafusion._internal."
             raise RuntimeError(msg) from cause
         if ctx is None:
             msg = "Delta session context construction failed."
@@ -5353,13 +5326,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return
         if self.tracing_hook is None:
             try:
-                module = importlib.import_module("datafusion_ext")
+                module = importlib.import_module("datafusion._internal")
             except ImportError as exc:
-                msg = "Tracing enabled but datafusion_ext is unavailable."
+                msg = "Tracing enabled but datafusion._internal is unavailable."
                 raise ValueError(msg) from exc
             install = getattr(module, "install_tracing", None)
             if not callable(install):
-                msg = "Tracing enabled but datafusion_ext.install_tracing is unavailable."
+                msg = "Tracing enabled but datafusion._internal.install_tracing is unavailable."
                 raise ValueError(msg)
             install(ctx)
             return

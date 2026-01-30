@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +43,7 @@ from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake import delta_schema_configuration, delta_write_configuration
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
@@ -329,7 +329,7 @@ def write_param_tables_delta(
         configuration.update(delta_schema_configuration(schema_policy) or {})
         df = datafusion_from_arrow(
             session_runtime.ctx,
-            name=f"__param_table_{logical_name}_{uuid.uuid4().hex}",
+            name=f"__param_table_{logical_name}_{uuid7_hex()}",
             value=artifact.table,
         )
         format_options: dict[str, object] = {

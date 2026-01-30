@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -29,6 +28,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from obs.otel import OtelBootstrapOptions, configure_otel
 from storage.deltalake import DeltaWriteResult
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import SessionRuntime
@@ -462,7 +462,7 @@ def write_extract_outputs(
     session_runtime = runtime_profile.session_runtime()
     df = datafusion_from_arrow(
         session_runtime.ctx,
-        name=f"__extract_output_{uuid.uuid4().hex}",
+        name=f"__extract_output_{uuid7_hex()}",
         value=reader,
     )
     commit_metadata = {

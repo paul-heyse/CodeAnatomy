@@ -643,7 +643,7 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
     Raises
     ------
     ImportError
-        Raised when ``datafusion_ext`` is not available.
+        Raised when ``datafusion._internal`` is not available.
     TypeError
         Raised when the cache table registration hook is unavailable.
     """
@@ -656,13 +656,13 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
         "predicate_cache_size": config.predicate_cache_size,
     }
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:
-        msg = "datafusion_ext is required for cache introspection tables."
+        msg = "datafusion._internal is required for cache introspection tables."
         raise ImportError(msg) from exc
     register = getattr(module, "register_cache_tables", None)
     if not callable(register):
-        msg = "datafusion_ext.register_cache_tables is unavailable."
+        msg = "datafusion._internal.register_cache_tables is unavailable."
         raise TypeError(msg)
     register(ctx, payload)
 

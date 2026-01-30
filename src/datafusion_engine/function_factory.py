@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
+from datafusion_engine.arrow_schema.field_builders import (
+    bool_field,
+    int32_field,
+    list_field,
+    string_field,
+)
 from storage.ipc_utils import payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -22,27 +28,27 @@ POLICY_PAYLOAD_VERSION: int = 1
 
 _PARAMETER_SCHEMA = pa.struct(
     [
-        pa.field("name", pa.string()),
-        pa.field("dtype", pa.string()),
+        string_field("name"),
+        string_field("dtype"),
     ]
 )
 _PRIMITIVE_SCHEMA = pa.struct(
     [
-        pa.field("name", pa.string()),
-        pa.field("params", pa.list_(_PARAMETER_SCHEMA)),
-        pa.field("return_type", pa.string()),
-        pa.field("volatility", pa.string()),
-        pa.field("description", pa.string()),
-        pa.field("supports_named_args", pa.bool_()),
+        string_field("name"),
+        list_field("params", _PARAMETER_SCHEMA),
+        string_field("return_type"),
+        string_field("volatility"),
+        string_field("description"),
+        bool_field("supports_named_args"),
     ]
 )
 _POLICY_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32()),
-        pa.field("prefer_named_arguments", pa.bool_()),
-        pa.field("allow_async", pa.bool_()),
-        pa.field("domain_operator_hooks", pa.list_(pa.string())),
-        pa.field("primitives", pa.list_(_PRIMITIVE_SCHEMA)),
+        int32_field("version"),
+        bool_field("prefer_named_arguments"),
+        bool_field("allow_async"),
+        list_field("domain_operator_hooks", pa.string()),
+        list_field("primitives", _PRIMITIVE_SCHEMA),
     ]
 )
 
@@ -184,7 +190,7 @@ def _load_extension() -> object:
     Returns
     -------
     object
-        Imported datafusion_ext module.
+        Imported datafusion._internal module.
 
     Raises
     ------
@@ -194,11 +200,11 @@ def _load_extension() -> object:
         Raised when a nested dependency import fails.
     """
     try:
-        return importlib.import_module("datafusion_ext")
+        return importlib.import_module("datafusion._internal")
     except ModuleNotFoundError as exc:
-        if exc.name != "datafusion_ext":
+        if exc.name != "datafusion._internal":
             raise
-        msg = "datafusion_ext is required for native FunctionFactory installation."
+        msg = "datafusion._internal is required for native FunctionFactory installation."
         raise ImportError(msg) from exc
 
 
@@ -213,7 +219,7 @@ def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> 
     module = _load_extension()
     install = getattr(module, "install_function_factory", None)
     if not callable(install):
-        msg = "datafusion_ext.install_function_factory is unavailable."
+        msg = "datafusion._internal.install_function_factory is unavailable."
         raise TypeError(msg)
     install(ctx, payload)
 

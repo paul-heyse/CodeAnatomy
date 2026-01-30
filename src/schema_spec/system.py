@@ -57,7 +57,7 @@ from storage.dataset_sources import (
 )
 from storage.deltalake import DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
-from utils.validation import find_missing
+from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.expr_spec import ExprSpec
@@ -390,19 +390,15 @@ class ContractSpec:
     view_specs: tuple[ViewSpec, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate contract spec invariants.
-
-        Raises
-        ------
-        ValueError
-            Raised when virtual field docs reference undefined virtual fields.
-        """
+        """Validate contract spec invariants."""
         if self.virtual_field_docs is None:
             return
-        missing = find_missing(self.virtual_field_docs, self.virtual_fields)
-        if missing:
-            msg = f"virtual_field_docs keys missing in virtual_fields: {missing}"
-            raise ValueError(msg)
+        validate_required_items(
+            self.virtual_field_docs,
+            self.virtual_fields,
+            item_label="virtual_field_docs keys in virtual_fields",
+            error_type=ValueError,
+        )
         _validate_view_specs(self.view_specs, label="contract")
 
     def to_contract(self) -> Contract:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import uuid
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -16,6 +15,7 @@ from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -185,7 +185,7 @@ def _worklist_stream(
 ) -> Iterator[FileContext]:
     session_runtime = runtime_profile.session_runtime()
     df_ctx = session_runtime.ctx
-    repo_name = f"__repo_files_{uuid.uuid4().hex}"
+    repo_name = f"__repo_files_{uuid7_hex()}"
     output_exists = _table_exists(df_ctx, output_table)
     output_location = runtime_profile.dataset_location(output_table)
     use_output = output_exists or output_location is not None

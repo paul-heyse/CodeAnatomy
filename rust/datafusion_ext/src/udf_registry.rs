@@ -11,7 +11,7 @@ use crate::udf_async;
 use crate::{udaf_builtin, udf_custom, udtf_builtin, udtf_external, udwf_builtin};
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UdfKind {
     Scalar,
     Aggregate,
@@ -218,25 +218,27 @@ pub fn all_udfs() -> Vec<UdfSpec> {
 }
 
 pub fn all_udfs_with_async(enable_async: bool) -> Result<Vec<UdfSpec>> {
-    let mut specs = all_udfs();
-    if enable_async {
-        #[cfg(feature = "async-udf")]
-        {
-            specs.push(UdfSpec {
-                name: udf_async::ASYNC_ECHO_NAME,
-                kind: UdfKind::Scalar,
-                builder: || UdfHandle::Scalar(udf_async::async_echo_udf()),
-                aliases: &[],
-            });
-        }
-        #[cfg(not(feature = "async-udf"))]
-        {
-            return Err(DataFusionError::Plan(
-                "Async UDFs require the async-udf feature".into(),
-            ));
-        }
+    let specs = all_udfs();
+    if !enable_async {
+        return Ok(specs);
     }
-    Ok(specs)
+    #[cfg(feature = "async-udf")]
+    {
+        let mut specs = specs;
+        specs.push(UdfSpec {
+            name: udf_async::ASYNC_ECHO_NAME,
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_async::async_echo_udf()),
+            aliases: &[],
+        });
+        return Ok(specs);
+    }
+    #[cfg(not(feature = "async-udf"))]
+    {
+        return Err(DataFusionError::Plan(
+            "Async UDFs require the async-udf feature".into(),
+        ));
+    }
 }
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {
@@ -254,9 +256,11 @@ pub fn register_all(ctx: &SessionContext) -> Result<()> {
 pub fn register_all_with_policy(
     ctx: &SessionContext,
     enable_async: bool,
-    _async_udf_timeout_ms: Option<u64>,
-    _async_udf_batch_size: Option<usize>,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
 ) -> Result<()> {
+    #[cfg(not(feature = "async-udf"))]
+    let _ = (async_udf_timeout_ms, async_udf_batch_size);
     let state = ctx.state();
     let config_options = state.config_options();
     for spec in all_udfs() {

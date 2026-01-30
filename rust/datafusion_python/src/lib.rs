@@ -46,6 +46,7 @@ mod functions;
 pub mod physical_plan;
 mod pyarrow_filter_expression;
 pub mod pyarrow_util;
+pub mod pyo3_utils;
 mod record_batch;
 pub mod sql;
 pub mod store;
@@ -61,33 +62,32 @@ mod udf;
 pub mod udtf;
 mod udwf;
 pub mod utils;
-mod codeanatomy_ext;
-mod delta_control_plane;
-mod delta_maintenance;
-mod delta_mutations;
-mod delta_observability;
-mod delta_protocol;
-mod expr_planner;
-mod function_factory;
-mod function_rewrite;
-mod registry_snapshot;
-mod udaf_builtin;
+pub mod codeanatomy_ext;
+pub use datafusion_ext::delta_control_plane;
+pub use datafusion_ext::delta_maintenance;
+pub use datafusion_ext::delta_mutations;
+pub use datafusion_ext::delta_observability;
+pub use datafusion_ext::delta_protocol;
+pub use datafusion_ext::expr_planner;
+pub use datafusion_ext::function_factory;
+pub use datafusion_ext::function_rewrite;
+pub use datafusion_ext::registry_snapshot;
+pub use datafusion_ext::udaf_builtin;
 #[cfg(feature = "async-udf")]
-mod udf_async;
+pub use datafusion_ext::udf_async;
+pub use datafusion_ext::udf_custom;
+pub use datafusion_ext::udf_config;
 mod udf_builtin;
-mod udf_custom;
-mod udf_docs;
-mod udf_registry;
-mod udtf_builtin;
-mod udtf_external;
-mod udwf_builtin;
+mod udf_custom_py;
+pub use datafusion_ext::udf_docs;
+pub use datafusion_ext::udf_registry;
+pub use datafusion_ext::udtf_builtin;
+pub use datafusion_ext::udtf_external;
+pub use datafusion_ext::udwf_builtin;
 
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-
-// Used to define Tokio Runtime as a Python module attribute
-pub(crate) struct TokioRuntime(tokio::runtime::Runtime);
 
 /// Low-level DataFusion internal package.
 ///
@@ -145,11 +145,11 @@ fn _internal(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     store::init_module(&store)?;
     m.add_submodule(&store)?;
 
+    codeanatomy_ext::init_internal_module(py, &m)?;
+
     // Register substrait as a submodule
     #[cfg(feature = "substrait")]
     setup_substrait_module(py, &m)?;
-
-    codeanatomy_ext::init_module(py, &m)?;
 
     Ok(())
 }

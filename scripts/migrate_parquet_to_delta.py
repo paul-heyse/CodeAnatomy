@@ -10,7 +10,6 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from uuid import uuid4
 
 import pyarrow.parquet as pq
 
@@ -18,6 +17,7 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from storage.deltalake import delta_table_version
+from utils.uuid_factory import uuid7_hex
 
 
 @dataclass(frozen=True)
@@ -169,7 +169,7 @@ def migrate_parquet_to_delta(
             df = read_parquet(source)
         else:
             table = pq.read_table(source)
-            temp_name = f"__parquet_{uuid4().hex}"
+            temp_name = f"__parquet_{uuid7_hex()}"
             adapter.register_record_batches(temp_name, [list(table.to_batches())])
             df = ctx.table(temp_name)
 

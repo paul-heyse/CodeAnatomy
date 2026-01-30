@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
-import os
 from importlib.metadata import PackageNotFoundError, version
+
+from utils.env_utils import env_text
 
 _SCHEMA_URL_ENV = "CODEANATOMY_OTEL_SCHEMA_URL"
 _ALT_SCHEMA_URL_ENV = "OTEL_SCHEMA_URL"
 
 
 def _resolve_schema_url() -> str | None:
-    raw = os.environ.get(_SCHEMA_URL_ENV) or os.environ.get(_ALT_SCHEMA_URL_ENV)
-    if raw is None:
-        return None
-    value = raw.strip()
-    return value or None
+    value = env_text(_SCHEMA_URL_ENV)
+    if value is None:
+        value = env_text(_ALT_SCHEMA_URL_ENV)
+    return value
 
 
 def _resolve_instrumentation_version() -> str | None:
-    env_version = os.environ.get("CODEANATOMY_SERVICE_VERSION")
+    env_version = env_text("CODEANATOMY_SERVICE_VERSION")
     if env_version:
-        value = env_version.strip()
-        if value:
-            return value
+        return env_version
     for package in ("codeanatomy", "codeanatomy-engine"):
         try:
             return version(package)

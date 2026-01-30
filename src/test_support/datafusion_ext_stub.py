@@ -7,6 +7,29 @@ from datafusion import Expr, SessionContext, lit
 IS_STUB: bool = True
 
 
+def plugin_library_path() -> str:
+    """Return a placeholder plugin library path for stubs.
+
+    Returns
+    -------
+    str
+        Empty string placeholder.
+    """
+    return ""
+
+
+def plugin_manifest(path: str | None = None) -> dict[str, object]:
+    """Return a stub plugin manifest payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Stub manifest payload.
+    """
+    _ = path
+    return {"stub": True}
+
+
 def _stub_expr(*values: object) -> Expr:
     """Return a placeholder DataFusion expression.
 

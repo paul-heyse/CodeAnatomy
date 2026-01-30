@@ -6,12 +6,11 @@ import contextlib
 from collections.abc import Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
 
-from datafusion import SessionContext
-
-import datafusion_ext
+from datafusion import SessionContext, _internal as datafusion_internal
+from datafusion_engine.plugin_discovery import assert_plugin_available
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
-from utils.validation import find_missing
+from utils.validation import validate_required_items
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
@@ -42,9 +41,10 @@ RustUdfSnapshot = Mapping[str, object]
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    snapshot = datafusion_ext.registry_snapshot(ctx)
+    assert_plugin_available()
+    snapshot = datafusion_internal.registry_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
-        msg = "datafusion_ext.registry_snapshot returned a non-mapping payload."
+        msg = "datafusion._internal.registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     payload = dict(snapshot)
     payload.pop("pycapsule_udfs", None)
@@ -65,6 +65,20 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("short_circuits", {})
     payload.setdefault("config_defaults", {})
     payload.setdefault("custom_udfs", [])
+    names = _snapshot_names(payload)
+    param_names = _mutable_mapping(payload, "parameter_names")
+    volatility = _mutable_mapping(payload, "volatility")
+    signature_inputs = _mutable_mapping(payload, "signature_inputs")
+    return_types = _mutable_mapping(payload, "return_types")
+    for name in names:
+        param_names.setdefault(name, ())
+        volatility.setdefault(name, "volatile")
+        signature_inputs.setdefault(name, ())
+        return_types.setdefault(name, ())
+    payload["parameter_names"] = param_names
+    payload["volatility"] = volatility
+    payload["signature_inputs"] = signature_inputs
+    payload["return_types"] = return_types
     if ctx in _RUST_UDF_POLICIES:
         enable_async, timeout_ms, batch_size = _RUST_UDF_POLICIES[ctx]
         payload["async_udf_policy"] = {
@@ -73,6 +87,20 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
             "batch_size": batch_size,
         }
     return payload
+
+
+def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
+    """Return a mutable mapping from a payload entry.
+
+    Returns
+    -------
+    dict[str, object]
+        Mutable mapping for the requested key.
+    """
+    value = payload.get(key)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
 
 
 def _require_sequence(snapshot: Mapping[str, object], *, name: str) -> Sequence[object]:
@@ -181,10 +209,12 @@ def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
 
 
 def _validate_required_snapshot_keys(snapshot: Mapping[str, object]) -> None:
-    missing = find_missing(_REQUIRED_SNAPSHOT_KEYS, snapshot)
-    if missing:
-        msg = f"Rust UDF snapshot missing required keys: {missing}."
-        raise ValueError(msg)
+    validate_required_items(
+        _REQUIRED_SNAPSHOT_KEYS,
+        snapshot,
+        item_label="Rust UDF snapshot keys",
+        error_type=ValueError,
+    )
 
 
 def _require_snapshot_metadata(
@@ -296,10 +326,12 @@ def validate_required_udfs(
     if not required:
         return
     names = _snapshot_names(snapshot)
-    missing = find_missing(required, names)
-    if missing:
-        msg = f"Missing required Rust UDFs: {sorted(missing)}."
-        raise ValueError(msg)
+    validate_required_items(
+        required,
+        names,
+        item_label="Rust UDFs",
+        error_type=ValueError,
+    )
     aliases = _alias_to_canonical(snapshot)
     signature_inputs = _require_mapping(snapshot, name="signature_inputs")
     return_types = _require_mapping(snapshot, name="return_types")
@@ -336,9 +368,10 @@ def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
 
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    snapshot = datafusion_ext.udf_docs_snapshot(ctx)
+    assert_plugin_available()
+    snapshot = datafusion_internal.udf_docs_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
-        msg = "datafusion_ext.udf_docs_snapshot returned a non-mapping payload."
+        msg = "datafusion._internal.udf_docs_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     return dict(snapshot)
 
@@ -497,7 +530,7 @@ def _async_udf_policy(
 
 
 def _install_udf_config(ctx: SessionContext) -> None:
-    installer = getattr(datafusion_ext, "install_codeanatomy_udf_config", None)
+    installer = getattr(datafusion_internal, "install_codeanatomy_udf_config", None)
     if callable(installer):
         with contextlib.suppress(RuntimeError, TypeError, ValueError):
             installer(ctx)

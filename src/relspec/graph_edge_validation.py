@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import GraphEdge, GraphNode, TaskGraph, TaskNode
+from utils.validation import find_missing
 
 
 @dataclass(frozen=True)
@@ -139,11 +140,7 @@ def validate_edge_requirements(
         if not isinstance(edge_data, GraphEdge):
             continue
         available_cols = catalog.columns_by_dataset.get(edge_data.name)
-        if (
-            edge_data.required_columns
-            and available_cols is not None
-            and not set(edge_data.required_columns).issubset(available_cols)
-        ):
+        if _missing_required_columns(edge_data.required_columns, available_cols):
             return False
         available_types = catalog.types_by_dataset.get(edge_data.name)
         if (
@@ -274,10 +271,10 @@ def _edge_validation_result(
 def _missing_required_columns(
     required_columns: tuple[str, ...],
     available_columns: set[str] | None,
-) -> set[str]:
+) -> tuple[str, ...]:
     if available_columns is None:
-        return set()
-    return set(required_columns) - available_columns
+        return ()
+    return tuple(find_missing(required_columns, available_columns))
 
 
 def validate_graph_edges(

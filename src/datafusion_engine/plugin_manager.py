@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol, cast
 
 from datafusion import SessionContext
@@ -116,13 +116,22 @@ class DataFusionPluginManager:
         self._handles: dict[str, object] = {}
 
     def load_all(self) -> None:
-        """Load all plugin libraries and cache the handles."""
+        """Load all plugin libraries and cache the handles.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when a configured plugin path does not exist.
+        """
         if not self.specs:
             return
         module = _load_extension()
         for spec in self.specs:
             if spec.path in self._handles:
                 continue
+            if not Path(spec.path).exists():
+                msg = f"DataFusion plugin library not found at {spec.path!r}."
+                raise RuntimeError(msg)
             logger.info("Loading DataFusion plugin: %s", spec.path)
             self._handles[spec.path] = module.load_df_plugin(spec.path)
 
@@ -186,26 +195,27 @@ class DataFusionPluginManager:
             else:
                 msg = "Multiple plugins configured; specify plugin_path."
                 raise RuntimeError(msg)
-        handle = self._handles.get(plugin_path)
-        if handle is None:
-            msg = f"DataFusion plugin handle not loaded for {plugin_path!r}."
-            raise RuntimeError(msg)
         module = _load_extension()
+        create_provider = getattr(module, "create_df_plugin_table_provider", None)
         options_json = json.dumps(options, sort_keys=True) if options is not None else None
-        return module.create_df_plugin_table_provider(
-            handle,
-            provider_name,
-            options_json,
-        )
+        if callable(create_provider):
+            handle = self._handles.get(plugin_path)
+            if handle is None:
+                msg = f"DataFusion plugin handle not loaded for {plugin_path!r}."
+                raise RuntimeError(msg)
+            return create_provider(handle, provider_name, options_json)
+
+        msg = "create_df_plugin_table_provider is unavailable in datafusion_ext."
+        raise TypeError(msg)
 
 
 def _load_extension() -> _PluginExtension:
     try:
-        module = importlib.import_module("datafusion_ext")
+        import datafusion_ext
     except ImportError as exc:  # pragma: no cover - validated at call sites
         msg = "DataFusion plugin manager requires datafusion_ext."
         raise RuntimeError(msg) from exc
-    return cast("_PluginExtension", module)
+    return cast("_PluginExtension", datafusion_ext)
 
 
 __all__ = [

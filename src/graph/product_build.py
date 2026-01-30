@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
-from uuid import uuid4
 
 from core_types import DeterminismTier, JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
@@ -29,6 +28,7 @@ from incremental.types import IncrementalConfig
 from obs.otel import OtelBootstrapOptions, configure_otel
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
+from utils.uuid_factory import uuid7_str
 
 GraphProduct = Literal["cpg"]
 
@@ -142,7 +142,7 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         overrides["writer_strategy"] = request.writer_strategy
     run_id = overrides.get("run_id")
     if not isinstance(run_id, str) or not run_id:
-        run_id = str(uuid4())
+        run_id = uuid7_str()
         overrides["run_id"] = run_id
 
     outputs = _outputs_for_request(request)

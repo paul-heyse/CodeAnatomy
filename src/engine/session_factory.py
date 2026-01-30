@@ -15,7 +15,7 @@ from engine.runtime_profile import (
     runtime_profile_snapshot,
 )
 from engine.session import EngineSession
-from obs.diagnostics import DiagnosticsCollector
+from obs.diagnostics import DiagnosticsCollector, record_plugin_diagnostics
 from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
@@ -54,6 +54,7 @@ def build_engine_session(
             runtime_profile=df_profile,
         )
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
+        record_plugin_diagnostics(diagnostics)
     datasets = DatasetCatalog()
     input_plugin_names: list[str] = []
     if df_profile is not None:

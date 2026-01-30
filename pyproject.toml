@@ -8,6 +8,7 @@ dependencies = [
     "pip>=25.3",
     "setuptools>=80.9.0",
     "datafusion>=50.1.0",
+    "datafusion_ext>=0.1.0",
     "rustworkx>=0.17.1",
     "rpygrep>=0.2.1",
     "pyyaml>=6.0.3",
@@ -70,7 +71,8 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-datafusion = { path = "rust/datafusion_python" }
+datafusion = { path = "dist/wheels/datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl" }
+datafusion_ext = { path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl" }
 
 [tool.ruff]
 line-length = 100

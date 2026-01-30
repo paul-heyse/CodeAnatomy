@@ -148,7 +148,9 @@ def _resolve_hamilton_telemetry_profile() -> HamiltonTelemetryProfile:
         profile_name
     )
     overrides = _resolve_hamilton_telemetry_overrides()
-    enable_tracker = overrides.enable_tracker if overrides.enable_tracker is not None else enable_tracker
+    enable_tracker = (
+        overrides.enable_tracker if overrides.enable_tracker is not None else enable_tracker
+    )
     capture_stats = (
         overrides.capture_stats if overrides.capture_stats is not None else capture_stats
     )

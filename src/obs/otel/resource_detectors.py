@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import functools
 import logging
-import os
-import uuid
 from collections.abc import Iterable, Mapping
 from importlib.metadata import EntryPoint, entry_points
 from typing import cast
 
 from opentelemetry.sdk.resources import Resource, ResourceDetector, get_aggregated_resources
+
+from utils.env_utils import env_text
+from utils.uuid_factory import secure_token_hex
 
 _LOGGER = logging.getLogger(__name__)
 _DEFAULT_DETECTORS = ("process", "os", "host", "container", "k8s")
@@ -25,12 +26,10 @@ def resolve_service_instance_id() -> str:
     str
         Stable instance identifier for this process.
     """
-    env_value = os.environ.get("OTEL_SERVICE_INSTANCE_ID") or os.environ.get(
-        "CODEANATOMY_SERVICE_INSTANCE_ID"
-    )
-    if env_value and env_value.strip():
-        return env_value.strip()
-    return uuid.uuid4().hex
+    env_value = env_text("OTEL_SERVICE_INSTANCE_ID") or env_text("CODEANATOMY_SERVICE_INSTANCE_ID")
+    if env_value:
+        return env_value
+    return secure_token_hex()
 
 
 def resolve_detector_names() -> tuple[str, ...]:
@@ -41,8 +40,8 @@ def resolve_detector_names() -> tuple[str, ...]:
     tuple[str, ...]
         Detector names to enable.
     """
-    raw = os.environ.get("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS")
-    if raw and raw.strip():
+    raw = env_text("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS")
+    if raw:
         requested = [part.strip() for part in raw.split(",") if part.strip()]
     else:
         requested = list(_DEFAULT_DETECTORS)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
@@ -17,6 +15,7 @@ from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
+from utils.uuid_factory import uuid7_hex
 from utils.validation import ensure_table
 
 
@@ -53,7 +52,7 @@ def _register_prev_exports(
     if prev_exports is None:
         empty = empty_table(dataset_schema("dim_exported_defs_v1"))
         return registry.register_table(empty, prefix="prev_exports")
-    name = f"__incremental_prev_exports_{uuid4().hex}"
+    name = f"__incremental_prev_exports_{uuid7_hex()}"
     register_delta_df(
         DeltaAccessContext(runtime=runtime),
         path=prev_exports,

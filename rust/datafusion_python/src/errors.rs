@@ -25,6 +25,8 @@ use prost::EncodeError;
 use pyo3::exceptions::PyException;
 use pyo3::PyErr;
 
+pub use datafusion_ext::errors::{to_datafusion_err, ExtError, ExtResult};
+
 pub type PyDataFusionResult<T> = std::result::Result<T, PyDataFusionError>;
 
 #[derive(Debug)]
@@ -34,6 +36,7 @@ pub enum PyDataFusionError {
     Common(String),
     PythonError(PyErr),
     EncodeError(EncodeError),
+    ExtError(ExtError),
 }
 
 impl fmt::Display for PyDataFusionError {
@@ -44,6 +47,7 @@ impl fmt::Display for PyDataFusionError {
             PyDataFusionError::PythonError(e) => write!(f, "Python error {e:?}"),
             PyDataFusionError::Common(e) => write!(f, "{e}"),
             PyDataFusionError::EncodeError(e) => write!(f, "Failed to encode substrait plan: {e}"),
+            PyDataFusionError::ExtError(e) => write!(f, "{e}"),
         }
     }
 }
@@ -63,6 +67,12 @@ impl From<InnerDataFusionError> for PyDataFusionError {
 impl From<PyErr> for PyDataFusionError {
     fn from(err: PyErr) -> PyDataFusionError {
         PyDataFusionError::PythonError(err)
+    }
+}
+
+impl From<ExtError> for PyDataFusionError {
+    fn from(err: ExtError) -> PyDataFusionError {
+        PyDataFusionError::ExtError(err)
     }
 }
 
@@ -91,8 +101,4 @@ pub fn py_datafusion_err(e: impl Debug) -> PyErr {
 
 pub fn py_unsupported_variant_err(e: impl Debug) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{e:?}"))
-}
-
-pub fn to_datafusion_err(e: impl Debug) -> InnerDataFusionError {
-    InnerDataFusionError::Execution(format!("{e:?}"))
 }

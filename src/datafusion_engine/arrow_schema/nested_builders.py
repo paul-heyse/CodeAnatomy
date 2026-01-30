@@ -18,7 +18,7 @@ from datafusion_engine.arrow_interop import (
     StructArrayLike,
 )
 from datafusion_engine.arrow_schema.types import list_view_type, map_type
-from utils.validation import find_missing
+from utils.validation import validate_required_items
 
 MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767
@@ -475,11 +475,6 @@ def struct_array_from_dicts(
     -------
     ArrayLike
         Struct array with inferred or explicit type.
-
-    Raises
-    ------
-    ValueError
-        Raised when a required field is missing from a non-null mapping.
     """
     normalized, mask_values = _normalize_struct_values(values)
     if struct_type is None:
@@ -490,10 +485,12 @@ def struct_array_from_dicts(
         for row in normalized:
             if row is None:
                 continue
-            missing = find_missing(required_fields, row)
-            if missing:
-                msg = f"Missing required struct field(s): {missing!r}."
-                raise ValueError(msg)
+            validate_required_items(
+                required_fields,
+                row,
+                item_label="struct field(s)",
+                error_type=ValueError,
+            )
     fields: dict[str, ArrayLike] = {}
     for struct_field in struct_type:
         column_values = _struct_column_values(normalized, struct_field=struct_field)

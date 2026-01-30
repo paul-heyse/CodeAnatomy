@@ -16,6 +16,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from core_types import JsonValue
 from datafusion_engine.delta_protocol import (
     DeltaFeatureGate,
     DeltaProtocolSnapshot,
@@ -31,7 +32,7 @@ from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from obs.otel.scopes import SCOPE_PLANNING
 from obs.otel.tracing import stage_span
-from serde_artifacts import DeltaInputPin, JsonValue, PlanArtifacts, PlanProtoStatus
+from serde_artifacts import DeltaInputPin, PlanArtifacts, PlanProtoStatus
 from serde_msgspec import to_builtins
 from serde_msgspec_ext import (
     ExecutionPlanProtoBytes,

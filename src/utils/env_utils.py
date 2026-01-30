@@ -39,6 +39,40 @@ def env_value(name: str) -> str | None:
     return stripped if stripped else None
 
 
+def env_text(
+    name: str,
+    *,
+    default: str | None = None,
+    strip: bool = True,
+    allow_empty: bool = False,
+) -> str | None:
+    """Return an environment variable string with optional normalization.
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    default
+        Default value if not set or empty (unless allow_empty is True).
+    strip
+        Whether to strip whitespace from the value.
+    allow_empty
+        Whether to return empty strings instead of the default.
+
+    Returns
+    -------
+    str | None
+        Parsed value, or default/None when missing.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip() if strip else raw
+    if not value and not allow_empty:
+        return default
+    return value
+
+
 # -----------------------------------------------------------------------------
 # Boolean Parsing
 # -----------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.hash_utils import hash128_from_text
+from utils.hashing import hash128_from_text
 
 _NULL_SEPARATOR = "\x1f"
 

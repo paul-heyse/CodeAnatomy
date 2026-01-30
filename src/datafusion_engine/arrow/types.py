@@ -21,7 +21,9 @@ class ListTypeProtocol(Protocol):
 class StructTypeProtocol(Protocol):
     """Protocol for Arrow struct types."""
 
-    def __iter__(self) -> Iterator[FieldLike]: ...
+    def __iter__(self) -> Iterator[FieldLike]:
+        """Iterate over struct fields."""
+        ...
 
 
 class MapTypeProtocol(Protocol):
@@ -38,7 +40,9 @@ class UnionTypeProtocol(Protocol):
     type_codes: Sequence[int]
     mode: str
 
-    def __iter__(self) -> Iterator[FieldLike]: ...
+    def __iter__(self) -> Iterator[FieldLike]:
+        """Iterate over union fields."""
+        ...
 
 
 def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:

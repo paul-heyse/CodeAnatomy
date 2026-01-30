@@ -184,7 +184,13 @@ def _setup_faulthandler() -> None:
 
 @pytest.fixture
 def df_profile() -> object:
-    """Provide a default DataFusion runtime profile for tests."""
+    """Provide a default DataFusion runtime profile for tests.
+
+    Returns
+    -------
+    object
+        Runtime profile instance for tests.
+    """
     from tests.test_helpers.datafusion_runtime import df_profile as _df_profile
 
     return _df_profile()
@@ -192,7 +198,13 @@ def df_profile() -> object:
 
 @pytest.fixture
 def df_ctx() -> object:
-    """Provide a default DataFusion session context for tests."""
+    """Provide a default DataFusion session context for tests.
+
+    Returns
+    -------
+    object
+        Session context instance for tests.
+    """
     from tests.test_helpers.datafusion_runtime import df_ctx as _df_ctx
 
     return _df_ctx()
@@ -200,7 +212,13 @@ def df_ctx() -> object:
 
 @pytest.fixture
 def diagnostic_profile() -> tuple[object, object]:
-    """Provide a runtime profile wired to a diagnostics collector."""
+    """Provide a runtime profile wired to a diagnostics collector.
+
+    Returns
+    -------
+    tuple[object, object]
+        Runtime profile and diagnostics collector tuple.
+    """
     from tests.test_helpers.diagnostics import diagnostic_profile as _diagnostic_profile
 
     return _diagnostic_profile()

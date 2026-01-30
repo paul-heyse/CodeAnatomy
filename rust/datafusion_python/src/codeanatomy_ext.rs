@@ -77,7 +77,7 @@ use crate::delta_observability::{
     scan_config_schema_ipc, snapshot_payload,
 };
 use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo};
-use crate::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
+use datafusion_ext::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
 use crate::{registry_snapshot, udf_builtin, udf_custom_py, udf_docs};
@@ -100,9 +100,9 @@ use pyo3::types::{
 use tokio::runtime::Runtime;
 
 macro_rules! register_pyfunctions {
-    ($module:expr, $mod_path:path, [$($func:ident),* $(,)?]) => {
+    ($module:expr, [$($func:path),* $(,)?]) => {
         $(
-            $module.add_function(pyo3::wrap_pyfunction!($mod_path::$func, $module)?)?;
+            $module.add_function(pyo3::wrap_pyfunction!($func, $module)?)?;
         )*
     };
 }
@@ -275,7 +275,7 @@ fn commit_options_from_params(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<DeltaCommitOptions> {
     let metadata = commit_metadata
@@ -348,7 +348,7 @@ fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> 
 }
 
 #[pyfunction]
-#[pyo3(signature = (allow_ddl = None, allow_dml = None, allow_statements = None))]
+#[pyo3(signature = (ctx, allow_ddl = None, allow_dml = None, allow_statements = None))]
 fn install_codeanatomy_policy_config(
     ctx: PyRef<PySessionContext>,
     allow_ddl: Option<bool>,
@@ -372,7 +372,7 @@ fn install_codeanatomy_policy_config(
 }
 
 #[pyfunction]
-#[pyo3(signature = (enabled = None))]
+#[pyo3(signature = (ctx, enabled = None))]
 fn install_codeanatomy_physical_config(
     ctx: PyRef<PySessionContext>,
     enabled: Option<bool>,
@@ -481,7 +481,12 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
 }
 
 #[pyfunction]
-#[pyo3(signature = (enable_async = false, async_udf_timeout_ms = None, async_udf_batch_size = None))]
+#[pyo3(signature = (
+    ctx,
+    enable_async = false,
+    async_udf_timeout_ms = None,
+    async_udf_batch_size = None
+))]
 fn register_codeanatomy_udfs(
     ctx: PyRef<PySessionContext>,
     enable_async: bool,
@@ -1718,7 +1723,7 @@ fn delta_write_ipc(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let storage = storage_options_map(storage_options);
@@ -1776,7 +1781,7 @@ fn delta_delete(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let storage = storage_options_map(storage_options);
@@ -1829,7 +1834,7 @@ fn delta_update(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     if updates.is_empty() {
@@ -1897,7 +1902,7 @@ fn delta_merge(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let matched_updates = matched_updates
@@ -1962,8 +1967,8 @@ fn delta_optimize_compact(
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    target_size: Option<usize>,
-    _max_concurrent_tasks: Option<usize>,
+    target_size: Option<i64>,
+    _max_concurrent_tasks: Option<i64>,
     min_reader_version: Option<i32>,
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
@@ -1972,7 +1977,7 @@ fn delta_optimize_compact(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let storage = storage_options_map(storage_options);
@@ -2032,7 +2037,7 @@ fn delta_vacuum(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let storage = storage_options_map(storage_options);
@@ -2090,7 +2095,7 @@ fn delta_restore(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let storage = storage_options_map(storage_options);
@@ -2142,7 +2147,7 @@ fn delta_set_properties(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     if properties.is_empty() {
@@ -2200,7 +2205,7 @@ fn delta_add_features(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     if features.is_empty() {
@@ -2258,7 +2263,7 @@ fn delta_add_constraints(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     if constraints.is_empty() {
@@ -2315,7 +2320,7 @@ fn delta_drop_constraints(
     app_id: Option<String>,
     app_version: Option<i64>,
     app_last_updated: Option<i64>,
-    max_retries: Option<usize>,
+    max_retries: Option<i64>,
     create_checkpoint: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     if constraints.is_empty() {
@@ -2461,108 +2466,105 @@ fn delta_data_checker(
 }
 
 pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_pyfunctions!(module, udf_custom_py, [
-        install_function_factory,
-        arrow_metadata,
-        semantic_tag,
-        stable_hash64,
-        stable_hash128,
-        prefixed_hash64,
-        stable_id,
-        stable_id_parts,
-        prefixed_hash_parts64,
-        stable_hash_any,
-        span_make,
-        span_len,
-        span_overlaps,
-        span_contains,
-        interval_align_score,
-        span_id,
-        utf8_normalize,
-        utf8_null_if_blank,
-        qname_normalize,
-        map_get_default,
-        map_normalize,
-        list_compact,
-        list_unique_sorted,
-        struct_pick,
-        cdf_change_rank,
-        cdf_is_upsert,
-        cdf_is_delete,
-        col_to_byte,
+    register_pyfunctions!(module, [
+        udf_custom_py::install_function_factory,
+        udf_custom_py::arrow_metadata,
+        udf_custom_py::semantic_tag,
+        udf_custom_py::stable_hash64,
+        udf_custom_py::stable_hash128,
+        udf_custom_py::prefixed_hash64,
+        udf_custom_py::stable_id,
+        udf_custom_py::stable_id_parts,
+        udf_custom_py::prefixed_hash_parts64,
+        udf_custom_py::stable_hash_any,
+        udf_custom_py::span_make,
+        udf_custom_py::span_len,
+        udf_custom_py::span_overlaps,
+        udf_custom_py::span_contains,
+        udf_custom_py::interval_align_score,
+        udf_custom_py::span_id,
+        udf_custom_py::utf8_normalize,
+        udf_custom_py::utf8_null_if_blank,
+        udf_custom_py::qname_normalize,
+        udf_custom_py::map_get_default,
+        udf_custom_py::map_normalize,
+        udf_custom_py::list_compact,
+        udf_custom_py::list_unique_sorted,
+        udf_custom_py::struct_pick,
+        udf_custom_py::cdf_change_rank,
+        udf_custom_py::cdf_is_upsert,
+        udf_custom_py::cdf_is_delete,
+        udf_custom_py::col_to_byte,
     ]);
-    register_pyfunctions!(module, udf_builtin, [
-        map_entries,
-        map_keys,
-        map_values,
-        map_extract,
-        list_extract,
-        list_unique,
-        first_value_agg,
-        last_value_agg,
-        count_distinct_agg,
-        string_agg,
-        row_number_window,
-        lag_window,
-        lead_window,
-        union_tag,
-        union_extract,
+    register_pyfunctions!(module, [
+        udf_builtin::map_entries,
+        udf_builtin::map_keys,
+        udf_builtin::map_values,
+        udf_builtin::map_extract,
+        udf_builtin::list_extract,
+        udf_builtin::list_unique,
+        udf_builtin::first_value_agg,
+        udf_builtin::last_value_agg,
+        udf_builtin::count_distinct_agg,
+        udf_builtin::string_agg,
+        udf_builtin::row_number_window,
+        udf_builtin::lag_window,
+        udf_builtin::lead_window,
+        udf_builtin::union_tag,
+        udf_builtin::union_extract,
     ]);
-    register_pyfunctions!(module, crate, [
-        install_codeanatomy_udf_config,
-        install_codeanatomy_policy_config,
-        install_codeanatomy_physical_config,
-        install_planner_rules,
-        install_physical_rules,
-        register_codeanatomy_udfs,
-        registry_snapshot_py,
-        udf_docs_snapshot,
-        load_df_plugin,
-        register_df_plugin_udfs,
-        register_df_plugin_table_functions,
-        create_df_plugin_table_provider,
-        register_df_plugin_table_providers,
-        register_df_plugin,
-        plugin_library_path,
-        plugin_manifest,
-        schema_evolution_adapter_factory,
-        parquet_listing_table_provider,
-        delta_table_provider_with_files,
-        install_expr_planners,
-        install_tracing,
-        register_cache_tables,
-        table_logical_plan,
-        table_dfschema_tree,
-        install_schema_evolution_adapter_factory,
-        registry_catalog_provider_factory,
-        install_delta_table_factory,
-        delta_session_context,
-        install_delta_plan_codecs,
-        delta_cdf_table_provider,
-        delta_snapshot_info,
-        validate_protocol_gate,
-        delta_add_actions,
-        delta_table_provider_from_session,
-        delta_scan_config_from_session,
-        delta_data_checker,
-        delta_write_ipc,
-        delta_delete,
-        delta_update,
-        delta_merge,
-        delta_optimize_compact,
-        delta_vacuum,
-        delta_restore,
-        delta_set_properties,
-        delta_add_features,
-        delta_add_constraints,
-        delta_drop_constraints,
-        delta_create_checkpoint,
-        delta_cleanup_metadata,
+    register_pyfunctions!(module, [
+        crate::codeanatomy_ext::install_codeanatomy_udf_config,
+        crate::codeanatomy_ext::install_codeanatomy_policy_config,
+        crate::codeanatomy_ext::install_codeanatomy_physical_config,
+        crate::codeanatomy_ext::install_planner_rules,
+        crate::codeanatomy_ext::install_physical_rules,
+        crate::codeanatomy_ext::register_codeanatomy_udfs,
+        crate::codeanatomy_ext::registry_snapshot_py,
+        crate::codeanatomy_ext::udf_docs_snapshot,
+        crate::codeanatomy_ext::load_df_plugin,
+        crate::codeanatomy_ext::register_df_plugin_udfs,
+        crate::codeanatomy_ext::register_df_plugin_table_functions,
+        crate::codeanatomy_ext::create_df_plugin_table_provider,
+        crate::codeanatomy_ext::register_df_plugin_table_providers,
+        crate::codeanatomy_ext::register_df_plugin,
+        crate::codeanatomy_ext::plugin_library_path,
+        crate::codeanatomy_ext::plugin_manifest,
+        crate::codeanatomy_ext::schema_evolution_adapter_factory,
+        crate::codeanatomy_ext::parquet_listing_table_provider,
+        crate::codeanatomy_ext::delta_table_provider_with_files,
+        crate::codeanatomy_ext::install_expr_planners,
+        crate::codeanatomy_ext::install_tracing,
+        crate::codeanatomy_ext::register_cache_tables,
+        crate::codeanatomy_ext::table_logical_plan,
+        crate::codeanatomy_ext::table_dfschema_tree,
+        crate::codeanatomy_ext::install_schema_evolution_adapter_factory,
+        crate::codeanatomy_ext::registry_catalog_provider_factory,
+        crate::codeanatomy_ext::install_delta_table_factory,
+        crate::codeanatomy_ext::delta_session_context,
+        crate::codeanatomy_ext::install_delta_plan_codecs,
+        crate::codeanatomy_ext::delta_cdf_table_provider,
+        crate::codeanatomy_ext::delta_snapshot_info,
+        crate::codeanatomy_ext::validate_protocol_gate,
+        crate::codeanatomy_ext::delta_add_actions,
+        crate::codeanatomy_ext::delta_table_provider_from_session,
+        crate::codeanatomy_ext::delta_scan_config_from_session,
+        crate::codeanatomy_ext::delta_data_checker,
+        crate::codeanatomy_ext::delta_write_ipc,
+        crate::codeanatomy_ext::delta_delete,
+        crate::codeanatomy_ext::delta_update,
+        crate::codeanatomy_ext::delta_merge,
+        crate::codeanatomy_ext::delta_optimize_compact,
+        crate::codeanatomy_ext::delta_vacuum,
+        crate::codeanatomy_ext::delta_restore,
+        crate::codeanatomy_ext::delta_set_properties,
+        crate::codeanatomy_ext::delta_add_features,
+        crate::codeanatomy_ext::delta_add_constraints,
+        crate::codeanatomy_ext::delta_drop_constraints,
+        crate::codeanatomy_ext::delta_create_checkpoint,
+        crate::codeanatomy_ext::delta_cleanup_metadata,
     ]);
     register_pyclasses!(module, [
-        DeltaAppTransaction,
-        DeltaCommitOptions,
-        DeltaFeatureGate,
         DeltaCdfOptions,
         DeltaRuntimeEnvOptions,
     ]);
@@ -2570,11 +2572,13 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
 }
 
 pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_pyfunctions!(module, crate, [
-        install_codeanatomy_udf_config,
-        create_df_plugin_table_provider,
-        plugin_library_path,
-        plugin_manifest,
+    register_pyfunctions!(module, [
+        crate::codeanatomy_ext::install_codeanatomy_udf_config,
+        crate::codeanatomy_ext::install_codeanatomy_policy_config,
+        crate::codeanatomy_ext::install_codeanatomy_physical_config,
+        crate::codeanatomy_ext::create_df_plugin_table_provider,
+        crate::codeanatomy_ext::plugin_library_path,
+        crate::codeanatomy_ext::plugin_manifest,
     ]);
     Ok(())
 }

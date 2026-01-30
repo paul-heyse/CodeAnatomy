@@ -8,7 +8,7 @@ from typing import cast
 import pyarrow as pa
 
 from tests.test_helpers.datafusion_runtime import df_profile
-from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.optional_deps import require_deltalake
 
 require_deltalake()
@@ -24,8 +24,10 @@ def test_delta_querybuilder_path(tmp_path: Path) -> None:
     _, _, table_path = write_delta_table(
         tmp_path,
         table=table,
-        profile=df_profile(),
-        table_name="delta_table",
+        options=DeltaSeedOptions(
+            profile=df_profile(),
+            table_name="delta_table",
+        ),
     )
 
     profile = DataFusionRuntimeProfile(

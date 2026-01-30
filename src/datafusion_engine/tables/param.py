@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import cache
@@ -15,6 +16,7 @@ from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_array_values
 from core.config_base import FingerprintableConfig, config_fingerprint
+from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from storage.ipc_utils import payload_hash
@@ -207,6 +209,108 @@ class ParamTableRegistry:
         return tables
 
 
+@dataclass(frozen=True)
+class DataFusionParamBindings:
+    """Resolved parameter bindings for DataFusion SQL execution."""
+
+    param_values: Mapping[str, object]
+    named_tables: Mapping[str, object]
+
+
+def resolve_param_bindings(
+    values: Mapping[str, object] | None,
+    *,
+    allowlist: Sequence[str] | None = None,
+    validate_names: bool = True,
+) -> DataFusionParamBindings:
+    """Resolve scalar and table-like parameter bindings.
+
+    Parameters
+    ----------
+    values
+        Parameter values keyed by name.
+    allowlist
+        Optional allowlist of permitted parameter names.
+    validate_names
+        Whether to validate parameter names against identifier rules.
+
+    Returns
+    -------
+    DataFusionParamBindings
+        Resolved scalar and table-like parameter bindings.
+
+    Raises
+    ------
+    ValueError
+        Raised when a parameter name is invalid or not allowlisted.
+    """
+    if not values:
+        return DataFusionParamBindings(param_values={}, named_tables={})
+    if allowlist is not None:
+        allowed = set(allowlist)
+        for name in values:
+            if name not in allowed:
+                msg = f"Parameter name {name!r} is not allowlisted."
+                raise ValueError(msg)
+    param_values: dict[str, object] = {}
+    named_tables: dict[str, object] = {}
+    for name, value in values.items():
+        if validate_names and not _IDENT_RE.match(name):
+            msg = f"Invalid parameter name: {name!r}."
+            raise ValueError(msg)
+        if _is_table_param(value):
+            named_tables[name] = value
+        else:
+            param_values[name] = value
+    return DataFusionParamBindings(param_values=param_values, named_tables=named_tables)
+
+
+@contextmanager
+def register_table_params(
+    ctx: SessionContext,
+    bindings: DataFusionParamBindings,
+) -> Iterator[None]:
+    """Register table-like parameters for SQL execution.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    bindings
+        Resolved table bindings to register.
+    """
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    registered: list[str] = []
+    for name, value in bindings.named_tables.items():
+        if isinstance(value, DataFrame):
+            adapter.register_view(name, value, overwrite=True, temporary=True)
+        else:
+            table = to_arrow_table(value)
+            adapter.register_arrow_table(name, table, overwrite=True)
+        registered.append(name)
+    try:
+        yield None
+    finally:
+        for name in registered:
+            adapter.deregister_table(name)
+
+
+@contextmanager
+def apply_bindings_to_context(
+    ctx: SessionContext,
+    bindings: DataFusionParamBindings,
+) -> Iterator[None]:
+    """Apply bindings to a DataFusion context for the scope of a block."""
+    with register_table_params(ctx, bindings):
+        yield None
+
+
+def _is_table_param(value: object) -> bool:
+    if isinstance(value, (pa.Table, pa.RecordBatch, pa.RecordBatchReader)):
+        return True
+    return isinstance(value, DataFrame)
+
+
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SCOPE_RE = re.compile(r"[^A-Za-z0-9_]+")
 
@@ -339,15 +443,19 @@ def _normalize_scope_key(value: str) -> str:
 
 
 __all__ = [
+    "DataFusionParamBindings",
     "ListParamSpec",
     "ParamTableArtifact",
     "ParamTablePolicy",
     "ParamTableRegistry",
     "ParamTableScope",
     "ParamTableSpec",
+    "apply_bindings_to_context",
     "build_param_table",
     "param_signature_from_array",
     "param_table_name",
+    "register_table_params",
+    "resolve_param_bindings",
     "scalar_param_signature",
     "unique_values",
 ]

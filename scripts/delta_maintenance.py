@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Run Delta Lake maintenance tasks (vacuum/checkpoint/cleanup)."""
+"""Run Delta Lake maintenance tasks (vacuum/checkpoint/cleanup).
+
+Deprecated: use `codeanatomy delta` subcommands instead.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from storage.deltalake import (
     DeltaVacuumOptions,
@@ -16,6 +19,9 @@ from storage.deltalake import (
     create_delta_checkpoint,
     vacuum_delta,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 @dataclass(frozen=True)

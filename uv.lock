@@ -338,7 +338,7 @@ wheels = [
 [[package]]
 name = "codeanatomy"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "ast-grep-py" },
@@ -413,7 +413,7 @@ requires-dist = [
     { name = "asyncio", specifier = ">=4.0.0" },
     { name = "basedpyright" },
     { name = "coverage", specifier = ">=7.12.0" },
-    { name = "cyclopts", specifier = ">=4.3.0" },
+    { name = "cyclopts", specifier = ">=4.4.1" },
     { name = "cython" },
     { name = "datafusion", path = "dist/wheels/datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl" },
     { name = "datafusion-ext", path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl" },
@@ -676,7 +676,7 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:eb890ac8d05ba4cb937f4f05fe728d7b3b500e26559a85933acb02c21981e73b" },
+    { filename = "datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:e11748e427f931ffd1b163caf97efe53d752c565f2ef77a4eaa46873d85fa456" },
 ]
 
 [package.metadata]
@@ -694,7 +694,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:76bde5ad5bbe1e9a429712a5573b0165b1b504b31898af49796015f569045c29" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:6ea1d0a51cd9b7e45bccde32d7a7a9c7d544fdb4eae9e99fc81fa5ae8005c280" },
 ]
 
 [package.metadata]

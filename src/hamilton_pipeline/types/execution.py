@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from core_types import JsonValue
     from datafusion_engine.arrow.interop import TableLike
-    from datafusion_engine.tables.spec import SimpleViewRef
+
+type SimpleViewRef = str
 
 
 ExecutorKind = Literal["threadpool", "multiprocessing", "dask", "ray"]

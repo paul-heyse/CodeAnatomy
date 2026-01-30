@@ -20,12 +20,12 @@ from datafusion_engine.arrow.metadata import (
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema.contracts import SchemaContract
 from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
-from datafusion_engine.views.graph import (
-    ViewNode,
+from datafusion_engine.views.bundle_extraction import (
     arrow_schema_from_df,
     extract_lineage_from_bundle,
     resolve_required_udfs_from_bundle,
 )
+from datafusion_engine.views.graph import ViewNode
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

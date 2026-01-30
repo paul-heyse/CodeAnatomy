@@ -1,0 +1,1 @@
+"""Golden CLI output tests."""

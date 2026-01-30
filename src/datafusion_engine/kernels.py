@@ -988,8 +988,8 @@ __all__ = [
     "DedupeSpec",
     "DedupeStrategy",
     "IntervalAlignOptions",
-    "SortKey",
     "PlanSortKey",
+    "SortKey",
     # Kernel functions
     "canonical_sort_if_canonical",
     "datafusion_kernel_registry",

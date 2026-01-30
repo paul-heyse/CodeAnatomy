@@ -52,7 +52,6 @@ from arrow_utils.core.ordering import OrderingLevel
 from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import ensure_path
-from datafusion_engine import sql_options as _sql_options
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.arrow.metadata import (
@@ -94,6 +93,7 @@ from datafusion_engine.schema.introspection import (
 )
 from datafusion_engine.schema.validation import _datafusion_type_name
 from datafusion_engine.session.runtime import schema_introspector_for_profile
+from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.metadata import (
     TableProviderCapsule,
     TableProviderMetadata,

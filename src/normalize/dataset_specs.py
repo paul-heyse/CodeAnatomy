@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
-from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from normalize.dataset_builders import build_dataset_spec, build_input_schema
 from normalize.dataset_rows import DATASET_ROWS, DatasetRow

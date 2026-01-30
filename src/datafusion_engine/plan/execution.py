@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from datafusion import SessionContext
+import pyarrow as pa
+from datafusion import DataFrameWriteOptions, SessionContext, col
 
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from schema_spec.policies import DataFusionWritePolicy
     from serde_artifacts import PlanArtifacts
 
 
@@ -133,10 +135,78 @@ def _telemetry_payload(start_time: float, *, emit_telemetry: bool) -> dict[str, 
     return {"duration_ms": duration_ms}
 
 
+def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
+    """Replay Substrait bytes into a DataFusion DataFrame.
+
+    Raises
+    ------
+    ValueError
+        Raised when Substrait replay is unavailable.
+    """
+    _ = (ctx, payload)
+    msg = "Substrait replay is unavailable in this build."
+    raise ValueError(msg)
+
+
+def validate_substrait_plan(
+    substrait_bytes: bytes,
+    *,
+    df: DataFrame | None = None,
+) -> Mapping[str, object] | None:
+    """Validate Substrait bytes against a DataFusion DataFrame.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Validation payload or ``None`` when validation is unavailable.
+    """
+    _ = (substrait_bytes, df)
+    return {"status": "unavailable", "reason": "substrait_deserialization_unavailable"}
+
+
+async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordBatch]:
+    """Yield RecordBatches asynchronously from a DataFusion DataFrame.
+
+    Yields
+    ------
+    pa.RecordBatch
+        Record batches from the DataFusion result.
+    """
+    import asyncio
+
+    reader = pa.RecordBatchReader.from_stream(df)
+    def _collect_batches() -> list[pa.RecordBatch]:
+        return list(reader)
+
+    batches = await asyncio.to_thread(_collect_batches)
+    for batch in batches:
+        yield batch
+
+
+def datafusion_write_options(policy: DataFusionWritePolicy) -> DataFrameWriteOptions:
+    """Return DataFusion write options derived from a write policy.
+
+    Returns
+    -------
+    DataFrameWriteOptions
+        DataFusion write options derived from the policy.
+    """
+    sort_exprs = tuple(col(name) for name in policy.sort_by) if policy.sort_by else None
+    return DataFrameWriteOptions(
+        partition_by=tuple(policy.partition_by),
+        single_file_output=policy.single_file_output,
+        sort_by=sort_exprs,
+    )
+
+
 __all__ = [
     "PlanEmissionOptions",
     "PlanExecutionOptions",
     "PlanExecutionResult",
     "PlanScanOverrides",
+    "datafusion_to_async_batches",
+    "datafusion_write_options",
     "execute_plan_bundle",
+    "replay_substrait_bytes",
+    "validate_substrait_plan",
 ]

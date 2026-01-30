@@ -1,0 +1,19 @@
+Usage: codeanatomy delta COMMAND
+
+Delta Lake maintenance operations.
+
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ checkpoint   Create a Delta checkpoint.                                                                              │
+│ cleanup-log  Cleanup expired Delta log files.                                                                        │
+│ export       Clone a Delta snapshot into Delta storage.                                                              │
+│ restore      Restore a Delta table to a prior version or timestamp.                                                  │
+│ vacuum       Run Delta vacuum to remove expired files.                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Session ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Session and run context options.                                                                                     │
+│                                                                                                                      │
+│ --config --no-  Path to configuration file (overrides default search).                                               │
+│ --run-id --no-  Explicit run identifier (UUID7 generated if not provided).                                           │
+│ --log-level     Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]     │
+│                 [default: INFO]                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

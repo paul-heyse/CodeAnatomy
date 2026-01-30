@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Run the graph product build against a repo."""
+"""Run the graph product build against a repo.
+
+Deprecated: use `codeanatomy build` instead.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from core_types import DeterminismTier
 from graph import GraphProductBuildRequest, build_graph_product
 from hamilton_pipeline.types import ExecutionMode, ExecutorConfig, ScipIndexConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def _build_parser() -> argparse.ArgumentParser:

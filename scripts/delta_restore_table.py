@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Restore a Delta table to a prior version or timestamp."""
+"""Restore a Delta table to a prior version or timestamp.
+
+Deprecated: use `codeanatomy delta restore` instead.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from datafusion_engine.delta.control_plane import DeltaRestoreRequest, delta_restore
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 @dataclass(frozen=True)

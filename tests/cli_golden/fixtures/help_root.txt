@@ -1,0 +1,29 @@
+Usage: codeanatomy COMMAND
+
+CodeAnatomy CPG Builder - Inference-driven Code Property Graph generation.
+
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ build        Build the Code Property Graph for a repository.                                                         │
+│ config       Configuration management.                                                                               │
+│ delta        Delta Lake maintenance operations.                                                                      │
+│ diag         Generate a diagnostic report for pipeline outputs.                                                      │
+│ plan         Show the computed execution plan without running it.                                                    │
+│ --help (-h)  Display this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Session ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Session and run context options.                                                                                     │
+│                                                                                                                      │
+│ --config --no-  Path to configuration file (overrides default search).                                               │
+│ --run-id --no-  Explicit run identifier (UUID7 generated if not provided).                                           │
+│ --log-level     Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]     │
+│                 [default: INFO]                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Admin ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Administrative commands and help.                                                                                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│ Administrative commands and help.                                                                                    │
+│                                                                                                                      │
+│ version               Show version and engine information.                                                           │
+│ --install-completion  Install shell completion scripts.                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

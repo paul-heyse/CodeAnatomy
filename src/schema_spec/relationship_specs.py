@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
-from datafusion_engine.runtime import SessionRuntime, dataset_spec_from_context
-from datafusion_engine.schema_introspection import table_constraint_rows
+from datafusion_engine.schema.introspection import table_constraint_rows
+from datafusion_engine.session.runtime import SessionRuntime, dataset_spec_from_context
 from schema_spec.system import (
     ContractCatalogSpec,
     DatasetSpec,

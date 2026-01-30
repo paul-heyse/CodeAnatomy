@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.diagnostics import recorder_for_profile
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.write_pipeline import (
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.io.write import (
     WriteFormat,
     WriteMode,
     WritePipeline,
     WriteRequest,
     WriteResult,
 )
+from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from storage.deltalake import delta_schema_configuration, delta_write_configuration
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.uuid_factory import uuid7_hex

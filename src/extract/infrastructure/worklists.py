@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Protocol
 from datafusion import DataFrame, SessionContext, col
 
 from cache.diskcache_factory import build_deque, build_index
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.schema_introspection import table_names_snapshot
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.schema.introspection import table_names_snapshot
 from extract.coordination.context import FileContext
 from extract.infrastructure.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from utils.uuid_factory import uuid7_hex
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Deque, Index
 
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from extract.scanning.scope_manifest import ScopeManifest
 
 
@@ -172,7 +172,7 @@ def _resolve_runtime_profile(
 ) -> DataFusionRuntimeProfile:
     if runtime_profile is not None:
         return runtime_profile
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     return DataFusionRuntimeProfile()
 
@@ -196,8 +196,8 @@ def _worklist_stream(
         output_table_name=output_name,
     )
     if output_location is not None and output_location.format == "delta":
-        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
-        from datafusion_engine.scan_planner import ScanLineage, plan_scan_unit
+        from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
+        from datafusion_engine.lineage.scan import ScanLineage, plan_scan_unit
 
         scan_unit = plan_scan_unit(
             df_ctx,
@@ -249,14 +249,14 @@ def _execute_expr_stream(
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> Iterator[_ArrowBatch]:
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from datafusion_engine.plan_execution import (
+    from datafusion_engine.plan.execution import (
         PlanExecutionOptions,
         PlanScanOverrides,
     )
-    from datafusion_engine.plan_execution import (
+    from datafusion_engine.plan.execution import (
         execute_plan_bundle as execute_plan_bundle_helper,
     )
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     bundle = facade.compile_to_bundle(builder)
@@ -343,7 +343,7 @@ def _registered_output_table(
     if location is None:
         yield None
         return
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     facade.register_dataset(name=name, location=location)

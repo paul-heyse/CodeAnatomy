@@ -8,14 +8,16 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-pytest.importorskip("datafusion")
+from tests.test_helpers.optional_deps import require_datafusion
+
+require_datafusion()
 pytest.importorskip("rustworkx")
 
 import rustworkx as rx
 from hamilton import driver
 
 from core_types import DeterminismTier, JsonValue
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.driver_factory import (
     DriverBuildRequest,
@@ -30,8 +32,8 @@ from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
 from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.view_graph_registry import ViewNode as RegistryViewNode
+    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.views.graph import ViewNode as RegistryViewNode
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,7 @@ from utils.hashing import hash_msgpack_canonical
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 CACHE_VERSION: int = 1

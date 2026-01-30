@@ -8,9 +8,9 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.schema_alignment import align_table
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.schema.policy import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.query_spec import QuerySpec
-from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from normalize.dataset_builders import build_dataset_spec, build_input_schema
 from normalize.dataset_rows import DATASET_ROWS, DatasetRow
 from schema_spec.specs import TableSchemaSpec

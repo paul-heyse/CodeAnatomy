@@ -7,6 +7,7 @@ from relspec.inferred_deps import (
     InferredDepsInputs,
     infer_deps_from_plan_bundle,
 )
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def test_inferred_deps_creation() -> None:
@@ -25,11 +26,10 @@ def test_inferred_deps_creation() -> None:
 
 def test_infer_deps_from_plan_bundle() -> None:
     """Infer dependencies from DataFusion plan bundle."""
-    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 
     # Create a test DataFusion plan
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     ctx.register_csv("table_a", "tests/fixtures/test.csv", has_header=True)

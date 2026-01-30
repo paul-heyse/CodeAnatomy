@@ -6,12 +6,12 @@ from functools import cache
 from typing import Final
 
 from arrow_utils.core.ordering import OrderingLevel
-from datafusion_engine.arrow_schema.metadata import (
+from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.schema_registry import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from datafusion_engine.schema.registry import SCHEMA_META_NAME, SCHEMA_META_VERSION
 from relspec.view_defs import (
     REL_CALLSITE_QNAME_OUTPUT,
     REL_CALLSITE_SYMBOL_OUTPUT,

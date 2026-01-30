@@ -7,7 +7,7 @@ from hamilton.function_modifiers import check_output_custom
 from hamilton.plugins.h_polars import with_columns
 
 from cpg.emit_specs import _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
-from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow.interop import TableLike
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from hamilton_pipeline.validators import (
     NonEmptyTableValidator,

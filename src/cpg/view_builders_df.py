@@ -24,12 +24,12 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
-from datafusion_engine.arrow_schema.semantic_types import SEMANTIC_TYPE_META
-from datafusion_engine.diagnostics import record_artifact
-from datafusion_engine.expr_udf_shims import semantic_tag, span_id, stable_id_parts
-from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
+from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.sql.options import sql_options_for_profile
+from datafusion_engine.udf.shims import semantic_tag, span_id, stable_id_parts
 from obs.otel.scopes import SCOPE_CPG
 from obs.otel.tracing import stage_span
 from relspec.view_defs import RELATION_OUTPUT_NAME

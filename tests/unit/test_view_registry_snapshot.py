@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.view_artifacts import (
+from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.views.artifacts import (
     ViewArtifactLineage,
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def _arrow_schema_from_df(df: object) -> pa.Schema:
@@ -42,7 +42,7 @@ def _arrow_schema_from_df(df: object) -> pa.Schema:
 
 def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
     """Keep view registry snapshots stable across repeated registrations."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     registry = profile.view_registry

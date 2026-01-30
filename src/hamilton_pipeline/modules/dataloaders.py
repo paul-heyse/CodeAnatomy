@@ -25,7 +25,7 @@ from hamilton_pipeline.tag_policy import apply_tag
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from datafusion_engine.arrow_interop import TableLike
+    from datafusion_engine.arrow.interop import TableLike
     from hamilton_pipeline.types import ScipIdentityOverrides, ScipIndexConfig
 
 

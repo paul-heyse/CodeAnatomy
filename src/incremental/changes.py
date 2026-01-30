@@ -8,7 +8,7 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.ingest import datafusion_from_arrow
+from datafusion_engine.io.ingest import datafusion_from_arrow
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -111,7 +111,7 @@ def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
     Expr
         Filter predicate for the specified CDF change types.
     """
-    from datafusion_engine.expr_udf_shims import cdf_is_delete, cdf_is_upsert
+    from datafusion_engine.udf.shims import cdf_is_delete, cdf_is_upsert
 
     change_type_col = col("_change_type")
     upsert_types = {

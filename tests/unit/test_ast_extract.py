@@ -7,7 +7,7 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 
 try:
     from extract import extract_ast_tables

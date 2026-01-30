@@ -14,12 +14,6 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.expr_udf_shims import (
-    span_make,
-    stable_id_parts,
-    utf8_normalize,
-    utf8_null_if_blank,
-)
 from datafusion_engine.hashing import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -27,13 +21,19 @@ from datafusion_engine.hashing import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.plan_bundle import (
+from datafusion_engine.plan.bundle import (
     DataFusionPlanBundle,
     PlanBundleOptions,
     build_plan_bundle,
 )
-from datafusion_engine.runtime import SessionRuntime
-from datafusion_engine.sql_guard import safe_sql
+from datafusion_engine.session.runtime import SessionRuntime
+from datafusion_engine.sql.guard import safe_sql
+from datafusion_engine.udf.shims import (
+    span_make,
+    stable_id_parts,
+    utf8_normalize,
+    utf8_null_if_blank,
+)
 from obs.otel.scopes import SCOPE_NORMALIZE
 from obs.otel.tracing import stage_span
 

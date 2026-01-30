@@ -12,7 +12,7 @@ from hamilton.io import materialization
 from hamilton.io.data_adapters import DataSaver
 from hamilton.registry import register_adapter
 
-from datafusion_engine.param_tables import ParamTableArtifact
+from datafusion_engine.tables.param import ParamTableArtifact
 from hamilton_pipeline.io_contracts import delta_output_specs
 
 if TYPE_CHECKING:

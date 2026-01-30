@@ -12,14 +12,14 @@ import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
-from datafusion_engine.arrow_interop import ScalarLike, TableLike
-from datafusion_engine.extract_extractors import (
+from datafusion_engine.arrow.interop import ScalarLike, TableLike
+from datafusion_engine.extract.extractors import (
     ExtractorSpec,
     extractor_specs,
     outputs_for_template,
     select_extractors_for_outputs,
 )
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,
@@ -53,7 +53,7 @@ from extract.coordination.materialization import (
 )
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:
@@ -146,7 +146,7 @@ def ast_def_nodes_plan(
     DataFusionPlanBundle
         Plan bundle filtered to function/class definitions.
     """
-    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 
     values = [
         "FunctionDef",

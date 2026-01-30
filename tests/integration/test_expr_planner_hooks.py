@@ -6,20 +6,23 @@ import importlib.util
 
 import pytest
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from obs.diagnostics import DiagnosticsCollector
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from tests.test_helpers.datafusion_runtime import df_ctx
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-datafusion = pytest.importorskip("datafusion")
+require_datafusion()
 
 
 @pytest.mark.integration
 def test_expr_planner_install_records_event() -> None:
     """Record ExprPlanner installation attempts."""
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(
-        diagnostics_sink=sink,
-        enable_expr_planners=True,
-        expr_planner_names=("codeintel_ops",),
+    profile, sink = diagnostic_profile(
+        profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
+            diagnostics_sink=diagnostics,
+            enable_expr_planners=True,
+            expr_planner_names=("codeintel_ops",),
+        )
     )
     has_extension = importlib.util.find_spec("datafusion_ext") is not None
     if not has_extension:
@@ -39,7 +42,7 @@ def test_expr_planner_install_records_event() -> None:
 @pytest.mark.integration
 def test_named_argument_sql_is_gated() -> None:
     """Gate named-argument SQL calls when planners are unavailable."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     expected_errors: tuple[type[Exception], ...] = (RuntimeError, TypeError, ValueError)
     with pytest.raises(expected_errors, match="named arguments"):
         ctx.sql("SELECT rpad(str => 'a', n => 3, padding_str => 'x')").to_arrow_table()

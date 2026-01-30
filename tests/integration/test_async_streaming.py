@@ -9,8 +9,9 @@ import pyarrow as pa
 import pytest
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.execution_helpers import datafusion_to_async_batches
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.plan.execution import datafusion_to_async_batches
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.datafusion_runtime import df_ctx
 
 
 async def _collect_batches(df: DataFrame) -> Sequence[pa.RecordBatch]:
@@ -20,11 +21,10 @@ async def _collect_batches(df: DataFrame) -> Sequence[pa.RecordBatch]:
 @pytest.mark.integration
 def test_datafusion_async_streaming_batches() -> None:
     """Yield RecordBatches asynchronously from DataFusion results."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     table = pa.table({"entity_id": [1, 2, 3], "name": ["a", "b", "c"]})
-    from datafusion_engine.ingest import datafusion_from_arrow
 
-    datafusion_from_arrow(ctx, name="input_table", value=table)
+    register_arrow_table(ctx, name="input_table", value=table)
     df = ctx.sql("select * from input_table")
     batches = asyncio.run(_collect_batches(df))
     assert batches

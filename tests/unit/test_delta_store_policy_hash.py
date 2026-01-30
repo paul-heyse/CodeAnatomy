@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.config_base import config_fingerprint
-from datafusion_engine.delta_store_policy import DeltaStorePolicy, delta_store_policy_hash
+from datafusion_engine.delta.store_policy import DeltaStorePolicy, delta_store_policy_hash
 
 
 def test_delta_store_policy_hash_none() -> None:

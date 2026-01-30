@@ -15,7 +15,7 @@ from core_types import (
     STATUS_PATTERN,
     JsonValueLax,
 )
-from datafusion_engine.delta_protocol import (
+from datafusion_engine.delta.protocol import (
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
 )

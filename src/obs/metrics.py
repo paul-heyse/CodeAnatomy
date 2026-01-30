@@ -13,21 +13,21 @@ import pyarrow.types as patypes
 
 from arrow_utils.core.array_iter import iter_array_values
 from core_types import JsonDict, JsonValue, PathLike, RowStrict, ensure_path
-from datafusion_engine.arrow_interop import (
+from datafusion_engine.arrow.abi import schema_to_dict
+from datafusion_engine.arrow.build import (
+    const_array,
+    empty_table,
+    rows_to_table,
+    table_from_columns,
+)
+from datafusion_engine.arrow.encoding import EncodingPolicy
+from datafusion_engine.arrow.interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
     SchemaLike,
     TableLike,
 )
-from datafusion_engine.arrow_schema.abi import schema_to_dict
-from datafusion_engine.arrow_schema.build import (
-    const_array,
-    empty_table,
-    rows_to_table,
-    table_from_columns,
-)
-from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import NormalizePolicy
 from datafusion_engine.identity import schema_identity_hash
 from obs.otel.metrics import set_dataset_stats

@@ -9,8 +9,8 @@ import pyarrow as pa
 from libcst import helpers as cst_helpers
 
 from arrow_utils.core.array_iter import iter_array_values
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow.build import empty_table, table_from_columns
+from datafusion_engine.arrow.interop import TableLike
 from incremental.registry_specs import dataset_schema
 
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datafusion_engine.schema_validation import ArrowValidationOptions
+    from datafusion_engine.schema.validation import ArrowValidationOptions
     from schema_spec.system import DedupeSpecSpec, SortKeySpec
 
 

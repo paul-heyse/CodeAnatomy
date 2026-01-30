@@ -13,7 +13,7 @@ import pyarrow.fs as pafs
 
 from arrow_utils.core.streaming import to_reader
 from core_types import JsonDict, PathLike
-from datafusion_engine.arrow_interop import (
+from datafusion_engine.arrow.interop import (
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,

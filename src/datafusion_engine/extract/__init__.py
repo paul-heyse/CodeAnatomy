@@ -1,0 +1,5 @@
+"""Extract registry and templates."""
+
+from __future__ import annotations
+
+__all__: list[str] = []

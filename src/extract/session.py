@@ -12,7 +12,7 @@ from engine.session import EngineSession
 from engine.session_factory import build_engine_session
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 @dataclass(frozen=True)

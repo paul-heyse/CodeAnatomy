@@ -29,12 +29,12 @@ from libcst.metadata import (
 )
 
 from core_types import RowPermissive as Row
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import dataset_schema, normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_introspection import find_struct_field_keys
-from datafusion_engine.schema_registry import default_attrs_value
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract.registry import dataset_schema, normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.schema.introspection import find_struct_field_keys
+from datafusion_engine.schema.registry import default_attrs_value
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,

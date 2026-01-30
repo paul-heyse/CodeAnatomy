@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from storage.deltalake.delta import IdempotentWriteOptions
 
-from datafusion_engine.diagnostics import DiagnosticsSink, ensure_recorder_sink
+from datafusion_engine.lineage.diagnostics import DiagnosticsSink, ensure_recorder_sink
 
 
 @dataclass

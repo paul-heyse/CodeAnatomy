@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from extract.git.blobs import RepoBlobOptions, scan_repo_blobs
 
 pygit2 = pytest.importorskip("pygit2")

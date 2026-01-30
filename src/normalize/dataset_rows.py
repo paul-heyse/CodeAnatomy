@@ -6,22 +6,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from arrow_utils.core.expr_types import ScalarValue
-from datafusion_engine.arrow_schema.metadata_codec import (
+from datafusion_engine.arrow.metadata_codec import (
     encode_metadata_map,
     encode_metadata_scalar_map,
 )
-from datafusion_engine.expr_spec import ExprIR, ExprSpec
-from datafusion_engine.hashing import (
-    masked_stable_id_expr_ir,
-    stable_id_expr_ir,
-    stable_id_expr_ir_from_parts,
-)
+from datafusion_engine.expr.spec import ExprIR, ExprSpec
 from datafusion_engine.hashing import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
+    masked_stable_id_expr_ir,
+    stable_id_expr_ir,
+    stable_id_expr_ir_from_parts,
 )
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.contract_row import ContractRow

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from datafusion_engine.arrow_schema.semantic_types import SPAN_STORAGE
+from datafusion_engine.arrow.semantic import SPAN_STORAGE
 from schema_spec.bundles import base_bundle_catalog
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle

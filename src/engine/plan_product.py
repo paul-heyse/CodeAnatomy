@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import WriterStrategy
 
 if TYPE_CHECKING:
-    from datafusion_engine.execution_facade import ExecutionResult
-    from datafusion_engine.view_artifacts import DataFusionViewArtifact
+    from datafusion_engine.session.facade import ExecutionResult
+    from datafusion_engine.views.artifacts import DataFusionViewArtifact
 
 
 @dataclass(frozen=True)

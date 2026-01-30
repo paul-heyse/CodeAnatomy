@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import sys
 
-import pytest
+from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
 
-pytest.importorskip("datafusion")
-pytest.importorskip("deltalake")
+require_datafusion()
+require_deltalake()
 
 from test_support import datafusion_ext_stub
 
@@ -20,7 +20,7 @@ def _stub_enabled() -> bool:
 if _stub_enabled():
     sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
-from datafusion_engine.write_pipeline import _delta_schema_mode, _writer_properties_from_policy
+from datafusion_engine.io.write import _delta_schema_mode, _writer_properties_from_policy
 from storage.deltalake.config import DeltaSchemaPolicy, ParquetWriterPolicy
 
 

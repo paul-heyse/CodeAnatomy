@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import pyarrow as pa
-import pytest
 
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-datafusion = pytest.importorskip("datafusion")
+require_datafusion()
 
 
 def test_dynamic_projection_reduces_columns() -> None:
     """Ensure projection pushdown removes unused columns."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    datafusion_from_arrow(
+    register_arrow_table(
         ctx,
         name="events",
         value=pa.table(

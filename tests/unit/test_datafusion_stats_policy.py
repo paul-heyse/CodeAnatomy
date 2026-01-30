@@ -6,14 +6,17 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.runtime import DataFusionRuntimeProfile, settings_snapshot_for_profile
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.session.runtime import (
+    settings_snapshot_for_profile,
+)
 from schema_spec.system import DataFusionScanOptions, table_spec_from_schema
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 def _write_parquet(path: Path) -> None:
@@ -25,7 +28,7 @@ def test_scan_policy_applies_stats_settings(tmp_path: Path) -> None:
     """Apply stats settings before registering external datasets."""
     parquet_path = tmp_path / "events.parquet"
     _write_parquet(parquet_path)
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     scan = DataFusionScanOptions(
         collect_statistics=False,
@@ -53,7 +56,7 @@ def test_scan_policy_applies_listing_cache_and_projection(tmp_path: Path) -> Non
     """Apply listing cache and projection settings on registration."""
     parquet_path = tmp_path / "events.parquet"
     _write_parquet(parquet_path)
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     scan = DataFusionScanOptions(
         list_files_cache_limit=str(1024),
@@ -89,7 +92,7 @@ def test_listing_schema_evolution_adds_missing_columns(tmp_path: Path) -> None:
     expected_schema = pa.schema(
         [("id", pa.int64()), ("value", pa.string()), ("extra", pa.string())]
     )
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     scan = DataFusionScanOptions(listing_mutable=True)
     register_dataset_df(

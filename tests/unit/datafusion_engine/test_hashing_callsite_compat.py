@@ -7,9 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
-from datafusion_engine.delta_scan_config import delta_scan_identity_hash
-from datafusion_engine.plan_artifact_store import _plan_identity_payload
-from datafusion_engine.plan_bundle import (
+from datafusion_engine.delta.scan_config import delta_scan_identity_hash
+from datafusion_engine.lineage.scan import ScanUnit
+from datafusion_engine.plan.artifact_store import _plan_identity_payload
+from datafusion_engine.plan.bundle import (
     DataFusionPlanBundle,
     PlanFingerprintInputs,
     _hash_plan,
@@ -17,12 +18,10 @@ from datafusion_engine.plan_bundle import (
     _planning_env_hash,
     _rulepack_hash,
 )
-from datafusion_engine.plan_bundle import (
+from datafusion_engine.plan.bundle import (
     _delta_protocol_payload as plan_delta_protocol_payload,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.scan_planner import ScanUnit
-from datafusion_engine.view_artifacts import _delta_inputs_payload, _plan_task_signature
+from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.scanning.repo_scan import _sha256_path
 from incremental.scip_fingerprint import scip_index_fingerprint
@@ -30,6 +29,7 @@ from relspec.execution_plan import _protocol_payload as exec_protocol_payload
 from relspec.execution_plan import _scan_unit_signature
 from serde_artifacts import DeltaInputPin, DeltaScanConfigSnapshot, PlanArtifacts
 from serde_msgspec import JSON_ENCODER, MSGPACK_ENCODER, to_builtins
+from tests.test_helpers.datafusion_runtime import df_profile
 from utils.hashing import hash_json_default
 
 
@@ -313,7 +313,7 @@ def test_plan_identity_hash_matches_json_encoder() -> None:
     scan_payload = ({"dataset_name": "dataset", "key": "scan_key"},)
     payload = _plan_identity_payload(
         bundle=cast("DataFusionPlanBundle", bundle_stub),
-        profile=DataFusionRuntimeProfile(),
+        profile=df_profile(),
         delta_inputs_payload=delta_inputs_payload,
         scan_payload=scan_payload,
         scan_keys_payload=["scan_key"],

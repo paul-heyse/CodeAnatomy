@@ -5,11 +5,10 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrow_utils.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.arrow_schema.metadata_codec import encode_metadata_list
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_registry import (
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.metadata_codec import encode_metadata_list
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema.registry import (
     AST_VIEW_NAMES,
     DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA,
     HAMILTON_PLAN_DRIFT_SCHEMA,
@@ -25,7 +24,8 @@ from datafusion_engine.schema_registry import (
     validate_required_engine_functions,
     validate_required_symtable_functions,
 )
-from datafusion_engine.udf_platform import ensure_rust_udfs
+from datafusion_engine.udf.platform import ensure_rust_udfs
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -40,7 +40,7 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 def test_nested_view_spec_roundtrip() -> None:
     """Ensure nested view specs round-trip from the DataFusion context."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
@@ -75,7 +75,7 @@ def test_symtable_schema_metadata() -> None:
 
 def test_required_functions_present() -> None:
     """Validate required CST function inventory and signatures."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_cst_functions(ctx)
@@ -83,7 +83,7 @@ def test_required_functions_present() -> None:
 
 def test_required_symtable_functions_present() -> None:
     """Validate required symtable function inventory and signatures."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_symtable_functions(ctx)
@@ -91,7 +91,7 @@ def test_required_symtable_functions_present() -> None:
 
 def test_required_bytecode_functions_present() -> None:
     """Validate required bytecode function inventory and signatures."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_bytecode_functions(ctx)
@@ -99,7 +99,7 @@ def test_required_bytecode_functions_present() -> None:
 
 def test_required_engine_functions_present() -> None:
     """Validate required engine function inventory."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_engine_functions(ctx)
@@ -107,7 +107,7 @@ def test_required_engine_functions_present() -> None:
 
 def test_validate_ast_views_smoke() -> None:
     """Ensure AST view validation runs against registered views."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_ast_views(ctx, view_names=AST_VIEW_NAMES)

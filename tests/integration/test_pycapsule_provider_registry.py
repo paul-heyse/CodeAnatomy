@@ -7,18 +7,17 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.expr_spec import ExprSpec
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from obs.diagnostics import DiagnosticsCollector
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.expr.spec import ExprSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DatasetSpec
+from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
 
-pytest.importorskip("datafusion")
-pytest.importorskip("deltalake")
+require_datafusion()
+require_deltalake()
 
 EXPECTED_ROW_COUNT = 2
 
@@ -27,21 +26,13 @@ EXPECTED_ROW_COUNT = 2
 def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     """Record table provider capabilities for Delta-backed tables."""
     table = pa.table({"id": [1, 2], "value": ["a", "b"]})
-    delta_path = tmp_path / "delta_table"
-
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
-    ctx = profile.session_context()
-    seed = datafusion_from_arrow(ctx, name="delta_seed", value=table)
-    pipeline = WritePipeline(ctx, runtime_profile=profile)
-    pipeline.write(
-        WriteRequest(
-            source=seed,
-            destination=str(delta_path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            format_options={"schema_mode": "overwrite"},
-        )
+    profile, sink = diagnostic_profile()
+    profile, ctx, delta_path = write_delta_table(
+        tmp_path,
+        table=table,
+        profile=profile,
+        table_name="delta_table",
+        schema_mode="overwrite",
     )
     register_dataset_df(
         ctx,
@@ -61,22 +52,14 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
 def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
     """Apply file pruning when dataset specs include pushdown predicates."""
     table = pa.table({"part": ["a", "b"], "value": [1, 2]})
-    delta_path = tmp_path / "delta_table"
-
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
-    ctx = profile.session_context()
-    seed = datafusion_from_arrow(ctx, name="delta_seed", value=table)
-    pipeline = WritePipeline(ctx, runtime_profile=profile)
-    pipeline.write(
-        WriteRequest(
-            source=seed,
-            destination=str(delta_path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            partition_by=("part",),
-            format_options={"schema_mode": "overwrite"},
-        )
+    profile, sink = diagnostic_profile()
+    profile, ctx, delta_path = write_delta_table(
+        tmp_path,
+        table=table,
+        profile=profile,
+        table_name="delta_table",
+        partition_by=("part",),
+        schema_mode="overwrite",
     )
     table_spec = TableSchemaSpec.from_schema("delta_tbl", table.schema)
     dataset_spec = DatasetSpec(

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import msgspec
 
-from datafusion_engine.delta_protocol import DeltaProtocolCompatibility, DeltaProtocolSnapshot
+from datafusion_engine.delta.protocol import DeltaProtocolCompatibility, DeltaProtocolSnapshot
 from serde_artifacts import (
     DeltaScanConfigSnapshot,
     DeltaStatsDecision,

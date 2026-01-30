@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.runtime import read_delta_as_reader
+from datafusion_engine.session.runtime import read_delta_as_reader
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.types import ScipIndexConfig
 from incremental.types import IncrementalConfig

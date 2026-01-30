@@ -20,7 +20,7 @@ from relspec.rustworkx_graph import (
 from relspec.schedule_events import TaskScheduleMetadata
 
 if TYPE_CHECKING:
-    from datafusion_engine.schema_contracts import SchemaContract
+    from datafusion_engine.schema.contracts import SchemaContract
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -301,7 +301,7 @@ def _register_ready_evidence(
         if contract is None:
             evidence.sources.add(name)
             continue
-        from datafusion_engine.schema_contracts import SchemaContract
+        from datafusion_engine.schema.contracts import SchemaContract
         from schema_spec.system import ContractSpec, DatasetSpec
 
         if isinstance(contract, SchemaContract):

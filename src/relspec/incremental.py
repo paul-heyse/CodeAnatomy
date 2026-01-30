@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from datafusion_engine.dataset_registry import DatasetCatalog
+from datafusion_engine.dataset.registry import DatasetCatalog
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import read_cdf_changes

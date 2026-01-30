@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.coercion import (
+from datafusion_engine.arrow.coercion import (
     coerce_table_to_storage,
     storage_schema,
     storage_type,

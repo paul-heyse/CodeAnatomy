@@ -10,13 +10,14 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from datafusion_engine.arrow_schema.abi import schema_identity_hash
-from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+
+from datafusion_engine.arrow.abi import schema_identity_hash
+from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from utils.uuid_factory import uuid7_hex
 
 

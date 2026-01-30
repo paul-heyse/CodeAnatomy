@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING, Literal, overload
 import pygit2
 
 from arrow_utils.core.array_iter import iter_table_rows
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import dataset_query, normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.query_spec import QuerySpec
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.extract.registry import dataset_query, normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,

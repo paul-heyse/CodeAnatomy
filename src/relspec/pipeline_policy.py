@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from core.config_base import FingerprintableConfig, config_fingerprint
-from datafusion_engine.param_tables import ParamTablePolicy
+from datafusion_engine.tables.param import ParamTablePolicy
 
 
 @dataclass(frozen=True)

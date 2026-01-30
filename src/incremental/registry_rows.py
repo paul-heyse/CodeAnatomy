@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-import datafusion_engine.arrow_interop as interop
+from datafusion_engine.arrow import interop
 from schema_spec.contract_row import ContractRow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.system import TableSpecConstraints

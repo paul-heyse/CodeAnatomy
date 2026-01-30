@@ -17,7 +17,7 @@ from relspec.execution_plan import ExecutionPlan, priority_for_task
 from relspec.runtime_artifacts import TableLike
 
 if TYPE_CHECKING:
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.views.graph import ViewNode
     from relspec.schedule_events import TaskScheduleMetadata
 
 

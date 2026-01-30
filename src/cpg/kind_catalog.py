@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, NewType, cast
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow_interop import SchemaLike
+    from datafusion_engine.arrow.interop import SchemaLike
 
 NodeKindId = NewType("NodeKindId", str)
 EdgeKindId = NewType("EdgeKindId", str)

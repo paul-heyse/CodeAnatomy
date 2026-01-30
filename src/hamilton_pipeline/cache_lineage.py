@@ -18,7 +18,7 @@ _CACHE_LINEAGE_DIRNAME = "cache_lineage"
 if TYPE_CHECKING:
     from hamilton import driver as hamilton_driver
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,7 @@ class CacheLineageHook(lifecycle_api.GraphExecutionHook):
             out_dir=out_path,
             plan_signature=self.plan_signature,
         )
-        from datafusion_engine.diagnostics import record_cache_lineage
+        from datafusion_engine.lineage.diagnostics import record_cache_lineage
 
         record_cache_lineage(
             self.profile,

@@ -7,9 +7,9 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypedDict, Unpack
 
 from arrow_utils.core.array_iter import iter_table_rows
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract.registry import normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,

@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from datafusion_engine.table_provider_metadata import TableProviderMetadata
+from datafusion_engine.tables.metadata import TableProviderMetadata
 
 
 def test_table_provider_metadata_default_schema_adapter_disabled() -> None:

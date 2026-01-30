@@ -9,11 +9,11 @@ from typing import cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.arrow_schema.schema_builders import dataset_name_field
-from datafusion_engine.delta_store_policy import resolve_delta_store_policy
-from datafusion_engine.view_artifacts import view_artifact_payload_table
-from datafusion_engine.write_pipeline import WriteMode
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.schema import dataset_name_field
+from datafusion_engine.delta.store_policy import resolve_delta_store_policy
+from datafusion_engine.io.write import WriteMode
+from datafusion_engine.views.artifacts import view_artifact_payload_table
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime

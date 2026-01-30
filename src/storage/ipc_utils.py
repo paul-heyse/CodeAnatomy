@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
 from core_types import JsonDict, PathLike, ensure_path
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from engine.plan_product import PlanProduct
 from utils.hashing import hash_sha256_hex
 
@@ -126,7 +126,7 @@ def ipc_hash(table: pa.Table) -> str:
 
 
 def _apply_schema_metadata(schema: pa.Schema, metadata: dict[bytes, bytes]) -> pa.Schema:
-    from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+    from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 
     return SchemaMetadataSpec(schema_metadata=metadata).apply(schema)
 

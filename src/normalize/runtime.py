@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 from datafusion import SQLOptions
 
-from datafusion_engine.diagnostics import DiagnosticsSink
-from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.lineage.diagnostics import DiagnosticsSink
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.sql.options import sql_options_for_profile
 
 
 @dataclass(frozen=True)

@@ -10,16 +10,16 @@ import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.sql_guard import safe_sql
+from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.sql.guard import safe_sql
 from validation.violations import ValidationViolation, ViolationType
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.schema_contracts import SchemaContract
-    from datafusion_engine.sql_guard import SqlBindings
+    from datafusion_engine.schema.contracts import SchemaContract
+    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.sql.guard import SqlBindings
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -184,7 +184,7 @@ class ViewSpec:
         sql_options:
             Optional SQL options to enforce SQL execution policy.
         """
-        from datafusion_engine.runtime import register_view_specs
+        from datafusion_engine.session.runtime import register_view_specs
 
         _ = sql_options
         register_view_specs(
@@ -220,7 +220,7 @@ class ViewSpec:
             return
         ctx = session_runtime.ctx
         actual = self._resolve_schema(session_runtime, sql_options=sql_options)
-        from datafusion_engine.schema_contracts import SchemaContract
+        from datafusion_engine.schema.contracts import SchemaContract
 
         contract = SchemaContract.from_arrow_schema(self.name, self.schema)
         introspector = SchemaIntrospector(ctx, sql_options=sql_options)
@@ -319,7 +319,7 @@ def _schema_metadata_violations(
     schema: pa.Schema,
     contract: SchemaContract,
 ) -> list[ValidationViolation]:
-    from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
+    from datafusion_engine.schema.contracts import SCHEMA_ABI_FINGERPRINT_META
 
     expected = contract.schema_metadata or {}
     if not expected:

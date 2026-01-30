@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime import EngineRuntime
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-from datafusion_engine.dataset_registry import DatasetCatalog
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.dataset.registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
 
 

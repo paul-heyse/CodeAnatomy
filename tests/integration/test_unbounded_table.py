@@ -8,12 +8,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 EXPECTED_ROWS = 2
 
@@ -34,7 +35,7 @@ def test_unbounded_external_table_read(tmp_path: Path) -> None:
     """
     parquet_path = tmp_path / "events.parquet"
     _write_parquet(parquet_path)
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     scan = DataFusionScanOptions(unbounded=True)
     location = DatasetLocation(

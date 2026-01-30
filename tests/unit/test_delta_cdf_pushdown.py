@@ -7,30 +7,25 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-pytest.importorskip("datafusion")
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+
+require_datafusion()
 pytest.importorskip("datafusion_ext")
-pytest.importorskip("deltalake")
+require_deltalake()
 
 
 def _create_cdf_table(path: Path) -> None:
-    from datafusion_engine.ingest import datafusion_from_arrow
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
     from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     try:
-        profile = DataFusionRuntimeProfile()
-        ctx = profile.session_context()
-        df = datafusion_from_arrow(ctx, name="cdf_seed", value=table)
-        pipeline = WritePipeline(ctx, runtime_profile=profile)
-        pipeline.write(
-            WriteRequest(
-                source=df,
-                destination=str(path),
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-            )
+        _ = write_delta_table(
+            path.parent,
+            table=table,
+            profile=df_profile(),
+            table_name=path.name,
         )
         enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
     except RuntimeError as exc:
@@ -39,16 +34,15 @@ def _create_cdf_table(path: Path) -> None:
 
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
-    from datafusion_engine.dataset_registration import register_dataset_df
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
     from storage.deltalake import DeltaCdfOptions
 
     table_path = tmp_path / "cdf_table"
     _create_cdf_table(table_path)
-    runtime = DataFusionRuntimeProfile()
+    runtime = df_profile()
     ctx = runtime.session_context()
     register_dataset_df(
         ctx,

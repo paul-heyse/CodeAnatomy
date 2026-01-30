@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_registry import TREE_SITTER_CHECK_VIEWS
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema.registry import TREE_SITTER_CHECK_VIEWS
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
 _CACHE_TABLES: tuple[str, ...] = (
     "list_files_cache",
@@ -17,21 +19,21 @@ _CACHE_TABLES: tuple[str, ...] = (
     "statistics_cache",
     "predicate_cache",
 )
-from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 @pytest.mark.integration
 def test_udf_registry_snapshot_includes_capsule_payload() -> None:
     """Record UDF registry payloads while executing a UDF query."""
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(
-        diagnostics_sink=sink,
-        input_plugins=(_seed_tree_sitter_check_views,),
+    profile, sink = diagnostic_profile(
+        profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
+            diagnostics_sink=diagnostics,
+            input_plugins=(_seed_tree_sitter_check_views,),
+        )
     )
     ctx = profile.session_context()
     df = ctx.sql("SELECT stable_hash64('alpha') AS hash_value")

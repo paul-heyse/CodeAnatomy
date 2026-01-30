@@ -12,8 +12,8 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
 from core.config_base import FingerprintableConfig, config_fingerprint
-from datafusion_engine.expr_udf_shims import list_extract, map_extract
-from datafusion_engine.session_helpers import temp_table
+from datafusion_engine.session.factory import temp_table
+from datafusion_engine.udf.shims import list_extract, map_extract
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

@@ -7,8 +7,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-pytest.importorskip("datafusion")
-pytest.importorskip("deltalake")
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+
+require_datafusion()
+require_deltalake()
 
 try:  # pragma: no cover - skip when native extensions are unavailable
     import datafusion_ext
@@ -21,17 +25,15 @@ if not callable(getattr(datafusion_ext, "delta_write_ipc", None)):
 
 from deltalake import DeltaTable
 
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.delta_protocol import DeltaProtocolSupport
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.write_pipeline import (
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.delta.protocol import DeltaProtocolSupport
+from datafusion_engine.io.write import (
     WriteFormat,
     WriteMode,
     WritePipeline,
     WriteRequest,
 )
-from obs.diagnostics import DiagnosticsCollector
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from storage.deltalake.config import DeltaSchemaPolicy
 
 
@@ -52,7 +54,7 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
         enable_schema_evolution_adapter=False,
     )
     ctx = profile.session_context()
-    seed = datafusion_from_arrow(
+    seed = register_arrow_table(
         ctx,
         name="events_seed",
         value=pa.table({"id": [1], "value": ["a"]}),
@@ -67,7 +69,7 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
             format_options={"schema_mode": "overwrite"},
         )
     )
-    df = datafusion_from_arrow(
+    df = register_arrow_table(
         ctx,
         name="events_updates",
         value=pa.table({"id": [2], "value": ["b"], "extra": [1]}),
@@ -88,19 +90,20 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
 def test_delta_protocol_support_warns_and_records(tmp_path: Path) -> None:
     """Record protocol compatibility artifacts when runtime support is insufficient."""
     delta_path = tmp_path / "delta_table"
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(
-        diagnostics_sink=sink,
-        delta_protocol_support=DeltaProtocolSupport(
-            max_reader_version=0,
-            max_writer_version=0,
-        ),
-        delta_protocol_mode="warn",
-        enable_schema_registry=False,
-        enable_schema_evolution_adapter=False,
+    profile, sink = diagnostic_profile(
+        profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
+            diagnostics_sink=diagnostics,
+            delta_protocol_support=DeltaProtocolSupport(
+                max_reader_version=0,
+                max_writer_version=0,
+            ),
+            delta_protocol_mode="warn",
+            enable_schema_registry=False,
+            enable_schema_evolution_adapter=False,
+        )
     )
     ctx = profile.session_context()
-    seed = datafusion_from_arrow(
+    seed = register_arrow_table(
         ctx,
         name="events_seed",
         value=pa.table({"id": [1], "value": ["a"]}),
@@ -115,7 +118,7 @@ def test_delta_protocol_support_warns_and_records(tmp_path: Path) -> None:
             format_options={"schema_mode": "overwrite"},
         )
     )
-    df = datafusion_from_arrow(
+    df = register_arrow_table(
         ctx,
         name="events_more",
         value=pa.table({"id": [2], "value": ["b"]}),

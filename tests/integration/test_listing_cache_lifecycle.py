@@ -8,13 +8,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from obs.diagnostics import DiagnosticsCollector
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 def _write_parquet(path: Path) -> None:
@@ -27,8 +27,7 @@ def test_listing_refresh_records_event(tmp_path: Path) -> None:
     """Record refresh events when listing tables are mutable."""
     parquet_path = tmp_path / "events.parquet"
     _write_parquet(parquet_path)
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
+    profile, sink = diagnostic_profile()
     ctx = profile.session_context()
     scan = DataFusionScanOptions(listing_mutable=True, list_files_cache_ttl="1s")
     location = DatasetLocation(

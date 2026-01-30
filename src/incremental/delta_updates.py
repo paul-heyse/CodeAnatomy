@@ -6,11 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.arrow_schema.metadata import encoding_policy_from_schema
-from datafusion_engine.extract_bundles import dataset_name_for_output
-from datafusion_engine.schema_contracts import delta_constraints_for_location
-from datafusion_engine.write_pipeline import WriteMode
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.arrow.metadata import encoding_policy_from_schema
+from datafusion_engine.extract.bundles import dataset_name_for_output
+from datafusion_engine.io.write import WriteMode
+from datafusion_engine.schema.contracts import delta_constraints_for_location
 from incremental.delta_context import DeltaAccessContext, run_delta_maintenance_if_configured
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore

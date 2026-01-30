@@ -10,14 +10,14 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.dataset_registry import (
+from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_delta_cdf_policy,
     resolve_delta_log_storage_options,
 )
-from datafusion_engine.delta_scan_config import resolve_delta_scan_options
-from datafusion_engine.diagnostics import record_artifact
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
+from datafusion_engine.delta.scan_config import resolve_delta_scan_options
+from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.delta_context import DeltaAccessContext
@@ -28,7 +28,7 @@ from storage.deltalake import DeltaCdfOptions, StorageOptions, delta_table_versi
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from incremental.runtime import IncrementalRuntime
     from schema_spec.system import DeltaCdfPolicy
 

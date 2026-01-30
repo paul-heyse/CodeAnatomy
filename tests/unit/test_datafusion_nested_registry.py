@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_registry import (
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema.registry import (
     LIBCST_FILES_SCHEMA,
     SCIP_DOCUMENT_SYMBOLS_SCHEMA,
     SCIP_METADATA_SCHEMA,
     SCIP_OCCURRENCES_SCHEMA,
     nested_view_spec,
 )
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -30,7 +30,7 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 def test_nested_schema_for_cst_parse_manifest() -> None:
     """Ensure nested schema derivation for LibCST parse manifest."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
@@ -49,7 +49,7 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
 
 def test_nested_schema_for_cst_refs() -> None:
     """Ensure nested schema derivation for LibCST references."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
@@ -68,7 +68,7 @@ def test_nested_schema_for_cst_refs() -> None:
 
 def test_nested_schema_for_cst_call_args() -> None:
     """Ensure nested schema derivation for LibCST call arguments."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.span_utils import (
+from datafusion_engine.expr.span import (
     ENC_UTF8,
     ENC_UTF16,
     ENC_UTF32,

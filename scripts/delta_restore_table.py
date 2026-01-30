@@ -10,8 +10,8 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from datafusion_engine.delta_control_plane import DeltaRestoreRequest, delta_restore
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.delta.control_plane import DeltaRestoreRequest, delta_restore
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)

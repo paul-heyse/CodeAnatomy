@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
+import pytest
 
 try:
     import psutil
@@ -179,3 +180,27 @@ def _setup_faulthandler() -> None:
         faulthandler.register(sigabrt, file=_STATE["faulthandler_file"], all_threads=True)
     except RuntimeError:
         return
+
+
+@pytest.fixture
+def df_profile() -> object:
+    """Provide a default DataFusion runtime profile for tests."""
+    from tests.test_helpers.datafusion_runtime import df_profile as _df_profile
+
+    return _df_profile()
+
+
+@pytest.fixture
+def df_ctx() -> object:
+    """Provide a default DataFusion session context for tests."""
+    from tests.test_helpers.datafusion_runtime import df_ctx as _df_ctx
+
+    return _df_ctx()
+
+
+@pytest.fixture
+def diagnostic_profile() -> tuple[object, object]:
+    """Provide a runtime profile wired to a diagnostics collector."""
+    from tests.test_helpers.diagnostics import diagnostic_profile as _diagnostic_profile
+
+    return _diagnostic_profile()

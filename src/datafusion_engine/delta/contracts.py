@@ -1,0 +1,209 @@
+"""Delta provider contracts for scan configuration and snapshot pinning."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
+
+from datafusion_engine.dataset.registry import (
+    resolve_delta_feature_gate,
+    resolve_delta_log_storage_options,
+)
+from datafusion_engine.delta.control_plane import DeltaCdfRequest, DeltaProviderRequest
+from datafusion_engine.delta.payload import settings_bool
+from datafusion_engine.delta.scan_config import (
+    delta_scan_config_snapshot_from_options,
+    delta_scan_identity_hash,
+    resolve_delta_scan_options,
+)
+from storage.deltalake import DeltaCdfOptions
+from utils.storage_options import merged_storage_options
+
+if TYPE_CHECKING:
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.protocol import DeltaFeatureGate
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from schema_spec.system import DeltaScanOptions
+
+
+@dataclass(frozen=True)
+class DeltaProviderContract:
+    """Resolved contract for Delta provider construction."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    scan_options: DeltaScanOptions | None
+    scan_snapshot: object | None
+    scan_identity_hash: str | None
+
+    def to_request(
+        self,
+        *,
+        predicate: str | None,
+        gate: DeltaFeatureGate | None,
+    ) -> DeltaProviderRequest:
+        """Return a provider request derived from this contract.
+
+        Parameters
+        ----------
+        predicate
+            Optional predicate to apply during provider resolution.
+        gate
+            Optional Delta feature gate to enforce.
+
+        Returns
+        -------
+        DeltaProviderRequest
+            Provider request populated from the contract.
+        """
+        return DeltaProviderRequest(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+            delta_scan=self.scan_options,
+            predicate=predicate,
+            gate=gate,
+        )
+
+
+@dataclass(frozen=True)
+class DeltaCdfContract:
+    """Resolved contract for Delta CDF provider construction."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    options: DeltaCdfOptions | None
+    gate: DeltaFeatureGate | None
+
+    def to_request(self) -> DeltaCdfRequest:
+        """Return a CDF provider request derived from this contract.
+
+        Returns
+        -------
+        DeltaCdfRequest
+            Provider request populated from the contract.
+        """
+        return DeltaCdfRequest(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+            options=self.options,
+            gate=self.gate,
+        )
+
+
+def build_delta_provider_contract(
+    location: DatasetLocation,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DeltaProviderContract:
+    """Build the Delta provider contract for a dataset location.
+
+    Parameters
+    ----------
+    location
+        Dataset location describing the Delta table.
+    runtime_profile
+        Optional runtime profile used to resolve scan defaults.
+
+    Returns
+    -------
+    DeltaProviderContract
+        Contract containing scan configuration and snapshot metadata.
+    """
+    scan_options = _resolve_delta_scan(location, runtime_profile=runtime_profile)
+    scan_snapshot = delta_scan_config_snapshot_from_options(scan_options)
+    return DeltaProviderContract(
+        table_uri=str(location.path),
+        storage_options=merged_storage_options(
+            location.storage_options,
+            resolve_delta_log_storage_options(location),
+        ),
+        version=location.delta_version,
+        timestamp=location.delta_timestamp,
+        scan_options=scan_options,
+        scan_snapshot=scan_snapshot,
+        scan_identity_hash=delta_scan_identity_hash(scan_snapshot),
+    )
+
+
+def build_delta_cdf_contract(location: DatasetLocation) -> DeltaCdfContract:
+    """Build the Delta CDF provider contract for a dataset location.
+
+    Parameters
+    ----------
+    location
+        Dataset location describing the Delta table.
+
+    Returns
+    -------
+    DeltaCdfContract
+        Contract containing CDF scan configuration and snapshot metadata.
+    """
+    return DeltaCdfContract(
+        table_uri=str(location.path),
+        storage_options=merged_storage_options(
+            location.storage_options,
+            resolve_delta_log_storage_options(location),
+        ),
+        version=location.delta_version,
+        timestamp=location.delta_timestamp,
+        options=location.delta_cdf_options,
+        gate=resolve_delta_feature_gate(location),
+    )
+
+
+def _resolve_delta_scan(
+    location: DatasetLocation,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DeltaScanOptions | None:
+    delta_scan = resolve_delta_scan_options(location)
+    if delta_scan is None:
+        return None
+    settings = _profile_settings(runtime_profile)
+    pushdown_setting = settings_bool(
+        settings,
+        "datafusion.execution.parquet.pushdown_filters",
+    )
+    if pushdown_setting is not None:
+        delta_scan = replace(delta_scan, enable_parquet_pushdown=pushdown_setting)
+    if delta_scan.schema_force_view_types is not None:
+        return delta_scan
+    schema_force_setting = settings_bool(
+        settings,
+        "datafusion.execution.parquet.schema_force_view_types",
+    )
+    if schema_force_setting is None:
+        schema_force_setting = _schema_hardening_view_types(runtime_profile)
+    return replace(delta_scan, schema_force_view_types=schema_force_setting)
+
+
+def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile | None) -> bool:
+    if runtime_profile is None:
+        return False
+    hardening = runtime_profile.schema_hardening
+    if hardening is not None:
+        return hardening.enable_view_types
+    return runtime_profile.schema_hardening_name == "arrow_performance"
+
+
+def _profile_settings(runtime_profile: DataFusionRuntimeProfile | None) -> Mapping[str, str]:
+    if runtime_profile is None:
+        return {}
+    return runtime_profile.settings_payload()
+
+
+__all__ = [
+    "DeltaCdfContract",
+    "DeltaProviderContract",
+    "build_delta_cdf_contract",
+    "build_delta_provider_contract",
+]

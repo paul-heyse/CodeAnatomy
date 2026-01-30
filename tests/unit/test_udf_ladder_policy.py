@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.udf_catalog import get_default_udf_catalog
-from datafusion_engine.udf_platform import ensure_rust_udfs
+from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.udf.catalog import get_default_udf_catalog
+from datafusion_engine.udf.platform import ensure_rust_udfs
+from tests.test_helpers.datafusion_runtime import df_ctx
 
 
 def test_udf_tier_tags_and_lane_precedence() -> None:
     """Prefer DataFusion UDF lanes in the ladder."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     ensure_rust_udfs(ctx)
     introspector = SchemaIntrospector(ctx, sql_options=None)
     catalog = get_default_udf_catalog(introspector=introspector)

@@ -8,14 +8,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.schema.introspection import SchemaIntrospector
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 pytest.importorskip("datafusion_ext")
 
 
@@ -36,7 +37,7 @@ def test_information_schema_column_defaults(tmp_path: Path) -> None:
     data_dir.mkdir()
     pq.write_table(table, data_dir / "part-0.parquet")
 
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     register_dataset_df(
         ctx,

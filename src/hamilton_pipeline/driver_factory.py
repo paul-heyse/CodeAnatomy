@@ -17,7 +17,7 @@ from opentelemetry import trace as otel_trace
 from core.config_base import FingerprintableConfig
 from core.config_base import config_fingerprint as hash_config_fingerprint
 from core_types import DeterminismTier, JsonValue, parse_determinism_tier
-from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow.interop import SchemaLike
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.driver_builder import DriverBuilder
@@ -52,8 +52,8 @@ if TYPE_CHECKING:
     from hamilton.base import HamiltonGraphAdapter
     from hamilton.io.materialization import MaterializerFactory
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.views.graph import ViewNode
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
@@ -198,8 +198,8 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     )
     profile = runtime_profile_spec.datafusion
     from cpg.kind_catalog import validate_edge_kind_requirements
-    from datafusion_engine.view_registry import ensure_view_graph
-    from datafusion_engine.view_registry_specs import view_graph_nodes
+    from datafusion_engine.views.registry import ensure_view_graph
+    from datafusion_engine.views.registry_specs import view_graph_nodes
 
     session_runtime = profile.session_runtime()
     snapshot = ensure_view_graph(
@@ -293,7 +293,7 @@ def _cdf_impacted_tasks(
     state_dir = _resolve_incremental_state_dir(config)
     if state_dir is None:
         return None, None
-    from datafusion_engine.dataset_registry import dataset_catalog_from_profile
+    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from incremental.cdf_cursors import CdfCursorStore
     from incremental.delta_context import DeltaAccessContext
     from incremental.runtime import IncrementalRuntime

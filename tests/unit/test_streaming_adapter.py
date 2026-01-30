@@ -7,10 +7,11 @@ import pyarrow.dataset as ds
 import pytest
 
 from arrow_utils.core.streaming import to_reader
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.datafusion_runtime import df_ctx
+from tests.test_helpers.optional_deps import require_datafusion
 
-datafusion = pytest.importorskip("datafusion")
+require_datafusion()
 
 
 class _StreamWrapper:
@@ -29,9 +30,9 @@ def _simple_table() -> pa.Table:
 
 def test_to_reader_datafusion_dataframe() -> None:
     """Convert DataFusion DataFrames into a RecordBatchReader."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     table = _simple_table()
-    datafusion_from_arrow(ctx, name="input_table", value=table)
+    register_arrow_table(ctx, name="input_table", value=table)
     df = ctx.table("input_table")
     reader = to_reader(df)
     result = reader.read_all()

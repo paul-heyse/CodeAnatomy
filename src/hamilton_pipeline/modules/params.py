@@ -11,11 +11,13 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonDict
-from datafusion_engine.arrow_schema.schema_builders import task_name_field
-from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.arrow.schema import task_name_field
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.param_tables import (
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.lineage.diagnostics import recorder_for_profile
+from datafusion_engine.session.runtime import read_delta_as_reader
+from datafusion_engine.tables.param import (
     ListParamSpec,
     ParamTableArtifact,
     ParamTablePolicy,
@@ -26,11 +28,9 @@ from datafusion_engine.param_tables import (
     param_table_name,
     unique_values,
 )
-from datafusion_engine.param_tables import (
+from datafusion_engine.tables.param import (
     scalar_param_signature as build_scalar_param_signature,
 )
-from datafusion_engine.runtime import read_delta_as_reader
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
 from engine.session import EngineSession
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
@@ -42,7 +42,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.views.graph import ViewNode
 
 
 @apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_policy"))

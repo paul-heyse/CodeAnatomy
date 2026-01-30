@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.build import rows_from_table
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.arrow.build import rows_from_table
+from datafusion_engine.session.facade import DataFusionExecutionFacade
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 def test_parameterized_execution_matches_unprepared() -> None:
     """Match DataFusion builder output to direct SQL."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     table = pa.table({"id": [1, 2], "name": ["a", "b"]})
     ctx.from_arrow(table, name="t")

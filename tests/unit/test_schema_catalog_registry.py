@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
+from datafusion_engine.session.runtime import dataset_schema_from_context
+from tests.test_helpers.datafusion_runtime import df_ctx
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -22,7 +23,7 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 def test_catalog_schema_resolves_nested_dataset() -> None:
     """Ensure nested dataset schemas resolve through DataFusion."""
     name = "cst_nodes"
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     expected = _to_arrow_schema(ctx.table(name).schema())
     resolved = _to_arrow_schema(dataset_schema_from_context(name))
     assert expected.equals(resolved)

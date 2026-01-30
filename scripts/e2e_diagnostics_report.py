@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Generate a diagnostic report for e2e_full_pipeline outputs."""
+"""Generate a diagnostic report for e2e_full_pipeline outputs.
+
+Deprecated: use `codeanatomy diag` instead.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
 from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema.registry import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.tables.metadata import TableProviderCapsule
+from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 
@@ -25,20 +29,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
-
-schema_identity_hash = cast(
-    "Callable[[pa.Schema], str]",
-    import_module("datafusion_engine.arrow_schema.abi").schema_identity_hash,
-)
-dataset_schema = cast(
-    "Callable[[str], pa.Schema]",
-    import_module("cpg.registry_specs").dataset_schema,
-)
-incremental_dataset_schema = cast(
-    "Callable[[str], pa.Schema]",
-    import_module("incremental.registry_specs").dataset_schema,
-)
-
 
 @dataclass(frozen=True)
 class Issue:
@@ -50,6 +40,8 @@ class Issue:
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Mapping, Sequence
+
     from datafusion import SessionContext
 
 
@@ -128,8 +120,12 @@ def _latest_dir(directories: Iterable[Path]) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _read_json(path: Path) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        return payload
+    msg = f"Expected JSON object in {path}."
+    raise ValueError(msg)
 
 
 def _decode_metadata(schema: pa.Schema) -> dict[str, str]:
@@ -138,8 +134,8 @@ def _decode_metadata(schema: pa.Schema) -> dict[str, str]:
     return {key.decode("utf-8"): value.decode("utf-8") for key, value in schema.metadata.items()}
 
 
-def _delta_summary(path: Path, *, validate: bool, table: pa.Table) -> dict[str, Any]:
-    summary: dict[str, Any] = {"path": str(path)}
+def _delta_summary(path: Path, *, validate: bool, table: pa.Table) -> dict[str, object]:
+    summary: dict[str, object] = {"path": str(path)}
     schema = table.schema
     summary["rows"] = int(table.num_rows)
     summary["columns"] = len(schema.names)
@@ -229,7 +225,7 @@ def _check_contract_schema(
     if not schema_name:
         return
     try:
-        expected = dataset_schema(schema_name)
+        expected = extract_schema_for(schema_name)
     except KeyError:
         try:
             expected = incremental_dataset_schema(schema_name)
@@ -334,11 +330,11 @@ def _check_required_files(
     return present
 
 
-def _summarize_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    outputs = manifest.get("outputs", [])
-    datasets = manifest.get("datasets", [])
-    extracts = manifest.get("extracts", [])
-    rules = manifest.get("rules", [])
+def _summarize_manifest(manifest: Mapping[str, object]) -> dict[str, object]:
+    outputs = _coerce_sequence(manifest.get("outputs"))
+    datasets = _coerce_sequence(manifest.get("datasets"))
+    extracts = _coerce_sequence(manifest.get("extracts"))
+    rules = _coerce_sequence(manifest.get("rules"))
     return {
         "outputs_count": len(outputs),
         "datasets_count": len(datasets),
@@ -348,25 +344,41 @@ def _summarize_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _coerce_sequence(value: object) -> Sequence[object]:
+    if isinstance(value, (list, tuple)):
+        return value
+    return ()
+
+
+def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
+def _write_summary(path: Path, report: Mapping[str, object]) -> None:
     lines: list[str] = []
     lines.append("# E2E Diagnostics Report")
     lines.append("")
     lines.append(f"Status: {report['status']}")
     lines.append("")
-    summary = report["summary"]
-    lines.append(f"Outputs checked: {summary['delta_tables']}")
-    lines.append(f"Manifest outputs: {summary['manifest_outputs']}")
-    lines.append(f"Extracts: {summary['extracts']} Rules: {summary['rules']}")
-    lines.append(f"Run bundle datasets: {summary['run_bundle_datasets']}")
-    lines.append(f"Incremental enabled: {summary['incremental_enabled']}")
-    lines.append(f"Incremental datasets: {summary['incremental_datasets']}")
+    summary_value = report.get("summary")
+    summary: Mapping[str, object] = summary_value if isinstance(summary_value, dict) else {}
+    lines.append(f"Outputs checked: {summary.get('delta_tables', 0)}")
+    lines.append(f"Manifest outputs: {summary.get('manifest_outputs', 0)}")
+    lines.append(f"Extracts: {summary.get('extracts', 0)} Rules: {summary.get('rules', 0)}")
+    lines.append(f"Run bundle datasets: {summary.get('run_bundle_datasets', 0)}")
+    lines.append(f"Incremental enabled: {summary.get('incremental_enabled', False)}")
+    lines.append(f"Incremental datasets: {summary.get('incremental_datasets', 0)}")
     lines.append("")
-    issues: list[dict[str, str]] = report["issues"]
+    issues_value = report.get("issues")
+    issues: list[dict[str, str]] = (
+        [
+            {str(key): str(value) for key, value in issue.items()}
+            for issue in issues_value
+            if isinstance(issue, dict)
+        ]
+        if isinstance(issues_value, list)
+        else []
+    )
     if not issues:
         lines.append("No issues detected.")
     else:
@@ -405,13 +417,18 @@ def _resolve_paths(
     return output_dir, run_bundle, report_path, summary_path
 
 
-def _resolve_state_dir(run_config: Mapping[str, Any]) -> Path | None:
+def _resolve_state_dir(run_config: Mapping[str, object]) -> Path | None:
     value = run_config.get("incremental_state_dir")
-    repo_root = run_config.get("repo_root")
-    if not value and not repo_root:
-        return None
-    state_dir = Path(value) if value else Path(repo_root) / "build" / "state"
-    if not state_dir.is_absolute() and repo_root:
+    repo_root_value = run_config.get("repo_root")
+    value_path = Path(value) if isinstance(value, (Path, str)) else None
+    repo_root = Path(repo_root_value) if isinstance(repo_root_value, (Path, str)) else None
+    if value_path is None:
+        if repo_root is None:
+            return None
+        state_dir = repo_root / "build" / "state"
+    else:
+        state_dir = value_path
+    if not state_dir.is_absolute() and repo_root is not None:
         state_dir = Path(repo_root) / state_dir
     return state_dir.resolve()
 
@@ -420,7 +437,7 @@ def _load_manifest(
     run_bundle: Path | None,
     *,
     issues: list[Issue],
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     if run_bundle is None:
         issues.append(
             Issue(
@@ -447,7 +464,7 @@ def _load_run_config(
     run_bundle: Path | None,
     *,
     issues: list[Issue],
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     if run_bundle is None:
         return None
     config_path = run_bundle / "config.json"
@@ -503,12 +520,12 @@ def _check_run_bundle_datasets(
 
 
 def _check_incremental_state(
-    run_config: Mapping[str, Any] | None,
+    run_config: Mapping[str, object] | None,
     run_bundle: Path | None,
     *,
     issues: list[Issue],
-) -> dict[str, Any]:
-    info: dict[str, Any] = {"enabled": False}
+) -> dict[str, object]:
+    info: dict[str, object] = {"enabled": False}
     if run_config is None:
         return info
     enabled = bool(run_config.get("incremental_enabled"))
@@ -541,7 +558,8 @@ def _check_incremental_state(
         datasets = sorted(path.name for path in datasets_dir.iterdir() if path.is_dir())
         info["datasets_present"] = datasets
     else:
-        info["datasets_present"] = []
+        empty_datasets: list[str] = []
+        info["datasets_present"] = empty_datasets
         issues.append(
             Issue(
                 severity="warn",
@@ -596,8 +614,8 @@ def _collect_delta_summaries(
     validate_delta: bool,
     issues: list[Issue],
     read_table: Callable[[Path], pa.Table],
-) -> dict[str, dict[str, Any]]:
-    summaries: dict[str, dict[str, Any]] = {}
+) -> dict[str, dict[str, object]]:
+    summaries: dict[str, dict[str, object]] = {}
     for path in output_dir.iterdir():
         if not path.is_dir():
             continue
@@ -624,9 +642,9 @@ def _maybe_check_edge_invariants(
         _check_edge_invariants(nodes_path, edges_path, issues=issues, read_table=read_table)
 
 
-def _scip_index_info(output_dir: Path, *, issues: list[Issue]) -> dict[str, Any]:
+def _scip_index_info(output_dir: Path, *, issues: list[Issue]) -> dict[str, object]:
     scip_index = output_dir.parent / "scip" / "index.scip"
-    info = {
+    info: dict[str, object] = {
         "path": str(scip_index),
         "exists": scip_index.exists(),
         "size": scip_index.stat().st_size if scip_index.exists() else 0,
@@ -658,12 +676,13 @@ def _report_status(issues: Sequence[Issue]) -> str:
 
 
 def _build_summary(
-    manifest_summary: Mapping[str, Any],
-    delta_summaries: Mapping[str, Mapping[str, Any]],
+    manifest_summary: Mapping[str, object],
+    delta_summaries: Mapping[str, Mapping[str, object]],
     extract_error_dirs: Sequence[Path],
     run_bundle_datasets: Mapping[str, bool],
-    incremental_info: Mapping[str, Any],
-) -> dict[str, Any]:
+    incremental_info: Mapping[str, object],
+) -> dict[str, object]:
+    datasets_present = _coerce_sequence(incremental_info.get("datasets_present"))
     return {
         "delta_tables": len(delta_summaries),
         "manifest_outputs": manifest_summary.get("outputs_count", 0),
@@ -672,7 +691,7 @@ def _build_summary(
         "extract_error_dirs": len(extract_error_dirs),
         "run_bundle_datasets": sum(1 for present in run_bundle_datasets.values() if present),
         "incremental_enabled": bool(incremental_info.get("enabled")),
-        "incremental_datasets": len(incremental_info.get("datasets_present", [])),
+        "incremental_datasets": len(datasets_present),
     }
 
 
@@ -682,7 +701,7 @@ def _build_report(
     *,
     validate_delta: bool,
     read_table: Callable[[Path], pa.Table],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     issues: list[Issue] = []
     required_files = _check_required_files(output_dir, issues=issues)
     manifest = _load_manifest(run_bundle, issues=issues)

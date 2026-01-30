@@ -56,8 +56,8 @@ from serde_msgspec import dumps_msgpack, loads_msgpack
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
-    from datafusion_engine.schema.contracts import ArrowFieldSpec
     from datafusion_engine.schema.contracts import TableSchemaSpec as TableSchemaProtocol
+    from datafusion_engine.schema.spec_protocol import ArrowFieldSpec
     from schema_spec.specs import TableSchemaSpec
 
 _POSITION_COLS: tuple[str, ...] = (

@@ -8,8 +8,9 @@ from typing import TypedDict, Unpack
 
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.delta.protocol import DeltaFeatureGate
-from datafusion_engine.expr.spec import ExprSpec, QuerySpec
-from datafusion_engine.schema.policy import SchemaEvolutionSpec
+from datafusion_engine.expr.query_spec import QuerySpec
+from datafusion_engine.expr.spec import ExprSpec
+from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec

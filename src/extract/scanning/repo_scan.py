@@ -11,7 +11,7 @@ from diskcache import memoize_stampede, throttle
 
 from core_types import PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.registry import dataset_query, normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.schema_ops import ExtractNormalizeOptions

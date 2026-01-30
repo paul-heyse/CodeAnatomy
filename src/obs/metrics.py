@@ -28,7 +28,7 @@ from datafusion_engine.arrow.interop import (
     SchemaLike,
     TableLike,
 )
-from datafusion_engine.encoding import NormalizePolicy
+from datafusion_engine.encoding.policy import NormalizePolicy
 from datafusion_engine.identity import schema_identity_hash
 from obs.otel.metrics import set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER

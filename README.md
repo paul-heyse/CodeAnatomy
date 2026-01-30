@@ -28,3 +28,14 @@ result = build_graph_product(
 )
 print(result.output_dir)
 ```
+
+## CLI
+
+The Cyclopts-based CLI is available via the `codeanatomy` entrypoint. In a dev checkout:
+
+```bash
+uv run codeanatomy --help
+uv run python -m cli --help
+```
+
+See `docs/guide/cli.md` for full usage, configuration, and examples.

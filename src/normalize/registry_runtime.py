@@ -17,7 +17,7 @@ from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
 from datafusion_engine.dataset.registration import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.schema.contracts import (
     SchemaContract,
     ValidationViolation,

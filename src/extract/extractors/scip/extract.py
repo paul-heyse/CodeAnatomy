@@ -22,7 +22,7 @@ from datafusion_engine.encoding.policy import encode_table
 from datafusion_engine.expr.span import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from datafusion_engine.schema.policy import align_table
+from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination import (

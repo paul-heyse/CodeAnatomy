@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::coalesce_partitions::CoalescePartitions;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::config::{ConfigExtension, ConfigOptions};
 use datafusion_common::Result;
-use datafusion_physical_plan::ExecutionPlan;
 
 const PREFIX: &str = "codeanatomy_physical";
 
@@ -89,7 +90,7 @@ impl PhysicalOptimizerRule for CodeAnatomyPhysicalRule {
         }
         let mut optimized = plan;
         if policy.coalesce_partitions {
-            optimized = CoalescePartitions::new().optimize(optimized, config)?;
+            optimized = Arc::new(CoalescePartitionsExec::new(optimized));
         }
         if policy.coalesce_batches {
             optimized = CoalesceBatches::new().optimize(optimized, config)?;
@@ -111,6 +112,8 @@ pub fn install_physical_rules(ctx: &SessionContext) -> Result<()> {
     let mut state = state_ref.write();
     let config = state.config_mut();
     let _ = ensure_physical_config(config.options_mut());
-    state.add_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule::default()));
+    let builder = SessionStateBuilder::from(state.clone())
+        .with_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule::default()));
+    *state = builder.build();
     Ok(())
 }

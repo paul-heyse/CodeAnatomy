@@ -32,6 +32,17 @@ fi
 uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile}
 uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile}
 
+wheel_dir="dist/wheels"
+mkdir -p "${wheel_dir}"
+manylinux_args=()
+if [ "$(uname -s)" = "Linux" ]; then
+  manylinux_args=(--manylinux 2_39)
+fi
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv lock --refresh-package datafusion
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv lock --refresh-package datafusion-ext
+
 (
   cd rust/df_plugin_codeanatomy
   cargo build --${profile}

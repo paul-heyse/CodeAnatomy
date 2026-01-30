@@ -19,7 +19,7 @@ use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_ud
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_macros::user_doc;
 
-use crate::macros::{aggregate_udfs, AggregateUdfSpec};
+use crate::{aggregate_udfs, macros::AggregateUdfSpec};
 
 const LIST_UNIQUE_NAME: &str = "list_unique";
 const COUNT_DISTINCT_NAME: &str = "count_distinct_agg";

@@ -13,7 +13,7 @@ from datafusion.dataframe import DataFrame
 from arrow_utils.core.array_iter import iter_table_rows
 from datafusion_engine.arrow.build import empty_table, table_from_columns
 from datafusion_engine.arrow.interop import TableLike
-from datafusion_engine.schema.policy import align_table
+from datafusion_engine.schema.alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema

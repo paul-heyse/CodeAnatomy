@@ -9,7 +9,7 @@ require_datafusion()
 import pyarrow as pa
 from datafusion import SessionContext
 
-from datafusion_engine.session.factory import deregister_table, register_temp_table, temp_table
+from datafusion_engine.session.helpers import deregister_table, register_temp_table, temp_table
 
 
 def _supports_deregister(ctx: SessionContext) -> bool:

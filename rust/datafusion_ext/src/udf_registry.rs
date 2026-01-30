@@ -8,7 +8,7 @@ use datafusion_functions_table::generate_series::RangeFunc;
 
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
-use crate::macros::{scalar_udfs, table_udfs};
+use crate::{scalar_udfs, table_udfs};
 pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 use crate::{udaf_builtin, udf_custom, udtf_builtin, udtf_external, udwf_builtin};
 

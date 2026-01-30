@@ -12,10 +12,10 @@ import pyarrow.dataset as ds
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine import sql_options as _sql_options
 from datafusion_engine.catalog.provider_registry import ProviderRegistry
 from datafusion_engine.dataset.registry import DatasetLocation, apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter, ListingTableRegistration
+from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.spec import table_spec_from_location
 
 if TYPE_CHECKING:

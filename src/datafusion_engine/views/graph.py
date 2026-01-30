@@ -28,7 +28,7 @@ from datafusion_engine.views.artifacts import (
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
-from datafusion_engine.views.graph import (
+from datafusion_engine.views.bundle_extraction import (
     arrow_schema_from_df,
     extract_lineage_from_bundle,
     resolve_required_udfs_from_bundle,

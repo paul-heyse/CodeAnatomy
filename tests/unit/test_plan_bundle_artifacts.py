@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 import rustworkx as rx
 
-from datafusion_engine.expr.planner import domain_planner_names_from_snapshot
+from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.udf.catalog import rewrite_tag_index
 from datafusion_engine.udf.runtime import rust_udf_snapshot_hash

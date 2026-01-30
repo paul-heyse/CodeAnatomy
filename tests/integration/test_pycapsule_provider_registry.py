@@ -12,7 +12,7 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.spec import ExprSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DatasetSpec
-from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
 
@@ -30,9 +30,11 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     profile, ctx, delta_path = write_delta_table(
         tmp_path,
         table=table,
-        profile=profile,
-        table_name="delta_table",
-        schema_mode="overwrite",
+        options=DeltaSeedOptions(
+            profile=profile,
+            table_name="delta_table",
+            schema_mode="overwrite",
+        ),
     )
     register_dataset_df(
         ctx,
@@ -56,10 +58,12 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
     profile, ctx, delta_path = write_delta_table(
         tmp_path,
         table=table,
-        profile=profile,
-        table_name="delta_table",
-        partition_by=("part",),
-        schema_mode="overwrite",
+        options=DeltaSeedOptions(
+            profile=profile,
+            table_name="delta_table",
+            partition_by=("part",),
+            schema_mode="overwrite",
+        ),
     )
     table_spec = TableSchemaSpec.from_schema("delta_tbl", table.schema)
     dataset_spec = DatasetSpec(

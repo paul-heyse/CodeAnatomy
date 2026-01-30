@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from tests.test_helpers.datafusion_runtime import df_profile
-from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
 
 require_datafusion()
@@ -24,8 +24,10 @@ def test_delta_file_column_conflict_raises(tmp_path: Path) -> None:
     profile, ctx, delta_path = write_delta_table(
         tmp_path,
         table=table,
-        profile=df_profile(),
-        table_name="delta_table",
+        options=DeltaSeedOptions(
+            profile=df_profile(),
+            table_name="delta_table",
+        ),
     )
     with pytest.raises(RuntimeError):
         register_dataset_df(

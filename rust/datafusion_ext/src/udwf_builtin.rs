@@ -2,7 +2,7 @@ use datafusion_expr::WindowUDF;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::row_number::row_number_udwf;
 
-use crate::macros::{window_udfs, WindowUdfSpec};
+use crate::{macros::WindowUdfSpec, window_udfs};
 
 pub fn builtin_udwfs() -> Vec<WindowUDF> {
     builtin_udwf_specs()

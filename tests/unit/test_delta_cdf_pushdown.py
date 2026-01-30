@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from tests.test_helpers.datafusion_runtime import df_profile
-from tests.test_helpers.delta_seed import write_delta_table
+from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
 
 require_datafusion()
@@ -24,8 +24,10 @@ def _create_cdf_table(path: Path) -> None:
         _ = write_delta_table(
             path.parent,
             table=table,
-            profile=df_profile(),
-            table_name=path.name,
+            options=DeltaSeedOptions(
+                profile=df_profile(),
+                table_name=path.name,
+            ),
         )
         enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
     except RuntimeError as exc:

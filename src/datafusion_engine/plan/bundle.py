@@ -1385,6 +1385,8 @@ def _substrait_validation_payload(
     from datafusion_engine.plan.execution import validate_substrait_plan
 
     validation = validate_substrait_plan(substrait_bytes, df=df)
+    if validation is None:
+        return None
     match = validation.get("match")
     if match is False:
         msg = f"Substrait validation failed: {validation}"

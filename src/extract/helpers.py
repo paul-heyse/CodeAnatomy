@@ -24,7 +24,7 @@ from datafusion_engine.arrow.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, ScalarLike, TableLike
-from datafusion_engine.expr.spec import apply_query_spec
+from datafusion_engine.expr.query_spec import apply_query_spec
 from datafusion_engine.extract.extractors import (
     ExtractorSpec,
     extractor_specs,

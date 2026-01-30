@@ -12,15 +12,13 @@ from datafusion import SessionContext, SQLOptions
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_guard import safe_sql
+from validation.violations import ValidationViolation, ViolationType
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.schema_contracts import (
-        SchemaContract,
-        SchemaViolation,
-    )
+    from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.sql_guard import SqlBindings
 
 
@@ -320,25 +318,21 @@ def _describe_rows_from_introspection(
 def _schema_metadata_violations(
     schema: pa.Schema,
     contract: SchemaContract,
-) -> list[SchemaViolation]:
-    from datafusion_engine.schema_contracts import (
-        SCHEMA_ABI_FINGERPRINT_META,
-        SchemaViolation,
-        SchemaViolationType,
-    )
+) -> list[ValidationViolation]:
+    from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 
     expected = contract.schema_metadata or {}
     if not expected:
         return []
     actual = schema.metadata or {}
-    violations: list[SchemaViolation] = []
+    violations: list[ValidationViolation] = []
     expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
     if expected_abi is not None:
         actual_abi = schema_identity_hash(schema).encode("utf-8")
         if actual_abi != expected_abi:
             violations.append(
-                SchemaViolation(
-                    violation_type=SchemaViolationType.METADATA_MISMATCH,
+                ValidationViolation(
+                    violation_type=ViolationType.METADATA_MISMATCH,
                     table_name=contract.table_name,
                     column_name=SCHEMA_ABI_FINGERPRINT_META.decode("utf-8"),
                     expected=expected_abi.decode("utf-8", errors="replace"),
@@ -352,8 +346,8 @@ def _schema_metadata_violations(
         if actual_value is None or actual_value == expected_value:
             continue
         violations.append(
-            SchemaViolation(
-                violation_type=SchemaViolationType.METADATA_MISMATCH,
+            ValidationViolation(
+                violation_type=ViolationType.METADATA_MISMATCH,
                 table_name=contract.table_name,
                 column_name=key.decode("utf-8", errors="replace"),
                 expected=expected_value.decode("utf-8", errors="replace"),

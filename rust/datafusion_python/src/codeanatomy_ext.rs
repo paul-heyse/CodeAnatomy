@@ -42,6 +42,10 @@ use datafusion_ext::install_expr_planners_native;
 use datafusion_ext::planner_rules::{
     ensure_policy_config, install_policy_rules as install_policy_rules_native,
 };
+use datafusion_ext::physical_rules::{
+    ensure_physical_config,
+    install_physical_rules as install_physical_rules_native,
+};
 use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use crate::delta_control_plane::{
@@ -94,6 +98,22 @@ use pyo3::types::{
     PyBool, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyFloat, PyInt, PyList, PyString,
 };
 use tokio::runtime::Runtime;
+
+macro_rules! register_pyfunctions {
+    ($module:expr, $mod_path:path, [$($func:ident),* $(,)?]) => {
+        $(
+            $module.add_function(pyo3::wrap_pyfunction!($mod_path::$func, $module)?)?;
+        )*
+    };
+}
+
+macro_rules! register_pyclasses {
+    ($module:expr, [$($class:ty),* $(,)?]) => {
+        $(
+            $module.add_class::<$class>()?;
+        )*
+    };
+}
 
 fn schema_from_ipc(schema_ipc: Vec<u8>) -> PyResult<SchemaRef> {
     let reader = StreamReader::try_new(Cursor::new(schema_ipc), None)
@@ -352,9 +372,31 @@ fn install_codeanatomy_policy_config(
 }
 
 #[pyfunction]
+#[pyo3(signature = (enabled = None))]
+fn install_codeanatomy_physical_config(
+    ctx: PyRef<PySessionContext>,
+    enabled: Option<bool>,
+) -> PyResult<()> {
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let config = state.config_mut();
+    let physical = ensure_physical_config(config.options_mut());
+    if let Some(value) = enabled {
+        physical.enabled = value;
+    }
+    Ok(())
+}
+
+#[pyfunction]
 fn install_planner_rules(ctx: PyRef<PySessionContext>) -> PyResult<()> {
     install_policy_rules_native(&ctx.ctx)
         .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
+}
+
+#[pyfunction]
+fn install_physical_rules(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    install_physical_rules_native(&ctx.ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("Physical rule install failed: {err}")))
 }
 
 #[pyfunction(name = "registry_snapshot")]
@@ -2419,126 +2461,120 @@ fn delta_data_checker(
 }
 
 pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(
-        udf_custom_py::install_function_factory,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
-    module.add_function(wrap_pyfunction!(install_codeanatomy_policy_config, module)?)?;
-    module.add_function(wrap_pyfunction!(install_planner_rules, module)?)?;
-    module.add_function(wrap_pyfunction!(register_codeanatomy_udfs, module)?)?;
-    module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
-    module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
-    module.add_function(wrap_pyfunction!(register_df_plugin_udfs, module)?)?;
-    module.add_function(wrap_pyfunction!(
+    register_pyfunctions!(module, udf_custom_py, [
+        install_function_factory,
+        arrow_metadata,
+        semantic_tag,
+        stable_hash64,
+        stable_hash128,
+        prefixed_hash64,
+        stable_id,
+        stable_id_parts,
+        prefixed_hash_parts64,
+        stable_hash_any,
+        span_make,
+        span_len,
+        span_overlaps,
+        span_contains,
+        interval_align_score,
+        span_id,
+        utf8_normalize,
+        utf8_null_if_blank,
+        qname_normalize,
+        map_get_default,
+        map_normalize,
+        list_compact,
+        list_unique_sorted,
+        struct_pick,
+        cdf_change_rank,
+        cdf_is_upsert,
+        cdf_is_delete,
+        col_to_byte,
+    ]);
+    register_pyfunctions!(module, udf_builtin, [
+        map_entries,
+        map_keys,
+        map_values,
+        map_extract,
+        list_extract,
+        list_unique,
+        first_value_agg,
+        last_value_agg,
+        count_distinct_agg,
+        string_agg,
+        row_number_window,
+        lag_window,
+        lead_window,
+        union_tag,
+        union_extract,
+    ]);
+    register_pyfunctions!(module, crate, [
+        install_codeanatomy_udf_config,
+        install_codeanatomy_policy_config,
+        install_codeanatomy_physical_config,
+        install_planner_rules,
+        install_physical_rules,
+        register_codeanatomy_udfs,
+        registry_snapshot_py,
+        udf_docs_snapshot,
+        load_df_plugin,
+        register_df_plugin_udfs,
         register_df_plugin_table_functions,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         create_df_plugin_table_provider,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         register_df_plugin_table_providers,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(register_df_plugin, module)?)?;
-    module.add_function(wrap_pyfunction!(plugin_library_path, module)?)?;
-    module.add_function(wrap_pyfunction!(plugin_manifest, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::map_entries, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::map_keys, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::map_values, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::map_extract, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::list_extract, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::list_unique, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::first_value_agg, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::last_value_agg, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::count_distinct_agg, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::string_agg, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::row_number_window, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::lag_window, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::lead_window, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::arrow_metadata, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::union_tag, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_builtin::union_extract, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash128, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::prefixed_hash64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::stable_id, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::semantic_tag, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::stable_id_parts, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::prefixed_hash_parts64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash_any, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::span_make, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::span_len, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::span_overlaps, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::span_contains, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::interval_align_score, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::span_id, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::utf8_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::utf8_null_if_blank, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::qname_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::map_get_default, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::map_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::list_compact, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::list_unique_sorted, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::struct_pick, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_change_rank, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_is_upsert, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_is_delete, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom_py::col_to_byte, module)?)?;
-    module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
-    module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_table_provider_with_files, module)?)?;
-    module.add_function(wrap_pyfunction!(install_expr_planners, module)?)?;
-    module.add_function(wrap_pyfunction!(install_tracing, module)?)?;
-    module.add_function(wrap_pyfunction!(register_cache_tables, module)?)?;
-    module.add_function(wrap_pyfunction!(table_logical_plan, module)?)?;
-    module.add_function(wrap_pyfunction!(table_dfschema_tree, module)?)?;
-    module.add_function(wrap_pyfunction!(
+        register_df_plugin,
+        plugin_library_path,
+        plugin_manifest,
+        schema_evolution_adapter_factory,
+        parquet_listing_table_provider,
+        delta_table_provider_with_files,
+        install_expr_planners,
+        install_tracing,
+        register_cache_tables,
+        table_logical_plan,
+        table_dfschema_tree,
         install_schema_evolution_adapter_factory,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
-    module.add_class::<DeltaAppTransaction>()?;
-    module.add_class::<DeltaCommitOptions>()?;
-    module.add_class::<DeltaFeatureGate>()?;
-    module.add_class::<DeltaCdfOptions>()?;
-    module.add_class::<DeltaRuntimeEnvOptions>()?;
-    module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_session_context, module)?)?;
-    module.add_function(wrap_pyfunction!(install_delta_plan_codecs, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_snapshot_info, module)?)?;
-    module.add_function(wrap_pyfunction!(validate_protocol_gate, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_add_actions, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_table_provider_from_session, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_scan_config_from_session, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_data_checker, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_write_ipc, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_delete, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_update, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_merge, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_optimize_compact, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_vacuum, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_restore, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_set_properties, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_add_features, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_add_constraints, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_drop_constraints, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_create_checkpoint, module)?)?;
-    module.add_function(wrap_pyfunction!(delta_cleanup_metadata, module)?)?;
+        registry_catalog_provider_factory,
+        install_delta_table_factory,
+        delta_session_context,
+        install_delta_plan_codecs,
+        delta_cdf_table_provider,
+        delta_snapshot_info,
+        validate_protocol_gate,
+        delta_add_actions,
+        delta_table_provider_from_session,
+        delta_scan_config_from_session,
+        delta_data_checker,
+        delta_write_ipc,
+        delta_delete,
+        delta_update,
+        delta_merge,
+        delta_optimize_compact,
+        delta_vacuum,
+        delta_restore,
+        delta_set_properties,
+        delta_add_features,
+        delta_add_constraints,
+        delta_drop_constraints,
+        delta_create_checkpoint,
+        delta_cleanup_metadata,
+    ]);
+    register_pyclasses!(module, [
+        DeltaAppTransaction,
+        DeltaCommitOptions,
+        DeltaFeatureGate,
+        DeltaCdfOptions,
+        DeltaRuntimeEnvOptions,
+    ]);
     Ok(())
 }
 
 pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
-    module.add_function(wrap_pyfunction!(
+    register_pyfunctions!(module, crate, [
+        install_codeanatomy_udf_config,
         create_df_plugin_table_provider,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(plugin_library_path, module)?)?;
-    module.add_function(wrap_pyfunction!(plugin_manifest, module)?)?;
+        plugin_library_path,
+        plugin_manifest,
+    ]);
     Ok(())
 }

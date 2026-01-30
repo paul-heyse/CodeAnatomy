@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_schema.field_builders import (
     bool_field,
     int32_field,
@@ -148,7 +149,7 @@ class UdwfSpecInput:
 
 
 @dataclass(frozen=True)
-class FunctionFactoryPolicy:
+class FunctionFactoryPolicy(FingerprintableConfig):
     """Policy options for FunctionFactory registration."""
 
     primitives: tuple[RulePrimitive, ...] = ()
@@ -170,6 +171,26 @@ class FunctionFactoryPolicy:
             "allow_async": self.allow_async,
             "domain_operator_hooks": list(self.domain_operator_hooks),
         }
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the FunctionFactory policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing FunctionFactory policy settings.
+        """
+        return self.to_payload()
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the FunctionFactory policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def _policy_payload(policy: FunctionFactoryPolicy) -> bytes:

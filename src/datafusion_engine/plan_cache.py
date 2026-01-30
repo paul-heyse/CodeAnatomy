@@ -21,8 +21,8 @@ class PlanCacheEntry:
     """Cached plan proto payloads keyed by plan identity hash."""
 
     plan_identity_hash: str
+    substrait_bytes: bytes
     plan_fingerprint: str | None = None
-    substrait_bytes: bytes | None = None
     logical_plan_proto: bytes | None = None
     optimized_plan_proto: bytes | None = None
     execution_plan_proto: bytes | None = None

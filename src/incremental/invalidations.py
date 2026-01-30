@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING
 import msgspec
 import pyarrow as pa
 
+from datafusion_engine.arrow_schema.schema_builders import (
+    plan_fingerprint_entry_type,
+    version_field,
+)
 from datafusion_engine.write_pipeline import WriteMode
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.delta_context import read_delta_table_via_facade
@@ -23,16 +27,10 @@ from storage.deltalake import delta_table_version
 from storage.ipc_utils import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 2
-_PLAN_FINGERPRINT_ENTRY = pa.struct(
-    [
-        pa.field("plan_name", pa.string(), nullable=False),
-        pa.field("plan_fingerprint", pa.string(), nullable=False),
-        pa.field("plan_task_signature", pa.string(), nullable=False),
-    ]
-)
+_PLAN_FINGERPRINT_ENTRY = plan_fingerprint_entry_type()
 _INVALIDATION_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field(
             "incremental_plan_fingerprints",
             pa.list_(_PLAN_FINGERPRINT_ENTRY),
@@ -347,7 +345,7 @@ def _diff_mapping(
 
 
 def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
-    plan_fingerprints = _coerce_plan_fingerprint_entries(row.get("incremental_plan_fingerprints"))
+    plan_fingerprints = _parse_plan_fingerprint_entries(row.get("incremental_plan_fingerprints"))
     metadata_hash = row.get("incremental_metadata_hash")
     runtime_hash = row.get("runtime_profile_hash")
     return InvalidationSnapshot(
@@ -357,7 +355,7 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
     )
 
 
-def _coerce_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint]:
+def _parse_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint]:
     if not isinstance(value, Sequence):
         return {}
     resolved: dict[str, PlanFingerprint] = {}

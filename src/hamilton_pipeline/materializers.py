@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hamilton.function_modifiers import source
 from hamilton.io import materialization
@@ -13,11 +13,10 @@ from hamilton.io.data_adapters import DataSaver
 from hamilton.registry import register_adapter
 
 from datafusion_engine.param_tables import ParamTableArtifact
-from hamilton_pipeline.modules.outputs import (
-    OutputPlanContext,
-    OutputRuntimeContext,
-    delta_output_specs,
-)
+from hamilton_pipeline.io_contracts import delta_output_specs
+
+if TYPE_CHECKING:
+    from hamilton_pipeline.io_contracts import OutputPlanContext, OutputRuntimeContext
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import msgspec
 import pyarrow as pa
 
+from datafusion_engine.bundle_extraction import extract_lineage_from_bundle
 from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_log_storage_options
 from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.diagnostics import record_artifact
@@ -792,7 +793,7 @@ def build_plan_artifact_row(
     PlanArtifactRow
         Serialized plan artifact row.
     """
-    resolved_lineage = request.lineage or _lineage_from_bundle(request.bundle)
+    resolved_lineage = request.lineage or extract_lineage_from_bundle(request.bundle)
     scan_payload = _scan_units_payload(request.scan_units, scan_keys=request.scan_keys)
     scan_keys_payload = tuple(sorted(set(request.scan_keys)))
     delta_inputs_payload = _delta_inputs_payload(request.bundle)
@@ -1139,15 +1140,6 @@ def _event_payload_msgpack(payload: object) -> bytes:
     return dumps_msgpack(to_builtins(payload, str_keys=True))
 
 
-def _lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
-    from datafusion_engine.lineage_datafusion import extract_lineage
-
-    return extract_lineage(
-        bundle.optimized_logical_plan,
-        udf_snapshot=bundle.artifacts.udf_snapshot,
-    )
-
-
 def _lineage_payload(report: LineageReport) -> dict[str, object]:
     scans = [
         {
@@ -1353,9 +1345,7 @@ def _udf_compatibility(
     return compatibility_ok, detail
 
 
-def _substrait_msgpack(payload: bytes | None) -> bytes | None:
-    if payload is None:
-        return None
+def _substrait_msgpack(payload: bytes) -> bytes:
     return dumps_msgpack(SubstraitBytes(payload))
 
 

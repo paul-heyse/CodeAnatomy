@@ -19,6 +19,8 @@ use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_ud
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_macros::user_doc;
 
+use crate::macros::{aggregate_udfs, AggregateUdfSpec};
+
 const LIST_UNIQUE_NAME: &str = "list_unique";
 const COUNT_DISTINCT_NAME: &str = "count_distinct_agg";
 const COLLECT_SET_NAME: &str = "collect_set";
@@ -29,24 +31,31 @@ const ARG_MIN_NAME: &str = "arg_min";
 const ASOF_SELECT_NAME: &str = "asof_select";
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {
-    vec![
-        list_unique_udaf(),
-        collect_set_udaf(),
-        count_distinct_udaf(),
-        count_if_udaf(),
-        any_value_det_udaf(),
-        arg_max_udaf(),
-        asof_select_udaf(),
-        arg_min_udaf(),
-        first_value_udaf()
-            .as_ref()
-            .clone()
-            .with_aliases(["first_value_agg"]),
-        last_value_udaf()
-            .as_ref()
-            .clone()
-            .with_aliases(["last_value_agg"]),
-        string_agg_udaf().as_ref().clone(),
+    builtin_udaf_specs()
+        .into_iter()
+        .map(|spec| {
+            let mut udaf = (spec.builder)();
+            if !spec.aliases.is_empty() {
+                udaf = udaf.with_aliases(spec.aliases.iter().copied());
+            }
+            udaf
+        })
+        .collect()
+}
+
+fn builtin_udaf_specs() -> Vec<AggregateUdfSpec> {
+    aggregate_udfs![
+        "list_unique" => list_unique_udaf;
+        "collect_set" => collect_set_udaf;
+        "count_distinct_agg" => count_distinct_udaf;
+        "count_if" => count_if_udaf;
+        "any_value_det" => any_value_det_udaf;
+        "arg_max" => arg_max_udaf;
+        "asof_select" => asof_select_udaf;
+        "arg_min" => arg_min_udaf;
+        "first_value" => first_value_base_udaf, aliases: ["first_value_agg"];
+        "last_value" => last_value_base_udaf, aliases: ["last_value_agg"];
+        "string_agg" => string_agg_base_udaf;
     ]
 }
 
@@ -60,6 +69,18 @@ fn collect_set_udaf() -> AggregateUDF {
 
 fn count_distinct_udaf() -> AggregateUDF {
     AggregateUDF::new_from_shared_impl(Arc::new(CountDistinctUdaf::new()))
+}
+
+fn first_value_base_udaf() -> AggregateUDF {
+    first_value_udaf().as_ref().clone()
+}
+
+fn last_value_base_udaf() -> AggregateUDF {
+    last_value_udaf().as_ref().clone()
+}
+
+fn string_agg_base_udaf() -> AggregateUDF {
+    string_agg_udaf().as_ref().clone()
 }
 
 #[user_doc(

@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::optimizer::analyzer::AnalyzerRule;
-use datafusion_common::config::{ConfigEntry, ConfigExtension, ConfigOptions, ExtensionOptions};
+use datafusion_common::config::{ConfigExtension, ConfigOptions};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
 
@@ -37,59 +36,20 @@ impl CodeAnatomyPolicyConfig {
     }
 }
 
-impl ExtensionOptions for CodeAnatomyPolicyConfig {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        Box::new(self.clone())
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        match key {
-            "allow_ddl" => {
-                self.allow_ddl = parse_bool(value, key)?;
-            }
-            "allow_dml" => {
-                self.allow_dml = parse_bool(value, key)?;
-            }
-            "allow_statements" => {
-                self.allow_statements = parse_bool(value, key)?;
-            }
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown CodeAnatomy policy config key: {key}"
-                )))
-            }
-        }
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<ConfigEntry> {
-        vec![
-            ConfigEntry {
-                key: format!("{PREFIX}.allow_ddl"),
-                value: Some(self.allow_ddl.to_string()),
-                description: "Allow DDL logical plans (CREATE/DROP/etc).",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.allow_dml"),
-                value: Some(self.allow_dml.to_string()),
-                description: "Allow DML logical plans (INSERT/UPDATE/DELETE).",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.allow_statements"),
-                value: Some(self.allow_statements.to_string()),
-                description: "Allow DataFusion Statement logical plans.",
-            },
-        ]
-    }
-}
+crate::impl_extension_options!(
+    CodeAnatomyPolicyConfig,
+    prefix = PREFIX,
+    unknown_key = "Unknown CodeAnatomy policy config key: {key}",
+    fields = [
+        (allow_ddl, bool, "Allow DDL logical plans (CREATE/DROP/etc)."),
+        (allow_dml, bool, "Allow DML logical plans (INSERT/UPDATE/DELETE)."),
+        (
+            allow_statements,
+            bool,
+            "Allow DataFusion Statement logical plans."
+        ),
+    ]
+);
 
 impl ConfigExtension for CodeAnatomyPolicyConfig {
     const PREFIX: &'static str = PREFIX;
@@ -155,15 +115,4 @@ fn validate_plan_policy(plan: &LogicalPlan, policy: &CodeAnatomyPolicyConfig) ->
         validate_plan_policy(child, policy)?;
     }
     Ok(())
-}
-
-fn parse_bool(value: &str, key: &str) -> Result<bool> {
-    let normalized = value.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "true" | "t" | "1" | "yes" | "y" => Ok(true),
-        "false" | "f" | "0" | "no" | "n" => Ok(false),
-        _ => Err(DataFusionError::Plan(format!(
-            "Invalid boolean for {key}: {value}"
-        ))),
-    }
 }

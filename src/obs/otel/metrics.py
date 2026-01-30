@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from opentelemetry import metrics
@@ -267,6 +267,19 @@ def _registry() -> MetricsRegistry:
     return registry
 
 
+def _emit_metric(
+    record_fn: Callable[[float, Mapping[str, AttributeValue]], None],
+    *,
+    value: float,
+    base_attributes: Mapping[str, object],
+    attributes: Mapping[str, object] | None = None,
+) -> None:
+    payload = dict(base_attributes)
+    if attributes:
+        payload.update(attributes)
+    record_fn(value, normalize_attributes(_with_run_id(payload)))
+
+
 def record_stage_duration(
     stage: str,
     duration_s: float,
@@ -276,13 +289,15 @@ def record_stage_duration(
 ) -> None:
     """Record a stage duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.STAGE.value: stage,
-        AttributeName.STATUS.value: status,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.stage_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.stage_duration.record,
+        value=duration_s,
+        base_attributes={
+            AttributeName.STAGE.value: stage,
+            AttributeName.STATUS.value: status,
+        },
+        attributes=attributes,
+    )
 
 
 def record_task_duration(
@@ -294,13 +309,15 @@ def record_task_duration(
 ) -> None:
     """Record a task duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.TASK_KIND.value: task_kind,
-        AttributeName.STATUS.value: status,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.task_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.task_duration.record,
+        value=duration_s,
+        base_attributes={
+            AttributeName.TASK_KIND.value: task_kind,
+            AttributeName.STATUS.value: status,
+        },
+        attributes=attributes,
+    )
 
 
 def record_datafusion_duration(
@@ -312,13 +329,15 @@ def record_datafusion_duration(
 ) -> None:
     """Record a DataFusion execution duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.STATUS.value: status,
-        AttributeName.PLAN_KIND.value: plan_kind,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.datafusion_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.datafusion_duration.record,
+        value=duration_s,
+        base_attributes={
+            AttributeName.STATUS.value: status,
+            AttributeName.PLAN_KIND.value: plan_kind,
+        },
+        attributes=attributes,
+    )
 
 
 def record_write_duration(
@@ -330,13 +349,15 @@ def record_write_duration(
 ) -> None:
     """Record a DataFusion write duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.STATUS.value: status,
-        AttributeName.DESTINATION.value: destination,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.write_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.write_duration.record,
+        value=duration_s,
+        base_attributes={
+            AttributeName.STATUS.value: status,
+            AttributeName.DESTINATION.value: destination,
+        },
+        attributes=attributes,
+    )
 
 
 def record_artifact_count(
@@ -347,13 +368,15 @@ def record_artifact_count(
 ) -> None:
     """Increment the artifact count metric."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.ARTIFACT_KIND.value: artifact_kind,
-        AttributeName.STATUS.value: status,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.artifact_count.add(1, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.artifact_count.add,
+        value=1.0,
+        base_attributes={
+            AttributeName.ARTIFACT_KIND.value: artifact_kind,
+            AttributeName.STATUS.value: status,
+        },
+        attributes=attributes,
+    )
 
 
 def record_error(
@@ -364,13 +387,15 @@ def record_error(
 ) -> None:
     """Increment the error count metric."""
     registry = _registry()
-    payload: dict[str, object] = {
-        AttributeName.STAGE.value: stage,
-        AttributeName.ERROR_TYPE.value: error_type,
-    }
-    if attributes:
-        payload.update(attributes)
-    registry.error_count.add(1, normalize_attributes(_with_run_id(payload)))
+    _emit_metric(
+        registry.error_count.add,
+        value=1.0,
+        base_attributes={
+            AttributeName.STAGE.value: stage,
+            AttributeName.ERROR_TYPE.value: error_type,
+        },
+        attributes=attributes,
+    )
 
 
 def set_dataset_stats(
@@ -381,9 +406,17 @@ def set_dataset_stats(
 ) -> None:
     """Set dataset row and column gauge values."""
     registry = _registry()
-    attrs = normalize_attributes(_with_run_id({AttributeName.DATASET.value: dataset}))
-    registry.dataset_rows.set_value(float(rows), attrs)
-    registry.dataset_columns.set_value(float(columns), attrs)
+    base = {AttributeName.DATASET.value: dataset}
+    _emit_metric(
+        registry.dataset_rows.set_value,
+        value=float(rows),
+        base_attributes=base,
+    )
+    _emit_metric(
+        registry.dataset_columns.set_value,
+        value=float(columns),
+        base_attributes=base,
+    )
 
 
 def set_scan_telemetry(
@@ -394,9 +427,17 @@ def set_scan_telemetry(
 ) -> None:
     """Set scan telemetry gauge values."""
     registry = _registry()
-    attrs = normalize_attributes(_with_run_id({AttributeName.DATASET.value: dataset}))
-    registry.scan_fragments.set_value(float(fragment_count), attrs)
-    registry.scan_row_groups.set_value(float(row_group_count), attrs)
+    base = {AttributeName.DATASET.value: dataset}
+    _emit_metric(
+        registry.scan_fragments.set_value,
+        value=float(fragment_count),
+        base_attributes=base,
+    )
+    _emit_metric(
+        registry.scan_row_groups.set_value,
+        value=float(row_group_count),
+        base_attributes=base,
+    )
 
 
 __all__ = [

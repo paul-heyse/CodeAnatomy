@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Protocol, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
@@ -17,6 +17,11 @@ from datafusion_engine.arrow_interop import (
     ScalarLike,
     StructArrayLike,
 )
+from datafusion_engine.arrow_schema._type_protocols import (
+    ListTypeProtocol,
+    StructTypeProtocol,
+    UnionTypeProtocol,
+)
 from datafusion_engine.arrow_schema.types import list_view_type, map_type
 from utils.validation import validate_required_items
 
@@ -24,21 +29,6 @@ MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767
 _UNION_TAG_KEY = "__union_tag__"
 _UNION_VALUE_KEY = "value"
-
-
-class _ListType(Protocol):
-    value_field: FieldLike
-
-
-class _StructType(Protocol):
-    def __iter__(self) -> Iterator[FieldLike]: ...
-
-
-class _UnionType(Protocol):
-    type_codes: Sequence[int]
-    mode: str
-
-    def __iter__(self) -> Iterator[FieldLike]: ...
 
 
 def _offsets_start() -> list[int]:
@@ -401,7 +391,7 @@ def list_array_from_lists(
         else:
             null_mask.append(True)
             offsets.append(len(flattened))
-    list_type = cast("_ListType", list_type)
+    list_type = cast("ListTypeProtocol", list_type)
     value_field = list_type.value_field
     child_array = nested_array_factory(value_field, flattened)
     offsets_array = pa.array(offsets, type=pa.int64() if large else pa.int32())
@@ -479,7 +469,7 @@ def struct_array_from_dicts(
     normalized, mask_values = _normalize_struct_values(values)
     if struct_type is None:
         return pa.array(normalized, type=None)
-    struct_type = cast("_StructType", struct_type)
+    struct_type = cast("StructTypeProtocol", struct_type)
     required_fields = tuple(field.name for field in struct_type if not field.nullable)
     if required_fields:
         for row in normalized:
@@ -622,7 +612,7 @@ def union_array_from_values(
     if not patypes.is_union(union_type):
         msg = "union_array_from_values requires a union dtype."
         raise TypeError(msg)
-    union_type = cast("_UnionType", union_type)
+    union_type = cast("UnionTypeProtocol", union_type)
     child_fields = list(union_type)
     child_names = [field.name for field in child_fields]
     child_types = [field.type for field in child_fields]
@@ -683,7 +673,7 @@ def union_array_from_tagged_values(
     if not patypes.is_union(union_type):
         msg = "union_array_from_tagged_values requires a union dtype."
         raise TypeError(msg)
-    union_type = cast("_UnionType", union_type)
+    union_type = cast("UnionTypeProtocol", union_type)
     child_fields = list(union_type)
     child_names = [field.name for field in child_fields]
     child_types = [field.type for field in child_fields]
@@ -770,7 +760,7 @@ def nested_array_factory(field: FieldLike, values: Sequence[object | None]) -> A
     """
     dtype = field.type
     if patypes.is_struct(dtype):
-        array = struct_array_from_dicts(values, struct_type=cast("_StructType", dtype))
+        array = struct_array_from_dicts(values, struct_type=cast("StructTypeProtocol", dtype))
     elif patypes.is_map(dtype):
         map_type = cast("pa.MapType", dtype)
         key_type = getattr(map_type, "key_type", map_type.key_field.type)

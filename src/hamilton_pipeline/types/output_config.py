@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from core.config_base import FingerprintableConfig, config_fingerprint
+
 if TYPE_CHECKING:
     from engine.plan_policy import WriterStrategy
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -16,11 +18,34 @@ OutputStorageFormat = Literal["delta"]
 
 
 @dataclass(frozen=True)
-class OutputStoragePolicy:
+class OutputStoragePolicy(FingerprintableConfig):
     """Configuration for output storage format enforcement."""
 
     format: OutputStorageFormat = "delta"
     allow_parquet_exports: bool = False
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for output storage policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing output storage policy settings.
+        """
+        return {
+            "format": self.format,
+            "allow_parquet_exports": self.allow_parquet_exports,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for output storage policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)

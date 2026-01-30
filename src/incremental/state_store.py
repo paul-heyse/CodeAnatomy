@@ -58,16 +58,6 @@ class StateStore:
         """
         return self.latest_snapshot_dir() / "repo_snapshot"
 
-    def incremental_diff_path(self) -> Path:
-        """Return the path to the incremental diff Delta table.
-
-        Returns
-        -------
-        Path
-            Incremental diff Delta table path.
-        """
-        return self.latest_snapshot_dir() / "incremental_diff"
-
     def scip_snapshot_path(self) -> Path:
         """Return the path to the SCIP snapshot Delta table.
 

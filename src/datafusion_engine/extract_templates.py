@@ -7,8 +7,40 @@ from dataclasses import dataclass, field
 
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow_schema.metadata import EvidenceMetadataSpec, evidence_metadata
-from datafusion_engine.extract_template_specs import DatasetTemplateSpec
 from utils.registry_protocol import ImmutableRegistry
+
+
+@dataclass(frozen=True)
+class DatasetTemplateSpec:
+    """Minimal template spec for extract dataset metadata expansion."""
+
+    name: str
+    template: str
+    params: Mapping[str, object] = field(default_factory=dict)
+
+
+_TEMPLATE_NAMES: tuple[str, ...] = (
+    "repo_scan",
+    "ast",
+    "cst",
+    "bytecode",
+    "symtable",
+    "scip",
+    "tree_sitter",
+    "python_imports",
+    "python_external",
+)
+
+
+def dataset_template_specs() -> tuple[DatasetTemplateSpec, ...]:
+    """Return extract dataset template specs in registry order.
+
+    Returns
+    -------
+    tuple[DatasetTemplateSpec, ...]
+        Dataset template specs for metadata expansion.
+    """
+    return tuple(DatasetTemplateSpec(name=name, template=name) for name in _TEMPLATE_NAMES)
 
 
 @dataclass(frozen=True)
@@ -797,9 +829,11 @@ def flag_default(flag: str, *, fallback: bool = True) -> bool:
 
 
 __all__ = [
+    "DatasetTemplateSpec",
     "ExtractorConfigSpec",
     "ExtractorTemplate",
     "config",
+    "dataset_template_specs",
     "expand_dataset_templates",
     "flag_default",
     "template",

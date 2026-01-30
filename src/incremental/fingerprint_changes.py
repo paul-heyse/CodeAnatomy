@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow_schema.schema_builders import (
+    dataset_name_field,
+    fingerprint_field,
+    version_field,
+)
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema
@@ -25,9 +30,9 @@ if TYPE_CHECKING:
 FINGERPRINTS_VERSION = 1
 _FINGERPRINTS_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("dataset_name", pa.string(), nullable=False),
-        pa.field("fingerprint", pa.string(), nullable=False),
+        version_field(),
+        dataset_name_field(),
+        fingerprint_field(),
     ]
 )
 _FINGERPRINTS_DIRNAME = "dataset_fingerprints"

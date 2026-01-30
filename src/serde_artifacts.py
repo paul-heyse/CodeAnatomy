@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 import msgspec
@@ -18,7 +19,7 @@ from datafusion_engine.delta_protocol import (
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
 )
-from serde_msgspec import StructBaseCompat, StructBaseHotPath
+from serde_msgspec import StructBaseCompat, StructBaseHotPath, export_json_schemas
 from serde_msgspec_ext import (
     ExecutionPlanProtoBytes,
     LogicalPlanProtoBytes,
@@ -287,7 +288,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     rulepack_hash: HashValue | None
     information_schema_msgpack: bytes
     information_schema_hash: HashValue
-    substrait_msgpack: bytes | None
+    substrait_msgpack: bytes
     logical_plan_proto_msgpack: bytes | None
     optimized_plan_proto_msgpack: bytes | None
     execution_plan_proto_msgpack: bytes | None
@@ -612,6 +613,38 @@ def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
     return hash_msgpack_canonical(envelope)
 
 
+def artifact_schema_types() -> tuple[type[msgspec.Struct], ...]:
+    """Return msgspec struct types exported as schema contracts.
+
+    Returns
+    -------
+    tuple[type[msgspec.Struct], ...]
+        msgspec struct types for schema export.
+    """
+    types: list[type[msgspec.Struct]] = []
+    for name in __all__:
+        value = globals().get(name)
+        if isinstance(value, type) and issubclass(value, msgspec.Struct):
+            types.append(value)
+    return tuple(types)
+
+
+def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
+    """Export JSON Schema payloads for artifact msgspec structs.
+
+    Parameters
+    ----------
+    output_dir
+        Directory to write schema files into.
+
+    Returns
+    -------
+    tuple[Path, ...]
+        Paths to the generated schema files.
+    """
+    return export_json_schemas(artifact_schema_types(), output_dir=output_dir)
+
+
 __all__ = [
     "ArtifactEnvelopeBase",
     "DeltaInputPin",
@@ -644,4 +677,6 @@ __all__ = [
     "ViewCacheArtifactEnvelope",
     "WriteArtifactRow",
     "artifact_envelope_id",
+    "artifact_schema_types",
+    "export_artifact_schemas",
 ]

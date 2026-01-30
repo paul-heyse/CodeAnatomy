@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
+from datafusion_engine.sql_options import sql_options_for_profile
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
@@ -50,7 +50,7 @@ def safe_sql(
     runtime_profile: DataFusionRuntimeProfile | None = None,
     bindings: SqlBindings | None = None,
 ) -> DataFrame:
-    """Return a DataFrame for SQL using read-only options by default.
+    """Return a DataFrame for SQL using SessionConfig policy enforcement.
 
     Parameters
     ----------
@@ -59,7 +59,7 @@ def safe_sql(
     sql
         SQL string to execute.
     sql_options
-        Optional SQL options overriding the default read-only policy.
+        Optional SQL options overriding the default SessionConfig-driven policy.
     runtime_profile
         Optional runtime profile for SQL policy resolution.
     bindings
@@ -89,7 +89,7 @@ def _resolve_sql_options(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> SQLOptions:
-    """Resolve SQL options for safe execution.
+    """Resolve SQL options for SQL execution.
 
     Returns
     -------
@@ -98,11 +98,7 @@ def _resolve_sql_options(
     """
     if sql_options is not None:
         return sql_options
-    if runtime_profile is not None:
-        from datafusion_engine.sql_options import planning_sql_options
-
-        return planning_sql_options(runtime_profile)
-    return DataFusionSqlPolicy().to_sql_options()
+    return sql_options_for_profile(runtime_profile)
 
 
 def _resolve_bindings(bindings: SqlBindings | None) -> _ResolvedSqlBindings:

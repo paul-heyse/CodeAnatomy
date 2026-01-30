@@ -244,6 +244,7 @@ def openapi_contract_payload() -> dict[str, object]:
         "paths": {},
         "components": {"schemas": components},
         "x-codeanatomy-root-schemas": root_schemas,
+        "x-codeanatomy-schema-hash": schema_contract_hash(),
     }
 
 

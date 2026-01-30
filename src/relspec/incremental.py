@@ -1,50 +1,17 @@
-"""Incremental helpers for plan-catalog diffs."""
+"""Incremental helpers for CDF-driven planning."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from datafusion_engine.dataset_registry import DatasetCatalog
-from datafusion_engine.semantic_diff import RebuildPolicy, SemanticDiff
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import read_cdf_changes
 from incremental.delta_context import DeltaAccessContext
-from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
-
-
-@dataclass(frozen=True)
-class IncrementalDiff:
-    """Summary of plan fingerprint changes between catalogs."""
-
-    changed_tasks: tuple[str, ...]
-    added_tasks: tuple[str, ...] = ()
-    removed_tasks: tuple[str, ...] = ()
-    unchanged_tasks: tuple[str, ...] = ()
-    semantic_changes: Mapping[str, SemanticDiff] = field(default_factory=dict)
-
-    def tasks_requiring_rebuild(
-        self,
-        *,
-        policy: RebuildPolicy = RebuildPolicy.CONSERVATIVE,
-    ) -> tuple[str, ...]:
-        """Return task names that require rebuild under the policy.
-
-        Returns
-        -------
-        tuple[str, ...]
-            Task names that should be rebuilt.
-        """
-        rebuild: set[str] = set(self.added_tasks)
-        for name in self.changed_tasks:
-            change = self.semantic_changes.get(name)
-            if change is None or change.requires_rebuild(policy):
-                rebuild.add(name)
-        return tuple(sorted(rebuild))
 
 
 @dataclass(frozen=True)
@@ -57,77 +24,6 @@ class CdfImpactRequest:
     cursor_store: CdfCursorStore
     evidence: EvidenceCatalog | None = None
     filter_policy: CdfFilterPolicy | None = None
-
-
-def diff_plan_fingerprints(
-    prev: Mapping[str, str],
-    curr: Mapping[str, str],
-) -> IncrementalDiff:
-    """Return a diff summary between two plan fingerprint mappings.
-
-    Parameters
-    ----------
-    prev : Mapping[str, str]
-        Previous plan fingerprint mapping keyed by task name.
-    curr : Mapping[str, str]
-        Current plan fingerprint mapping keyed by task name.
-
-    Returns
-    -------
-    IncrementalDiff
-        Diff summary based on plan fingerprints.
-    """
-    prev_names = set(prev)
-    curr_names = set(curr)
-
-    added = sorted(curr_names - prev_names)
-    removed = sorted(prev_names - curr_names)
-    common = prev_names & curr_names
-
-    changed = sorted(name for name in common if prev[name] != curr[name])
-    unchanged = sorted(name for name in common if prev[name] == curr[name])
-
-    return IncrementalDiff(
-        changed_tasks=tuple(changed),
-        added_tasks=tuple(added),
-        removed_tasks=tuple(removed),
-        unchanged_tasks=tuple(unchanged),
-    )
-
-
-def diff_plan_snapshots(
-    prev: Mapping[str, PlanFingerprintSnapshot],
-    curr: Mapping[str, PlanFingerprintSnapshot],
-) -> IncrementalDiff:
-    """Return a diff summary between two plan snapshot mappings.
-
-    Parameters
-    ----------
-    prev : Mapping[str, PlanFingerprintSnapshot]
-        Previous plan snapshot mapping keyed by task name.
-    curr : Mapping[str, PlanFingerprintSnapshot]
-        Current plan snapshot mapping keyed by task name.
-
-    Returns
-    -------
-    IncrementalDiff
-        Diff summary with semantic diff metadata when available.
-    """
-    prev_fingerprints = {
-        name: snap.plan_task_signature or snap.plan_fingerprint for name, snap in prev.items()
-    }
-    curr_fingerprints = {
-        name: snap.plan_task_signature or snap.plan_fingerprint for name, snap in curr.items()
-    }
-    diff = diff_plan_fingerprints(prev_fingerprints, curr_fingerprints)
-    semantic = _semantic_diff_map(prev, curr, diff.changed_tasks)
-    return IncrementalDiff(
-        changed_tasks=diff.changed_tasks,
-        added_tasks=diff.added_tasks,
-        removed_tasks=diff.removed_tasks,
-        unchanged_tasks=diff.unchanged_tasks,
-        semantic_changes=semantic,
-    )
 
 
 def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
@@ -165,29 +61,7 @@ def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
     return tuple(sorted(impacted))
 
 
-def _semantic_diff_map(
-    prev: Mapping[str, PlanFingerprintSnapshot],
-    curr: Mapping[str, PlanFingerprintSnapshot],
-    changed_tasks: tuple[str, ...],
-) -> dict[str, SemanticDiff]:
-    """Return semantic diff details for changed tasks when supported.
-
-    DataFusion-native semantic diffing is not yet implemented. This function
-    returns an empty mapping until a LogicalPlan diff engine is available.
-
-    Returns
-    -------
-    dict[str, SemanticDiff]
-        Semantic diff records keyed by task name.
-    """
-    _ = prev, curr, changed_tasks
-    return {}
-
-
 __all__ = [
     "CdfImpactRequest",
-    "IncrementalDiff",
-    "diff_plan_fingerprints",
-    "diff_plan_snapshots",
     "impacted_tasks_for_cdf",
 ]

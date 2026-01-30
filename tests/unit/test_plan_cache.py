@@ -30,7 +30,7 @@ def test_plan_proto_cache_snapshot(tmp_path: Path) -> None:
     """Collect cached plan proto snapshot entries."""
     profile = DiskCacheProfile(root=tmp_path)
     cache = PlanProtoCache(cache_profile=profile)
-    entry = PlanCacheEntry(plan_identity_hash="plan-456")
+    entry = PlanCacheEntry(plan_identity_hash="plan-456", substrait_bytes=b"substrait")
     cache.put(entry)
     snapshot = cache.snapshot()
     assert any(item.plan_identity_hash == "plan-456" for item in snapshot)

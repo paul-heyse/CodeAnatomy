@@ -46,6 +46,11 @@ from datafusion_engine.arrow_schema.metadata import (
     required_functions_from_metadata,
 )
 from datafusion_engine.arrow_schema.metadata_codec import encode_metadata_list
+from datafusion_engine.arrow_schema.schema_builders import (
+    plan_fingerprint_field,
+    task_name_field,
+    version_field,
+)
 from datafusion_engine.arrow_schema.semantic_types import (
     SEMANTIC_TYPE_META,
     apply_semantic_types,
@@ -1351,7 +1356,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("profile_name", pa.string(), nullable=True),
             pa.field("event_kind", pa.string(), nullable=False),
             pa.field("view_name", pa.string(), nullable=False),
-            pa.field("plan_fingerprint", pa.string(), nullable=False),
+            plan_fingerprint_field(),
             pa.field("plan_identity_hash", pa.string(), nullable=False),
             pa.field("udf_snapshot_hash", pa.string(), nullable=False),
             pa.field("function_registry_hash", pa.string(), nullable=False),
@@ -1366,7 +1371,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("rulepack_hash", pa.string(), nullable=True),
             pa.field("information_schema_msgpack", pa.binary(), nullable=False),
             pa.field("information_schema_hash", pa.string(), nullable=False),
-            pa.field("substrait_msgpack", pa.binary(), nullable=True),
+            pa.field("substrait_msgpack", pa.binary(), nullable=False),
             pa.field("logical_plan_proto_msgpack", pa.binary(), nullable=True),
             pa.field("optimized_plan_proto_msgpack", pa.binary(), nullable=True),
             pa.field("execution_plan_proto_msgpack", pa.binary(), nullable=True),
@@ -1410,7 +1415,7 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
 
 HAMILTON_TASK_FACT_STRUCT = pa.struct(
     [
-        pa.field("task_name", pa.string(), nullable=False),
+        task_name_field(),
         pa.field("bottom_level_cost", pa.float64(), nullable=False),
         pa.field("on_critical_path", pa.bool_(), nullable=False),
         pa.field("generation_index", pa.int64(), nullable=True),
@@ -1626,7 +1631,7 @@ SCALAR_PARAM_SIGNATURE_SCHEMA = _schema_with_metadata(
     "scalar_param_signature_v1",
     pa.schema(
         [
-            pa.field("version", pa.int32(), nullable=False),
+            version_field(),
             pa.field(
                 "entries",
                 pa.list_(
@@ -1647,7 +1652,7 @@ DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
     "dataset_fingerprint_v1",
     pa.schema(
         [
-            pa.field("version", pa.int32(), nullable=False),
+            version_field(),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
             pa.field("schema_identity_hash", pa.string(), nullable=False),
             pa.field("profile_hash", pa.string(), nullable=False),
@@ -2636,6 +2641,19 @@ def extract_schema_contract_for(name: str) -> SchemaContract:
 
     schema = extract_schema_for(name)
     return SchemaContract.from_arrow_schema(name, schema)
+
+
+def schema_contract_for_table(ctx: SessionContext, *, table_name: str) -> SchemaContract:
+    """Return the SchemaContract for a registered DataFusion table.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the catalog schema.
+    """
+    from datafusion_engine.schema_introspection import schema_contract_from_table
+
+    return schema_contract_from_table(ctx, table_name=table_name)
 
 
 def _context_fields_for(name: str, root_schema: pa.Schema) -> tuple[pa.Field, ...]:
@@ -3866,6 +3884,7 @@ __all__ = [
     "nested_view_spec",
     "nested_view_specs",
     "registered_table_names",
+    "schema_contract_for_table",
     "struct_for_path",
     "validate_ast_views",
     "validate_bytecode_views",

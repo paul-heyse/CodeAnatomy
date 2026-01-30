@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -12,13 +13,16 @@ from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.abi import schema_to_dict
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.delta_scan_config import delta_scan_config_snapshot_from_options
+from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.runtime import normalize_dataset_locations_for_profile
 from schema_spec.specs import TableSchemaSpec
 from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from schema_spec.system import (
         DataFusionScanOptions,
         DatasetSpec,
@@ -140,6 +144,9 @@ class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
 def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
     """Return a JSON-ready snapshot of registry locations.
 
+    Non-Delta locations are omitted because catalog autoload handles
+    non-Delta registration.
+
     Returns
     -------
     list[dict[str, object]]
@@ -148,6 +155,8 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
     snapshot: list[dict[str, object]] = []
     for name in catalog.names():
         loc = catalog.get(name)
+        if loc.format != "delta":
+            continue
         schema = resolve_dataset_schema(loc)
         scan = None
         if loc.datafusion_scan is not None:
@@ -247,6 +256,46 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
             }
         )
     return snapshot
+
+
+def dataset_catalog_from_profile(
+    profile: DataFusionRuntimeProfile | None,
+) -> DatasetCatalog:
+    """Build a DatasetCatalog from a runtime profile.
+
+    Returns
+    -------
+    DatasetCatalog
+        Catalog with dataset locations derived from the profile.
+    """
+    catalog = DatasetCatalog()
+    if profile is None:
+        return catalog
+    profile_ref = profile
+
+    def _register(name: str, location: DatasetLocation) -> None:
+        if catalog.has(name):
+            return
+        resolved = apply_delta_store_policy(location, policy=profile_ref.delta_store_policy)
+        catalog.register(name, resolved)
+
+    def _register_locations(locations: Mapping[str, DatasetLocation]) -> None:
+        for name, location in locations.items():
+            _register(name, location)
+
+    def _register_registry_catalog(registry: DatasetCatalog) -> None:
+        for name in registry.names():
+            if catalog.has(name):
+                continue
+            with suppress(KeyError):
+                _register(name, registry.get(name))
+
+    _register_locations(profile.extract_dataset_locations)
+    _register_locations(profile.scip_dataset_locations)
+    _register_locations(normalize_dataset_locations_for_profile(profile))
+    for registry in profile.registry_catalogs.values():
+        _register_registry_catalog(registry)
+    return catalog
 
 
 def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScanOptions | None:
@@ -391,21 +440,6 @@ def resolve_delta_feature_gate(location: DatasetLocation) -> DeltaFeatureGate | 
     return None
 
 
-def resolve_delta_constraints(location: DatasetLocation) -> tuple[str, ...]:
-    """Return Delta constraint expressions for a dataset location.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Constraint expressions for the dataset.
-    """
-    if location.delta_constraints:
-        return location.delta_constraints
-    if location.dataset_spec is not None:
-        return location.dataset_spec.delta_constraints
-    return ()
-
-
 def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
     """Return the resolved schema for a dataset location.
 
@@ -455,12 +489,12 @@ __all__ = [
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
     "PathLike",
+    "dataset_catalog_from_profile",
     "registry_snapshot",
     "resolve_datafusion_provider",
     "resolve_datafusion_scan_options",
     "resolve_dataset_schema",
     "resolve_delta_cdf_policy",
-    "resolve_delta_constraints",
     "resolve_delta_feature_gate",
     "resolve_delta_log_storage_options",
     "resolve_delta_maintenance_policy",

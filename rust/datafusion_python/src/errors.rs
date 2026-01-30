@@ -26,6 +26,7 @@ use pyo3::exceptions::PyException;
 use pyo3::PyErr;
 
 pub use datafusion_ext::errors::{to_datafusion_err, ExtError, ExtResult};
+use datafusion_ext::impl_error_from;
 
 pub type PyDataFusionResult<T> = std::result::Result<T, PyDataFusionError>;
 
@@ -52,29 +53,15 @@ impl fmt::Display for PyDataFusionError {
     }
 }
 
-impl From<ArrowError> for PyDataFusionError {
-    fn from(err: ArrowError) -> PyDataFusionError {
-        PyDataFusionError::ArrowError(err)
-    }
-}
-
-impl From<InnerDataFusionError> for PyDataFusionError {
-    fn from(err: InnerDataFusionError) -> PyDataFusionError {
-        PyDataFusionError::ExecutionError(Box::new(err))
-    }
-}
-
-impl From<PyErr> for PyDataFusionError {
-    fn from(err: PyErr) -> PyDataFusionError {
-        PyDataFusionError::PythonError(err)
-    }
-}
-
-impl From<ExtError> for PyDataFusionError {
-    fn from(err: ExtError) -> PyDataFusionError {
-        PyDataFusionError::ExtError(err)
-    }
-}
+impl_error_from!(PyDataFusionError, ArrowError, ArrowError);
+impl_error_from!(
+    PyDataFusionError,
+    InnerDataFusionError,
+    ExecutionError,
+    |err| Box::new(err)
+);
+impl_error_from!(PyDataFusionError, PyErr, PythonError);
+impl_error_from!(PyDataFusionError, ExtError, ExtError);
 
 impl From<PyDataFusionError> for PyErr {
     fn from(err: PyDataFusionError) -> PyErr {

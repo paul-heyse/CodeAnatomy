@@ -12,6 +12,7 @@ import msgspec
 import pyarrow as pa
 
 from core_types import DeterminismTier
+from datafusion_engine.arrow_schema.schema_builders import version_field
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 PROFILE_HASH_VERSION: int = 3
 _PROFILE_HASH_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field("profile_name", pa.string(), nullable=False),
         pa.field("determinism_tier", pa.string(), nullable=False),
         pa.field("telemetry_hash", pa.string(), nullable=False),

@@ -11,6 +11,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_functions_table::all_default_table_functions;
 
+use crate::macros::{table_udfs, TableUdfSpec};
 use crate::registry_snapshot;
 
 const REGISTRY_TABLE_FUNCTION: &str = "udf_registry";
@@ -20,11 +21,21 @@ pub fn register_builtin_udtfs(ctx: &SessionContext) -> Result<()> {
     for func in all_default_table_functions() {
         ctx.register_udtf(func.name(), Arc::clone(func.function()));
     }
-    let registry = registry_table_function(ctx)?;
-    ctx.register_udtf(REGISTRY_TABLE_FUNCTION, registry);
-    let docs = docs_table_function(ctx)?;
-    ctx.register_udtf(DOCS_TABLE_FUNCTION, docs);
+    for spec in builtin_udtf_specs() {
+        let table_fn = (spec.builder)(ctx)?;
+        ctx.register_udtf(spec.name, Arc::clone(&table_fn));
+        for alias in spec.aliases {
+            ctx.register_udtf(alias, Arc::clone(&table_fn));
+        }
+    }
     Ok(())
+}
+
+fn builtin_udtf_specs() -> Vec<TableUdfSpec> {
+    table_udfs![
+        REGISTRY_TABLE_FUNCTION => registry_table_function;
+        DOCS_TABLE_FUNCTION => docs_table_function;
+    ]
 }
 
 fn registry_table_function(ctx: &SessionContext) -> Result<Arc<dyn TableFunctionImpl>> {

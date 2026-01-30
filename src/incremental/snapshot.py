@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
 from datafusion_engine.arrow_schema.build import column_or_null, table_from_columns
-from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.runtime import dataset_schema_from_context
+from datafusion_engine.schema_contracts import delta_constraints_for_location
 from datafusion_engine.write_pipeline import WriteMode
-from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
+from incremental.delta_context import (
+    DeltaAccessContext,
+    DeltaStorageOptions,
+    read_delta_table_via_facade,
+    run_delta_maintenance_if_configured,
+)
 from incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
     write_delta_table_via_pipeline,
@@ -140,6 +146,23 @@ def write_repo_snapshot(
             msg = "Repo snapshot Delta write did not return a result."
             raise RuntimeError(msg)
         return write_result.delta_result
+    return _merge_repo_snapshot(
+        target=target,
+        snapshot=snapshot,
+        metadata=metadata,
+        storage=storage,
+        context=context,
+    )
+
+
+def _merge_repo_snapshot(
+    *,
+    target: Path,
+    snapshot: pa.Table,
+    metadata: Mapping[str, str],
+    storage: DeltaStorageOptions,
+    context: DeltaAccessContext,
+) -> DeltaWriteResult:
     commit_key = str(target)
     commit_metadata = {
         **metadata,
@@ -165,7 +188,7 @@ def write_repo_snapshot(
     )
     ctx = context.runtime.session_runtime().ctx
     dataset_location = context.runtime.profile.dataset_location("repo_snapshot")
-    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    extra_constraints = delta_constraints_for_location(dataset_location)
     from storage.deltalake import DeltaMergeArrowRequest
 
     delta_merge_arrow(
@@ -194,7 +217,7 @@ def write_repo_snapshot(
         run=commit_run,
         metadata={"operation": "merge", "rows_affected": snapshot.num_rows},
     )
-    enable_delta_features(
+    enabled_features = enable_delta_features(
         DeltaFeatureMutationOptions(
             path=str(target),
             storage_options=storage.storage_options,
@@ -203,13 +226,39 @@ def write_repo_snapshot(
             dataset_name="repo_snapshot",
         )
     )
+    from datafusion_engine.delta_observability import (
+        DeltaFeatureStateArtifact,
+        record_delta_feature_state,
+    )
+
+    final_version = delta_table_version(
+        str(target),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    record_delta_feature_state(
+        context.runtime.profile,
+        artifact=DeltaFeatureStateArtifact(
+            table_uri=str(target),
+            enabled_features=enabled_features,
+            dataset_name="repo_snapshot",
+            delta_version=final_version,
+            commit_metadata=commit_metadata,
+            commit_app_id=commit_options.app_id,
+            commit_version=commit_options.version,
+            commit_run_id=commit_run.run_id,
+        ),
+    )
+    run_delta_maintenance_if_configured(
+        context,
+        table_uri=str(target),
+        dataset_name="repo_snapshot",
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
     return DeltaWriteResult(
         path=str(target),
-        version=delta_table_version(
-            str(target),
-            storage_options=storage.storage_options,
-            log_storage_options=storage.log_storage_options,
-        ),
+        version=final_version,
     )
 
 

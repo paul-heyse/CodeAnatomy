@@ -33,6 +33,34 @@ Key themes:
 
 ---
 
+## Status Summary (as of 2026-01-30)
+
+1. **Physical Optimizer Rulepack** — **Partial**
+   - Rust physical rule hook is installed and rulepack snapshots are captured.
+   - Policy-driven physical rules and Python-side cleanup remain.
+2. **DDL-First External Table Registration** — **Complete**
+   - Non-Delta registration is DDL-first (DDL captured in provider artifacts).
+3. **Delta Scan Overrides via Provider File Sets** — **Complete**
+   - Scan unit pinning uses provider `with_files` and artifacts record file-set hashes.
+4. **Constraint Governance Unification** — **Partial**
+   - Delta CHECK constraints on write + information_schema fallback added.
+   - Unified constraint DSL + duplicate validation cleanup remain.
+5. **Delta Protocol Feature Adoption** — **Partial**
+   - Policy surface + maintenance ops added; remaining integration/observability pending.
+6. **Substrait-First Plan Portability** — **Partial**
+   - Substrait is used for fingerprinting, but bundle still allows missing bytes.
+7. **msgspec Schema Registry** — **Partial**
+   - Registry exists; export automation + manual schema doc removal pending.
+8. **Catalog Autoload for Non-Delta** — **Partial**
+   - Registry catalogs are Delta-only; non-Delta registry snapshots removal pending.
+9. **SQL Policy Single Source** — **Partial**
+   - sql_guard/sql_options fallbacks removed; runtime policy resolution still uses Python fallbacks.
+10. **COPY/INSERT Standardization** — **Partial**
+   - COPY/INSERT paths added; legacy writers + diagnostics capture pending.
+11. **Deferred Decommissioning** — **Not Started**
+
+---
+
 ## 1. Physical Optimizer Rulepack (Rust SessionState hooks)
 
 ### Goal
@@ -63,8 +91,8 @@ pub fn install_physical_rules(ctx: &SessionContext) {
 
 ### Checklist
 - [ ] Implement physical rulepack in Rust with explicit policy inputs.
-- [ ] Register physical rules during SessionContext initialization.
-- [ ] Record rulepack identity in plan artifacts.
+- [x] Register physical rules during SessionContext initialization.
+- [x] Record rulepack identity in plan artifacts.
 - [ ] Remove redundant Python physical tuning branches.
 
 ---
@@ -99,9 +127,9 @@ WITH ORDER (ts)
 - Remove custom ordering/partition metadata builders for non-Delta sources.
 
 ### Checklist
-- [ ] Define a DDL builder for external tables with schema/partition/order options.
-- [ ] Route all non-Delta registrations through DDL.
-- [ ] Capture DDL text in plan/diagnostic artifacts.
+- [x] Define a DDL builder for external tables with schema/partition/order options.
+- [x] Route all non-Delta registrations through DDL.
+- [x] Capture DDL text in plan/diagnostic artifacts.
 
 ---
 
@@ -128,9 +156,9 @@ ctx.register_table("delta_table", provider)
 - Remove scan override re-registration paths once provider pinning is authoritative.
 
 ### Checklist
-- [ ] Implement file-set pinning in delta provider resolution.
-- [ ] Remove scan-unit re-registration loops and duplicate hashes.
-- [ ] Capture file-set metadata in plan artifacts.
+- [x] Implement file-set pinning in delta provider resolution.
+- [x] Remove scan-unit re-registration loops and duplicate hashes.
+- [x] Capture file-set metadata in plan artifacts.
 
 ---
 
@@ -160,8 +188,8 @@ write_delta_table(..., constraints=constraints)
 
 ### Checklist
 - [ ] Define constraint DSL as a single contract surface.
-- [ ] Emit Delta CHECK constraints on writes.
-- [ ] Populate information_schema constraints for introspection.
+- [x] Emit Delta CHECK constraints on writes.
+- [x] Populate information_schema constraints for introspection.
 
 ---
 
@@ -189,7 +217,7 @@ DeltaMaintenancePolicy(
 - Remove scattered maintenance toggles and ad-hoc cleanup helpers.
 
 ### Checklist
-- [ ] Add a single Delta maintenance policy surface.
+- [x] Add a single Delta maintenance policy surface.
 - [ ] Apply policy during table initialization and commits.
 - [ ] Record feature adoption state in diagnostics.
 
@@ -246,7 +274,7 @@ schema = msgspec.json.schema(PlanArtifact)
 - Remove hand-authored schema docs for artifact payloads once msgspec export is canonical.
 
 ### Checklist
-- [ ] Define canonical msgspec Structs for all artifacts.
+- [x] Define canonical msgspec Structs for all artifacts.
 - [ ] Export JSON Schema 2020-12 for each contract.
 - [ ] Replace manual schema docs with generated schema artifacts.
 
@@ -322,7 +350,7 @@ COPY (SELECT * FROM staging) TO 's3://bucket/out/' STORED AS PARQUET
 - Remove bespoke Arrow->filesystem writers for non-Delta outputs.
 
 ### Checklist
-- [ ] Route non-Delta writes via COPY or INSERT.
+- [x] Route non-Delta writes via COPY or INSERT.
 - [ ] Capture COPY/INSERT artifacts in diagnostics.
 - [ ] Remove duplicate write helpers.
 

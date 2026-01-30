@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from hamilton.function_modifiers import tag
-
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.cpg_finalize_utils import finalize_cpg_table
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.runtime_artifacts import TableLike
 
 
-@tag(layer="execution", artifact="cpg_finalize_table", kind="stage")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="stage",
+        artifact="cpg_finalize_table",
+    )
+)
 def final_table(
     table: TableLike,
     *,

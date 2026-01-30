@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
-from hamilton.function_modifiers import tag
 
 from core_types import JsonDict
+from datafusion_engine.arrow_schema.schema_builders import task_name_field
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.ingest import datafusion_from_arrow
@@ -33,6 +33,7 @@ from datafusion_engine.runtime import read_delta_as_reader
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
 from engine.session import EngineSession
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from hamilton_pipeline.types import ActiveParamSet, OutputConfig, ParamBundle, TaskDependencyReport
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.pipeline_policy import PipelinePolicy
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
 
 
-@tag(layer="params", artifact="param_table_policy", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_policy"))
 def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
     """Return the default parameter table policy.
 
@@ -56,7 +57,7 @@ def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
     return pipeline_policy.param_table_policy
 
 
-@tag(layer="params", artifact="param_table_scope_key", kind="scalar")
+@apply_tag(TagPolicy(layer="params", kind="scalar", artifact="param_table_scope_key"))
 def param_table_scope_key(
     param_table_policy: ParamTablePolicy,
     engine_session: EngineSession | None = None,
@@ -75,7 +76,7 @@ def param_table_scope_key(
     return None
 
 
-@tag(layer="params", artifact="param_table_specs", kind="spec")
+@apply_tag(TagPolicy(layer="params", kind="spec", artifact="param_table_specs"))
 def param_table_specs() -> tuple[ParamTableSpec, ...]:
     """Return default parameter table specs.
 
@@ -98,7 +99,7 @@ def param_table_specs() -> tuple[ParamTableSpec, ...]:
         ListParamSpec(
             logical_name="task_allowlist",
             key_col="task_name",
-            schema=pa.schema([pa.field("task_name", pa.string())]),
+            schema=pa.schema([task_name_field(nullable=True)]),
         ),
     )
 
@@ -112,7 +113,7 @@ class ParamTableInputs:
     active_set: frozenset[str] | None = None
 
 
-@tag(layer="params", artifact="param_table_inputs", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_inputs"))
 def param_table_inputs(
     param_table_scope_key: str | None,
     param_table_delta_paths: Mapping[str, str] | None,
@@ -138,7 +139,7 @@ def param_table_inputs(
     )
 
 
-@tag(layer="params", artifact="relspec_param_dependency_reports", kind="bundle")
+@apply_tag(TagPolicy(layer="params", kind="bundle", artifact="relspec_param_dependency_reports"))
 def relspec_param_dependency_reports(
     view_nodes: tuple[ViewNode, ...],
     param_table_policy: ParamTablePolicy,
@@ -169,7 +170,7 @@ def relspec_param_dependency_reports(
     return tuple(reports)
 
 
-@tag(layer="params", artifact="param_bundle", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_bundle"))
 def param_bundle(
     relspec_param_values: JsonDict,
     param_table_specs: tuple[ParamTableSpec, ...],
@@ -186,7 +187,7 @@ def param_bundle(
     list_values: dict[str, tuple[object, ...]] = {}
     for key, value in relspec_param_values.items():
         if key in list_names:
-            list_values[key] = _coerce_list_values(key, value)
+            list_values[key] = _parse_list_values(key, value)
         else:
             scalar_values[key] = value
     for name in list_names:
@@ -194,7 +195,7 @@ def param_bundle(
     return ParamBundle(scalar=scalar_values, lists=list_values)
 
 
-@tag(layer="params", artifact="param_scalar_signature", kind="scalar")
+@apply_tag(TagPolicy(layer="params", kind="scalar", artifact="param_scalar_signature"))
 def param_scalar_signature(param_bundle: ParamBundle) -> str:
     """Return a stable signature for scalar parameters.
 
@@ -206,7 +207,7 @@ def param_scalar_signature(param_bundle: ParamBundle) -> str:
     return build_scalar_param_signature(param_bundle.scalar)
 
 
-@tag(layer="params", artifact="param_table_registry", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_registry"))
 def param_table_registry(
     param_bundle: ParamBundle,
     param_table_specs: tuple[ParamTableSpec, ...],
@@ -241,7 +242,7 @@ def param_table_registry(
     return registry
 
 
-@tag(layer="params", artifact="param_table_artifacts", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_artifacts"))
 def param_table_artifacts(
     param_table_registry: ParamTableRegistry,
 ) -> Mapping[str, ParamTableArtifact]:
@@ -255,7 +256,7 @@ def param_table_artifacts(
     return param_table_registry.artifacts.snapshot()
 
 
-@tag(layer="params", artifact="param_table_name_map", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_name_map"))
 def param_table_name_map(
     param_table_registry: ParamTableRegistry,
     engine_session: EngineSession,
@@ -275,7 +276,7 @@ def param_table_name_map(
     }
 
 
-@tag(layer="params", artifact="param_tables_df", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="param_tables_df"))
 def param_tables_datafusion(
     param_table_registry: ParamTableRegistry,
     engine_session: EngineSession,
@@ -290,7 +291,7 @@ def param_tables_datafusion(
     return param_table_registry.datafusion_tables(engine_session.df_ctx())
 
 
-@tag(layer="params", artifact="param_table_delta", kind="side_effect")
+@apply_tag(TagPolicy(layer="params", kind="side_effect", artifact="param_table_delta"))
 def write_param_tables_delta(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
     runtime_profile_spec: RuntimeProfileSpec,
@@ -403,7 +404,7 @@ def _delta_schema_policy_payload(policy: DeltaSchemaPolicy | None) -> JsonDict |
     }
 
 
-@tag(layer="params", artifact="active_param_set", kind="object")
+@apply_tag(TagPolicy(layer="params", kind="object", artifact="active_param_set"))
 def active_param_set(
     relspec_param_dependency_reports: tuple[TaskDependencyReport, ...],
 ) -> ActiveParamSet:
@@ -420,7 +421,7 @@ def active_param_set(
     return ActiveParamSet(frozenset(active))
 
 
-def _coerce_list_values(name: str, value: object) -> tuple[object, ...]:
+def _parse_list_values(name: str, value: object) -> tuple[object, ...]:
     if value is None:
         return ()
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):

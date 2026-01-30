@@ -13,6 +13,7 @@ from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.lineage_datafusion import LineageReport
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.runtime import normalize_dataset_locations_for_profile
 from datafusion_engine.scan_planner import ScanUnit, plan_scan_units
 from datafusion_engine.view_registry import ensure_view_graph
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
@@ -200,7 +201,7 @@ def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, Datase
         locations.setdefault(
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )
-    for name, location in profile.normalize_dataset_locations().items():
+    for name, location in normalize_dataset_locations_for_profile(profile).items():
         locations.setdefault(
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )

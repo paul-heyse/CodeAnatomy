@@ -163,7 +163,7 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
         logical_plan=mock_logical_plan,
         optimized_logical_plan=mock_optimized_plan,
         execution_plan=None,
-        substrait_bytes=None,
+        substrait_bytes=b"substrait",
         plan_fingerprint="mock_fp_12345",
         artifacts=artifacts,
         scan_units=(),

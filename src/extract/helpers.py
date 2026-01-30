@@ -1,10 +1,13 @@
-"""Shared extractor helpers and registries."""
+"""Shared extractor helpers and registries.
+
+This module provides backward-compatible re-exports from the coordination layer
+alongside materialization and evidence planning utilities.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -13,7 +16,6 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.core.array_iter import iter_table_rows
 from core_types import DeterminismTier
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, ScalarLike, TableLike
 from datafusion_engine.arrow_schema.build import (
@@ -37,325 +39,52 @@ from datafusion_engine.plan_bundle import (
     PlanBundleOptions,
     build_plan_bundle,
 )
+from datafusion_engine.plan_execution import (
+    PlanExecutionOptions,
+    PlanScanOverrides,
+)
+from datafusion_engine.plan_execution import (
+    execute_plan_bundle as execute_plan_bundle_helper,
+)
 from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.schema_policy import SchemaPolicy
 from datafusion_engine.view_graph_registry import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
-from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
-from extract.evidence_plan import EvidencePlan
-from extract.schema_ops import (
+from extract.coordination.context import (
+    ExtractExecutionContext,
+    FileContext,
+    SpanSpec,
+    attrs_map,
+    byte_span_dict,
+    bytes_from_file_ctx,
+    file_identity_row,
+    iter_contexts,
+    iter_file_contexts,
+    pos_dict,
+    span_dict,
+    text_from_file_ctx,
+)
+from extract.coordination.evidence_plan import EvidencePlan
+from extract.coordination.schema_ops import (
     ExtractNormalizeOptions,
     apply_pipeline_kernels,
     finalize_context_for_dataset,
     normalized_schema_policy_for_dataset,
 )
-from extract.session import ExtractSession, build_extract_session
-from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
-from serde_msgspec import (
-    StructBaseCompat,
-    convert,
-    to_builtins,
-    validation_error_payload,
+from extract.coordination.spec_helpers import (
+    ExtractExecutionOptions,
+    plan_requires_row,
+    rule_execution_options,
 )
+from extract.session import ExtractSession
+from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
-    from extract.scope_manifest import ScopeManifest
-
-
-@dataclass(frozen=True)
-class FileContext:
-    """Canonical file identity and payload context for extractors."""
-
-    file_id: str
-    path: str
-    abs_path: str | None
-    file_sha256: str | None
-    encoding: str | None = None
-    text: str | None = None
-    data: bytes | None = None
-
-    @classmethod
-    def _payload_from_row(cls, row: Mapping[str, object]) -> RepoFileRow:
-        """Convert a repo_files row into a typed payload.
-
-        Returns
-        -------
-        RepoFileRow
-            Typed row payload.
-
-        Raises
-        ------
-        ValueError
-            Raised when the row payload does not conform to the expected schema.
-        """
-        try:
-            return convert(dict(row), target_type=RepoFileRow, strict=False)
-        except msgspec.ValidationError as exc:
-            details = validation_error_payload(exc)
-            msg = f"Repo file payload validation failed: {details}"
-            raise ValueError(msg) from exc
-
-    @classmethod
-    def from_repo_row(cls, row: Mapping[str, object]) -> FileContext:
-        """Build a FileContext from a repo_files row.
-
-        Parameters
-        ----------
-        row:
-            Row mapping from repo_files output.
-
-        Returns
-        -------
-        FileContext
-            Parsed file context.
-        """
-        payload = cls._payload_from_row(row)
-        file_id = payload.file_id or ""
-        path = payload.path or ""
-        abs_path = payload.abs_path
-        file_sha256 = payload.file_sha256
-        encoding = payload.encoding
-        text = payload.text
-        data = payload.data
-
-        return cls(
-            file_id=file_id,
-            path=path,
-            abs_path=abs_path,
-            file_sha256=file_sha256,
-            encoding=encoding,
-            text=text,
-            data=data,
-        )
-
-
-class RepoFileRow(StructBaseCompat, frozen=True):
-    """Typed repo_files row payload for extractor ingestion."""
-
-    file_id: str | None = None
-    path: str | None = None
-    abs_path: str | None = None
-    file_sha256: str | None = None
-    encoding: str | None = None
-    text: str | None = None
-    data: bytes | None = msgspec.field(name="bytes", default=None)
-
-
-@dataclass(frozen=True)
-class ExtractExecutionContext:
-    """Execution context bundle for extract entry points."""
-
-    file_contexts: Iterable[FileContext] | None = None
-    evidence_plan: EvidencePlan | None = None
-    scope_manifest: ScopeManifest | None = None
-    session: ExtractSession | None = None
-    runtime_spec: RuntimeProfileSpec | None = None
-    profile: str = "default"
-
-    def ensure_session(self) -> ExtractSession:
-        """Return the effective extract session.
-
-        Returns
-        -------
-        ExtractSession
-            Provided session or a profile-derived session when missing.
-        """
-        if self.session is not None:
-            return self.session
-        runtime_spec = self.runtime_spec or resolve_runtime_profile(self.profile)
-        return build_extract_session(runtime_spec)
-
-    def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
-        """Return the DataFusion runtime profile for extraction.
-
-        Returns
-        -------
-        DataFusionRuntimeProfile
-            Resolved DataFusion runtime profile.
-        """
-        return self.ensure_session().engine_session.datafusion_profile
-
-    def determinism_tier(self) -> DeterminismTier:
-        """Return the determinism tier for extract execution.
-
-        Returns
-        -------
-        DeterminismTier
-            Determinism tier for extract execution.
-        """
-        return self.ensure_session().engine_session.surface_policy.determinism_tier
-
-
-def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
-    """Yield FileContext objects from a repo_files table.
-
-    Parameters
-    ----------
-    repo_files:
-        Repo files table.
-
-    Yields
-    ------
-    FileContext
-        Parsed file context rows with required identity fields.
-    """
-    for row in iter_table_rows(repo_files):
-        ctx = FileContext.from_repo_row(row)
-        if ctx.file_id and ctx.path:
-            yield ctx
-
-
-def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
-    """Return the standard file identity columns for extractor rows.
-
-    Returns
-    -------
-    dict[str, str | None]
-        Row fragment with file_id, path, and file_sha256.
-    """
-    return {
-        "file_id": file_ctx.file_id,
-        "path": file_ctx.path,
-        "file_sha256": file_ctx.file_sha256,
-    }
-
-
-def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
-    """Return map entries for nested Arrow map fields.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        List of key/value map entries.
-    """
-    if not values:
-        return []
-    return [(str(key), str(val)) for key, val in values.items() if val is not None]
-
-
-def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None:
-    """Return a position dict for nested span structs.
-
-    Returns
-    -------
-    dict[str, int | None] | None
-        Position mapping or ``None`` when empty.
-    """
-    if line0 is None and col is None:
-        return None
-    return {"line0": line0, "col": col}
-
-
-def byte_span_dict(byte_start: int | None, byte_len: int | None) -> dict[str, int | None] | None:
-    """Return a byte-span dict for nested span structs.
-
-    Returns
-    -------
-    dict[str, int | None] | None
-        Byte-span mapping or ``None`` when empty.
-    """
-    if byte_start is None and byte_len is None:
-        return None
-    return {"byte_start": byte_start, "byte_len": byte_len}
-
-
-@dataclass(frozen=True)
-class SpanSpec:
-    """Span specification for nested span structs."""
-
-    start_line0: int | None
-    start_col: int | None
-    end_line0: int | None
-    end_col: int | None
-    end_exclusive: bool | None
-    col_unit: str | None
-    byte_start: int | None = None
-    byte_len: int | None = None
-
-
-def span_dict(spec: SpanSpec) -> dict[str, object] | None:
-    """Return a span dict for nested span structs.
-
-    Returns
-    -------
-    dict[str, object] | None
-        Span mapping or ``None`` when empty.
-    """
-    start = pos_dict(spec.start_line0, spec.start_col)
-    end = pos_dict(spec.end_line0, spec.end_col)
-    byte_span = byte_span_dict(spec.byte_start, spec.byte_len)
-    if start is None and end is None and byte_span is None and spec.col_unit is None:
-        return None
-    return {
-        "start": start,
-        "end": end,
-        "end_exclusive": spec.end_exclusive,
-        "col_unit": spec.col_unit,
-        "byte_span": byte_span,
-    }
-
-
-def text_from_file_ctx(file_ctx: FileContext) -> str | None:
-    """Return decoded text from a file context, if available.
-
-    Returns
-    -------
-    str | None
-        Decoded text or ``None`` when unavailable.
-    """
-    if file_ctx.text:
-        return file_ctx.text
-    data = bytes_from_file_ctx(file_ctx)
-    if data is None:
-        return None
-    encoding = file_ctx.encoding or "utf-8"
-    try:
-        return data.decode(encoding, errors="replace")
-    except UnicodeError:
-        return None
-
-
-def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:
-    """Return raw bytes from a file context.
-
-    Returns
-    -------
-    bytes | None
-        Raw file bytes or ``None`` when unavailable.
-    """
-    if file_ctx.data is not None:
-        return file_ctx.data
-    if file_ctx.text is not None:
-        encoding = file_ctx.encoding or "utf-8"
-        return file_ctx.text.encode(encoding, errors="replace")
-    if file_ctx.abs_path:
-        try:
-            return Path(file_ctx.abs_path).read_bytes()
-        except OSError:
-            return None
-    return None
-
-
-def iter_contexts(
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-) -> Iterator[FileContext]:
-    """Iterate file contexts from provided contexts or a repo_files table.
-
-    Yields
-    ------
-    FileContext
-        File contexts for extraction.
-    """
-    if file_contexts is None:
-        yield from iter_file_contexts(repo_files)
-        return
-    yield from file_contexts
 
 
 def _build_plan_bundle_from_df(
@@ -776,17 +505,20 @@ def _execute_extract_plan_bundle(
             scan_units=scan_units,
             runtime_profile=runtime_profile,
         )
-    facade = DataFusionExecutionFacade(
-        ctx=session_runtime.ctx,
-        runtime_profile=runtime_profile,
-    )
-    result = facade.execute_plan_bundle(
+    execution = execute_plan_bundle_helper(
+        session_runtime.ctx,
         plan,
-        view_name=name,
-        scan_units=scan_units,
-        scan_keys=scan_keys,
+        options=PlanExecutionOptions(
+            runtime_profile=runtime_profile,
+            view_name=name,
+            scan=PlanScanOverrides(
+                scan_units=scan_units,
+                scan_keys=scan_keys,
+                apply_scan_overrides=False,
+            ),
+        ),
     )
-    return result, scan_units, scan_keys
+    return execution.execution_result, scan_units, scan_keys
 
 
 def _write_and_record_extract_output(

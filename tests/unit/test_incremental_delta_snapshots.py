@@ -8,9 +8,9 @@ import pyarrow as pa
 import pytest
 
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from incremental.cdf_runtime import read_cdf_changes
 from incremental.changes import file_changes_from_cdf
 from incremental.delta_context import DeltaAccessContext
-from incremental.diff import diff_snapshots_with_delta_cdf
 from incremental.runtime import IncrementalRuntime
 from incremental.snapshot import write_repo_snapshot
 from incremental.state_store import StateStore
@@ -55,7 +55,7 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     result_two = write_repo_snapshot(store, snapshot_two, context=context)
     assert result_two.version is not None
 
-    cdf_result = diff_snapshots_with_delta_cdf(
+    cdf_result = read_cdf_changes(
         context,
         dataset_path=str(store.repo_snapshot_path()),
         cursor_store=cursor_store,

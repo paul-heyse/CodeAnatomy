@@ -748,7 +748,10 @@ fn simplify_flag_for(name: &str) -> Option<bool> {
 
 fn custom_udf_names(table_signatures: &BTreeMap<String, TableSignature>) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for spec in udf_registry::all_udfs() {
+    for spec in udf_registry::scalar_udf_specs() {
+        names.insert(spec.name.to_string());
+    }
+    for spec in udf_registry::table_udf_specs() {
         names.insert(spec.name.to_string());
     }
     for udaf in udaf_builtin::builtin_udafs() {

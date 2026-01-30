@@ -283,7 +283,7 @@ def _dataset_from_inputs(
     elif _has_arrow_capsule(source):
         dataset = _dataset_from_capsule(source, options=options)
     else:
-        path = _coerce_pathlike(source)
+        path = _ensure_pathlike(source)
         file_format = _resolve_file_format(options)
         dataset = _dataset_from_path(path, options=options, file_format=file_format)
     return dataset
@@ -309,7 +309,7 @@ def _dataset_from_capsule(
     return ds.dataset(coerced, schema=options.schema)
 
 
-def _coerce_pathlike(source: object) -> PathLike:
+def _ensure_pathlike(source: object) -> PathLike:
     if isinstance(source, (str, Path)):
         return source
     msg = f"Dataset source must be path-like, got {type(source)}."

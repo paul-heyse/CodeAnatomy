@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.schema_contracts import (
     SchemaContract,
-    SchemaViolation,
+    ValidationViolation,
     schema_contract_from_contract_spec,
     schema_contract_from_dataset_spec,
 )
@@ -34,7 +34,7 @@ class EvidenceCatalog:
     types_by_dataset: dict[str, dict[str, str]] = field(default_factory=dict)
     metadata_by_dataset: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
     contracts_by_dataset: dict[str, SchemaContract] = field(default_factory=dict)
-    contract_violations_by_dataset: dict[str, tuple[SchemaViolation, ...]] = field(
+    contract_violations_by_dataset: dict[str, tuple[ValidationViolation, ...]] = field(
         default_factory=dict
     )
 

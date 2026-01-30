@@ -34,7 +34,7 @@ This plan extends the v4 consolidation work with a **best-in-class** follow-up f
 Create a single tag taxonomy and enforcement layer for Hamilton nodes, and wire tags into semantic registry compilation and UI tracker metadata.
 
 ### Status
-Planned
+In progress (policy + module adoption complete; cleanup pending)
 
 ### Representative Pattern
 ```python
@@ -103,10 +103,11 @@ def plan_context(...):
   - `src/hamilton_pipeline/modules/outputs.py` (`_semantic_tag` helper if superseded)
 
 ### Checklist
-- [ ] Define `TagPolicy` and `apply_tag` helpers.
-- [ ] Update Hamilton modules to use the centralized policy.
-- [ ] Enforce required tags in `semantic_registry` with actionable error messages.
-- [ ] Ensure tracker tags include semantic + plan metadata consistently.
+- [x] Define `TagPolicy` and `apply_tag` helpers.
+- [x] Update Hamilton modules to use the centralized policy.
+- [x] Enforce required tags in `semantic_registry` with actionable error messages.
+- [x] Ensure tracker tags include semantic + plan metadata consistently.
+- [ ] Remove remaining ad-hoc tag dicts/helpers now superseded by `TagPolicy`.
 
 ---
 
@@ -116,7 +117,7 @@ def plan_context(...):
 Consolidate dataloaders, datasavers, and materializers into a single IO contract library and stop embedding IO logic in pipeline modules.
 
 ### Status
-Planned
+In progress (IO contracts + materializers centralized; module cleanup pending)
 
 ### Representative Pattern
 ```python
@@ -165,10 +166,10 @@ def build_materializers(specs: list[DatasetIO]):
 - Remove local IO helpers embedded in Hamilton modules once `io_contracts` is adopted.
 
 ### Checklist
-- [ ] Define dataset IO contracts and materializer factories.
-- [ ] Move per-module IO logic into centralized contracts.
-- [ ] Update task builder to inject materializers and datasavers.
-- [ ] Add contract-level validation of output metadata.
+- [x] Define dataset IO contracts and materializer factories.
+- [ ] Move remaining per-module IO logic into centralized contracts where possible.
+- [x] Update task builder to inject materializers and datasavers.
+- [ ] Add contract-level validation of output metadata (post-write payload checks).
 
 ---
 
@@ -178,7 +179,7 @@ def build_materializers(specs: list[DatasetIO]):
 Standardize cache lineage export and introduce structured JSONL run logs for all Hamilton executions.
 
 ### Status
-Planned
+Complete
 
 ### Representative Pattern
 ```python
@@ -205,10 +206,10 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
 - Remove ad-hoc run logging scattered across diagnostics once structured logs are centralized.
 
 ### Checklist
-- [ ] Add structured log hook and schema.
-- [ ] Ensure cache lineage export is always tied to run metadata.
-- [ ] Persist lineage + logs in a deterministic directory layout.
-- [ ] Emit log artifacts in diagnostics store.
+- [x] Add structured log hook and schema.
+- [x] Ensure cache lineage export is always tied to run metadata.
+- [x] Persist lineage + logs in a deterministic directory layout.
+- [x] Emit log artifacts in diagnostics store.
 
 ---
 
@@ -218,7 +219,7 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
 Replace repeated Hamilton node sequences with parameterized subdags and pipe helpers.
 
 ### Status
-Planned
+In progress (initial subdag extracted; remaining duplication cleanup pending)
 
 ### Representative Pattern
 ```python
@@ -245,8 +246,8 @@ def normalize_subdag(raw_table: object) -> object:
 - Remove duplicated per-dataset function blocks once subdags are adopted.
 
 ### Checklist
-- [ ] Identify repeated node chains and factor into subdags.
-- [ ] Replace manual per-dataset variants with parameterized subdags.
+- [x] Identify repeated node chains and factor into subdags.
+- [ ] Replace remaining manual per-dataset variants with parameterized subdags.
 - [ ] Update tests/fixtures to reference new subdag outputs.
 
 ---
@@ -257,7 +258,7 @@ def normalize_subdag(raw_table: object) -> object:
 Centralize table registration into listing tables with explicit partition columns and file ordering, and unify DataFusion session config in one builder.
 
 ### Status
-Planned
+In progress (registration + session policy centralized; dataset_registration still duplicated)
 
 ### Representative Pattern
 ```python
@@ -290,9 +291,9 @@ ctx.register_listing_table(
 
 ### Checklist
 - [ ] Create a single registration entrypoint for all table types.
-- [ ] Ensure partition columns and file sort order are first-class config.
-- [ ] Standardize session options (parquet pushdown, metadata cache limit).
-- [ ] Emit registration diagnostics with normalized payloads.
+- [x] Ensure partition columns and file sort order are first-class config.
+- [x] Standardize session options (parquet pushdown, metadata cache limit).
+- [x] Emit registration diagnostics with normalized payloads.
 
 ---
 
@@ -302,7 +303,7 @@ ctx.register_listing_table(
 Make logical, optimized, and physical plan snapshots a required artifact for every run.
 
 ### Status
-Planned
+Complete
 
 ### Representative Pattern
 ```python
@@ -326,9 +327,9 @@ record_plan_artifact(plan_bundle)
 - Remove ad-hoc plan debug capture once plan artifacts are always recorded.
 
 ### Checklist
-- [ ] Standardize the plan artifact schema and persistence path.
-- [ ] Capture explain output with run + dataset metadata.
-- [ ] Wire plan artifact emission into Hamilton execution.
+- [x] Standardize the plan artifact schema and persistence path.
+- [x] Capture explain output with run + dataset metadata.
+- [x] Wire plan artifact emission into Hamilton execution.
 
 ---
 
@@ -338,7 +339,7 @@ record_plan_artifact(plan_bundle)
 Define a single Delta provider contract that binds scan config to session settings and normalizes snapshot pinning behavior.
 
 ### Status
-Planned
+In progress (contracts live and used in resolution; registration/planning alignment pending)
 
 ### Representative Pattern
 ```python
@@ -370,9 +371,9 @@ provider = build_delta_provider(
 - Remove inline scan config assembly once provider contracts are enforced.
 
 ### Checklist
-- [ ] Define contract types for scan config + snapshot pinning.
-- [ ] Enforce config derivation from session settings.
-- [ ] Emit scan config identity hashes in plan artifacts.
+- [x] Define contract types for scan config + snapshot pinning.
+- [x] Enforce config derivation from session settings.
+- [x] Emit scan config identity hashes in plan artifacts.
 
 ---
 
@@ -382,7 +383,7 @@ provider = build_delta_provider(
 Make Delta Change Data Feed the default incremental path and remove duplicated diff logic.
 
 ### Status
-Planned
+In progress (CDF-first path in use; diff cleanup pending)
 
 ### Representative Pattern
 ```python
@@ -409,8 +410,8 @@ register_provider(cdf_bundle.provider_capsule)
 - Remove incremental diff helpers once CDF path is mandatory (see deferred deletions).
 
 ### Checklist
-- [ ] Enforce CDF provider path for delta datasets requiring incremental.
-- [ ] Normalize CDF cursor persistence and window validation.
+- [x] Enforce CDF provider path for delta datasets requiring incremental.
+- [x] Normalize CDF cursor persistence and window validation.
 - [ ] Remove alternative diff-based incremental branches.
 
 ---
@@ -421,7 +422,7 @@ register_provider(cdf_bundle.provider_capsule)
 Centralize optimize, vacuum, and checkpoint policies into a single Delta maintenance layer.
 
 ### Status
-Planned
+In progress (control plane added; incremental wiring pending)
 
 ### Representative Pattern
 ```python
@@ -445,9 +446,9 @@ run_delta_maintenance(table_uri, maintenance_plan)
 - Remove ad-hoc maintenance calls once policy is centralized.
 
 ### Checklist
-- [ ] Define maintenance plan schema and default policies.
+- [x] Define maintenance plan schema and default policies.
 - [ ] Wire maintenance execution into write and incremental paths.
-- [ ] Capture maintenance artifacts and metrics.
+- [x] Capture maintenance artifacts and metrics.
 
 ---
 
@@ -457,7 +458,7 @@ run_delta_maintenance(table_uri, maintenance_plan)
 Unify schema validation by combining DataFusion info schema queries with Hamilton validator hooks.
 
 ### Status
-Planned
+Complete
 
 ### Representative Pattern
 ```python
@@ -483,9 +484,9 @@ validate_schema(info_schema, expected)
 - Remove per-module schema checks once registry-based validation is enforced.
 
 ### Checklist
-- [ ] Add info-schema based introspection utilities.
-- [ ] Consolidate schema contracts into a single registry format.
-- [ ] Wire schema validation into Hamilton check_output hooks.
+- [x] Add info-schema based introspection utilities.
+- [x] Consolidate schema contracts into a single registry format.
+- [x] Wire schema validation into Hamilton check_output hooks.
 
 ---
 
@@ -495,7 +496,7 @@ validate_schema(info_schema, expected)
 Remove legacy paths only after all scopes above are complete and validated.
 
 ### Status
-Planned
+In progress (cleanup/deletions pending)
 
 ### Representative Pattern
 ```python
@@ -520,4 +521,3 @@ Planned
 - [ ] Remove deprecated tag dicts and per-module tag helpers.
 - [ ] Remove legacy incremental diff modules.
 - [ ] Re-run plan artifact and schema validation checks.
-

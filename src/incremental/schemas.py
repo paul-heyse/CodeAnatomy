@@ -56,6 +56,9 @@ def _incremental_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy
         z_order_cols=z_order_cols,
         z_order_when="after_partition_complete",
         vacuum_on_write=False,
+        enable_deletion_vectors=True,
+        enable_v2_checkpoints=True,
+        enable_log_compaction=True,
     )
 
 

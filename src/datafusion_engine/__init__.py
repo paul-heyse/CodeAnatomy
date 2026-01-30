@@ -52,6 +52,11 @@ if TYPE_CHECKING:
         DataFusionPlanBundle,
         build_plan_bundle,
     )
+    from datafusion_engine.plan_execution import (
+        PlanExecutionOptions,
+        PlanExecutionResult,
+        execute_plan_bundle,
+    )
     from datafusion_engine.plan_udf_analysis import (
         derive_required_udfs_from_plans,
         ensure_plan_udfs_available,
@@ -60,13 +65,6 @@ if TYPE_CHECKING:
         extract_udfs_from_plan_bundle,
         validate_required_udfs_from_bundle,
         validate_required_udfs_from_plan,
-    )
-    from datafusion_engine.registry_loader import (
-        RegistryTarget,
-        register_registry_delta_tables,
-        register_registry_exports,
-        registry_delta_table_paths,
-        registry_output_dir,
     )
     from datafusion_engine.runtime import (
         DEFAULT_DF_POLICY,
@@ -80,14 +78,13 @@ if TYPE_CHECKING:
         apply_execution_label,
         apply_execution_policy,
         register_view_specs,
-        snapshot_plans,
     )
     from datafusion_engine.schema_contracts import (
         ContractRegistry,
         EvolutionPolicy,
         SchemaContract,
-        SchemaViolation,
-        SchemaViolationType,
+        ValidationViolation,
+        ViolationType,
     )
     from datafusion_engine.schema_introspection import SchemaIntrospector
     from datafusion_engine.schema_registry import (
@@ -96,13 +93,6 @@ if TYPE_CHECKING:
         nested_base_df,
         nested_dataset_names,
         nested_schema_names,
-    )
-    from datafusion_engine.semantic_diff import (
-        ChangeCategory,
-        RebuildPolicy,
-        SemanticChange,
-        SemanticDiff,
-        compute_rebuild_needed,
     )
     from datafusion_engine.streaming_executor import StreamingExecutionResult
     from datafusion_engine.udf_platform import (
@@ -121,7 +111,6 @@ __all__ = [
     "DEFAULT_DF_POLICY",
     "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
-    "ChangeCategory",
     "ContractRegistry",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
@@ -146,21 +135,19 @@ __all__ = [
     "IntrospectionSnapshot",
     "LineageReport",
     "MemoryPool",
-    "RebuildPolicy",
+    "PlanExecutionOptions",
+    "PlanExecutionResult",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
-    "RegistryTarget",
     "RustUdfPlatform",
     "RustUdfPlatformOptions",
     "ScanLineage",
     "SchemaContract",
     "SchemaHardeningProfile",
     "SchemaIntrospector",
-    "SchemaViolation",
-    "SchemaViolationType",
-    "SemanticChange",
-    "SemanticDiff",
     "StreamingExecutionResult",
+    "ValidationViolation",
+    "ViolationType",
     "WriteFormat",
     "WriteMode",
     "WritePipeline",
@@ -169,9 +156,9 @@ __all__ = [
     "apply_execution_label",
     "apply_execution_policy",
     "build_plan_bundle",
-    "compute_rebuild_needed",
     "derive_required_udfs_from_plans",
     "ensure_plan_udfs_available",
+    "execute_plan_bundle",
     "extract_lineage",
     "extract_nested_dataset_names",
     "extract_nested_schema_names",
@@ -184,14 +171,9 @@ __all__ = [
     "nested_schema_names",
     "referenced_tables_from_plan",
     "register_registry_catalog",
-    "register_registry_delta_tables",
-    "register_registry_exports",
     "register_view_specs",
-    "registry_delta_table_paths",
-    "registry_output_dir",
     "required_columns_by_table",
     "resolve_param_bindings",
-    "snapshot_plans",
     "validate_required_udfs_from_bundle",
     "validate_required_udfs_from_plan",
 ]
@@ -214,7 +196,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "apply_execution_label": ("datafusion_engine.runtime", "apply_execution_label"),
     "apply_execution_policy": ("datafusion_engine.runtime", "apply_execution_policy"),
     "register_view_specs": ("datafusion_engine.runtime", "register_view_specs"),
-    "snapshot_plans": ("datafusion_engine.runtime", "snapshot_plans"),
     # Catalog and schema
     "RegistryCatalogProvider": ("datafusion_engine.catalog_provider", "RegistryCatalogProvider"),
     "RegistrySchemaProvider": ("datafusion_engine.catalog_provider", "RegistrySchemaProvider"),
@@ -233,20 +214,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "datafusion_engine.schema_registry",
         "extract_nested_schema_names",
     ),
-    "register_registry_delta_tables": (
-        "datafusion_engine.registry_loader",
-        "register_registry_delta_tables",
-    ),
-    "register_registry_exports": (
-        "datafusion_engine.registry_loader",
-        "register_registry_exports",
-    ),
-    "registry_delta_table_paths": (
-        "datafusion_engine.registry_loader",
-        "registry_delta_table_paths",
-    ),
-    "registry_output_dir": ("datafusion_engine.registry_loader", "registry_output_dir"),
-    "RegistryTarget": ("datafusion_engine.registry_loader", "RegistryTarget"),
     "SchemaIntrospector": ("datafusion_engine.schema_introspection", "SchemaIntrospector"),
     # Bridge and execution
     # Streaming Execution
@@ -261,11 +228,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "apply_bindings_to_context",
     ),
     "resolve_param_bindings": ("datafusion_engine.param_binding", "resolve_param_bindings"),
-    # SQL Safety
-    "ExecutionPolicy": ("datafusion_engine.sql_safety", "ExecutionPolicy"),
-    "SafeExecutor": ("datafusion_engine.sql_safety", "SafeExecutor"),
-    "execute_with_policy": ("datafusion_engine.sql_safety", "execute_with_policy"),
-    "validate_sql_safety": ("datafusion_engine.sql_safety", "validate_sql_safety"),
     # Introspection
     "IntrospectionCache": ("datafusion_engine.introspection", "IntrospectionCache"),
     "IntrospectionSnapshot": ("datafusion_engine.introspection", "IntrospectionSnapshot"),
@@ -275,7 +237,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DiagnosticsSink": ("datafusion_engine.diagnostics", "DiagnosticsSink"),
     "InMemoryDiagnosticsSink": ("datafusion_engine.diagnostics", "InMemoryDiagnosticsSink"),
     # Execution Facade
-    "CompiledPlan": ("datafusion_engine.execution_facade", "CompiledPlan"),
     "DataFusionExecutionFacade": (
         "datafusion_engine.execution_facade",
         "DataFusionExecutionFacade",
@@ -289,21 +250,18 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "WriteMode": ("datafusion_engine.write_pipeline", "WriteMode"),
     "WritePipeline": ("datafusion_engine.write_pipeline", "WritePipeline"),
     "WriteRequest": ("datafusion_engine.write_pipeline", "WriteRequest"),
-    # Semantic Diff
-    "ChangeCategory": ("datafusion_engine.semantic_diff", "ChangeCategory"),
-    "RebuildPolicy": ("datafusion_engine.semantic_diff", "RebuildPolicy"),
-    "SemanticChange": ("datafusion_engine.semantic_diff", "SemanticChange"),
-    "SemanticDiff": ("datafusion_engine.semantic_diff", "SemanticDiff"),
-    "compute_rebuild_needed": ("datafusion_engine.semantic_diff", "compute_rebuild_needed"),
     # Schema Contracts
     "ContractRegistry": ("datafusion_engine.schema_contracts", "ContractRegistry"),
     "EvolutionPolicy": ("datafusion_engine.schema_contracts", "EvolutionPolicy"),
     "SchemaContract": ("datafusion_engine.schema_contracts", "SchemaContract"),
-    "SchemaViolation": ("datafusion_engine.schema_contracts", "SchemaViolation"),
-    "SchemaViolationType": ("datafusion_engine.schema_contracts", "SchemaViolationType"),
+    "ValidationViolation": ("datafusion_engine.schema_contracts", "ValidationViolation"),
+    "ViolationType": ("datafusion_engine.schema_contracts", "ViolationType"),
     # Plan Bundle and Lineage (DataFusion-native)
     "DataFusionPlanBundle": ("datafusion_engine.plan_bundle", "DataFusionPlanBundle"),
     "build_plan_bundle": ("datafusion_engine.plan_bundle", "build_plan_bundle"),
+    "PlanExecutionOptions": ("datafusion_engine.plan_execution", "PlanExecutionOptions"),
+    "PlanExecutionResult": ("datafusion_engine.plan_execution", "PlanExecutionResult"),
+    "execute_plan_bundle": ("datafusion_engine.plan_execution", "execute_plan_bundle"),
     "LineageReport": ("datafusion_engine.lineage_datafusion", "LineageReport"),
     "ScanLineage": ("datafusion_engine.lineage_datafusion", "ScanLineage"),
     "extract_lineage": ("datafusion_engine.lineage_datafusion", "extract_lineage"),

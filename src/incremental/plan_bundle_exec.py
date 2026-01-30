@@ -6,9 +6,15 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.lineage_datafusion import extract_lineage
+from datafusion_engine.plan_execution import (
+    PlanExecutionOptions,
+    PlanScanOverrides,
+)
+from datafusion_engine.plan_execution import (
+    execute_plan_bundle as execute_plan_bundle_helper,
+)
 from datafusion_engine.scan_planner import ScanUnit, plan_scan_unit
 
 if TYPE_CHECKING:
@@ -52,19 +58,20 @@ def execute_plan_bundle(
         Execution result for the plan bundle.
     """
     scan_units, scan_keys = _plan_scan_units(bundle, runtime)
-    if scan_units:
-        apply_scan_unit_overrides(
-            runtime.session_runtime().ctx,
-            scan_units=scan_units,
-            runtime_profile=runtime.profile,
-        )
-    facade = _facade(runtime)
-    return facade.execute_plan_bundle(
+    execution = execute_plan_bundle_helper(
+        runtime.session_runtime().ctx,
         bundle,
-        view_name=view_name,
-        scan_units=scan_units,
-        scan_keys=scan_keys,
+        options=PlanExecutionOptions(
+            runtime_profile=runtime.profile,
+            view_name=view_name,
+            scan=PlanScanOverrides(
+                scan_units=scan_units,
+                scan_keys=scan_keys,
+                apply_scan_overrides=True,
+            ),
+        ),
     )
+    return execution.execution_result
 
 
 def execute_df_to_table(

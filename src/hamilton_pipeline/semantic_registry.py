@@ -15,6 +15,7 @@ _SEMANTIC_LAYER = "semantic"
 _REQUIRED_SEMANTIC_TAGS: frozenset[str] = frozenset(
     {
         "layer",
+        "artifact",
         "semantic_id",
         "kind",
         "entity",

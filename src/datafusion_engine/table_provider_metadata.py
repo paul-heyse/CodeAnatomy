@@ -56,6 +56,12 @@ class TableProviderMetadata:
         When True, schema drift resolution happens at the TableProvider
         boundary via DataFusion-native physical expression adapters,
         eliminating the need for downstream cast/projection transforms.
+    delta_scan_config : dict[str, object] | None
+        Captured Delta scan configuration snapshot when applicable.
+    delta_scan_identity_hash : str | None
+        Stable identity hash for the Delta scan configuration.
+    delta_scan_effective : dict[str, object] | None
+        Effective Delta scan configuration payload resolved by the provider.
     """
 
     table_name: str
@@ -72,6 +78,9 @@ class TableProviderMetadata:
     supports_insert: bool | None = None
     supports_cdf: bool | None = None
     schema_adapter_enabled: bool = False
+    delta_scan_config: dict[str, object] | None = None
+    delta_scan_identity_hash: str | None = None
+    delta_scan_effective: dict[str, object] | None = None
 
     def with_ddl(self, ddl: str) -> TableProviderMetadata:
         """Return a copy with updated DDL.
@@ -101,6 +110,9 @@ class TableProviderMetadata:
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
             schema_adapter_enabled=self.schema_adapter_enabled,
+            delta_scan_config=self.delta_scan_config,
+            delta_scan_identity_hash=self.delta_scan_identity_hash,
+            delta_scan_effective=self.delta_scan_effective,
         )
 
     def with_constraints(self, constraints: tuple[str, ...]) -> TableProviderMetadata:
@@ -131,6 +143,9 @@ class TableProviderMetadata:
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
             schema_adapter_enabled=self.schema_adapter_enabled,
+            delta_scan_config=self.delta_scan_config,
+            delta_scan_identity_hash=self.delta_scan_identity_hash,
+            delta_scan_effective=self.delta_scan_effective,
         )
 
     def with_schema_identity_hash(self, fingerprint: str) -> TableProviderMetadata:
@@ -161,6 +176,9 @@ class TableProviderMetadata:
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
             schema_adapter_enabled=self.schema_adapter_enabled,
+            delta_scan_config=self.delta_scan_config,
+            delta_scan_identity_hash=self.delta_scan_identity_hash,
+            delta_scan_effective=self.delta_scan_effective,
         )
 
     def with_schema_adapter(self, *, enabled: bool = True) -> TableProviderMetadata:
@@ -191,6 +209,9 @@ class TableProviderMetadata:
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
             schema_adapter_enabled=enabled,
+            delta_scan_config=self.delta_scan_config,
+            delta_scan_identity_hash=self.delta_scan_identity_hash,
+            delta_scan_effective=self.delta_scan_effective,
         )
 
 

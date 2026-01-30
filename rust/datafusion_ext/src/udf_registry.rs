@@ -3,232 +3,68 @@ use std::sync::Arc;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, WindowUDF};
 use datafusion_functions_table::generate_series::RangeFunc;
 
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
+use crate::macros::{scalar_udfs, table_udfs};
+pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 use crate::{udaf_builtin, udf_custom, udtf_builtin, udtf_external, udwf_builtin};
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UdfKind {
-    Scalar,
-    Aggregate,
-    Window,
-    Table,
+fn range_table_udtf(_ctx: &SessionContext) -> Result<Arc<dyn TableFunctionImpl>> {
+    Ok(Arc::new(RangeFunc {}))
 }
 
-#[allow(dead_code)]
-pub enum UdfHandle {
-    Scalar(ScalarUDF),
-    Aggregate(AggregateUDF),
-    Window(WindowUDF),
-    Table(Arc<dyn TableFunctionImpl>),
-}
-
-pub struct UdfSpec {
-    pub name: &'static str,
-    pub kind: UdfKind,
-    pub builder: fn() -> UdfHandle,
-    pub aliases: &'static [&'static str],
-}
-
-fn range_table_udtf() -> UdfHandle {
-    UdfHandle::Table(Arc::new(RangeFunc {}))
-}
-
-pub fn all_udfs() -> Vec<UdfSpec> {
-    vec![
-        UdfSpec {
-            name: "arrow_metadata",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::arrow_metadata_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "semantic_tag",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::semantic_tag_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "cpg_score",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::cpg_score_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "stable_hash64",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::stable_hash64_udf()),
-            aliases: &["hash64"],
-        },
-        UdfSpec {
-            name: "stable_hash128",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::stable_hash128_udf()),
-            aliases: &["hash128"],
-        },
-        UdfSpec {
-            name: "prefixed_hash64",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::prefixed_hash64_udf()),
-            aliases: &["prefixed_hash"],
-        },
-        UdfSpec {
-            name: "stable_id",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::stable_id_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "stable_id_parts",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::stable_id_parts_udf()),
-            aliases: &["stable_id_multi"],
-        },
-        UdfSpec {
-            name: "prefixed_hash_parts64",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::prefixed_hash_parts64_udf()),
-            aliases: &["prefixed_hash_parts"],
-        },
-        UdfSpec {
-            name: "stable_hash_any",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::stable_hash_any_udf()),
-            aliases: &["stable_hash"],
-        },
-        UdfSpec {
-            name: "span_make",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::span_make_udf()),
-            aliases: &["span"],
-        },
-        UdfSpec {
-            name: "span_len",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::span_len_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "interval_align_score",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::interval_align_score_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "span_overlaps",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::span_overlaps_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "span_contains",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::span_contains_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "span_id",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::span_id_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "utf8_normalize",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::utf8_normalize_udf()),
-            aliases: &["normalize_utf8"],
-        },
-        UdfSpec {
-            name: "utf8_null_if_blank",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::utf8_null_if_blank_udf()),
-            aliases: &["null_if_blank"],
-        },
-        UdfSpec {
-            name: "qname_normalize",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::qname_normalize_udf()),
-            aliases: &["qualname_normalize"],
-        },
-        UdfSpec {
-            name: "map_get_default",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::map_get_default_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "map_normalize",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::map_normalize_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "list_compact",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::list_compact_udf()),
-            aliases: &["array_compact"],
-        },
-        UdfSpec {
-            name: "list_unique_sorted",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::list_unique_sorted_udf()),
-            aliases: &["array_unique_sorted"],
-        },
-        UdfSpec {
-            name: "struct_pick",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::struct_pick_udf()),
-            aliases: &["struct_select"],
-        },
-        UdfSpec {
-            name: "cdf_change_rank",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::cdf_change_rank_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "cdf_is_upsert",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::cdf_is_upsert_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "cdf_is_delete",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::cdf_is_delete_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "col_to_byte",
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_custom::col_to_byte_udf()),
-            aliases: &[],
-        },
-        UdfSpec {
-            name: "range_table",
-            kind: UdfKind::Table,
-            builder: range_table_udtf,
-            aliases: &[],
-        },
+pub fn scalar_udf_specs() -> Vec<ScalarUdfSpec> {
+    scalar_udfs![
+        "arrow_metadata" => udf_custom::arrow_metadata_udf;
+        "semantic_tag" => udf_custom::semantic_tag_udf;
+        "cpg_score" => udf_custom::cpg_score_udf;
+        "stable_hash64" => udf_custom::stable_hash64_udf, aliases: ["hash64"];
+        "stable_hash128" => udf_custom::stable_hash128_udf, aliases: ["hash128"];
+        "prefixed_hash64" => udf_custom::prefixed_hash64_udf, aliases: ["prefixed_hash"];
+        "stable_id" => udf_custom::stable_id_udf;
+        "stable_id_parts" => udf_custom::stable_id_parts_udf, aliases: ["stable_id_multi"];
+        "prefixed_hash_parts64" => udf_custom::prefixed_hash_parts64_udf, aliases: ["prefixed_hash_parts"];
+        "stable_hash_any" => udf_custom::stable_hash_any_udf, aliases: ["stable_hash"];
+        "span_make" => udf_custom::span_make_udf, aliases: ["span"];
+        "span_len" => udf_custom::span_len_udf;
+        "interval_align_score" => udf_custom::interval_align_score_udf;
+        "span_overlaps" => udf_custom::span_overlaps_udf;
+        "span_contains" => udf_custom::span_contains_udf;
+        "span_id" => udf_custom::span_id_udf;
+        "utf8_normalize" => udf_custom::utf8_normalize_udf, aliases: ["normalize_utf8"];
+        "utf8_null_if_blank" => udf_custom::utf8_null_if_blank_udf, aliases: ["null_if_blank"];
+        "qname_normalize" => udf_custom::qname_normalize_udf, aliases: ["qualname_normalize"];
+        "map_get_default" => udf_custom::map_get_default_udf;
+        "map_normalize" => udf_custom::map_normalize_udf;
+        "list_compact" => udf_custom::list_compact_udf, aliases: ["array_compact"];
+        "list_unique_sorted" => udf_custom::list_unique_sorted_udf, aliases: ["array_unique_sorted"];
+        "struct_pick" => udf_custom::struct_pick_udf, aliases: ["struct_select"];
+        "cdf_change_rank" => udf_custom::cdf_change_rank_udf;
+        "cdf_is_upsert" => udf_custom::cdf_is_upsert_udf;
+        "cdf_is_delete" => udf_custom::cdf_is_delete_udf;
+        "col_to_byte" => udf_custom::col_to_byte_udf;
     ]
 }
 
-pub fn all_udfs_with_async(enable_async: bool) -> Result<Vec<UdfSpec>> {
-    let specs = all_udfs();
+pub fn table_udf_specs() -> Vec<TableUdfSpec> {
+    table_udfs![
+        "range_table" => range_table_udtf;
+    ]
+}
+
+pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSpec>> {
+    let mut specs = scalar_udf_specs();
     if !enable_async {
         return Ok(specs);
     }
     #[cfg(feature = "async-udf")]
     {
-        let mut specs = specs;
-        specs.push(UdfSpec {
+        specs.push(ScalarUdfSpec {
             name: udf_async::ASYNC_ECHO_NAME,
-            kind: UdfKind::Scalar,
-            builder: || UdfHandle::Scalar(udf_async::async_echo_udf()),
+            builder: udf_async::async_echo_udf,
             aliases: &[],
         });
         return Ok(specs);
@@ -263,43 +99,22 @@ pub fn register_all_with_policy(
     let _ = (async_udf_timeout_ms, async_udf_batch_size);
     let state = ctx.state();
     let config_options = state.config_options();
-    for spec in all_udfs() {
-        match (spec.kind, (spec.builder)()) {
-            (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
-                let mut udf = udf
-                    .inner()
-                    .with_updated_config(config_options)
-                    .unwrap_or(udf);
-                if !spec.aliases.is_empty() {
-                    udf = udf.with_aliases(spec.aliases.iter().copied());
-                }
-                ctx.register_udf(udf);
-            }
-            (UdfKind::Aggregate, UdfHandle::Aggregate(udaf)) => {
-                let udaf = if spec.aliases.is_empty() {
-                    udaf
-                } else {
-                    udaf.with_aliases(spec.aliases.iter().copied())
-                };
-                ctx.register_udaf(udaf);
-            }
-            (UdfKind::Window, UdfHandle::Window(udwf)) => {
-                let udwf = if spec.aliases.is_empty() {
-                    udwf
-                } else {
-                    udwf.with_aliases(spec.aliases.iter().copied())
-                };
-                ctx.register_udwf(udwf);
-            }
-            (UdfKind::Table, UdfHandle::Table(udtf)) => {
-                ctx.register_udtf(spec.name, Arc::clone(&udtf));
-                for alias in spec.aliases {
-                    ctx.register_udtf(alias, Arc::clone(&udtf));
-                }
-            }
-            _ => {
-                panic!("UDF spec kind mismatch for {}", spec.name);
-            }
+    for spec in scalar_udf_specs() {
+        let mut udf = (spec.builder)();
+        let updated = udf.inner().with_updated_config(config_options);
+        if let Some(updated) = updated {
+            udf = updated;
+        }
+        if !spec.aliases.is_empty() {
+            udf = udf.with_aliases(spec.aliases.iter().copied());
+        }
+        ctx.register_udf(udf);
+    }
+    for spec in table_udf_specs() {
+        let table_fn = (spec.builder)(ctx)?;
+        ctx.register_udtf(spec.name, Arc::clone(&table_fn));
+        for alias in spec.aliases {
+            ctx.register_udtf(alias, Arc::clone(&table_fn));
         }
     }
     for udaf in udaf_builtin::builtin_udafs() {
@@ -330,11 +145,15 @@ pub fn register_all_with_policy(
 mod tests {
     use std::collections::HashSet;
 
-    use super::{all_udfs, UdfKind};
+    use super::{scalar_udf_specs, table_udf_specs};
 
     #[test]
     fn registry_contains_expected_entries() {
-        let names: HashSet<&'static str> = all_udfs().iter().map(|spec| spec.name).collect();
+        let names: HashSet<&'static str> = scalar_udf_specs()
+            .iter()
+            .map(|spec| spec.name)
+            .chain(table_udf_specs().iter().map(|spec| spec.name))
+            .collect();
         for name in [
             "arrow_metadata",
             "stable_hash64",
@@ -350,9 +169,6 @@ mod tests {
 
     #[test]
     fn registry_has_table_functions() {
-        let has_table = all_udfs()
-            .iter()
-            .any(|spec| matches!(spec.kind, UdfKind::Table));
-        assert!(has_table, "expected at least one table UDF");
+        assert!(!table_udf_specs().is_empty(), "expected at least one table UDF");
     }
 }

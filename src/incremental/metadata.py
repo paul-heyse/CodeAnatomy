@@ -10,6 +10,7 @@ from typing import cast
 import pyarrow as pa
 
 from datafusion_engine.arrow_schema.build import empty_table
+from datafusion_engine.arrow_schema.schema_builders import dataset_name_field
 from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from datafusion_engine.view_artifacts import view_artifact_payload_table
 from datafusion_engine.write_pipeline import WriteMode
@@ -29,7 +30,7 @@ from storage.deltalake import (
 
 _CDF_CURSOR_SCHEMA = pa.schema(
     [
-        pa.field("dataset_name", pa.string(), nullable=False),
+        dataset_name_field(),
         pa.field("last_version", pa.int64(), nullable=False),
     ]
 )

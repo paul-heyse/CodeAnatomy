@@ -25,6 +25,7 @@ from datafusion_engine.delta_store_policy import (
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan_cache import PlanCacheEntry
 from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
+from datafusion_engine.runtime import normalize_dataset_locations_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from obs.otel.scopes import SCOPE_PLANNING
 from obs.otel.tracing import stage_span
@@ -116,7 +117,7 @@ class DataFusionPlanBundle:
         The optimized logical plan (used for lineage extraction).
     execution_plan : DataFusionExecutionPlan | None
         The physical execution plan (may be None for lazy evaluation).
-    substrait_bytes : bytes | None
+    substrait_bytes : bytes
         Substrait serialization of the plan (used for fingerprinting).
     plan_fingerprint : str
         Stable hash for caching and comparison.
@@ -130,7 +131,7 @@ class DataFusionPlanBundle:
     logical_plan: object  # DataFusionLogicalPlan
     optimized_logical_plan: object  # DataFusionLogicalPlan
     execution_plan: object | None  # DataFusionExecutionPlan | None
-    substrait_bytes: bytes | None
+    substrait_bytes: bytes
     plan_fingerprint: str
     artifacts: PlanArtifacts
     delta_inputs: tuple[DeltaInputPin, ...] = ()
@@ -398,7 +399,7 @@ class _BundleComponents:
     logical: DataFusionLogicalPlan
     optimized: DataFusionLogicalPlan | None
     execution: object | None
-    substrait_bytes: bytes | None
+    substrait_bytes: bytes
     fingerprint: str
     artifacts: PlanArtifacts
     merged_delta_inputs: tuple[DeltaInputPin, ...]
@@ -416,7 +417,7 @@ class _PlanCoreComponents:
     logical: DataFusionLogicalPlan
     optimized: DataFusionLogicalPlan | None
     execution: object | None
-    substrait_bytes: bytes | None
+    substrait_bytes: bytes
 
 
 @dataclass(frozen=True)
@@ -468,15 +469,19 @@ def _plan_core_components(
     -------
     _PlanCoreComponents
         Core plan objects for bundling.
+
+    Raises
+    ------
+    ValueError
+        Raised when Substrait computation is disabled.
     """
     logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
     optimized = cast("DataFusionLogicalPlan | None", _safe_optimized_logical_plan(df))
     execution = _safe_execution_plan(df) if options.compute_execution_plan else None
-    substrait_bytes = (
-        _to_substrait_bytes(ctx, optimized)
-        if options.compute_substrait and optimized is not None
-        else None
-    )
+    if not options.compute_substrait:
+        msg = "Substrait bytes are required for plan bundle construction."
+        raise ValueError(msg)
+    substrait_bytes = _to_substrait_bytes(ctx, optimized)
     return _PlanCoreComponents(
         logical=logical,
         optimized=optimized,
@@ -1288,7 +1293,7 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
         return None
 
 
-def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes | None:
+def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     """Convert an optimized plan to Substrait bytes.
 
     Uses DataFusion's Substrait Producer to serialize the plan for
@@ -1296,13 +1301,20 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes 
 
     Returns
     -------
-    bytes | None
-        Substrait plan bytes, or None if unavailable.
+    bytes
+        Substrait plan bytes.
+
+    Raises
+    ------
+    ValueError
+        Raised when Substrait serialization is unavailable.
     """
     if SubstraitProducer is None:
-        return None
+        msg = "Substrait producer is unavailable."
+        raise ValueError(msg)
     if optimized is None:
-        return None
+        msg = "Substrait serialization requires an optimized logical plan."
+        raise ValueError(msg)
     # Use Producer.to_substrait_plan(logical_plan, ctx) -> Plan, then Plan.encode() -> bytes
     try:
         to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
@@ -1310,11 +1322,14 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes 
             substrait_plan = to_substrait(cast("DataFusionLogicalPlan", optimized), ctx)
             encode = getattr(substrait_plan, "encode", None)
             if callable(encode):
-                return cast("bytes | None", encode())
+                encoded = encode()
+                if isinstance(encoded, (bytes, bytearray)):
+                    return bytes(encoded)
     except (RuntimeError, TypeError, ValueError, AttributeError):
         pass
 
-    return None
+    msg = "Failed to encode Substrait plan bytes."
+    raise ValueError(msg)
 
 
 def _capture_explain_analyze(
@@ -1344,7 +1359,7 @@ def _capture_explain_analyze(
 
 
 def _substrait_validation_payload(
-    substrait_bytes: bytes | None,
+    substrait_bytes: bytes,
     *,
     df: DataFrame,
 ) -> Mapping[str, object] | None:
@@ -1365,11 +1380,8 @@ def _substrait_validation_payload(
     Raises
     ------
     ValueError
-        Raised when validation fails or Substrait bytes are missing.
+        Raised when validation fails.
     """
-    if substrait_bytes is None:
-        msg = "Substrait bytes are required for plan validation."
-        raise ValueError(msg)
     from datafusion_engine.execution_helpers import validate_substrait_plan
 
     validation = validate_substrait_plan(substrait_bytes, df=df)
@@ -1455,7 +1467,7 @@ def _information_schema_hash(snapshot: Mapping[str, object]) -> str:
 class PlanFingerprintInputs:
     """Inputs required to fingerprint a plan bundle."""
 
-    substrait_bytes: bytes | None
+    substrait_bytes: bytes
     df_settings: Mapping[str, str]
     planning_env_hash: str | None
     rulepack_hash: str | None
@@ -1477,15 +1489,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
     -------
     str
         Stable plan fingerprint.
-
-    Raises
-    ------
-    ValueError
-        Raised when Substrait bytes are unavailable for fingerprinting.
     """
-    if inputs.substrait_bytes is None:
-        msg = "Plan fingerprinting requires Substrait bytes."
-        raise ValueError(msg)
     settings_items = tuple(sorted(inputs.df_settings.items()))
     settings_hash = hash_msgpack_canonical(settings_items)
     planning_env_hash = inputs.planning_env_hash or ""
@@ -1589,7 +1593,7 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
         locations.setdefault(
             name,
             apply_delta_store_policy(
-                cast("DatasetLocation", location),
+                location,
                 policy=runtime_profile.delta_store_policy,
             ),
         )
@@ -1597,15 +1601,15 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
         locations.setdefault(
             name,
             apply_delta_store_policy(
-                cast("DatasetLocation", location),
+                location,
                 policy=runtime_profile.delta_store_policy,
             ),
         )
-    for name, location in runtime_profile.normalize_dataset_locations().items():
+    for name, location in normalize_dataset_locations_for_profile(runtime_profile).items():
         locations.setdefault(
             name,
             apply_delta_store_policy(
-                cast("DatasetLocation", location),
+                location,
                 policy=runtime_profile.delta_store_policy,
             ),
         )

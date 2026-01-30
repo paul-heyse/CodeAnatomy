@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
@@ -12,6 +12,11 @@ from datafusion import SessionContext
 from datafusion_engine.schema_introspection import (
     parameters_snapshot_table,
     routines_snapshot_table,
+)
+from datafusion_engine.udf_runtime import (
+    snapshot_function_names,
+    snapshot_parameter_names,
+    snapshot_return_types,
 )
 from datafusion_engine.udf_signature import (
     custom_udf_names,
@@ -671,31 +676,6 @@ def create_strict_catalog(
     return UdfCatalog(udf_specs=udf_specs)
 
 
-def _registry_names(snapshot: Mapping[str, object]) -> set[str]:
-    names: set[str] = set()
-    for key in ("scalar", "aggregate", "window", "table"):
-        value = snapshot.get(key, [])
-        if isinstance(value, str):
-            continue
-        if isinstance(value, Iterable):
-            names.update(str(name) for name in value if name is not None)
-    return names
-
-
-def _registry_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
-    value = snapshot.get("parameter_names")
-    if not isinstance(value, Mapping):
-        return {}
-    resolved: dict[str, tuple[str, ...]] = {}
-    for name, params in value.items():
-        if params is None or isinstance(params, str):
-            continue
-        if not isinstance(params, Iterable):
-            continue
-        resolved[str(name)] = tuple(str(param) for param in params if param is not None)
-    return resolved
-
-
 def _registry_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
     value = snapshot.get("volatility")
     if not isinstance(value, Mapping):
@@ -766,18 +746,6 @@ def _registry_signature_inputs(
     return resolved
 
 
-def _registry_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
-    raw = snapshot.get("return_types")
-    if not isinstance(raw, Mapping):
-        return {}
-    resolved: dict[str, tuple[str, ...]] = {}
-    for name, entries in raw.items():
-        if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes)):
-            continue
-        resolved[str(name)] = tuple(str(item) for item in entries if item is not None)
-    return resolved
-
-
 def _first_return_type(value: tuple[str, ...] | None) -> str | None:
     if value:
         return value[0]
@@ -792,16 +760,16 @@ def udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object]
     Mapping[str, object]
         Planner-aware metadata payload for registered UDFs.
     """
-    names = _registry_names(snapshot)
+    names = snapshot_function_names(snapshot)
     if not names:
         return {"status": "unavailable"}
     kinds = _snapshot_kind_map(snapshot)
-    param_names = _registry_parameter_names(snapshot)
+    param_names = snapshot_parameter_names(snapshot)
     volatilities = _registry_volatility(snapshot)
     rewrite_tags = _registry_rewrite_tags(snapshot)
     docs = _registry_docs(snapshot)
     signature_inputs = _registry_signature_inputs(snapshot)
-    return_types = _registry_return_types(snapshot)
+    return_types = snapshot_return_types(snapshot)
     has_simplify = _registry_bool_map(snapshot, key="simplify")
     has_coerce_types = _registry_bool_map(snapshot, key="coerce_types")
     short_circuits = _registry_bool_map(snapshot, key="short_circuits")
@@ -844,33 +812,6 @@ def rewrite_tag_index(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ..
     return {tag: tuple(sorted(names)) for tag, names in index.items()}
 
 
-def _apply_registry_metadata(
-    specs: tuple[DataFusionUdfSpec, ...],
-    snapshot: Mapping[str, object],
-) -> tuple[DataFusionUdfSpec, ...]:
-    names = _registry_names(snapshot)
-    if not names:
-        return specs
-    missing = sorted(spec.engine_name for spec in specs if spec.engine_name not in names)
-    if missing:
-        msg = f"Rust UDF registry missing expected functions: {missing}"
-        raise ValueError(msg)
-    param_names = _registry_parameter_names(snapshot)
-    volatilities = _registry_volatility(snapshot)
-    enriched: list[DataFusionUdfSpec] = []
-    for spec in specs:
-        arg_names = param_names.get(spec.engine_name, spec.arg_names)
-        volatility = volatilities.get(spec.engine_name, spec.volatility)
-        enriched.append(
-            replace(
-                spec,
-                arg_names=arg_names if arg_names else spec.arg_names,
-                volatility=volatility,
-            )
-        )
-    return tuple(enriched)
-
-
 def datafusion_udf_specs(
     *,
     registry_snapshot: Mapping[str, object],
@@ -885,7 +826,7 @@ def datafusion_udf_specs(
     """
     names = custom_udf_names(registry_snapshot)
     kinds = _snapshot_kind_map(registry_snapshot)
-    param_names = _registry_parameter_names(registry_snapshot)
+    param_names = snapshot_parameter_names(registry_snapshot)
     volatilities = _registry_volatility(registry_snapshot)
     rewrite_tags = _registry_rewrite_tags(registry_snapshot)
     docs = _registry_docs(registry_snapshot)

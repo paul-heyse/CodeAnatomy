@@ -27,23 +27,14 @@ impl fmt::Display for ExtError {
 
 impl Error for ExtError {}
 
-impl From<ArrowError> for ExtError {
-    fn from(err: ArrowError) -> Self {
-        ExtError::Arrow(err)
-    }
-}
-
-impl From<DataFusionError> for ExtError {
-    fn from(err: DataFusionError) -> Self {
-        ExtError::DataFusion(Box::new(err))
-    }
-}
-
-impl From<deltalake::errors::DeltaTableError> for ExtError {
-    fn from(err: deltalake::errors::DeltaTableError) -> Self {
-        ExtError::Delta(err.to_string())
-    }
-}
+crate::impl_error_from!(ExtError, ArrowError, Arrow);
+crate::impl_error_from!(ExtError, DataFusionError, DataFusion, |err| Box::new(err));
+crate::impl_error_from!(
+    ExtError,
+    deltalake::errors::DeltaTableError,
+    Delta,
+    |err| err.to_string()
+);
 
 pub type ExtResult<T> = std::result::Result<T, ExtError>;
 

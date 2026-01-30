@@ -20,7 +20,7 @@ from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_contracts import (
     SchemaContract,
-    SchemaViolation,
+    ValidationViolation,
     schema_contract_from_dataset_spec,
 )
 from datafusion_engine.schema_introspection import table_names_snapshot
@@ -298,7 +298,7 @@ def dataset_contract_violations(
     name: str,
     *,
     ctx: SessionContext | None = None,
-) -> tuple[SchemaViolation, ...]:
+) -> tuple[ValidationViolation, ...]:
     """Return schema contract violations for the dataset name.
 
     Parameters
@@ -310,7 +310,7 @@ def dataset_contract_violations(
 
     Returns
     -------
-    tuple[SchemaViolation, ...]
+    tuple[ValidationViolation, ...]
         Contract violations for the current information_schema snapshot.
     """
     session = _resolve_session_context(ctx)

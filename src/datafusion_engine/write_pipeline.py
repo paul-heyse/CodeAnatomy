@@ -5,13 +5,12 @@ partitioning, and schema constraints while using DataFusion-native writers
 (streaming + DataFrame writes).
 
 Canonical write surfaces (Scope 15)
-------------------------------------
-All write operations route through DataFusion-native APIs:
+-----------------------------------
+All write operations route through DataFusion-native SQL statements:
 
-1. **CSV/JSON/Arrow**: `DataFrame.write_csv()`, `DataFrame.write_json()`, Arrow IPC
-2. **Parquet**: `DataFrame.write_parquet()` with `DataFrameWriteOptions`
-3. **Table inserts**: `DataFrame.write_table()` with `InsertOp.APPEND/OVERWRITE`
-4. **Delta**: `DataFrame.write_table()` inserts into DeltaTableProvider
+1. **CSV/JSON/Arrow**: `COPY (SELECT ...) TO ... STORED AS ...`
+2. **Table inserts**: `INSERT INTO` / `INSERT OVERWRITE`
+3. **Delta**: `DataFrame.write_table()` inserts into DeltaTableProvider
 
 Pattern
 -------
@@ -33,6 +32,7 @@ import json
 import shutil
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -46,19 +46,22 @@ from datafusion.expr import SortExpr
 
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
-    resolve_delta_constraints,
     resolve_delta_feature_gate,
     resolve_delta_maintenance_policy,
     resolve_delta_schema_policy,
     resolve_delta_write_policy,
 )
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
+from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import normalize_dataset_locations_for_profile
+from datafusion_engine.schema_contracts import delta_constraints_for_location
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
 from storage.deltalake import (
     DeltaWriteResult,
+    delta_history_snapshot,
     delta_table_version,
     idempotent_commit_properties,
 )
@@ -73,7 +76,9 @@ from storage.deltalake.config import (
 from storage.deltalake.delta import (
     DeltaFeatureMutationOptions,
     IdempotentWriteOptions,
+    delta_add_constraints,
     enable_delta_change_data_feed,
+    enable_delta_check_constraints,
     enable_delta_column_mapping,
     enable_delta_deletion_vectors,
     enable_delta_features,
@@ -82,6 +87,7 @@ from storage.deltalake.delta import (
     enable_delta_v2_checkpoints,
 )
 from utils.hashing import hash_sha256_hex
+from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -120,32 +126,42 @@ class WriteMethod(Enum):
     INSERT = auto()
 
 
-_DELTA_MIN_RETENTION_HOURS = 168
+_COPY_FORMAT_TOKENS: Mapping[WriteFormat, str] = {
+    WriteFormat.CSV: "CSV",
+    WriteFormat.JSON: "JSON",
+    WriteFormat.ARROW: "ARROW",
+}
 
 
-def _merge_constraints(
-    primary: tuple[str, ...],
-    secondary: tuple[str, ...],
-) -> tuple[str, ...]:
-    """Merge constraint tuples deterministically while removing blanks.
+def _sql_identifier(name: str) -> str:
+    parts = [part for part in name.split(".") if part]
+    if parts and all(part.isidentifier() for part in parts):
+        return name
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
-    Returns
-    -------
-    tuple[str, ...]
-        Deduplicated constraint strings in deterministic order.
-    """
-    if not primary and not secondary:
-        return ()
-    ordered: dict[str, None] = {}
-    for constraint_text in primary:
-        normalized = constraint_text.strip()
-        if normalized:
-            ordered.setdefault(normalized, None)
-    for constraint_text in secondary:
-        normalized = constraint_text.strip()
-        if normalized:
-            ordered.setdefault(normalized, None)
-    return tuple(ordered)
+
+def _sql_string_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _copy_options_clause(options: Mapping[str, str]) -> str | None:
+    if not options:
+        return None
+    items = ", ".join(
+        f"{_sql_string_literal(key)} {_sql_string_literal(value)}"
+        for key, value in sorted(options.items(), key=lambda item: item[0])
+    )
+    return f"OPTIONS ({items})"
+
+
+def _copy_format_token(format_: WriteFormat) -> str:
+    token = _COPY_FORMAT_TOKENS.get(format_)
+    if token is None:
+        msg = f"COPY does not support format: {format_}"
+        raise ValueError(msg)
+    return token
 
 
 @dataclass(frozen=True)
@@ -368,6 +384,7 @@ class WriteResult:
     method: WriteMethod
     sql: str | None
     duration_ms: float | None = None
+    rows_written: int | None = None
     delta_result: DeltaWriteResult | None = None
     delta_features: Mapping[str, str] | None = None
     commit_app_id: str | None = None
@@ -524,6 +541,70 @@ def _apply_explicit_delta_features(
             enable_delta_v2_checkpoints(options)
 
 
+def _delta_constraint_name(expression: str) -> str:
+    digest = hash_sha256_hex(expression.encode("utf-8"))[:10]
+    return f"ck_{digest}"
+
+
+def _existing_delta_constraints(spec: DeltaWriteSpec) -> dict[str, str]:
+    snapshot = delta_history_snapshot(
+        spec.table_uri,
+        storage_options=spec.storage_options,
+        log_storage_options=spec.log_storage_options,
+        gate=spec.feature_gate,
+    )
+    if snapshot is None:
+        return {}
+    properties = snapshot.get("table_properties")
+    if not isinstance(properties, Mapping):
+        return {}
+    constraints: dict[str, str] = {}
+    for key, value in properties.items():
+        name = str(key)
+        if not name.startswith("delta.constraints."):
+            continue
+        constraint_name = name.split("delta.constraints.", 1)[-1]
+        constraints[constraint_name] = str(value)
+    return constraints
+
+
+def _delta_constraints_to_add(
+    constraints: Sequence[str],
+    *,
+    existing: Mapping[str, str],
+) -> dict[str, str]:
+    existing_values = {value.strip() for value in existing.values() if str(value).strip()}
+    mapping: dict[str, str] = {}
+    for expression in constraints:
+        normalized = expression.strip()
+        if not normalized:
+            continue
+        if normalized in existing_values:
+            continue
+        name = _delta_constraint_name(normalized)
+        if name in existing and existing[name].strip() == normalized:
+            continue
+        mapping[name] = normalized
+    return mapping
+
+
+def _apply_delta_check_constraints(
+    *,
+    spec: DeltaWriteSpec,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> str:
+    if not spec.extra_constraints:
+        return "skipped"
+    options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
+    enable_delta_check_constraints(options)
+    existing = _existing_delta_constraints(spec)
+    to_add = _delta_constraints_to_add(spec.extra_constraints, existing=existing)
+    if to_add:
+        delta_add_constraints(options, constraints=to_add)
+        return "added"
+    return "present"
+
+
 class WritePipeline:
     """Unified write pipeline for all output paths.
 
@@ -617,7 +698,7 @@ class WritePipeline:
         locations = [
             sorted(self.runtime_profile.extract_dataset_locations.items()),
             sorted(self.runtime_profile.scip_dataset_locations.items()),
-            sorted(self.runtime_profile.normalize_dataset_locations().items()),
+            sorted(normalize_dataset_locations_for_profile(self.runtime_profile).items()),
         ]
         for candidates in locations:
             match = self._match_dataset_location(
@@ -692,11 +773,6 @@ class WritePipeline:
         request
             Write request specification.
 
-        Raises
-        ------
-        NotImplementedError
-            If the write format is not supported by the streaming writer.
-
         Notes
         -----
         This method is preferred for large datasets or when partitioning
@@ -726,19 +802,24 @@ class WritePipeline:
 
         table_target = self._table_target(request)
         if table_target is not None:
-            self._write_table(df, request=request, table_name=table_target)
+            rows_written = self._maybe_count_rows(df)
+            sql_text = self._write_insert(df, request=request, table_name=table_target)
             duration_ms = (time.perf_counter() - start) * 1000.0
             write_result = WriteResult(
                 request=request,
                 method=WriteMethod.INSERT,
-                sql=None,
+                sql=sql_text,
                 duration_ms=duration_ms,
+                rows_written=rows_written,
             )
             self._record_write_artifact(write_result)
             return write_result
 
         # Write based on format
         delta_outcome: DeltaWriteOutcome | None = None
+        sql_text: str | None = None
+        method = WriteMethod.STREAMING
+        rows_written: int | None = None
         if request.format == WriteFormat.DELTA:
             streaming_spec = self._delta_write_spec(
                 request,
@@ -755,22 +836,18 @@ class WritePipeline:
                 request=request,
                 spec=streaming_spec,
             )
-        elif request.format == WriteFormat.CSV:
-            self._write_csv(df, request=request)
-        elif request.format == WriteFormat.JSON:
-            self._write_json(df, request=request)
-        elif request.format == WriteFormat.ARROW:
-            self._write_arrow(result, request=request)
         else:
-            msg = f"Streaming write for {request.format}"
-            raise NotImplementedError(msg)
+            method = WriteMethod.COPY
+            rows_written = self._maybe_count_rows(df)
+            sql_text = self._write_copy(df, request=request)
 
         duration_ms = (time.perf_counter() - start) * 1000.0
         write_result = WriteResult(
             request=request,
-            method=WriteMethod.STREAMING,
-            sql=None,
+            method=method,
+            sql=sql_text,
             duration_ms=duration_ms,
+            rows_written=rows_written,
             delta_result=delta_outcome.delta_result if delta_outcome is not None else None,
             delta_features=(delta_outcome.enabled_features if delta_outcome is not None else None),
             commit_app_id=delta_outcome.commit_app_id if delta_outcome is not None else None,
@@ -867,9 +944,22 @@ class WritePipeline:
                 destination=result.request.destination,
                 format_=result.request.format.name.lower(),
                 method=result.method.name.lower(),
+                rows_written=result.rows_written,
                 duration_ms=result.duration_ms or 0.0,
+                sql=result.sql,
+                delta_features=(
+                    dict(result.delta_features) if result.delta_features is not None else None
+                ),
             )
         )
+
+    def _maybe_count_rows(self, df: DataFrame) -> int | None:
+        if self.recorder is None:
+            return None
+        try:
+            return df.count()
+        except (RuntimeError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _prepare_destination(request: WriteRequest) -> Path:
@@ -891,6 +981,84 @@ class WritePipeline:
                 path.unlink()
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+    @staticmethod
+    def _temp_view_name(prefix: str, *, request: WriteRequest) -> str:
+        digest = hash_sha256_hex(f"{prefix}:{request.destination}:{id(request)}".encode())[:8]
+        return f"__{prefix}_{digest}"
+
+    def _write_copy(self, df: DataFrame, *, request: WriteRequest) -> str:
+        if request.single_file_output:
+            msg = "COPY does not support single_file_output."
+            raise ValueError(msg)
+        path = self._prepare_destination(request)
+        temp_view = self._temp_view_name("copy", request=request)
+        adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
+        adapter.register_view(temp_view, df, overwrite=True, temporary=True)
+        try:
+            format_token = _copy_format_token(request.format)
+            sql = (
+                f"COPY (SELECT * FROM {_sql_identifier(temp_view)}) "
+                f"TO {_sql_string_literal(str(path))} STORED AS {format_token}"
+            )
+            if request.partition_by:
+                partition_cols = ", ".join(_sql_identifier(col) for col in request.partition_by)
+                sql = f"{sql} PARTITIONED BY ({partition_cols})"
+            copy_options: dict[str, str] = {}
+            if (
+                request.format == WriteFormat.CSV
+                and request.format_options
+                and "with_header" in request.format_options
+            ):
+                copy_options["format.has_header"] = str(
+                    bool(request.format_options["with_header"])
+                ).lower()
+            options_clause = _copy_options_clause(copy_options)
+            if options_clause:
+                sql = f"{sql} {options_clause}"
+            allow_statements = True
+            sql_options = sql_options_for_profile(self.runtime_profile).with_allow_statements(
+                allow_statements
+            )
+            df_stmt = self.ctx.sql_with_options(sql, sql_options)
+            if df_stmt is None:
+                msg = "COPY statement did not return a DataFusion DataFrame."
+                raise ValueError(msg)
+            df_stmt.collect()
+        finally:
+            with suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(temp_view)
+        return sql
+
+    def _write_insert(self, df: DataFrame, *, request: WriteRequest, table_name: str) -> str:
+        if request.mode == WriteMode.ERROR:
+            msg = "Table writes require APPEND or OVERWRITE mode."
+            raise ValueError(msg)
+        temp_view = self._temp_view_name("insert", request=request)
+        adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
+        adapter.register_view(temp_view, df, overwrite=True, temporary=True)
+        try:
+            verb = "OVERWRITE" if request.mode == WriteMode.OVERWRITE else "INTO"
+            sql = (
+                f"INSERT {verb} {_sql_identifier(table_name)} "
+                f"SELECT * FROM {_sql_identifier(temp_view)}"
+            )
+            allow_statements = True
+            allow_dml = True
+            sql_options = (
+                sql_options_for_profile(self.runtime_profile)
+                .with_allow_statements(allow_statements)
+                .with_allow_dml(allow_dml)
+            )
+            df_stmt = self.ctx.sql_with_options(sql, sql_options)
+            if df_stmt is None:
+                msg = "INSERT statement did not return a DataFusion DataFrame."
+                raise ValueError(msg)
+            df_stmt.collect()
+        finally:
+            with suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(temp_view)
+        return sql
 
     @staticmethod
     def _write_table(df: DataFrame, *, request: WriteRequest, table_name: str) -> None:
@@ -1021,9 +1189,9 @@ class WritePipeline:
             policy_ctx=policy_ctx,
             lineage_columns=inputs.lineage_columns,
         )
-        extra_constraints = _merge_constraints(
-            request.constraints,
-            resolve_delta_constraints(inputs.dataset_location) if inputs.dataset_location else (),
+        extra_constraints = delta_constraints_for_location(
+            inputs.dataset_location,
+            extra_checks=request.constraints,
         )
         commit_metadata = _delta_commit_metadata(
             request,
@@ -1246,84 +1414,28 @@ class WritePipeline:
     ) -> None:
         if self.runtime_profile is None:
             return
-        policy = spec.maintenance_policy
-        if policy is None and spec.dataset_location is not None:
-            policy = resolve_delta_maintenance_policy(spec.dataset_location)
-        if policy is None:
-            return
-        from datafusion_engine.delta_control_plane import (
-            DeltaCommitOptions,
-            DeltaOptimizeRequest,
-            DeltaVacuumRequest,
-            delta_optimize_compact,
-            delta_vacuum,
-        )
-        from datafusion_engine.delta_observability import (
-            DeltaMaintenanceArtifact,
-            record_delta_maintenance,
+        from datafusion_engine.delta_maintenance import (
+            DeltaMaintenancePlanInput,
+            resolve_delta_maintenance_plan,
+            run_delta_maintenance,
         )
 
-        if policy.optimize_on_write:
-            z_order_cols: tuple[str, ...] | None = None
-            if policy.z_order_cols and policy.z_order_when != "never":
-                z_order_cols = policy.z_order_cols
-            report = delta_optimize_compact(
-                self.ctx,
-                request=DeltaOptimizeRequest(
-                    table_uri=spec.table_uri,
-                    storage_options=spec.storage_options,
-                    version=delta_version,
-                    timestamp=None,
-                    target_size=policy.optimize_target_size,
-                    z_order_cols=z_order_cols,
-                    gate=spec.feature_gate,
-                    commit_options=DeltaCommitOptions(metadata={"operation": "optimize"}),
-                ),
+        plan = resolve_delta_maintenance_plan(
+            DeltaMaintenancePlanInput(
+                dataset_location=spec.dataset_location,
+                table_uri=spec.table_uri,
+                dataset_name=spec.commit_key,
+                storage_options=spec.storage_options,
+                log_storage_options=spec.log_storage_options,
+                delta_version=delta_version,
+                delta_timestamp=None,
+                feature_gate=spec.feature_gate,
+                policy=spec.maintenance_policy,
             )
-            record_delta_maintenance(
-                self.runtime_profile,
-                artifact=DeltaMaintenanceArtifact(
-                    table_uri=spec.table_uri,
-                    operation="optimize",
-                    report=report,
-                    dataset_name=spec.commit_key,
-                ),
-            )
-        if policy.vacuum_on_write:
-            retention_hours = policy.vacuum_retention_hours
-            if policy.enforce_retention_duration and (
-                retention_hours is None or retention_hours < _DELTA_MIN_RETENTION_HOURS
-            ):
-                msg = (
-                    "Delta vacuum retention_hours must be at least "
-                    f"{_DELTA_MIN_RETENTION_HOURS} when enforcement is enabled."
-                )
-                raise ValueError(msg)
-            report = delta_vacuum(
-                self.ctx,
-                request=DeltaVacuumRequest(
-                    table_uri=spec.table_uri,
-                    storage_options=spec.storage_options,
-                    version=delta_version,
-                    timestamp=None,
-                    retention_hours=retention_hours,
-                    dry_run=policy.vacuum_dry_run,
-                    enforce_retention_duration=policy.enforce_retention_duration,
-                    gate=spec.feature_gate,
-                    commit_options=DeltaCommitOptions(metadata={"operation": "vacuum"}),
-                ),
-            )
-            record_delta_maintenance(
-                self.runtime_profile,
-                artifact=DeltaMaintenanceArtifact(
-                    table_uri=spec.table_uri,
-                    operation="vacuum",
-                    report=report,
-                    dataset_name=spec.commit_key,
-                    retention_hours=retention_hours,
-                    dry_run=policy.vacuum_dry_run,
-                ),
-            )
+        )
+        if plan is None:
+            return
+        run_delta_maintenance(self.ctx, plan=plan, runtime_profile=self.runtime_profile)
 
     def _write_delta(
         self,
@@ -1382,12 +1494,6 @@ class WritePipeline:
         )
         result.df.write_table(table_name, write_options=write_options)
         delta_result = DeltaWriteResult(path=spec.table_uri, version=None, report=None)
-        self._record_delta_mutation(
-            spec=spec,
-            delta_result=delta_result,
-            operation="write",
-            constraint_status="passed" if spec.extra_constraints else "skipped",
-        )
         enabled_features = enable_delta_features(
             DeltaFeatureMutationOptions(
                 path=spec.table_uri,
@@ -1404,6 +1510,16 @@ class WritePipeline:
             spec=spec,
             runtime_profile=self.runtime_profile,
         )
+        constraint_status = _apply_delta_check_constraints(
+            spec=spec,
+            runtime_profile=self.runtime_profile,
+        )
+        self._record_delta_mutation(
+            spec=spec,
+            delta_result=delta_result,
+            operation="write",
+            constraint_status=constraint_status,
+        )
         if not enabled_features:
             enabled_features = dict(spec.table_properties)
         final_version = delta_table_version(
@@ -1414,6 +1530,26 @@ class WritePipeline:
         if final_version is None:
             msg = f"Failed to resolve Delta version after write: {spec.table_uri}"
             raise RuntimeError(msg)
+        if self.runtime_profile is not None:
+            from datafusion_engine.delta_observability import (
+                DeltaFeatureStateArtifact,
+                record_delta_feature_state,
+            )
+
+            commit_run_id = spec.commit_run.run_id if spec.commit_run is not None else None
+            record_delta_feature_state(
+                self.runtime_profile,
+                artifact=DeltaFeatureStateArtifact(
+                    table_uri=spec.table_uri,
+                    enabled_features=enabled_features,
+                    dataset_name=spec.commit_key,
+                    delta_version=final_version,
+                    commit_metadata=spec.commit_metadata,
+                    commit_app_id=spec.commit_app_id,
+                    commit_version=spec.commit_version,
+                    commit_run_id=commit_run_id,
+                ),
+            )
         self._finalize_delta_commit(
             self._DeltaCommitFinalizeContext(
                 spec=spec,
@@ -1914,9 +2050,11 @@ def _delta_storage_options(
     )
     merged_storage = {**base_storage, **option_storage}
     merged_log_storage = {**base_log_storage, **option_log_storage}
-    if not merged_log_storage and merged_storage:
-        merged_log_storage = dict(merged_storage)
-    return merged_storage or None, merged_log_storage or None
+    return normalize_storage_options(
+        merged_storage,
+        merged_log_storage,
+        fallback_log_to_storage=True,
+    )
 
 
 def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext) -> dict[str, str]:

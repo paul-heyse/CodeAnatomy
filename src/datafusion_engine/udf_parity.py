@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_engine.udf_runtime import rust_udf_snapshot, validate_rust_udf_snapshot
+from datafusion_engine.udf_runtime import (
+    rust_udf_snapshot,
+    snapshot_function_names,
+    snapshot_parameter_names,
+    validate_rust_udf_snapshot,
+)
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -135,7 +140,7 @@ def udf_info_schema_parity_report(
         Summary of parity mismatches for diagnostics.
     """
     resolved_snapshot = snapshot or rust_udf_snapshot(ctx)
-    registry_names = _rust_function_names(resolved_snapshot)
+    registry_names = set(snapshot_function_names(resolved_snapshot, include_aliases=True))
     table_names = _rust_table_function_names(resolved_snapshot)
     registry_names.difference_update(table_names)
     try:
@@ -184,7 +189,7 @@ def udf_info_schema_parity_report(
             error="information_schema.parameters unavailable",
         )
     param_rows = list(parameters_table.to_pylist())
-    registry_params = _rust_param_names(resolved_snapshot)
+    registry_params = snapshot_parameter_names(resolved_snapshot)
     allowed_names = {name.lower() for name in registry_names}
     filtered_params = {
         name: params
@@ -205,53 +210,11 @@ def udf_info_schema_parity_report(
     )
 
 
-def _rust_function_names(snapshot: Mapping[str, object]) -> set[str]:
-    names: set[str] = set()
-    for key in ("scalar", "aggregate", "window", "table"):
-        names.update(_iter_snapshot_names(snapshot.get(key)))
-    names.update(_alias_names(snapshot.get("aliases")))
-    return names
-
-
-def _iter_snapshot_names(values: object) -> set[str]:
-    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
-        return {str(value) for value in values if value is not None}
-    return set()
-
-
-def _alias_names(aliases: object) -> set[str]:
-    if not isinstance(aliases, Mapping):
-        return set()
-    names: set[str] = set()
-    for alias, target in aliases.items():
-        if alias is not None:
-            names.add(str(alias))
-        if target is None:
-            continue
-        if isinstance(target, str):
-            names.add(target)
-        elif isinstance(target, Sequence) and not isinstance(target, (str, bytes)):
-            names.update({str(value) for value in target if value is not None})
-    return names
-
-
 def _rust_table_function_names(snapshot: Mapping[str, object]) -> set[str]:
     values = snapshot.get("table")
     if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
         return {str(value) for value in values if value is not None}
     return set()
-
-
-def _rust_param_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
-    params: dict[str, tuple[str, ...]] = {}
-    raw = snapshot.get("parameter_names")
-    if isinstance(raw, Mapping):
-        for key, value in raw.items():
-            if key is None:
-                continue
-            if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-                params[str(key)] = tuple(str(item) for item in value if item is not None)
-    return params
 
 
 def _parameter_name_mismatches(
@@ -305,13 +268,13 @@ def _parameter_entry(
     param_name = row.get("parameter_name")
     if not isinstance(param_name, str):
         return None
-    ordinal = _coerce_ordinal(row.get("ordinal_position"))
+    ordinal = _parse_ordinal(row.get("ordinal_position"))
     if ordinal is None:
         return None
     return (routine.lower(), specific.lower()), ordinal, param_name
 
 
-def _coerce_ordinal(value: object) -> int | None:
+def _parse_ordinal(value: object) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int):
@@ -437,7 +400,7 @@ def udf_signature_conformance_report(
     resolved_snapshot = snapshot if snapshot is not None else rust_udf_snapshot(ctx)
     validate_rust_udf_snapshot(resolved_snapshot)
 
-    all_names = _rust_function_names(resolved_snapshot)
+    all_names = set(snapshot_function_names(resolved_snapshot, include_aliases=True))
     total_count = len(all_names)
 
     # Check return_type visibility via information_schema

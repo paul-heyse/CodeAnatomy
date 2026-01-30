@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import importlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import ModuleType
+from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary, WeakSet
 
 from datafusion import SessionContext
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    from datafusion_engine.function_factory import CreateFunctionConfig, FunctionArgSpec
+    from datafusion_engine.udf_catalog import DataFusionUdfSpec
+
+    class RegisterFunction(Protocol):
+        def __call__(self, ctx: SessionContext, *, config: CreateFunctionConfig) -> None: ...
+
 
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
@@ -22,6 +33,7 @@ _RUST_UDF_POLICIES: WeakKeyDictionary[
     tuple[bool, int | None, int | None],
 ] = WeakKeyDictionary()
 _RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
+_RUST_UDF_DDL: WeakSet[SessionContext] = WeakSet()
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "scalar",
@@ -225,6 +237,116 @@ def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
         msg = "Rust UDF snapshot aliases must map to strings or string lists."
         raise TypeError(msg)
     return mapping
+
+
+def _iter_snapshot_values(values: object) -> set[str]:
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return {str(value) for value in values if value is not None}
+    return set()
+
+
+def _snapshot_alias_names(snapshot: Mapping[str, object]) -> set[str]:
+    raw = snapshot.get("aliases")
+    if not isinstance(raw, Mapping):
+        return set()
+    names: set[str] = set()
+    for alias, target in raw.items():
+        if alias is not None:
+            names.add(str(alias))
+        if target is None:
+            continue
+        if isinstance(target, str):
+            names.add(target)
+        elif isinstance(target, Sequence) and not isinstance(target, (str, bytes, bytearray)):
+            names.update({str(value) for value in target if value is not None})
+    return names
+
+
+def snapshot_function_names(
+    snapshot: Mapping[str, object],
+    *,
+    include_aliases: bool = False,
+    include_custom: bool = False,
+) -> frozenset[str]:
+    """Return function names from a registry snapshot.
+
+    Parameters
+    ----------
+    snapshot
+        Registry snapshot payload.
+    include_aliases
+        Whether to include alias names from the snapshot.
+    include_custom
+        Whether to include custom UDF names.
+
+    Returns
+    -------
+    frozenset[str]
+        Function names extracted from the snapshot.
+    """
+    keys: tuple[str, ...] = ("scalar", "aggregate", "window", "table")
+    if include_custom:
+        keys = (*keys, "custom_udfs")
+    names: set[str] = set()
+    for key in keys:
+        names.update(_iter_snapshot_values(snapshot.get(key)))
+    if include_aliases:
+        names.update(_snapshot_alias_names(snapshot))
+    return frozenset(names)
+
+
+def snapshot_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    """Return a mapping of UDF parameter names from a registry snapshot.
+
+    Returns
+    -------
+    dict[str, tuple[str, ...]]
+        Mapping of function name to parameter names.
+    """
+    raw = snapshot.get("parameter_names")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, params in raw.items():
+        if name is None:
+            continue
+        if params is None or isinstance(params, str):
+            continue
+        if isinstance(params, Iterable) and not isinstance(params, (str, bytes)):
+            resolved[str(name)] = tuple(str(param) for param in params if param is not None)
+    return resolved
+
+
+def snapshot_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    """Return a mapping of UDF return types from a registry snapshot.
+
+    Returns
+    -------
+    dict[str, tuple[str, ...]]
+        Mapping of function name to return type names.
+    """
+    raw = snapshot.get("return_types")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, entries in raw.items():
+        if name is None:
+            continue
+        if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes)):
+            continue
+        resolved[str(name)] = tuple(str(item) for item in entries if item is not None)
+    return resolved
+
+
+def snapshot_alias_mapping(snapshot: Mapping[str, object]) -> dict[str, str]:
+    """Return alias-to-canonical mapping from a registry snapshot.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of alias name to canonical name.
+    """
+    return _alias_to_canonical(snapshot)
 
 
 def _validate_required_snapshot_keys(snapshot: Mapping[str, object]) -> None:
@@ -614,14 +736,154 @@ def register_rust_udfs(
     return _validated_snapshot(ctx)
 
 
+def register_udfs_via_ddl(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+    replace: bool = True,
+) -> None:
+    """Register Rust UDFs via CREATE FUNCTION DDL for catalog visibility.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context used for DDL registration.
+    snapshot
+        Rust UDF registry snapshot payload.
+    replace
+        Whether to replace existing CREATE FUNCTION entries.
+    """
+    if ctx in _RUST_UDF_DDL:
+        return
+    from datafusion_engine.function_factory import register_function
+    from datafusion_engine.udf_catalog import datafusion_udf_specs
+
+    specs = datafusion_udf_specs(registry_snapshot=snapshot)
+    spec_map = {spec.engine_name: spec for spec in specs}
+    _register_udf_specs(ctx, specs=specs, replace=replace, register_fn=register_function)
+    _register_udf_aliases(
+        ctx,
+        spec_map=spec_map,
+        snapshot=snapshot,
+        replace=replace,
+        register_fn=register_function,
+    )
+    _RUST_UDF_DDL.add(ctx)
+
+
+def _register_udf_specs(
+    ctx: SessionContext,
+    *,
+    specs: Sequence[DataFusionUdfSpec],
+    replace: bool,
+    register_fn: RegisterFunction,
+) -> None:
+    for spec in specs:
+        if spec.kind == "table":
+            continue
+        config = _ddl_config_for_spec(spec, target_name=spec.engine_name, replace=replace)
+        register_fn(ctx, config=config)
+
+
+def _register_udf_aliases(
+    ctx: SessionContext,
+    *,
+    spec_map: Mapping[str, DataFusionUdfSpec],
+    snapshot: Mapping[str, object],
+    replace: bool,
+    register_fn: RegisterFunction,
+) -> None:
+    alias_map = snapshot.get("aliases")
+    if not isinstance(alias_map, Mapping):
+        return
+    for base_name, aliases in alias_map.items():
+        if not isinstance(base_name, str):
+            continue
+        spec = spec_map.get(base_name)
+        if spec is None or spec.kind == "table":
+            continue
+        for alias in _alias_list(aliases):
+            if alias == base_name:
+                continue
+            config = _ddl_config_for_spec(
+                spec,
+                target_name=base_name,
+                name_override=alias,
+                replace=replace,
+            )
+            register_fn(ctx, config=config)
+
+
+def _alias_list(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value if item is not None)
+    return ()
+
+
+def _ddl_config_for_spec(
+    spec: DataFusionUdfSpec,
+    *,
+    target_name: str,
+    name_override: str | None = None,
+    replace: bool,
+) -> CreateFunctionConfig:
+    from datafusion_engine.function_factory import CreateFunctionConfig
+
+    args = _ddl_args(spec)
+    return CreateFunctionConfig(
+        name=name_override or spec.engine_name,
+        args=args,
+        return_type=_ddl_return_type(spec),
+        returns_table=spec.kind == "table",
+        body_sql=_ddl_body_sql(target_name, len(args), kind=spec.kind),
+        language=spec.kind,
+        volatility=spec.volatility,
+        replace=replace,
+    )
+
+
+def _ddl_args(spec: DataFusionUdfSpec) -> tuple[FunctionArgSpec, ...]:
+    from datafusion_engine.function_factory import FunctionArgSpec
+
+    arg_names = spec.arg_names
+    if arg_names is None or len(arg_names) != len(spec.input_types):
+        arg_names = tuple(f"arg{idx}" for idx in range(len(spec.input_types)))
+    return tuple(
+        FunctionArgSpec(name=name, dtype=str(dtype))
+        for name, dtype in zip(arg_names, spec.input_types, strict=False)
+    )
+
+
+def _ddl_return_type(spec: DataFusionUdfSpec) -> str | None:
+    if spec.kind == "table":
+        return None
+    return str(spec.return_type)
+
+
+def _ddl_body_sql(target_name: str, arg_count: int, *, kind: str) -> str:
+    if kind in {"window", "table"}:
+        return f"'{target_name}'"
+    if arg_count == 0:
+        return f"{target_name}()"
+    placeholders = ", ".join(f"${index}" for index in range(1, arg_count + 1))
+    return f"{target_name}({placeholders})"
+
+
 __all__ = [
     "RustUdfSnapshot",
     "register_rust_udfs",
+    "register_udfs_via_ddl",
     "rust_udf_docs",
     "rust_udf_snapshot",
     "rust_udf_snapshot_bytes",
     "rust_udf_snapshot_hash",
     "rust_udf_snapshot_payload",
+    "snapshot_alias_mapping",
+    "snapshot_function_names",
+    "snapshot_parameter_names",
+    "snapshot_return_types",
     "udf_names_from_snapshot",
     "validate_required_udfs",
     "validate_rust_udf_snapshot",

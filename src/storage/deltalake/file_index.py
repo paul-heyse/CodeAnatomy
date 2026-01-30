@@ -64,7 +64,7 @@ class FileIndexEntry:
         )
 
 
-def _coerce_int_field(value: object, *, field: str) -> int:
+def _parse_int_field(value: object, *, field: str) -> int:
     """Coerce optional numeric payloads into integer values.
 
     Parameters
@@ -135,9 +135,9 @@ def build_delta_file_index_from_add_actions(
             msg = "Delta add action missing required path field."
             raise ValueError(msg)
         paths.append(str(path_value))
-        sizes.append(_coerce_int_field(action.get("size"), field="size"))
+        sizes.append(_parse_int_field(action.get("size"), field="size"))
         modification_times.append(
-            _coerce_int_field(action.get("modification_time"), field="modification_time")
+            _parse_int_field(action.get("modification_time"), field="modification_time")
         )
         partitions_raw = action.get("partition_values")
         partitions: dict[str, str | None] = {}
@@ -303,7 +303,7 @@ def _extract_stats(stats_column: pa.Array) -> tuple[pa.Array, pa.Array]:
     return pa.array(min_values, type=map_type), pa.array(max_values, type=map_type)
 
 
-def _coerce_adds_table(adds: object) -> pa.Table:
+def _resolve_adds_table(adds: object) -> pa.Table:
     if isinstance(adds, pa.Table):
         return adds
     if isinstance(adds, pa.RecordBatch):

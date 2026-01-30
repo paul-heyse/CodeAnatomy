@@ -13,14 +13,15 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.bundle_extraction import (
+    arrow_schema_from_df,
+    extract_lineage_from_bundle,
+    resolve_required_udfs_from_bundle,
+)
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.schema_contracts import (
-    SchemaContract,
-    SchemaViolation,
-    SchemaViolationType,
-)
+from datafusion_engine.schema_contracts import SchemaContract, ValidationViolation, ViolationType
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.udf_runtime import (
     udf_names_from_snapshot,
@@ -38,7 +39,6 @@ from utils.uuid_factory import uuid7_hex
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
-    from datafusion_engine.lineage_datafusion import LineageReport
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
@@ -82,7 +82,7 @@ class SchemaContractViolationError(ValueError):
         self,
         *,
         table_name: str,
-        violations: Sequence[SchemaViolation],
+        violations: Sequence[ValidationViolation],
     ) -> None:
         self.table_name = table_name
         self.violations = tuple(violations)
@@ -175,7 +175,7 @@ def register_view_graph(
             df=df,
             cache=ViewCacheContext(runtime=runtime, options=resolved),
         )
-        schema = _schema_from_df(registered)
+        schema = arrow_schema_from_df(registered)
         if resolved.validate_schema and node.contract_builder is not None:
             contract = node.contract_builder(schema)
             _validate_schema_contract(ctx, contract, schema=schema)
@@ -380,7 +380,7 @@ def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
         raise ValueError(msg)
     required_udfs = node.plan_bundle.required_udfs
     if not required_udfs:
-        lineage = _lineage_from_bundle(node.plan_bundle)
+        lineage = extract_lineage_from_bundle(node.plan_bundle)
         required_udfs = lineage.required_udfs
     if not required_udfs:
         return
@@ -410,7 +410,7 @@ def _materialize_nodes(
             msg = f"View {node.name!r} missing plan bundle for lineage extraction."
             raise ValueError(msg)
         deps = _deps_from_plan_bundle(node.plan_bundle)
-        required = _required_udfs_from_plan_bundle(node.plan_bundle, snapshot=snapshot)
+        required = resolve_required_udfs_from_bundle(node.plan_bundle, snapshot=snapshot)
         resolved.append(replace(node, deps=deps, required_udfs=required))
     return tuple(resolved)
 
@@ -428,7 +428,7 @@ def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
     tuple[str, ...]
         Dependency names inferred from the plan bundle.
     """
-    lineage = _lineage_from_bundle(bundle)
+    lineage = extract_lineage_from_bundle(bundle)
     return lineage.referenced_tables
 
 
@@ -440,7 +440,7 @@ def _plan_scan_units_for_bundle(
 ) -> tuple[ScanUnit, ...]:
     from datafusion_engine.scan_planner import plan_scan_unit
 
-    lineage = _lineage_from_bundle(bundle)
+    lineage = extract_lineage_from_bundle(bundle)
     scan_units: dict[str, ScanUnit] = {}
     for scan in lineage.scans:
         location = runtime_profile.dataset_location(scan.dataset_name)
@@ -454,51 +454,6 @@ def _plan_scan_units_for_bundle(
         )
         scan_units[unit.key] = unit
     return tuple(sorted(scan_units.values(), key=lambda unit: unit.key))
-
-
-def _required_udfs_from_plan_bundle(
-    bundle: DataFusionPlanBundle,
-    *,
-    snapshot: Mapping[str, object],
-) -> tuple[str, ...]:
-    """Extract required UDFs from DataFusion plan bundle (preferred path).
-
-    Parameters
-    ----------
-    bundle : DataFusionPlanBundle
-        Plan bundle with optimized logical plan.
-    snapshot : Mapping[str, object]
-        Rust UDF snapshot.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Required UDF names.
-    """
-    required_udfs = bundle.required_udfs
-    if not required_udfs:
-        lineage = _lineage_from_bundle(bundle)
-        required_udfs = lineage.required_udfs
-    if not required_udfs:
-        return ()
-    snapshot_names = udf_names_from_snapshot(snapshot)
-    lookup = {name.lower(): name for name in snapshot_names}
-    required = {
-        lookup[name.lower()]
-        for name in required_udfs
-        if isinstance(name, str) and name.lower() in lookup
-    }
-    return tuple(sorted(required))
-
-
-def _lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
-    if bundle.optimized_logical_plan is None:
-        msg = "DataFusion plan bundle missing optimized logical plan."
-        raise ValueError(msg)
-    from datafusion_engine.lineage_datafusion import extract_lineage
-
-    snapshot = bundle.artifacts.udf_snapshot
-    return extract_lineage(bundle.optimized_logical_plan, udf_snapshot=snapshot)
 
 
 def _validate_schema_contract(
@@ -525,21 +480,21 @@ def _validate_schema_contract(
 def _schema_metadata_violations(
     schema: pa.Schema,
     contract: SchemaContract,
-) -> list[SchemaViolation]:
+) -> list[ValidationViolation]:
     expected = contract.schema_metadata or {}
     if not expected:
         return []
     from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 
     actual = schema.metadata or {}
-    violations: list[SchemaViolation] = []
+    violations: list[ValidationViolation] = []
     expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
     if expected_abi is not None:
         actual_abi = schema_identity_hash(schema).encode("utf-8")
         if actual_abi != expected_abi:
             violations.append(
-                SchemaViolation(
-                    violation_type=SchemaViolationType.METADATA_MISMATCH,
+                ValidationViolation(
+                    violation_type=ViolationType.METADATA_MISMATCH,
                     table_name=contract.table_name,
                     column_name=_metadata_key_label(SCHEMA_ABI_FINGERPRINT_META),
                     expected=_format_metadata_value(expected_abi),
@@ -555,8 +510,8 @@ def _schema_metadata_violations(
         if actual_value == expected_value:
             continue
         violations.append(
-            SchemaViolation(
-                violation_type=SchemaViolationType.METADATA_MISMATCH,
+            ValidationViolation(
+                violation_type=ViolationType.METADATA_MISMATCH,
                 table_name=contract.table_name,
                 column_name=_metadata_key_label(key),
                 expected=_format_metadata_value(expected_value),
@@ -604,19 +559,6 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         missing = [name for name in required if name.lower() not in available]
         msg = f"information_schema missing required functions: {sorted(missing)}."
         raise ValueError(msg) from None
-
-
-def _schema_from_df(df: DataFrame) -> pa.Schema:
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve DataFusion schema."
-    raise TypeError(msg)
 
 
 def _schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:

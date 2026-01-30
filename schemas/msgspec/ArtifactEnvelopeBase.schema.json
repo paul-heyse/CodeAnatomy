@@ -1,0 +1,1 @@
+{"$ref":"#/$defs/ArtifactEnvelopeBase","$defs":{"ArtifactEnvelopeBase":{"title":"ArtifactEnvelopeBase","description":"Tagged envelope for artifact payload streams.","type":"object","properties":{"kind":{"enum":["ArtifactEnvelopeBase"]}},"required":["kind"]}}}

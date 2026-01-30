@@ -14,6 +14,7 @@ from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 from opentelemetry import trace as otel_trace
 
+from core.config_base import FingerprintableConfig
 from core.config_base import config_fingerprint as hash_config_fingerprint
 from core_types import DeterminismTier, JsonValue, parse_determinism_tier
 from datafusion_engine.arrow_interop import SchemaLike
@@ -56,7 +57,6 @@ if TYPE_CHECKING:
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
-    from relspec.incremental import IncrementalDiff
 
 try:
     from hamilton_sdk import adapters as hamilton_adapters
@@ -284,20 +284,21 @@ def _resolve_incremental_state_dir(config: Mapping[str, JsonValue]) -> Path | No
     return repo_root / "build" / "state"
 
 
-def _precompute_incremental_diff(
+def _cdf_impacted_tasks(
     *,
     view_ctx: ViewGraphContext,
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
-) -> tuple[IncrementalDiff | None, str | None]:
+) -> tuple[tuple[str, ...] | None, str | None]:
     state_dir = _resolve_incremental_state_dir(config)
     if state_dir is None:
         return None, None
+    from datafusion_engine.dataset_registry import dataset_catalog_from_profile
+    from incremental.cdf_cursors import CdfCursorStore
     from incremental.delta_context import DeltaAccessContext
-    from incremental.plan_fingerprints import read_plan_snapshots
     from incremental.runtime import IncrementalRuntime
     from incremental.state_store import StateStore
-    from relspec.incremental import diff_plan_snapshots
+    from relspec.incremental import CdfImpactRequest, impacted_tasks_for_cdf
 
     try:
         runtime = IncrementalRuntime.build(
@@ -308,24 +309,31 @@ def _precompute_incremental_diff(
         return None, str(state_dir)
     context = DeltaAccessContext(runtime=runtime)
     state_store = StateStore(root=state_dir)
-    previous = read_plan_snapshots(state_store, context=context)
-    diff = diff_plan_snapshots(previous, plan.plan_snapshots)
-    return diff, str(state_dir)
+    cursor_store = CdfCursorStore(cursors_path=state_store.cdf_cursors_path())
+    catalog = dataset_catalog_from_profile(view_ctx.profile)
+    impacted = impacted_tasks_for_cdf(
+        CdfImpactRequest(
+            graph=plan.task_graph,
+            catalog=catalog,
+            context=context,
+            cursor_store=cursor_store,
+            evidence=plan.evidence,
+        )
+    )
+    return impacted, str(state_dir)
 
 
-def _active_tasks_from_incremental_diff(
+def _active_tasks_from_impacted(
     *,
     plan: ExecutionPlan,
-    diff: IncrementalDiff,
+    impacted_tasks: Sequence[str],
 ) -> set[str]:
     from relspec.execution_plan import downstream_task_closure, upstream_task_closure
 
     active = set(plan.active_tasks)
-    rebuild = diff.tasks_requiring_rebuild()
-    rebuild_active = set(rebuild) & active
-    if not rebuild_active:
+    if not impacted_tasks:
         return active
-    impacted = downstream_task_closure(plan.task_graph, rebuild_active)
+    impacted = downstream_task_closure(plan.task_graph, impacted_tasks)
     impacted &= active
     if not impacted:
         return active
@@ -345,31 +353,31 @@ def _plan_with_incremental_pruning(
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
 ) -> ExecutionPlan:
-    diff, state_dir = _precompute_incremental_diff(
+    impacted, state_dir = _cdf_impacted_tasks(
         view_ctx=view_ctx,
         plan=plan,
         config=config,
     )
-    if diff is None and state_dir is None:
+    if impacted is None and state_dir is None:
         return plan
-    plan_with_diff = replace(
+    impacted_names = impacted or ()
+    plan_with_impacts = replace(
         plan,
-        incremental_diff=diff,
-        incremental_state_dir=state_dir,
+        impacted_task_names=tuple(sorted(set(impacted_names))) or plan.impacted_task_names,
     )
-    if diff is None:
-        return plan_with_diff
-    active_from_diff = _active_tasks_from_incremental_diff(
-        plan=plan_with_diff,
-        diff=diff,
+    if impacted is None:
+        return plan_with_impacts
+    active_from_cdf = _active_tasks_from_impacted(
+        plan=plan_with_impacts,
+        impacted_tasks=impacted_names,
     )
-    if active_from_diff == set(plan_with_diff.active_tasks):
-        return plan_with_diff
+    if active_from_cdf == set(plan_with_impacts.active_tasks):
+        return plan_with_impacts
     from relspec.execution_plan import prune_execution_plan
 
     return prune_execution_plan(
-        plan_with_diff,
-        active_tasks=active_from_diff,
+        plan_with_impacts,
+        active_tasks=active_from_cdf,
     )
 
 
@@ -1146,7 +1154,7 @@ def _apply_materializers(
 
 
 @dataclass(frozen=True)
-class CachePolicyProfile:
+class CachePolicyProfile(FingerprintableConfig):
     """Explicit cache policy defaults for correctness boundaries."""
 
     name: str
@@ -1154,6 +1162,32 @@ class CachePolicyProfile:
     default_loader_behavior: CacheBehavior
     default_saver_behavior: CacheBehavior
     log_to_file: bool
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for cache policy defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing cache policy defaults.
+        """
+        return {
+            "name": self.name,
+            "default_behavior": self.default_behavior,
+            "default_loader_behavior": self.default_loader_behavior,
+            "default_saver_behavior": self.default_saver_behavior,
+            "log_to_file": self.log_to_file,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for cache policy defaults.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return hash_config_fingerprint(self.fingerprint_payload())
 
 
 CacheBehavior = Literal["default", "disable", "ignore", "recompute"]
@@ -1285,6 +1319,16 @@ def _apply_adapters(
                 collector=context.diagnostics,
             )
         )
+    if bool(config.get("enable_structured_run_logs", True)):
+        from hamilton_pipeline.structured_logs import StructuredLogHook
+
+        builder = builder.with_adapters(
+            StructuredLogHook(
+                profile=context.profile,
+                config=config,
+                plan_signature=context.plan.plan_signature,
+            )
+        )
     if bool(config.get("enable_otel_plan_tracing", True)):
         builder = builder.with_adapters(OtelPlanHook())
     return builder
@@ -1340,6 +1384,9 @@ def build_plan_context(
             plan=resolved_plan,
             config=request.config,
         )
+    from hamilton_pipeline.validators import set_schema_contracts
+
+    set_schema_contracts(resolved_plan.output_contracts)
     modules.append(build_execution_plan_module(resolved_plan))
     modules.append(
         build_task_execution_module(

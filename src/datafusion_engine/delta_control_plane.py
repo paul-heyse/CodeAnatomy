@@ -5,6 +5,7 @@ This module centralizes access to the Rust Delta control plane exposed via
 1. Snapshot and protocol-aware metadata.
 2. Provider construction with session-derived scan configuration.
 3. File-pruned provider construction for scan planning.
+4. Maintenance operations (optimize/vacuum/checkpoint).
 """
 
 from __future__ import annotations
@@ -19,6 +20,11 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.arrow_schema.abi import schema_to_dict
+from datafusion_engine.delta_payload_helpers import (
+    cdf_options_payload,
+    commit_payload,
+    schema_ipc_payload,
+)
 from datafusion_engine.delta_protocol import delta_feature_gate_rust_payload
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.generated.delta_types import (
@@ -28,6 +34,7 @@ from datafusion_engine.generated.delta_types import (
 )
 from schema_spec.system import DeltaScanOptions
 from utils.validation import ensure_mapping
+from utils.value_coercion import coerce_mapping_list
 
 if TYPE_CHECKING:
     from storage.deltalake.delta import DeltaCdfOptions
@@ -323,45 +330,8 @@ def _require_internal_entrypoint(name: str) -> Callable[..., object]:
     return entrypoint
 
 
-def _schema_ipc_payload(schema: object | None) -> bytes | None:
-    """Serialize an Arrow schema to IPC bytes when supported.
-
-    Returns
-    -------
-    bytes | None
-        IPC payload when schema serialization succeeds, otherwise None.
-
-    """
-    if schema is None:
-        return None
-    serialize = getattr(schema, "serialize", None)
-    if not callable(serialize):
-        msg = "Delta scan schema does not support serialize()."
-        _raise_engine_error(msg, kind=ErrorKind.ARROW)
-    buffer = serialize()
-    to_bytes = getattr(buffer, "to_pybytes", None)
-    if not callable(to_bytes):
-        msg = "Delta scan schema serialize() did not return a compatible buffer."
-        _raise_engine_error(msg, kind=ErrorKind.ARROW)
-    payload = to_bytes()
-    if isinstance(payload, bytes):
-        return payload
-    if isinstance(payload, bytearray):
-        return bytes(payload)
-    if isinstance(payload, memoryview):
-        return payload.tobytes()
-    msg = "Delta scan schema serialize() returned unsupported buffer type."
-    _raise_engine_error(msg, kind=ErrorKind.ARROW)
-
-
-def _coerce_add_actions(payload: object | None) -> Sequence[Mapping[str, object]] | None:
-    if payload is None:
-        return None
-    if isinstance(payload, Mapping):
-        return [payload]
-    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        return [entry for entry in payload if isinstance(entry, Mapping)]
-    return None
+def _parse_add_actions(payload: object | None) -> Sequence[Mapping[str, object]] | None:
+    return coerce_mapping_list(payload)
 
 
 def _decode_schema_ipc(payload: bytes) -> pa.Schema:
@@ -380,69 +350,6 @@ def _decode_schema_ipc(payload: bytes) -> pa.Schema:
         _raise_engine_error(msg, kind=ErrorKind.ARROW, exc=exc)
 
 
-def _commit_payload(
-    options: DeltaCommitOptions | None,
-) -> tuple[
-    list[tuple[str, str]] | None,
-    str | None,
-    int | None,
-    int | None,
-    int | None,
-    bool | None,
-]:
-    """Convert commit options into Rust extension payload values.
-
-    Returns
-    -------
-    tuple[list[tuple[str, str]] | None, str | None, int | None, int | None, int | None, bool | None]
-        Commit metadata and idempotent transaction fields for Rust calls.
-    """
-    if options is None:
-        return None, None, None, None, None, None
-    metadata_items = sorted((str(key), str(value)) for key, value in options.metadata.items())
-    metadata_payload = metadata_items or None
-    app_id: str | None = None
-    app_version: int | None = None
-    app_last_updated: int | None = None
-    if options.app_transaction is not None:
-        app_id = options.app_transaction.app_id
-        app_version = options.app_transaction.version
-        app_last_updated = options.app_transaction.last_updated
-    return (
-        metadata_payload,
-        app_id,
-        app_version,
-        app_last_updated,
-        options.max_retries,
-        options.create_checkpoint,
-    )
-
-
-def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object]:
-    """Return a normalized payload for CDF options.
-
-    Returns
-    -------
-    dict[str, object]
-        Payload describing the requested CDF window.
-    """
-    if options is None:
-        return {
-            "starting_version": None,
-            "ending_version": None,
-            "starting_timestamp": None,
-            "ending_timestamp": None,
-            "allow_out_of_range": False,
-        }
-    return {
-        "starting_version": options.starting_version,
-        "ending_version": options.ending_version,
-        "starting_timestamp": options.starting_timestamp,
-        "ending_timestamp": options.ending_timestamp,
-        "allow_out_of_range": options.allow_out_of_range,
-    }
-
-
 def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> object:
     """Convert Python CDF options into the Rust extension options type.
 
@@ -457,7 +364,7 @@ def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> obje
         msg = "datafusion._internal.DeltaCdfOptions is unavailable."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
     ext_options = options_type()
-    payload = _cdf_options_payload(options)
+    payload = cdf_options_payload(options)
     ext_options.starting_version = payload["starting_version"]
     ext_options.ending_version = payload["ending_version"]
     ext_options.starting_timestamp = payload["starting_timestamp"]
@@ -513,7 +420,7 @@ def delta_provider_from_session(
 
     """
     provider_factory = _require_internal_entrypoint("delta_table_provider_from_session")
-    schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
+    schema_ipc = schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
@@ -545,7 +452,7 @@ def delta_provider_from_session(
         snapshot=snapshot,
         scan_config=scan_config,
         scan_effective=_scan_effective_payload(scan_config),
-        add_actions=_coerce_add_actions(payload.get("add_actions")),
+        add_actions=_parse_add_actions(payload.get("add_actions")),
         predicate_error=cast("str | None", payload.get("predicate_error")),
     )
 
@@ -574,7 +481,7 @@ def delta_provider_with_files(
 
     """
     provider_factory = _require_internal_entrypoint("delta_table_provider_with_files")
-    schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
+    schema_ipc = schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
@@ -606,7 +513,7 @@ def delta_provider_with_files(
         snapshot=snapshot,
         scan_config=scan_config,
         scan_effective=_scan_effective_payload(scan_config),
-        add_actions=_coerce_add_actions(payload.get("add_actions")),
+        add_actions=_parse_add_actions(payload.get("add_actions")),
     )
 
 
@@ -743,7 +650,7 @@ def delta_write_ipc(
     write_fn = _require_internal_entrypoint("delta_write_ipc")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     partitions_payload = list(request.partition_columns) if request.partition_columns else None
     response = write_fn(
@@ -762,12 +669,12 @@ def delta_write_ipc(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_write_ipc")
 
@@ -795,7 +702,7 @@ def delta_delete(
     delete_fn = _require_internal_entrypoint("delta_delete")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     response = delete_fn(
         ctx,
@@ -809,12 +716,12 @@ def delta_delete(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_delete")
 
@@ -902,7 +809,7 @@ def delta_update(
     update_fn = _require_internal_entrypoint("delta_update")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     updates_payload = sorted((str(key), str(value)) for key, value in request.updates.items())
     response = update_fn(
@@ -918,12 +825,12 @@ def delta_update(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_update")
 
@@ -951,7 +858,7 @@ def delta_merge(
     merge_fn = _require_internal_entrypoint("delta_merge")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     matched_payload = sorted(
         (str(key), str(value)) for key, value in request.matched_updates.items()
@@ -980,12 +887,12 @@ def delta_merge(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_merge")
 
@@ -1013,7 +920,7 @@ def delta_optimize_compact(
     optimize_fn = _require_internal_entrypoint("delta_optimize_compact")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
     response = optimize_fn(
         ctx,
@@ -1027,12 +934,12 @@ def delta_optimize_compact(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_optimize_compact")
 
@@ -1060,7 +967,7 @@ def delta_vacuum(
     vacuum_fn = _require_internal_entrypoint("delta_vacuum")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     response = vacuum_fn(
         ctx,
         request.table_uri,
@@ -1075,12 +982,12 @@ def delta_vacuum(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_vacuum")
 
@@ -1108,7 +1015,7 @@ def delta_restore(
     restore_fn = _require_internal_entrypoint("delta_restore")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     response = restore_fn(
         ctx,
         request.table_uri,
@@ -1121,12 +1028,12 @@ def delta_restore(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_restore")
 
@@ -1157,7 +1064,7 @@ def delta_set_properties(
     set_fn = _require_internal_entrypoint("delta_set_properties")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
     response = set_fn(
         ctx,
@@ -1170,12 +1077,12 @@ def delta_set_properties(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_set_properties")
 
@@ -1206,7 +1113,7 @@ def delta_add_features(
     add_fn = _require_internal_entrypoint("delta_add_features")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     features_payload = [str(feature) for feature in request.features]
     response = add_fn(
         ctx,
@@ -1220,12 +1127,12 @@ def delta_add_features(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_add_features")
 
@@ -1249,7 +1156,7 @@ def delta_add_constraints(
     add_fn = _require_internal_entrypoint("delta_add_constraints")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = sorted(
         (str(name), str(expr)) for name, expr in request.constraints.items()
     )
@@ -1264,12 +1171,12 @@ def delta_add_constraints(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_add_constraints")
 
@@ -1293,7 +1200,7 @@ def delta_drop_constraints(
     drop_fn = _require_internal_entrypoint("delta_drop_constraints")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
-    commit_payload = _commit_payload(request.commit_options)
+    commit_payload_values = commit_payload(request.commit_options)
     response = drop_fn(
         ctx,
         request.table_uri,
@@ -1306,12 +1213,12 @@ def delta_drop_constraints(
         gate_payload[1],
         gate_payload[2],
         gate_payload[3],
-        commit_payload[0],
-        commit_payload[1],
-        commit_payload[2],
-        commit_payload[3],
-        commit_payload[4],
-        commit_payload[5],
+        commit_payload_values[0],
+        commit_payload_values[1],
+        commit_payload_values[2],
+        commit_payload_values[3],
+        commit_payload_values[4],
+        commit_payload_values[5],
     )
     return ensure_mapping(response, label="delta_drop_constraints")
 

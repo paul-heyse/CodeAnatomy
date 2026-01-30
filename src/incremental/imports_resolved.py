@@ -63,7 +63,7 @@ def _module_index_map(
     return module_map
 
 
-def _coerce_import_row(
+def _parse_import_row(
     row: dict[str, object],
 ) -> tuple[str, str, str | None, str | None, str, int, bool] | None:
     importer_file_id = row.get("file_id")
@@ -95,7 +95,7 @@ def _resolve_import_row(
     *,
     module_map: Mapping[str, tuple[str | None, bool]],
 ) -> tuple[str, str, str, str | None, bool] | None:
-    coerced = _coerce_import_row(row)
+    coerced = _parse_import_row(row)
     if coerced is None:
         return None
     (

@@ -21,6 +21,12 @@ from datafusion_engine.arrow_schema.field_builders import (
 )
 from datafusion_engine.dataset_registration import register_dataset_df
 from datafusion_engine.dataset_registry import DatasetLocation
+from datafusion_engine.delta_payload_helpers import (
+    msgpack_or_none,
+    msgpack_payload,
+    string_list,
+    string_map,
+)
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import (
     WriteFormat,
@@ -28,7 +34,7 @@ from datafusion_engine.write_pipeline import (
     WritePipeline,
     WriteRequest,
 )
-from serde_msgspec import dumps_msgpack, to_builtins
+from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -94,7 +100,7 @@ class DeltaScanPlanArtifact:
 
 @dataclass(frozen=True)
 class DeltaMaintenanceArtifact:
-    """Maintenance artifact payload for Delta tables."""
+    """Maintenance artifact payload for Delta tables (optimize/vacuum/checkpoint)."""
 
     table_uri: str
     operation: str
@@ -103,6 +109,20 @@ class DeltaMaintenanceArtifact:
     retention_hours: int | None = None
     dry_run: bool | None = None
     commit_metadata: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class DeltaFeatureStateArtifact:
+    """Feature state artifact payload for Delta tables."""
+
+    table_uri: str
+    enabled_features: Mapping[str, str]
+    dataset_name: str | None = None
+    delta_version: int | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    commit_app_id: str | None = None
+    commit_version: int | None = None
+    commit_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,17 +166,17 @@ def record_delta_snapshot(
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
-        "delta_version": _coerce_int(snapshot.get("version")),
-        "snapshot_timestamp": _coerce_int(snapshot.get("snapshot_timestamp")),
-        "min_reader_version": _coerce_int(snapshot.get("min_reader_version")),
-        "min_writer_version": _coerce_int(snapshot.get("min_writer_version")),
-        "reader_features": _string_list(snapshot.get("reader_features") or ()),
-        "writer_features": _string_list(snapshot.get("writer_features") or ()),
-        "table_properties": _string_map(snapshot.get("table_properties") or {}),
-        "schema_msgpack": _msgpack_payload(_schema_payload(snapshot.get("schema_json"))),
+        "delta_version": coerce_int(snapshot.get("version")),
+        "snapshot_timestamp": coerce_int(snapshot.get("snapshot_timestamp")),
+        "min_reader_version": coerce_int(snapshot.get("min_reader_version")),
+        "min_writer_version": coerce_int(snapshot.get("min_writer_version")),
+        "reader_features": string_list(snapshot.get("reader_features") or ()),
+        "writer_features": string_list(snapshot.get("writer_features") or ()),
+        "table_properties": string_map(snapshot.get("table_properties") or {}),
+        "schema_msgpack": msgpack_payload(_schema_payload(snapshot.get("schema_json"))),
         "schema_identity_hash": artifact.schema_identity_hash,
         "ddl_fingerprint": artifact.ddl_fingerprint,
-        "partition_columns": _string_list(snapshot.get("partition_columns") or ()),
+        "partition_columns": string_list(snapshot.get("partition_columns") or ()),
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
@@ -203,19 +223,19 @@ def record_delta_mutation(
         "table_uri": artifact.table_uri,
         "operation": artifact.operation,
         "mode": artifact.mode,
-        "delta_version": _coerce_int(report.get("version")),
-        "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
-        "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
-        "reader_features": _string_list(snapshot_payload.get("reader_features") or ()),
-        "writer_features": _string_list(snapshot_payload.get("writer_features") or ()),
+        "delta_version": coerce_int(report.get("version")),
+        "min_reader_version": coerce_int(snapshot_payload.get("min_reader_version")),
+        "min_writer_version": coerce_int(snapshot_payload.get("min_writer_version")),
+        "reader_features": string_list(snapshot_payload.get("reader_features") or ()),
+        "writer_features": string_list(snapshot_payload.get("writer_features") or ()),
         "table_properties": table_properties,
         "constraint_status": artifact.constraint_status,
-        "constraint_violations": _string_list(artifact.constraint_violations),
+        "constraint_violations": string_list(artifact.constraint_violations),
         "commit_app_id": artifact.commit_app_id,
         "commit_version": artifact.commit_version,
         "commit_run_id": artifact.commit_run_id,
-        "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
-        "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
+        "commit_metadata": string_map(dict(artifact.commit_metadata or {})),
+        "metrics_msgpack": msgpack_payload(report.get("metrics") or {}),
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
@@ -228,6 +248,28 @@ def record_delta_mutation(
             commit_metadata=artifact.commit_metadata,
         )
     )
+
+
+def record_delta_feature_state(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    artifact: DeltaFeatureStateArtifact,
+) -> None:
+    """Record Delta feature state adoption in diagnostics."""
+    if profile is None:
+        return
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "dataset_name": artifact.dataset_name,
+        "table_uri": artifact.table_uri,
+        "delta_version": artifact.delta_version,
+        "enabled_features": string_map(dict(artifact.enabled_features)),
+        "commit_metadata": string_map(dict(artifact.commit_metadata or {})),
+        "commit_app_id": artifact.commit_app_id,
+        "commit_version": artifact.commit_version,
+        "commit_run_id": artifact.commit_run_id,
+    }
+    profile.record_artifact("datafusion_delta_features_v1", payload)
 
 
 def record_delta_scan_plan(
@@ -262,9 +304,9 @@ def record_delta_scan_plan(
         "total_files": artifact.total_files,
         "candidate_files": artifact.candidate_files,
         "pruned_files": artifact.pruned_files,
-        "pushed_filters": _string_list(artifact.pushed_filters),
-        "projected_columns": _string_list(artifact.projected_columns),
-        "delta_protocol_msgpack": _msgpack_or_none(artifact.delta_protocol),
+        "pushed_filters": string_list(artifact.pushed_filters),
+        "projected_columns": string_list(artifact.projected_columns),
+        "delta_protocol_msgpack": msgpack_or_none(artifact.delta_protocol),
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
@@ -314,11 +356,11 @@ def record_delta_maintenance(
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "operation": artifact.operation,
-        "delta_version": _coerce_int(report.get("version")),
-        "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
-        "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
-        "reader_features": _string_list(snapshot_payload.get("reader_features") or ()),
-        "writer_features": _string_list(snapshot_payload.get("writer_features") or ()),
+        "delta_version": coerce_int(report.get("version")),
+        "min_reader_version": coerce_int(snapshot_payload.get("min_reader_version")),
+        "min_writer_version": coerce_int(snapshot_payload.get("min_writer_version")),
+        "reader_features": string_list(snapshot_payload.get("reader_features") or ()),
+        "writer_features": string_list(snapshot_payload.get("writer_features") or ()),
         "table_properties": table_properties,
         "log_retention_duration": log_retention,
         "checkpoint_interval": checkpoint_interval,
@@ -326,8 +368,8 @@ def record_delta_maintenance(
         "checkpoint_protection": checkpoint_protection,
         "retention_hours": artifact.retention_hours,
         "dry_run": artifact.dry_run,
-        "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
-        "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
+        "metrics_msgpack": msgpack_payload(report.get("metrics") or {}),
+        "commit_metadata": string_map(dict(artifact.commit_metadata or {})),
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
@@ -528,32 +570,6 @@ def _snapshot_table_properties(snapshot_payload: Mapping[str, object]) -> dict[s
     return {str(key): str(value) for key, value in dict(properties).items()}
 
 
-def _msgpack_payload(value: object) -> bytes:
-    return dumps_msgpack(to_builtins(value, str_keys=True))
-
-
-def _msgpack_or_none(value: object | None) -> bytes | None:
-    if value is None:
-        return None
-    return _msgpack_payload(value)
-
-
-def _string_list(value: object) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, memoryview)):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
-def _string_map(value: object) -> dict[str, str]:
-    if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items()}
-    return {}
-
-
 def _schema_payload(value: object) -> object:
     empty: dict[str, object] = {}
     if value is None:
@@ -568,30 +584,17 @@ def _schema_payload(value: object) -> object:
     return value
 
 
-def _coerce_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
 __all__ = [
     "DELTA_MAINTENANCE_TABLE_NAME",
     "DELTA_MUTATION_TABLE_NAME",
     "DELTA_SCAN_PLAN_TABLE_NAME",
     "DELTA_SNAPSHOT_TABLE_NAME",
+    "DeltaFeatureStateArtifact",
     "DeltaMaintenanceArtifact",
     "DeltaMutationArtifact",
     "DeltaScanPlanArtifact",
     "DeltaSnapshotArtifact",
+    "record_delta_feature_state",
     "record_delta_maintenance",
     "record_delta_mutation",
     "record_delta_scan_plan",

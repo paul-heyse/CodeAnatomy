@@ -9,12 +9,22 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_log_storage_options
+from datafusion_engine.dataset_registry import (
+    DatasetLocation,
+    resolve_delta_feature_gate,
+    resolve_delta_log_storage_options,
+)
+from datafusion_engine.delta_maintenance import (
+    DeltaMaintenancePlanInput,
+    resolve_delta_maintenance_plan,
+    run_delta_maintenance,
+)
 from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
+from storage.deltalake.delta import delta_table_version
 
 
 @dataclass(frozen=True)
@@ -156,9 +166,63 @@ def register_delta_df(
     )
 
 
+def run_delta_maintenance_if_configured(
+    context: DeltaAccessContext,
+    *,
+    table_uri: str,
+    dataset_name: str | None,
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+) -> None:
+    """Run Delta maintenance when policies are configured.
+
+    Parameters
+    ----------
+    context
+        Delta access context with runtime profile.
+    table_uri
+        Delta table URI for maintenance actions.
+    dataset_name
+        Optional dataset name for policy resolution.
+    storage_options
+        Storage options for the Delta table.
+    log_storage_options
+        Log storage options for the Delta table.
+    """
+    runtime_profile = context.runtime.profile
+    dataset_location = runtime_profile.dataset_location(dataset_name) if dataset_name else None
+    plan = resolve_delta_maintenance_plan(
+        DeltaMaintenancePlanInput(
+            dataset_location=dataset_location,
+            table_uri=table_uri,
+            dataset_name=dataset_name,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            delta_version=delta_table_version(
+                table_uri,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+            ),
+            delta_timestamp=None,
+            feature_gate=resolve_delta_feature_gate(dataset_location)
+            if dataset_location is not None
+            else None,
+            policy=None,
+        )
+    )
+    if plan is None:
+        return
+    run_delta_maintenance(
+        context.runtime.session_runtime().ctx,
+        plan=plan,
+        runtime_profile=runtime_profile,
+    )
+
+
 __all__ = [
     "DeltaAccessContext",
     "DeltaStorageOptions",
     "read_delta_table_via_facade",
     "register_delta_df",
+    "run_delta_maintenance_if_configured",
 ]

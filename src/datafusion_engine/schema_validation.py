@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -17,8 +17,10 @@ from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema_introspection import table_constraint_rows
+from datafusion_engine.schema_spec_protocol import ArrowFieldSpec, TableSchemaSpec
 from datafusion_engine.session_helpers import deregister_table, register_temp_table, temp_table
 from datafusion_engine.sql_options import sql_options_for_profile
+from validation.violations import ValidationViolation, ViolationType
 
 if TYPE_CHECKING:
     from datafusion import SQLOptions
@@ -26,39 +28,42 @@ if TYPE_CHECKING:
     from datafusion.expr import Expr
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.schema_contracts import SchemaContract, TableConstraints
 
 
-class _ArrowFieldSpec(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def dtype(self) -> DataTypeLike: ...
+@dataclass(frozen=True)
+class _SchemaContractAdapter:
+    contract: SchemaContract
 
     @property
-    def nullable(self) -> bool: ...
+    def name(self) -> str:
+        return self.contract.table_name
 
     @property
-    def metadata(self) -> Mapping[str, str]: ...
+    def fields(self) -> Sequence[ArrowFieldSpec]:
+        return self.contract.columns
 
     @property
-    def encoding(self) -> str | None: ...
-
-
-class _TableSchemaSpec(Protocol):
-    @property
-    def name(self) -> str: ...
+    def key_fields(self) -> Sequence[str]:
+        return ()
 
     @property
-    def fields(self) -> Sequence[_ArrowFieldSpec]: ...
+    def required_non_null(self) -> Sequence[str]:
+        return tuple(field.name for field in self.contract.columns if not field.nullable)
 
-    @property
-    def key_fields(self) -> Sequence[str]: ...
+    def to_arrow_schema(self) -> SchemaLike:
+        return self.contract.to_arrow_schema()
 
-    @property
-    def required_non_null(self) -> Sequence[str]: ...
 
-    def to_arrow_schema(self) -> SchemaLike: ...
+def _constraints_from_spec(spec: TableSchemaSpec) -> TableConstraints:
+    from datafusion_engine.schema_contracts import TableConstraints
+
+    primary_key = tuple(spec.key_fields)
+    not_null = tuple(spec.required_non_null)
+    return TableConstraints(
+        primary_key=primary_key or None,
+        not_null=not_null or None,
+    )
 
 
 @dataclass(frozen=True)
@@ -73,7 +78,7 @@ class ArrowValidationOptions:
 
 
 @dataclass(frozen=True)
-class ValidationReport:
+class SchemaValidationReport:
     """Validation output and metadata."""
 
     valid: bool
@@ -84,19 +89,12 @@ class ValidationReport:
 
 
 @dataclass(frozen=True)
-class _ValidationErrorEntry:
-    code: str
-    column: str | None
-    count: int
-
-
-@dataclass(frozen=True)
 class _ValidationContext:
     aligned_name: str
     original_name: str
     aligned_table: ArrowTable
     original_table: ArrowTable
-    spec: _TableSchemaSpec
+    spec: TableSchemaSpec
     info: AlignmentInfo
     row_count: int
 
@@ -158,11 +156,15 @@ def _resolve_key_fields(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
     session: SessionContext,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     sql_options: SQLOptions,
 ) -> Sequence[str]:
+    from datafusion_engine.schema_contracts import constraint_key_fields
+
+    constraints = _constraints_from_spec(spec)
+    default_keys = constraint_key_fields(constraints) or spec.key_fields
     if runtime_profile is None or not runtime_profile.enable_information_schema:
-        return spec.key_fields
+        return default_keys
     try:
         rows = table_constraint_rows(
             session,
@@ -170,9 +172,9 @@ def _resolve_key_fields(
             sql_options=sql_options,
         )
     except (RuntimeError, TypeError, ValueError):
-        return spec.key_fields
+        return default_keys
     resolved = _constraint_key_fields(rows)
-    return resolved or spec.key_fields
+    return resolved or default_keys
 
 
 @lru_cache(maxsize=128)
@@ -213,7 +215,7 @@ def _count_rows(
 def _align_for_validation(
     table: TableLike,
     *,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     options: ArrowValidationOptions,
 ) -> tuple[TableLike, AlignmentInfo]:
     keep_extra = options.strict is False
@@ -272,38 +274,54 @@ def _duplicate_row_count(
     return int(value or 0)
 
 
-def _missing_column_errors(info: AlignmentInfo, row_count: int) -> list[_ValidationErrorEntry]:
+def _missing_column_errors(info: AlignmentInfo, row_count: int) -> list[ValidationViolation]:
     return [
-        _ValidationErrorEntry("missing_column", name, row_count) for name in info["missing_cols"]
+        ValidationViolation(
+            violation_type=ViolationType.MISSING_COLUMN,
+            column_name=name,
+            count=row_count,
+        )
+        for name in info["missing_cols"]
     ]
 
 
-def _extra_column_errors(info: AlignmentInfo, row_count: int) -> list[_ValidationErrorEntry]:
-    return [_ValidationErrorEntry("extra_column", name, row_count) for name in info["dropped_cols"]]
+def _extra_column_errors(info: AlignmentInfo, row_count: int) -> list[ValidationViolation]:
+    return [
+        ValidationViolation(
+            violation_type=ViolationType.EXTRA_COLUMN,
+            column_name=name,
+            count=row_count,
+        )
+        for name in info["dropped_cols"]
+    ]
 
 
 def _type_mismatch_errors(
     table: TableLike,
     *,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     row_count: int,
-) -> list[_ValidationErrorEntry]:
+) -> list[ValidationViolation]:
     return [
-        _ValidationErrorEntry("type_mismatch", field.name, row_count)
+        ValidationViolation(
+            violation_type=ViolationType.TYPE_MISMATCH,
+            column_name=field.name,
+            count=row_count,
+        )
         for field in spec.fields
         if field.name in table.column_names and table.schema.field(field.name).type != field.dtype
     ]
 
 
-def _coerce_type_mismatch_errors(
+def _cast_type_mismatch_errors(
     ctx: SessionContext,
     *,
     table_name: str,
     table: TableLike,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     sql_options: SQLOptions,
-) -> list[_ValidationErrorEntry]:
-    entries: list[_ValidationErrorEntry] = []
+) -> list[ValidationViolation]:
+    entries: list[ValidationViolation] = []
     for field in spec.fields:
         if field.name not in table.column_names:
             continue
@@ -317,7 +335,13 @@ def _coerce_type_mismatch_errors(
             sql_options=sql_options,
         )
         if count:
-            entries.append(_ValidationErrorEntry("type_mismatch", field.name, count))
+            entries.append(
+                ValidationViolation(
+                    violation_type=ViolationType.TYPE_MISMATCH,
+                    column_name=field.name,
+                    count=count,
+                )
+            )
     return entries
 
 
@@ -328,7 +352,7 @@ def _null_violation_results(
     required_fields: Sequence[str],
     missing_cols: Sequence[str],
     sql_options: SQLOptions,
-) -> tuple[list[_ValidationErrorEntry], Expr | None]:
+) -> tuple[list[ValidationViolation], Expr | None]:
     required_present = [name for name in required_fields if name not in missing_cols]
     if not required_present:
         return [], None
@@ -344,12 +368,18 @@ def _null_violation_results(
         case_expr = f.when(null_check, lit(1)).otherwise(lit(0))
         selections.append(f.sum(case_expr).alias(alias))
     table = _expr_table(ctx.table(table_name).aggregate([], selections))
-    entries: list[_ValidationErrorEntry] = []
+    entries: list[ValidationViolation] = []
     for name, alias in alias_by_field.items():
         value = table[alias][0].as_py() if table.num_rows else 0
         count = int(value or 0)
         if count:
-            entries.append(_ValidationErrorEntry("null_violation", name, count))
+            entries.append(
+                ValidationViolation(
+                    violation_type=ViolationType.NULL_VIOLATION,
+                    column_name=name,
+                    count=count,
+                )
+            )
     invalid_expr = _or_expressions(null_checks)
     return entries, invalid_expr
 
@@ -396,12 +426,17 @@ class _KeyFieldInputs:
 
 def _key_field_errors(
     inputs: _KeyFieldInputs,
-) -> list[_ValidationErrorEntry]:
+) -> list[ValidationViolation]:
     if not inputs.key_fields:
         return []
     missing_keys = missing_key_fields(inputs.key_fields, missing_cols=inputs.missing_cols)
     entries = [
-        _ValidationErrorEntry("missing_key_field", key, inputs.row_count) for key in missing_keys
+        ValidationViolation(
+            violation_type=ViolationType.MISSING_KEY_FIELD,
+            column_name=key,
+            count=inputs.row_count,
+        )
+        for key in missing_keys
     ]
     if not missing_keys:
         dup_count = _duplicate_row_count(
@@ -412,14 +447,20 @@ def _key_field_errors(
         )
         if dup_count:
             key_label = ",".join(inputs.key_fields)
-            entries.append(_ValidationErrorEntry("duplicate_keys", key_label, dup_count))
+            entries.append(
+                ValidationViolation(
+                    violation_type=ViolationType.DUPLICATE_KEYS,
+                    column_name=key_label,
+                    count=dup_count,
+                )
+            )
     return entries
 
 
-def _error_table(entries: Sequence[_ValidationErrorEntry]) -> TableLike:
-    codes = [entry.code for entry in entries]
-    columns = [entry.column for entry in entries]
-    counts = [entry.count for entry in entries]
+def _error_table(entries: Sequence[ValidationViolation]) -> TableLike:
+    codes = [entry.violation_type.value for entry in entries]
+    columns = [entry.column_name for entry in entries]
+    counts = [entry.count or 0 for entry in entries]
     return pa.table(
         {
             "error_code": pa.array(codes, type=pa.string()),
@@ -461,10 +502,10 @@ def _build_validation_report(
     validated: TableLike,
     invalid_rows: TableLike | None,
     invalid_row_count: int,
-    error_entries: Sequence[_ValidationErrorEntry],
+    error_entries: Sequence[ValidationViolation],
     options: ArrowValidationOptions,
-) -> ValidationReport:
-    total_error_rows = sum(entry.count for entry in error_entries)
+) -> SchemaValidationReport:
+    total_error_rows = sum(entry.count or 0 for entry in error_entries)
     total_errors = len(error_entries)
     valid = total_errors == 0 and invalid_row_count == 0
     errors = _error_table(error_entries) if options.emit_error_table else _empty_error_table()
@@ -474,7 +515,7 @@ def _build_validation_report(
         total_error_rows=total_error_rows,
         total_invalid_rows=invalid_row_count,
     )
-    return ValidationReport(
+    return SchemaValidationReport(
         valid=valid,
         validated=validated,
         errors=errors,
@@ -490,14 +531,14 @@ def _collect_validation_results(
     options: ArrowValidationOptions,
     key_fields: Sequence[str],
     sql_options: SQLOptions,
-) -> tuple[list[_ValidationErrorEntry], TableLike, TableLike | None, int]:
-    error_entries: list[_ValidationErrorEntry] = []
+) -> tuple[list[ValidationViolation], TableLike, TableLike | None, int]:
+    error_entries: list[ValidationViolation] = []
     error_entries.extend(_missing_column_errors(context.info, context.row_count))
     if options.strict is True:
         error_entries.extend(_extra_column_errors(context.info, context.row_count))
     if options.coerce:
         error_entries.extend(
-            _coerce_type_mismatch_errors(
+            _cast_type_mismatch_errors(
                 session,
                 table_name=context.original_name,
                 table=context.original_table,
@@ -551,7 +592,7 @@ def _prepare_validation_context(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
     table: TableLike,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     options: ArrowValidationOptions,
 ) -> tuple[SessionContext, _ValidationContext, str, str]:
     session = _session_context(runtime_profile)
@@ -580,15 +621,15 @@ def _prepare_validation_context(
 def validate_table(
     table: TableLike,
     *,
-    spec: _TableSchemaSpec,
+    spec: TableSchemaSpec,
     options: ArrowValidationOptions | None = None,
     runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> ValidationReport:
+) -> SchemaValidationReport:
     """Validate an Arrow table against a schema spec.
 
     Returns
     -------
-    ValidationReport
+    SchemaValidationReport
         Validation report with invalid rows and stats.
     """
     options = options or ArrowValidationOptions()
@@ -629,7 +670,30 @@ def validate_table(
     )
 
 
-def required_field_names(spec: _TableSchemaSpec) -> tuple[str, ...]:
+def validate_schema_contract(
+    table: TableLike,
+    *,
+    contract: SchemaContract,
+    options: ArrowValidationOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> SchemaValidationReport:
+    """Validate a table against a SchemaContract definition.
+
+    Returns
+    -------
+    SchemaValidationReport
+        Validation report with invalid rows and stats.
+    """
+    adapter = _SchemaContractAdapter(contract=contract)
+    return validate_table(
+        table,
+        spec=adapter,
+        options=options,
+        runtime_profile=runtime_profile,
+    )
+
+
+def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
     """Return required field names (explicit or non-nullable).
 
     Returns
@@ -637,7 +701,7 @@ def required_field_names(spec: _TableSchemaSpec) -> tuple[str, ...]:
     tuple[str, ...]
         Required field names.
     """
-    required = set(spec.required_non_null)
+    required = set(_constraints_from_spec(spec).required_non_null())
     return tuple(
         field.name for field in spec.fields if field.name in required or not field.nullable
     )
@@ -657,8 +721,9 @@ def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> t
 
 __all__ = [
     "ArrowValidationOptions",
-    "ValidationReport",
+    "SchemaValidationReport",
     "missing_key_fields",
     "required_field_names",
+    "validate_schema_contract",
     "validate_table",
 ]

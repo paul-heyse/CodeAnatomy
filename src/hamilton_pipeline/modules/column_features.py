@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import polars as pl
-from hamilton.function_modifiers import check_output_custom, tag
+from hamilton.function_modifiers import check_output_custom
 from hamilton.plugins.h_polars import with_columns
 
 from cpg.emit_specs import _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from datafusion_engine.arrow_interop import TableLike
-from hamilton_pipeline.validators import NonEmptyTableValidator, TableSchemaValidator
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
+from hamilton_pipeline.validators import (
+    NonEmptyTableValidator,
+    SchemaContractValidator,
+    TableSchemaValidator,
+)
 
 
 def _to_polars(table: TableLike) -> pl.DataFrame:
@@ -24,27 +29,27 @@ def _from_polars(frame: pl.DataFrame) -> TableLike:
     return frame.to_arrow()
 
 
-@tag(layer="quality", kind="column", artifact="cpg_nodes_path_depth")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_nodes_path_depth"))
 def cpg_nodes_path_depth(path: pl.Series) -> pl.Series:
     return path.fill_null("").str.count_matches("/")
 
 
-@tag(layer="quality", kind="column", artifact="cpg_nodes_span_length")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_nodes_span_length"))
 def cpg_nodes_span_length(bstart: pl.Series, bend: pl.Series) -> pl.Series:
     return (bend - bstart).fill_null(0)
 
 
-@tag(layer="quality", kind="column", artifact="cpg_nodes_has_file_id")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_nodes_has_file_id"))
 def cpg_nodes_has_file_id(file_id: pl.Series) -> pl.Series:
     return file_id.is_not_null()
 
 
-@tag(layer="quality", kind="column", artifact="cpg_nodes_has_task_name")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_nodes_has_task_name"))
 def cpg_nodes_has_task_name(task_name: pl.Series) -> pl.Series:
     return task_name.is_not_null()
 
 
-@tag(layer="execution", artifact="cpg_nodes_polars", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_nodes_polars"))
 def cpg_nodes_polars(cpg_nodes: TableLike) -> pl.DataFrame:
     """Return CPG nodes as a Polars DataFrame.
 
@@ -69,7 +74,7 @@ def cpg_nodes_polars(cpg_nodes: TableLike) -> pl.DataFrame:
         "cpg_nodes_has_task_name",
     ],
 )
-@tag(layer="execution", artifact="cpg_nodes_quality_polars", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_nodes_quality_polars"))
 def cpg_nodes_quality_polars(cpg_nodes_polars: pl.DataFrame) -> pl.DataFrame:
     """Return CPG nodes with quality columns appended.
 
@@ -91,10 +96,11 @@ _CPG_NODES_QUALITY_COLUMNS = (
 
 
 @check_output_custom(
+    SchemaContractValidator(dataset_name="cpg_nodes_quality", importance="warn"),
     TableSchemaValidator(expected_columns=_CPG_NODES_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@tag(layer="execution", artifact="cpg_nodes_quality", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_nodes_quality"))
 def cpg_nodes_quality(cpg_nodes_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG nodes quality output as Arrow.
 
@@ -106,7 +112,7 @@ def cpg_nodes_quality(cpg_nodes_quality_polars: pl.DataFrame) -> TableLike:
     return _from_polars(cpg_nodes_quality_polars)
 
 
-@tag(layer="quality", kind="column", artifact="cpg_props_value_present")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_props_value_present"))
 def cpg_props_value_present(
     value_string: pl.Series,
     value_int: pl.Series,
@@ -123,17 +129,17 @@ def cpg_props_value_present(
     )
 
 
-@tag(layer="quality", kind="column", artifact="cpg_props_value_is_numeric")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_props_value_is_numeric"))
 def cpg_props_value_is_numeric(value_int: pl.Series, value_float: pl.Series) -> pl.Series:
     return value_int.is_not_null() | value_float.is_not_null()
 
 
-@tag(layer="quality", kind="column", artifact="cpg_props_key_length")
+@apply_tag(TagPolicy(layer="quality", kind="column", artifact="cpg_props_key_length"))
 def cpg_props_key_length(prop_key: pl.Series) -> pl.Series:
     return prop_key.fill_null("").str.len_chars()
 
 
-@tag(layer="execution", artifact="cpg_props_polars", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_props_polars"))
 def cpg_props_polars(cpg_props: TableLike) -> pl.DataFrame:
     """Return CPG properties as a Polars DataFrame.
 
@@ -159,7 +165,7 @@ def cpg_props_polars(cpg_props: TableLike) -> pl.DataFrame:
     ],
     select=["cpg_props_value_present", "cpg_props_value_is_numeric", "cpg_props_key_length"],
 )
-@tag(layer="execution", artifact="cpg_props_quality_polars", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_props_quality_polars"))
 def cpg_props_quality_polars(cpg_props_polars: pl.DataFrame) -> pl.DataFrame:
     """Return CPG properties with quality columns appended.
 
@@ -180,10 +186,11 @@ _CPG_PROPS_QUALITY_COLUMNS = (
 
 
 @check_output_custom(
+    SchemaContractValidator(dataset_name="cpg_props_quality", importance="warn"),
     TableSchemaValidator(expected_columns=_CPG_PROPS_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@tag(layer="execution", artifact="cpg_props_quality", kind="table")
+@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_props_quality"))
 def cpg_props_quality(cpg_props_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG properties quality output as Arrow.
 

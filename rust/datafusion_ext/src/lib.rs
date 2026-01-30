@@ -1,17 +1,21 @@
 //! DataFusion extension for native function registration.
 
 pub mod async_runtime;
+pub mod config_macros;
 pub mod delta_control_plane;
 pub mod delta_maintenance;
 pub mod delta_mutations;
 pub mod delta_observability;
 pub mod delta_protocol;
+pub mod error_conversion;
 pub mod errors;
 pub mod expr_planner;
 pub mod function_factory;
 pub mod function_rewrite;
 pub mod generated;
+pub mod macros;
 pub mod planner_rules;
+pub mod physical_rules;
 pub mod registry_snapshot;
 pub mod udaf_builtin;
 #[cfg(feature = "async-udf")]

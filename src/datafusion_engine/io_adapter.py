@@ -8,6 +8,7 @@ execution paths.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -25,6 +26,18 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
+
+
+@dataclass(frozen=True)
+class ListingTableRegistration:
+    """Configuration for registering a DataFusion listing table."""
+
+    name: str
+    path: str
+    file_extension: str | None = None
+    table_partition_cols: Sequence[tuple[str, pa.DataType]] = ()
+    schema: pa.Schema | None = None
+    file_sort_order: Sequence[tuple[str, str]] = ()
 
 
 def _convert_struct_array(array: pa.StructArray, target_type: pa.StructType) -> pa.StructArray:
@@ -221,6 +234,57 @@ class DataFusionIOAdapter:
         self._record_artifact(
             "table_provider_registered",
             {"name": name, "provider_type": type(provider).__name__},
+        )
+
+    def register_listing_table(
+        self,
+        registration: ListingTableRegistration,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Register a listing table with diagnostics capture.
+
+        Parameters
+        ----------
+        registration
+            Listing table registration configuration.
+        overwrite
+            If True, deregister existing table with the same name before
+            registering. Defaults to False.
+
+        Raises
+        ------
+        TypeError
+            Raised when the session context does not support listing tables.
+        """
+        if overwrite and self.ctx.table_exist(registration.name):
+            self._deregister_table(registration.name)
+        register = getattr(self.ctx, "register_listing_table", None)
+        if not callable(register):
+            msg = "SessionContext.register_listing_table is not available."
+            raise TypeError(msg)
+        register(
+            registration.name,
+            registration.path,
+            file_extension=registration.file_extension,
+            table_partition_cols=list(registration.table_partition_cols),
+            schema=registration.schema,
+            file_sort_order=list(registration.file_sort_order),
+        )
+        invalidate_introspection_cache(self.ctx)
+        self._record_registration(
+            name=registration.name,
+            registration_type="listing_table",
+        )
+        self._record_artifact(
+            "listing_table_registered",
+            {
+                "name": registration.name,
+                "path": registration.path,
+                "file_extension": registration.file_extension,
+                "partition_cols": [list(item) for item in registration.table_partition_cols],
+                "file_sort_order": [list(item) for item in registration.file_sort_order],
+            },
         )
 
     def register_delta_table_provider(

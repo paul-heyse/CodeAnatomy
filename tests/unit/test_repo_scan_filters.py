@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from extract.repo_scan_pygit2 import iter_repo_candidate_paths, repo_status_paths
-from extract.repo_scope import RepoScopeOptions, resolve_repo_scope, scope_rule_lines
-from extract.scope_manifest import ScopeManifestOptions, build_scope_manifest
-from extract.scope_rules import build_scope_rules, check_scope_path
+from extract.git.pygit2_scan import iter_repo_candidate_paths, repo_status_paths
+from extract.scanning.repo_scope import RepoScopeOptions, resolve_repo_scope, scope_rule_lines
+from extract.scanning.scope_manifest import ScopeManifestOptions, build_scope_manifest
+from extract.scanning.scope_rules import build_scope_rules, check_scope_path
 
 pygit2 = pytest.importorskip("pygit2")
 

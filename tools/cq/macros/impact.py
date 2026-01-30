@@ -22,6 +22,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
@@ -537,6 +544,7 @@ def _append_depth_findings(
     depth_counts: dict[int, int],
     files_affected: set[str],
     site_count: int,
+    scoring_details: dict[str, object],
 ) -> None:
     if not site_count:
         return
@@ -548,6 +556,7 @@ def _append_depth_findings(
                 f"reaches {site_count} sites in {len(files_affected)} files"
             ),
             severity="info",
+            details=dict(scoring_details),
         )
     )
     for depth, count in sorted(depth_counts.items()):
@@ -556,6 +565,7 @@ def _append_depth_findings(
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
@@ -570,17 +580,19 @@ def _group_sites_by_kind(all_sites: list[TaintedSite]) -> dict[str, list[Tainted
 def _append_kind_sections(
     result: CqResult,
     by_kind: dict[str, list[TaintedSite]],
+    scoring_details: dict[str, object],
 ) -> None:
     for kind, sites in by_kind.items():
         section = Section(title=f"Taint {kind.title()} Sites")
         for site in sites[:_SECTION_SITE_LIMIT]:
+            details = {"depth": site.depth, "param": site.param, **scoring_details}
             section.findings.append(
                 Finding(
                     category=kind,
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
-                    details={"depth": site.depth, "param": site.param},
+                    details=details,
                 )
             )
         result.sections.append(section)
@@ -589,6 +601,7 @@ def _append_kind_sections(
 def _append_callers_section(
     result: CqResult,
     caller_sites: list[tuple[str, int]],
+    scoring_details: dict[str, object],
 ) -> None:
     if not caller_sites:
         return
@@ -600,24 +613,30 @@ def _append_callers_section(
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(caller_section)
 
 
-def _append_evidence(result: CqResult, all_sites: list[TaintedSite]) -> None:
+def _append_evidence(
+    result: CqResult,
+    all_sites: list[TaintedSite],
+    scoring_details: dict[str, object],
+) -> None:
     seen: set[tuple[str, int]] = set()
     for site in all_sites:
         key = (site.file, site.line)
         if key in seen:
             continue
         seen.add(key)
+        details = {"depth": site.depth, **scoring_details}
         result.evidence.append(
             Finding(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
-                details={"depth": site.depth},
+                details=details,
             )
         )
 
@@ -711,16 +730,40 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
     }
 
     depth_counts, files_affected = _collect_depth_stats(all_sites)
+
+    # Compute scoring signals
+    max_depth = max(depth_counts.keys()) if depth_counts else 0
+    imp_signals = ImpactSignals(
+        sites=len(all_sites),
+        files=len(files_affected),
+        depth=max_depth,
+        breakages=0,
+        ambiguities=0,
+    )
+    # Lower confidence for cross-file taint (depth > 0)
+    evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"
+    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     _append_depth_findings(
         result,
         request=request,
         depth_counts=depth_counts,
         files_affected=files_affected,
         site_count=len(all_sites),
+        scoring_details=scoring_details,
     )
     by_kind = _group_sites_by_kind(all_sites)
-    _append_kind_sections(result, by_kind)
-    _append_callers_section(result, caller_sites)
-    _append_evidence(result, all_sites)
+    _append_kind_sections(result, by_kind, scoring_details)
+    _append_callers_section(result, caller_sites, scoring_details)
+    _append_evidence(result, all_sites, scoring_details)
 
     return result

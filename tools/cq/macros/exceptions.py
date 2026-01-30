@@ -21,6 +21,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -325,6 +332,7 @@ def _append_exception_sections(
     *,
     raise_types: dict[str, int],
     catch_types: dict[str, int],
+    scoring_details: dict[str, object],
 ) -> None:
     raise_section = Section(title="Raised Exception Types")
     for exc_type, count in sorted(raise_types.items(), key=lambda item: -item[1])[
@@ -335,6 +343,7 @@ def _append_exception_sections(
                 category="raise",
                 message=f"{exc_type}: {count} sites",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(raise_section)
@@ -347,6 +356,7 @@ def _append_exception_sections(
                 category="catch",
                 message=f"{exc_type}: {count} handlers",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(catch_section)
@@ -371,6 +381,7 @@ def _append_uncaught_section(
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
+    scoring_details: dict[str, object],
 ) -> None:
     uncaught_section = Section(title="Potentially Uncaught Exceptions")
     for raised in all_raises:
@@ -378,13 +389,16 @@ def _append_uncaught_section(
             continue
         if _has_matching_catch(raised, all_catches):
             continue
+        details = dict(scoring_details)
+        if raised.message:
+            details["message"] = raised.message
         uncaught_section.findings.append(
             Finding(
                 category="uncaught",
                 message=f"{raised.exception_type} raised in {raised.in_function}",
                 anchor=Anchor(file=raised.file, line=raised.line),
                 severity="warning",
-                details={"message": raised.message} if raised.message else {},
+                details=details,
             )
         )
     result.sections.append(uncaught_section)
@@ -394,18 +408,20 @@ def _append_bare_except_section(
     result: CqResult,
     *,
     bare_excepts: list[CatchSite],
+    scoring_details: dict[str, object],
 ) -> None:
     if not bare_excepts:
         return
     bare_section = Section(title="Bare Except Clauses")
     for caught in bare_excepts[:_BARE_EXCEPT_LIMIT]:
+        details = {"reraises": caught.reraises, **scoring_details}
         bare_section.findings.append(
             Finding(
                 category="bare_except",
                 message=f"in {caught.in_function}",
                 anchor=Anchor(file=caught.file, line=caught.line),
                 severity="warning",
-                details={"reraises": caught.reraises},
+                details=details,
             )
         )
     result.sections.append(bare_section)
@@ -416,35 +432,40 @@ def _append_exception_evidence(
     *,
     all_raises: list[RaiseSite],
     all_catches: list[CatchSite],
+    scoring_details: dict[str, object],
 ) -> None:
     for raised in all_raises:
         message = f"raise {raised.exception_type}"
         if raised.message:
             message = f"{message}: {raised.message}"
+        details = {
+            "function": raised.in_function,
+            "class": raised.in_class,
+            "is_reraise": raised.is_reraise,
+            **scoring_details,
+        }
         result.evidence.append(
             Finding(
                 category="raise",
                 message=message,
                 anchor=Anchor(file=raised.file, line=raised.line),
-                details={
-                    "function": raised.in_function,
-                    "class": raised.in_class,
-                    "is_reraise": raised.is_reraise,
-                },
+                details=details,
             )
         )
     for caught in all_catches:
+        details = {
+            "function": caught.in_function,
+            "class": caught.in_class,
+            "bare": caught.is_bare_except,
+            "reraises": caught.reraises,
+            **scoring_details,
+        }
         result.evidence.append(
             Finding(
                 category="catch",
                 message=f"except {', '.join(caught.exception_types)}",
                 anchor=Anchor(file=caught.file, line=caught.line),
-                details={
-                    "function": caught.in_function,
-                    "class": caught.in_class,
-                    "bare": caught.is_bare_except,
-                    "reraises": caught.reraises,
-                },
+                details=details,
             )
         )
 
@@ -495,14 +516,35 @@ def cmd_exceptions(
         "reraises": sum(1 for r in all_raises if r.is_reraise),
     }
 
-    # Key findings
+    # Compute scoring signals
+    unique_files = len({r.file for r in all_raises} | {c.file for c in all_catches})
     bare_excepts = [c for c in all_catches if c.is_bare_except]
+    imp_signals = ImpactSignals(
+        sites=len(all_raises),
+        files=unique_files,
+        depth=0,
+        breakages=len(bare_excepts),
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
+    # Key findings
     if bare_excepts:
         result.key_findings.append(
             Finding(
                 category="warning",
                 message=f"Found {len(bare_excepts)} bare except: clauses",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
 
@@ -513,12 +555,28 @@ def cmd_exceptions(
                 category="warning",
                 message=f"Found {len(empty_handlers)} empty exception handlers",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
 
-    _append_exception_sections(result, raise_types=raise_types, catch_types=catch_types)
-    _append_uncaught_section(result, all_raises=all_raises, all_catches=all_catches)
-    _append_bare_except_section(result, bare_excepts=bare_excepts)
-    _append_exception_evidence(result, all_raises=all_raises, all_catches=all_catches)
+    _append_exception_sections(
+        result,
+        raise_types=raise_types,
+        catch_types=catch_types,
+        scoring_details=scoring_details,
+    )
+    _append_uncaught_section(
+        result,
+        all_raises=all_raises,
+        all_catches=all_catches,
+        scoring_details=scoring_details,
+    )
+    _append_bare_except_section(result, bare_excepts=bare_excepts, scoring_details=scoring_details)
+    _append_exception_evidence(
+        result,
+        all_raises=all_raises,
+        all_catches=all_catches,
+        scoring_details=scoring_details,
+    )
 
     return result

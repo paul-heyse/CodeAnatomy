@@ -1,0 +1,173 @@
+"""Scoring module for impact and confidence signals.
+
+Provides standardized scoring for cq findings based on impact and confidence signals.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# Bucket thresholds
+_HIGH_THRESHOLD = 0.7
+_MED_THRESHOLD = 0.4
+
+# Impact weights (must sum to 1.0)
+_WEIGHT_SITES = 0.45
+_WEIGHT_FILES = 0.25
+_WEIGHT_DEPTH = 0.15
+_WEIGHT_BREAKAGES = 0.10
+_WEIGHT_AMBIGUITIES = 0.05
+
+# Normalizing denominators for impact calculation
+_NORM_SITES = 100
+_NORM_FILES = 20
+_NORM_DEPTH = 10
+_NORM_BREAKAGES = 10
+_NORM_AMBIGUITIES = 10
+
+# Confidence score mappings by evidence kind
+_CONFIDENCE_SCORES: dict[str, float] = {
+    "resolved_ast": 0.95,
+    "bytecode": 0.90,
+    "resolved_ast_heuristic": 0.75,
+    "bytecode_heuristic": 0.75,
+    "cross_file_taint": 0.70,
+    "heuristic": 0.60,
+    "rg_only": 0.45,
+    "unresolved": 0.30,
+}
+
+# Severity multipliers for impact score adjustment
+_SEVERITY_MULTIPLIERS: dict[str, float] = {
+    "error": 1.5,
+    "warning": 1.0,
+    "info": 0.5,
+}
+
+
+@dataclass(frozen=True)
+class ImpactSignals:
+    """Signals for computing impact score.
+
+    Parameters
+    ----------
+    sites : int
+        Number of affected call/usage sites.
+    files : int
+        Number of affected files.
+    depth : int
+        Propagation depth (for taint/impact analysis).
+    breakages : int
+        Count of breaking changes or would-break sites.
+    ambiguities : int
+        Count of ambiguous/uncertain cases.
+    """
+
+    sites: int = 0
+    files: int = 0
+    depth: int = 0
+    breakages: int = 0
+    ambiguities: int = 0
+
+
+@dataclass(frozen=True)
+class ConfidenceSignals:
+    """Signals for computing confidence score.
+
+    Parameters
+    ----------
+    evidence_kind : str
+        Type of evidence backing the finding.
+        One of: "resolved_ast", "bytecode", "resolved_ast_heuristic",
+        "bytecode_heuristic", "cross_file_taint", "heuristic", "rg_only",
+        "unresolved".
+    """
+
+    evidence_kind: str = "unresolved"
+
+
+def impact_score(signals: ImpactSignals, severity: str | None = None) -> float:
+    """Compute weighted impact score from signals.
+
+    The score is computed as a weighted sum of normalized signal values:
+    - sites: 45% weight
+    - files: 25% weight
+    - depth: 15% weight
+    - breakages: 10% weight
+    - ambiguities: 5% weight
+
+    An optional severity multiplier adjusts the final score:
+    - "error": 1.5x
+    - "warning": 1.0x (default)
+    - "info": 0.5x
+
+    Parameters
+    ----------
+    signals : ImpactSignals
+        Impact signal values.
+    severity : str | None
+        Optional severity level for score adjustment.
+
+    Returns
+    -------
+    float
+        Impact score in [0.0, 1.0].
+    """
+    # Normalize each signal to [0, 1] using saturation at denominator
+    norm_sites = min(signals.sites / _NORM_SITES, 1.0)
+    norm_files = min(signals.files / _NORM_FILES, 1.0)
+    norm_depth = min(signals.depth / _NORM_DEPTH, 1.0)
+    norm_breakages = min(signals.breakages / _NORM_BREAKAGES, 1.0)
+    norm_ambiguities = min(signals.ambiguities / _NORM_AMBIGUITIES, 1.0)
+
+    # Weighted sum
+    score = (
+        _WEIGHT_SITES * norm_sites
+        + _WEIGHT_FILES * norm_files
+        + _WEIGHT_DEPTH * norm_depth
+        + _WEIGHT_BREAKAGES * norm_breakages
+        + _WEIGHT_AMBIGUITIES * norm_ambiguities
+    )
+
+    # Apply severity multiplier if provided
+    if severity is not None:
+        multiplier = _SEVERITY_MULTIPLIERS.get(severity, 1.0)
+        score = score * multiplier
+
+    return min(max(score, 0.0), 1.0)
+
+
+def confidence_score(signals: ConfidenceSignals) -> float:
+    """Compute confidence score from evidence kind.
+
+    Parameters
+    ----------
+    signals : ConfidenceSignals
+        Confidence signal values.
+
+    Returns
+    -------
+    float
+        Confidence score in [0.0, 1.0].
+    """
+    return _CONFIDENCE_SCORES.get(signals.evidence_kind, 0.30)
+
+
+def bucket(score: float) -> str:
+    """Convert a score to a bucket label.
+
+    Parameters
+    ----------
+    score : float
+        Score in [0.0, 1.0].
+
+    Returns
+    -------
+    str
+        Bucket label: "high" (>= 0.7), "med" (>= 0.4), or "low".
+    """
+    if score >= _HIGH_THRESHOLD:
+        return "high"
+    if score >= _MED_THRESHOLD:
+        return "med"
+    return "low"

@@ -31,7 +31,6 @@ from datafusion_engine.arrow_schema.metadata import (
 )
 from datafusion_engine.kernel_specs import DedupeSpec, IntervalAlignOptions, SortKey
 from datafusion_engine.kernel_specs import SortKey as PlanSortKey
-from datafusion_engine.udf_runtime import register_rust_udfs
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -50,19 +49,7 @@ def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> Sessio
     else:
         profile = runtime_profile
     session_runtime = profile.session_runtime()
-    session = session_runtime.ctx
-    async_timeout_ms = None
-    async_batch_size = None
-    if profile.enable_async_udfs:
-        async_timeout_ms = profile.async_udf_timeout_ms
-        async_batch_size = profile.async_udf_batch_size
-    register_rust_udfs(
-        session,
-        enable_async=profile.enable_async_udfs,
-        async_udf_timeout_ms=async_timeout_ms,
-        async_udf_batch_size=async_batch_size,
-    )
-    return session
+    return session_runtime.ctx
 
 
 def _ensure_required_udfs(ctx: SessionContext, *, required: Sequence[str]) -> None:
@@ -928,6 +915,5 @@ __all__ = [
     "dedupe_kernel",
     "explode_list_kernel",
     "interval_align_kernel",
-    "register_rust_udfs",
     "winner_select_kernel",
 ]

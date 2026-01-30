@@ -766,7 +766,7 @@ def _execute_extract_plan_bundle(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[ExecutionResult, tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+    from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
     session_runtime = runtime_profile.session_runtime()
     scan_units, scan_keys = _plan_scan_units_for_extract(plan, runtime_profile=runtime_profile)

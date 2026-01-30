@@ -14,10 +14,10 @@ import normalize.dataset_specs as static_dataset_specs
 from core_types import PathLike, ensure_path
 from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.dataset_registration import register_dataset_df
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.query_spec import QuerySpec
-from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_contracts import (
     SchemaContract,
     SchemaViolation,

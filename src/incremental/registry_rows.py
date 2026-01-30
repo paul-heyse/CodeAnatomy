@@ -172,19 +172,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
     ),
     DatasetRow(
-        name="function_registry_snapshots_v1",
-        version=SCHEMA_VERSION,
-        fields=(
-            FieldSpec(name="registry_hash", dtype=interop.string()),
-            FieldSpec(name="snapshot_ipc", dtype=interop.binary()),
-        ),
-        constraints=TableSpecConstraints(
-            required_non_null=("registry_hash", "snapshot_ipc"),
-            key_fields=("registry_hash",),
-        ),
-    ),
-    DatasetRow(
-        name="datafusion_plan_artifacts_v8",
+        name="datafusion_plan_artifacts_v9",
         version=SCHEMA_VERSION,
         fields=(
             FieldSpec(name="event_time_unix_ms", dtype=interop.int64()),
@@ -219,7 +207,6 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             FieldSpec(name="scan_units_msgpack", dtype=pa.binary()),
             FieldSpec(name="scan_keys", dtype=interop.list_(interop.string())),
             FieldSpec(name="plan_details_msgpack", dtype=pa.binary()),
-            FieldSpec(name="function_registry_snapshot_msgpack", dtype=pa.binary()),
             FieldSpec(name="udf_snapshot_msgpack", dtype=pa.binary()),
             FieldSpec(name="udf_planner_snapshot_msgpack", dtype=pa.binary()),
             FieldSpec(name="udf_compatibility_ok", dtype=interop.bool_()),
@@ -250,7 +237,6 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 "scan_units_msgpack",
                 "scan_keys",
                 "plan_details_msgpack",
-                "function_registry_snapshot_msgpack",
                 "udf_snapshot_msgpack",
                 "udf_compatibility_ok",
                 "udf_compatibility_detail_msgpack",

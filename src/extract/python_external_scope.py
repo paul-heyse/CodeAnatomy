@@ -21,6 +21,7 @@ from extract.helpers import (
     materialize_extract_plan,
 )
 from extract.python_env_profile import PythonEnvProfile, resolve_python_env_profile
+from extract.result_types import ExtractResult
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
 
@@ -38,13 +39,6 @@ class ExternalInterfaceExtractOptions:
     include_unresolved: bool = True
     max_imports: int | None = None
     depth: Literal["metadata", "full"] = "metadata"
-
-
-@dataclass(frozen=True)
-class ExternalInterfaceExtractResult:
-    """Result for external interface extraction."""
-
-    python_external_interfaces: TableLike
 
 
 @dataclass(frozen=True)
@@ -82,12 +76,12 @@ def extract_python_external(
     options: ExternalInterfaceExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> ExternalInterfaceExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract external Python interfaces from unified imports.
 
     Returns
     -------
-    ExternalInterfaceExtractResult
+    ExtractResult[TableLike]
         Extracted external interface table.
     """
     normalized_options = normalize_options(
@@ -126,7 +120,7 @@ def extract_python_external(
             apply_post_kernels=True,
         ),
     )
-    return ExternalInterfaceExtractResult(python_external_interfaces=table)
+    return ExtractResult(table=table, extractor_name="python_external")
 
 
 def _build_external_interface_plan(
@@ -457,7 +451,6 @@ def extract_python_external_tables(
 __all__ = [
     "ExternalInterface",
     "ExternalInterfaceExtractOptions",
-    "ExternalInterfaceExtractResult",
     "extract_python_external",
     "extract_python_external_tables",
 ]

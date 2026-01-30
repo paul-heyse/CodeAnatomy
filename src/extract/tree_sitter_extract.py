@@ -45,6 +45,7 @@ from extract.helpers import (
 )
 from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers
+from extract.result_types import ExtractResult
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
@@ -88,13 +89,6 @@ class TreeSitterExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOption
     included_ranges: tuple[tuple[int, int], ...] | None = None
     parse_callback_threshold_bytes: int | None = 5_000_000
     parse_callback_chunk_size: int = 65_536
-
-
-@dataclass(frozen=True)
-class TreeSitterExtractResult:
-    """Extracted tree-sitter tables for nodes and diagnostics."""
-
-    tree_sitter_files: TableLike
 
 
 @dataclass
@@ -909,7 +903,7 @@ def extract_ts(
     *,
     options: TreeSitterExtractOptions | None = None,
     context: ExtractExecutionContext | None = None,
-) -> TreeSitterExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract tree-sitter nodes and diagnostics from repo files.
 
     Parameters
@@ -923,7 +917,7 @@ def extract_ts(
 
     Returns
     -------
-    TreeSitterExtractResult
+    ExtractResult[TableLike]
         Extracted tree-sitter file table.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
@@ -940,21 +934,20 @@ def extract_ts(
         options=normalized_options,
         context=exec_context,
     )
-    return TreeSitterExtractResult(
-        tree_sitter_files=cast(
-            "TableLike",
-            materialize_extract_plan(
-                "tree_sitter_files_v1",
-                plans["tree_sitter_files"],
-                runtime_profile=runtime_profile,
-                determinism_tier=determinism_tier,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    apply_post_kernels=True,
-                ),
+    table = cast(
+        "TableLike",
+        materialize_extract_plan(
+            "tree_sitter_files_v1",
+            plans["tree_sitter_files"],
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
             ),
         ),
     )
+    return ExtractResult(table=table, extractor_name="tree_sitter")
 
 
 def extract_ts_plans(

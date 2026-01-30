@@ -96,7 +96,7 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.dataset_registration import register_dataset_df
 
         return register_dataset_df(
             session_runtime.ctx,

@@ -19,6 +19,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -290,6 +297,7 @@ def _group_effects_by_kind(all_effects: list[SideEffect]) -> dict[str, list[Side
 def _append_kind_sections(
     result: CqResult,
     by_kind: dict[str, list[SideEffect]],
+    scoring_details: dict[str, object],
 ) -> None:
     kind_titles = {
         "top_level_call": "Top Level Calls",
@@ -314,6 +322,7 @@ def _append_kind_sections(
                     message=effect.description,
                     anchor=Anchor(file=effect.file, line=effect.line),
                     severity=severity_map[kind],
+                    details=dict(scoring_details),
                 )
             )
         if len(effects) > _MAX_EFFECTS_DISPLAY:
@@ -322,18 +331,24 @@ def _append_kind_sections(
                     category="truncated",
                     message=f"... and {len(effects) - _MAX_EFFECTS_DISPLAY} more",
                     severity="info",
+                    details=dict(scoring_details),
                 )
             )
         result.sections.append(section)
 
 
-def _append_evidence(result: CqResult, all_effects: list[SideEffect]) -> None:
+def _append_evidence(
+    result: CqResult,
+    all_effects: list[SideEffect],
+    scoring_details: dict[str, object],
+) -> None:
     for effect in all_effects:
         result.evidence.append(
             Finding(
                 category=effect.kind,
                 message=effect.description,
                 anchor=Anchor(file=effect.file, line=effect.line),
+                details=dict(scoring_details),
             )
         )
 
@@ -378,6 +393,26 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
         "ambient_reads": len(by_kind.get("ambient_read", [])),
     }
 
+    # Compute scoring signals
+    unique_files = len({e.file for e in all_effects})
+    imp_signals = ImpactSignals(
+        sites=len(all_effects),
+        files=unique_files,
+        depth=0,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     if by_kind.get("top_level_call"):
         result.key_findings.append(
@@ -385,6 +420,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="warning",
                 message=f"{len(by_kind['top_level_call'])} import-time function calls",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
     if by_kind.get("global_write"):
@@ -393,6 +429,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="warning",
                 message=f"{len(by_kind['global_write'])} module-level mutations",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
     if by_kind.get("ambient_read"):
@@ -401,6 +438,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="info",
                 message=f"{len(by_kind['ambient_read'])} ambient state accesses",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
@@ -410,10 +448,11 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="info",
                 message="No import-time side effects detected",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
-    _append_kind_sections(result, by_kind)
-    _append_evidence(result, all_effects)
+    _append_kind_sections(result, by_kind, scoring_details)
+    _append_evidence(result, all_effects, scoring_details)
 
     return result

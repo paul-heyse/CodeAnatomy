@@ -100,6 +100,50 @@ All commands support:
 - `--root <PATH>`: Repository root (default: auto-detect)
 - `--format <md|json|both>`: Output format (default: md)
 - `--no-save-artifact`: Skip saving JSON artifact
+- `--impact <low,med,high>`: Filter by impact bucket (comma-separated)
+- `--confidence <low,med,high>`: Filter by confidence bucket (comma-separated)
+- `--include <pattern>`: Include files matching pattern (glob or ~regex, repeatable)
+- `--exclude <pattern>`: Exclude files matching pattern (glob or ~regex, repeatable)
+- `--limit <N>`: Maximum number of findings
+
+## Scoring
+
+Each finding includes impact and confidence scores:
+
+**Impact** (0.0-1.0): Weighted formula based on:
+- Sites affected (45%)
+- Files affected (25%)
+- Propagation depth (15%)
+- Breaking changes (10%)
+- Ambiguous cases (5%)
+
+**Confidence** (0.0-1.0): Based on evidence kind:
+- `resolved_ast` = 0.95 (full AST analysis)
+- `bytecode` = 0.90 (bytecode inspection)
+- `heuristic` = 0.60 (pattern matching)
+- `rg_only` = 0.45 (grep-only results)
+- `unresolved` = 0.30 (unverified)
+
+**Buckets**: high (≥0.7), med (≥0.4), low (<0.4)
+
+## Filtering Examples
+
+```bash
+# High-impact, high-confidence findings in core modules
+/cq impact build_graph_product --param repo_root --impact high --confidence high --include "src/"
+
+# Exclude tests and limit results
+/cq exceptions --exclude "tests/" --limit 100
+
+# Multiple filters combined
+/cq calls DefIndex.build --impact med,high --include "src/relspec/" --exclude "*test*"
+
+# Use regex pattern (prefix with ~)
+/cq side-effects --include "~src/(extract|normalize)/.*\\.py$"
+
+# Filter by multiple impact levels
+/cq async-hazards --impact high,med --confidence high
+```
 
 ## When to Use
 

@@ -20,6 +20,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 from tools.cq.macros.calls import _collect_call_sites, _group_candidates, _rg_find_candidates
 
 if TYPE_CHECKING:
@@ -166,20 +173,27 @@ def _classify_call(
     tuple[str, str]
         (bucket, reason) where bucket is 'would_break', 'ambiguous', or 'ok'.
     """
-    # Count required positional params
-    required_pos = sum(
-        1
-        for p in new_params
-        if not p.has_default and not p.is_kwonly and not p.is_vararg and not p.is_kwarg
-    )
-
     # Check if call has *args/**kwargs (can't analyze statically)
     if site.has_star_args or site.has_star_kwargs:
         return ("ambiguous", "call uses *args/**kwargs - cannot verify")
 
-    # Check positional arg count
-    if site.num_args < required_pos:
-        return ("would_break", f"needs {required_pos} positional args, got {site.num_args}")
+    # Build list of required param names (positional params without defaults)
+    required_params = [
+        p.name
+        for p in new_params
+        if not p.has_default and not p.is_kwonly and not p.is_vararg and not p.is_kwarg
+    ]
+
+    # For each required param, check coverage by position or keyword
+    kwargs_set = set(site.kwargs)
+    for i, param_name in enumerate(required_params):
+        # Covered by positional arg?
+        if i < site.num_args:
+            continue
+        # Covered by keyword arg?
+        if param_name in kwargs_set:
+            continue
+        return ("would_break", f"parameter '{param_name}' not provided")
 
     # Check for excess positional args (if no *args in new sig)
     has_vararg = any(p.is_vararg for p in new_params)
@@ -229,6 +243,7 @@ def _append_bucket_sections(
     result: CqResult,
     buckets: dict[str, list[tuple[CallSite, str]]],
     symbol: str,
+    scoring_details: dict[str, object],
 ) -> None:
     severity_map = {"would_break": "error", "ambiguous": "warning", "ok": "info"}
     for bucket_name in ("would_break", "ambiguous", "ok"):
@@ -243,6 +258,7 @@ def _append_bucket_sections(
                     message=f"{symbol}({site.arg_preview}): {reason}",
                     anchor=Anchor(file=site.file, line=site.line),
                     severity=severity_map[bucket_name],
+                    details=dict(scoring_details),
                 )
             )
         if len(bucket_sites) > _MAX_SITES_DISPLAY:
@@ -251,6 +267,7 @@ def _append_bucket_sections(
                     category="truncated",
                     message=f"... and {len(bucket_sites) - _MAX_SITES_DISPLAY} more",
                     severity="info",
+                    details=dict(scoring_details),
                 )
             )
         result.sections.append(section)
@@ -261,15 +278,17 @@ def _append_evidence(
     all_sites: list[CallSite],
     new_params: list[SigParam],
     symbol: str,
+    scoring_details: dict[str, object],
 ) -> None:
     for site in all_sites:
-        bucket, reason = _classify_call(site, new_params)
+        bucket_name, reason = _classify_call(site, new_params)
+        details = {"preview": site.arg_preview, **scoring_details}
         result.evidence.append(
             Finding(
-                category=bucket,
+                category=bucket_name,
                 message=f"{site.context} calls {symbol}: {reason}",
                 anchor=Anchor(file=site.file, line=site.line),
-                details={"preview": site.arg_preview},
+                details=details,
             )
         )
 
@@ -310,6 +329,28 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
         "ok": len(buckets["ok"]),
     }
 
+    # Compute scoring signals
+    unique_files = len({site.file for site, _ in buckets["would_break"]}
+                       | {site.file for site, _ in buckets["ambiguous"]}
+                       | {site.file for site, _ in buckets["ok"]})
+    imp_signals = ImpactSignals(
+        sites=len(all_sites),
+        files=unique_files,
+        depth=0,
+        breakages=len(buckets["would_break"]),
+        ambiguities=len(buckets["ambiguous"]),
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     if buckets["would_break"]:
         result.key_findings.append(
@@ -317,6 +358,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="break",
                 message=f"{len(buckets['would_break'])} call sites would break",
                 severity="error",
+                details=dict(scoring_details),
             )
         )
     if buckets["ambiguous"]:
@@ -325,6 +367,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="ambiguous",
                 message=f"{len(buckets['ambiguous'])} call sites need manual review",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
     if buckets["ok"]:
@@ -333,6 +376,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="ok",
                 message=f"{len(buckets['ok'])} call sites are compatible",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
@@ -342,10 +386,11 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="info",
                 message=f"No call sites found for '{request.symbol}'",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
-    _append_bucket_sections(result, buckets, request.symbol)
-    _append_evidence(result, all_sites, new_params, request.symbol)
+    _append_bucket_sections(result, buckets, request.symbol, scoring_details)
+    _append_evidence(result, all_sites, new_params, request.symbol, scoring_details)
 
     return result

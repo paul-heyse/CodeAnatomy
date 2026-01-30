@@ -14,7 +14,6 @@ from datafusion_engine.diagnostics import (
     view_fingerprint_payload,
     view_udf_parity_payload,
 )
-from datafusion_engine.plugin_discovery import plugin_diagnostics
 from datafusion_engine.schema_contracts import SchemaViolation
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
@@ -162,15 +161,6 @@ def record_rust_udf_snapshot(
     recorder_sink.record_artifact(
         "rust_udf_snapshot_v1",
         rust_udf_snapshot_payload(snapshot),
-    )
-
-
-def record_plugin_diagnostics(sink: DiagnosticsCollector) -> None:
-    """Record plugin discovery diagnostics into the sink."""
-    recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact(
-        "datafusion_plugin_diagnostics_v1",
-        plugin_diagnostics().to_payload(),
     )
 
 

@@ -13,7 +13,7 @@ from hamilton.graph_types import HamiltonNode
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from hamilton_pipeline.driver_factory import DriverBuildRequest, build_driver
 from hamilton_pipeline.materializers import build_hamilton_materializers
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
     GraphAdapterConfig,

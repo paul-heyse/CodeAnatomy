@@ -14,7 +14,6 @@ from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from engine.plan_cache import PlanCacheKey
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import loads_msgpack, to_builtins
@@ -77,11 +76,9 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
-            "storage_options_hash": pin.storage_options_hash,
             "delta_scan_config": (
                 to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
             ),

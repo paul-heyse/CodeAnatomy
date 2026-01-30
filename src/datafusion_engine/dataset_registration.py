@@ -1,4 +1,4 @@
-"""Dataset registry bridge for DataFusion SessionContext.
+"""Dataset registration surfaces for DataFusion SessionContext.
 
 This module provides dataset registration utilities that bind datasets to
 DataFusion's catalog via native registration APIs and DDL surfaces. All IO
@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
@@ -63,14 +64,12 @@ from datafusion_engine.dataset_registry import (
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
     resolve_delta_cdf_policy,
-    resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
 )
 from datafusion_engine.dataset_resolution import (
+    DatasetResolution,
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
-from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.delta_scan_config import (
     delta_scan_config_snapshot_from_options,
 )
@@ -109,13 +108,9 @@ from schema_spec.system import (
 )
 from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
-from utils.hashing import hash_storage_options
-from utils.storage_options import merged_storage_options, normalize_storage_options
 from utils.validation import find_missing, validate_required_items
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
-    from datafusion_engine.delta_protocol import DeltaFeatureGate
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
@@ -309,16 +304,6 @@ class DataFusionRegistryOptions:
 
 
 @dataclass(frozen=True)
-class DeltaCdfRegistrationOptions:
-    """Options for registering Delta CDF tables."""
-
-    cdf_options: DeltaCdfOptions | None = None
-    storage_options: Mapping[str, str] | None = None
-    log_storage_options: Mapping[str, str] | None = None
-    runtime_profile: DataFusionRuntimeProfile | None = None
-
-
-@dataclass(frozen=True)
 class DeltaCdfArtifact:
     """Diagnostics payload for Delta CDF registration."""
 
@@ -328,7 +313,6 @@ class DeltaCdfArtifact:
     options: DeltaCdfOptions | None
     log_storage_options: Mapping[str, str] | None
     snapshot: Mapping[str, object] | None = None
-    storage_options_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -814,9 +798,10 @@ def _build_registration_context(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRegistrationContext:
     location = _apply_scan_defaults(name, location)
-    _register_object_store_for_location(ctx, location, runtime_profile=runtime_profile)
     runtime_profile = _prepare_runtime_profile(runtime_profile, ctx=ctx)
     options = _resolve_registry_options(name, location, runtime_profile=runtime_profile)
+    if options.provider == "listing":
+        _register_object_store_for_location(ctx, location, runtime_profile=runtime_profile)
     cache = _resolve_cache_policy(
         options,
         cache_policy=cache_policy,
@@ -919,16 +904,10 @@ def _invalidate_information_schema_cache(
 
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
-    if context.location.format != "delta":
-        msg = f"Non-delta dataset registration is disabled; got format={context.location.format!r}."
-        raise ValueError(msg)
-    if context.options.provider == "delta_cdf":
-        df = _register_delta_cdf(context)
-    elif _should_register_delta_provider(context):
-        df = _register_delta_provider(context)
+    if context.options.provider == "listing":
+        df = _register_listing_table(context)
     else:
-        msg = "Delta registration requires the native provider."
-        raise ValueError(msg)
+        df = _register_delta_provider(context)
     scan = context.options.scan
     projection_exprs = scan.projection_exprs if scan is not None else ()
     if not projection_exprs and context.options.schema is not None:
@@ -949,18 +928,59 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     return df
 
 
-def _should_register_delta_provider(context: DataFusionRegistrationContext) -> bool:
+def _register_listing_table(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
-    return location.format == "delta"
-
-
-@dataclass(frozen=True)
-class _DeltaProviderResponse:
-    provider: object
-    delta_scan_effective: Mapping[str, object] | None
-    snapshot: Mapping[str, object] | None
-    add_actions: Sequence[Mapping[str, object]] | None
-    predicate_error: str | None
+    scan = context.options.scan
+    runtime_profile = context.runtime_profile
+    sql_options = _sql_options.sql_options_for_profile(runtime_profile)
+    _apply_scan_settings(
+        context.ctx,
+        scan=scan,
+        sql_options=sql_options,
+    )
+    dataset: object
+    if location.files:
+        dataset = ds.dataset(
+            list(location.files),
+            format=location.format,
+            filesystem=location.filesystem,
+            schema=cast("pa.Schema | None", context.options.schema),
+        )
+    else:
+        dataset = ds.dataset(
+            str(location.path),
+            format=location.format,
+            filesystem=location.filesystem,
+            partitioning=location.partitioning,
+            schema=cast("pa.Schema | None", context.options.schema),
+        )
+    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=runtime_profile)
+    adapter.register_table_provider(context.name, dataset)
+    df = context.ctx.table(context.name)
+    _, _, fingerprint_details = _update_table_provider_fingerprints(
+        context.ctx,
+        name=context.name,
+        schema=df.schema(),
+    )
+    details: dict[str, object] = {
+        "path": str(location.path),
+        "format": location.format,
+        "partitioning": location.partitioning,
+        "read_options": dict(context.options.read_options),
+    }
+    if fingerprint_details:
+        details.update(fingerprint_details)
+    _record_table_provider_artifact(
+        runtime_profile,
+        artifact=_TableProviderArtifact(
+            name=context.name,
+            provider=dataset,
+            provider_kind="listing_table",
+            source=None,
+            details=details,
+        ),
+    )
+    return _maybe_cache(context, df)
 
 
 @dataclass(frozen=True)
@@ -976,22 +996,9 @@ class _DeltaProviderArtifactContext:
 
 @dataclass(frozen=True)
 class _DeltaProviderRegistration:
-    provider: object
-    response: _DeltaProviderResponse
-    merged_storage_options: Mapping[str, str] | None
-    delta_scan: DeltaScanOptions | None
+    resolution: DatasetResolution
     predicate_sql: str | None
     predicate_error: str | None
-
-
-@dataclass(frozen=True)
-class _DeltaCdfRegistration:
-    provider: object
-    bundle: DeltaCdfProviderBundle
-    storage_options: Mapping[str, str] | None
-    log_storage_options: Mapping[str, str] | None
-    cdf_options: DeltaCdfOptions | None
-    runtime_profile: DataFusionRuntimeProfile | None
 
 
 def _delta_pruning_predicate(
@@ -1027,10 +1034,6 @@ def _build_delta_provider_registration(
 ) -> _DeltaProviderRegistration:
     location = context.location
     predicate_sql, predicate_error = _delta_pruning_predicate(context)
-    merged_storage = merged_storage_options(
-        location.storage_options,
-        resolve_delta_log_storage_options(location),
-    )
     resolution = resolve_dataset_provider(
         DatasetResolutionRequest(
             ctx=context.ctx,
@@ -1041,68 +1044,23 @@ def _build_delta_provider_registration(
         )
     )
     combined_error = predicate_error or resolution.predicate_error
-    response = _DeltaProviderResponse(
-        provider=resolution.provider,
-        delta_scan_effective=resolution.delta_scan_effective,
-        snapshot=resolution.delta_snapshot,
-        add_actions=resolution.add_actions,
-        predicate_error=combined_error,
-    )
     return _DeltaProviderRegistration(
-        provider=resolution.provider,
-        response=response,
-        merged_storage_options=merged_storage,
-        delta_scan=resolution.delta_scan_options,
+        resolution=resolution,
         predicate_sql=predicate_sql,
         predicate_error=combined_error,
-    )
-
-
-def _build_delta_cdf_registration(
-    *,
-    path: str,
-    options: DeltaCdfRegistrationOptions | None,
-    gate: DeltaFeatureGate | None,
-) -> _DeltaCdfRegistration:
-    resolved = options or DeltaCdfRegistrationOptions()
-    cdf_options = resolved.cdf_options
-    explicit_log_storage_options = merged_storage_options(
-        None,
-        resolved.log_storage_options,
-    )
-    storage_options = merged_storage_options(
-        resolved.storage_options,
-        explicit_log_storage_options or resolved.storage_options,
-    )
-    from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
-
-    bundle = delta_cdf_provider(
-        request=DeltaCdfRequest(
-            table_uri=path,
-            storage_options=storage_options,
-            version=None,
-            timestamp=None,
-            options=cdf_options,
-            gate=gate,
-        )
-    )
-    provider = bundle.provider
-    return _DeltaCdfRegistration(
-        provider=provider,
-        bundle=bundle,
-        storage_options=storage_options,
-        log_storage_options=explicit_log_storage_options,
-        cdf_options=cdf_options,
-        runtime_profile=resolved.runtime_profile,
     )
 
 
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
     registration = _build_delta_provider_registration(context)
-    provider = registration.provider
+    resolution = registration.resolution
+    provider = resolution.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_delta_table_provider(context.name, TableProviderCapsule(provider))
+    if resolution.provider_kind == "delta_cdf":
+        adapter.register_delta_cdf_provider(context.name, TableProviderCapsule(provider))
+    else:
+        adapter.register_delta_table_provider(context.name, TableProviderCapsule(provider))
     df = context.ctx.table(context.name)
     schema_identity_hash_value, ddl_fingerprint, fingerprint_details = (
         _update_table_provider_fingerprints(
@@ -1111,16 +1069,48 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             schema=df.schema(),
         )
     )
+    if resolution.provider_kind == "delta_cdf":
+        artifact_details = _delta_cdf_artifact_payload(location, resolution=resolution)
+        if fingerprint_details:
+            artifact_details.update(fingerprint_details)
+        _record_table_provider_artifact(
+            context.runtime_profile,
+            artifact=_TableProviderArtifact(
+                name=context.name,
+                provider=provider,
+                provider_kind="cdf_table_provider",
+                source=None,
+                details=artifact_details,
+            ),
+        )
+        _update_table_provider_capabilities(
+            context.ctx,
+            name=context.name,
+            supports_cdf=True,
+        )
+        _record_delta_cdf_artifact(
+            context.runtime_profile,
+            artifact=DeltaCdfArtifact(
+                name=context.name,
+                path=str(location.path),
+                provider="table_provider",
+                options=location.delta_cdf_options,
+                log_storage_options=location.delta_log_storage_options,
+                snapshot=resolution.delta_snapshot,
+            ),
+        )
+        _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
+        return _maybe_cache(context, df)
     artifact_details = _delta_provider_artifact_payload(
         location,
         context=_DeltaProviderArtifactContext(
-            delta_scan=registration.delta_scan,
-            delta_scan_effective=registration.response.delta_scan_effective,
-            snapshot=registration.response.snapshot,
+            delta_scan=resolution.delta_scan_options,
+            delta_scan_effective=resolution.delta_scan_effective,
+            snapshot=resolution.delta_snapshot,
             registration_path="provider",
             predicate=registration.predicate_sql,
-            predicate_error=(registration.predicate_error or registration.response.predicate_error),
-            add_actions=registration.response.add_actions,
+            predicate_error=registration.predicate_error,
+            add_actions=resolution.add_actions,
         ),
     )
     if fingerprint_details:
@@ -1135,24 +1125,18 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             details=artifact_details,
         ),
     )
-    if registration.response.snapshot is not None:
+    if resolution.delta_snapshot is not None:
         from datafusion_engine.delta_observability import (
             DeltaSnapshotArtifact,
             record_delta_snapshot,
         )
 
-        storage_options, log_storage_options = normalize_storage_options(
-            location.storage_options,
-            resolve_delta_log_storage_options(location),
-        )
-        storage_hash = hash_storage_options(storage_options, log_storage_options)
         record_delta_snapshot(
             context.runtime_profile,
             artifact=DeltaSnapshotArtifact(
                 table_uri=str(location.path),
-                snapshot=registration.response.snapshot,
+                snapshot=resolution.delta_snapshot,
                 dataset_name=context.name,
-                storage_options_hash=storage_hash,
                 schema_identity_hash=schema_identity_hash_value,
                 ddl_fingerprint=ddl_fingerprint,
             ),
@@ -1165,39 +1149,11 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     return _maybe_cache(context, df)
 
 
-def _register_delta_cdf(context: DataFusionRegistrationContext) -> DataFrame:
-    options = DeltaCdfRegistrationOptions(
-        cdf_options=context.location.delta_cdf_options,
-        storage_options=context.location.storage_options,
-        log_storage_options=context.location.delta_log_storage_options,
-        runtime_profile=context.runtime_profile,
-    )
-    return register_delta_cdf_df(
-        context.ctx,
-        name=context.name,
-        path=str(context.location.path),
-        options=options,
-        gate=resolve_delta_feature_gate(context.location),
-    )
-
-
 def _delta_provider_artifact_payload(
     location: DatasetLocation,
     *,
     context: _DeltaProviderArtifactContext,
 ) -> dict[str, object]:
-    explicit_log_storage = merged_storage_options(
-        None,
-        location.delta_log_storage_options,
-    )
-    resolved_log_storage = resolve_delta_log_storage_options(location)
-    storage_options, log_storage_options = normalize_storage_options(
-        location.storage_options,
-        resolved_log_storage,
-    )
-    merged_storage = merged_storage_options(storage_options, log_storage_options)
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
-    gate = resolve_delta_feature_gate(location)
     pruned_files_count = len(context.add_actions) if context.add_actions is not None else None
     pruning_applied = context.add_actions is not None
     delta_scan_ignored = context.registration_path == "ddl" and context.delta_scan is not None
@@ -1206,18 +1162,38 @@ def _delta_provider_artifact_payload(
         "registration_path": context.registration_path,
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
-        "delta_log_storage_options": (dict(explicit_log_storage) if explicit_log_storage else None),
-        "delta_storage_options": dict(merged_storage) if merged_storage else None,
-        "delta_storage_options_hash": storage_hash,
+        "delta_log_storage_options": (
+            dict(location.delta_log_storage_options) if location.delta_log_storage_options else None
+        ),
+        "delta_storage_options": (
+            dict(location.storage_options) if location.storage_options else None
+        ),
         "delta_scan": _delta_scan_payload(context.delta_scan),
         "delta_scan_effective": context.delta_scan_effective,
-        "delta_feature_gate": delta_feature_gate_payload(gate),
         "delta_snapshot": context.snapshot,
         "delta_scan_ignored": delta_scan_ignored,
         "delta_pruning_predicate": context.predicate,
         "delta_pruning_error": context.predicate_error,
         "delta_pruning_applied": pruning_applied,
         "delta_pruned_files": pruned_files_count,
+    }
+
+
+def _delta_cdf_artifact_payload(
+    location: DatasetLocation,
+    *,
+    resolution: DatasetResolution,
+) -> dict[str, object]:
+    return {
+        "path": str(location.path),
+        "delta_log_storage_options": (
+            dict(location.delta_log_storage_options) if location.delta_log_storage_options else None
+        ),
+        "delta_storage_options": (
+            dict(location.storage_options) if location.storage_options else None
+        ),
+        "delta_snapshot": resolution.delta_snapshot,
+        "cdf_options": _cdf_options_payload(location.delta_cdf_options),
     }
 
 
@@ -2234,124 +2210,6 @@ def _normalize_filesystem(filesystem: object) -> pafs.FileSystem | None:
     return None
 
 
-def register_delta_cdf_df(
-    ctx: SessionContext,
-    *,
-    name: str,
-    path: str,
-    options: DeltaCdfRegistrationOptions | None = None,
-    gate: DeltaFeatureGate | None = None,
-) -> DataFrame:
-    """Register a Delta CDF snapshot as a DataFusion table.
-
-    Raises
-    ------
-    ValueError
-        Raised when the Delta CDF provider cannot be constructed.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame for the registered CDF dataset.
-    """
-    try:
-        registration = _build_delta_cdf_registration(
-            path=path,
-            options=options,
-            gate=gate,
-        )
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
-    provider = registration.provider
-    runtime_profile = registration.runtime_profile
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    adapter = facade.io_adapter()
-    adapter.register_delta_cdf_provider(name, TableProviderCapsule(provider))
-    df = ctx.table(name)
-    _, _, fingerprint_details = _update_table_provider_fingerprints(
-        ctx,
-        name=name,
-        schema=df.schema(),
-    )
-    artifact_details: dict[str, object] = {
-        "path": path,
-        "delta_log_storage_options": (
-            dict(registration.log_storage_options)
-            if registration.log_storage_options is not None
-            else None
-        ),
-        "delta_storage_options": (
-            dict(registration.storage_options) if registration.storage_options is not None else None
-        ),
-        "delta_storage_options_hash": hash_storage_options(
-            registration.storage_options,
-            registration.log_storage_options,
-        ),
-        "delta_snapshot": registration.bundle.snapshot,
-        "cdf_options": _cdf_options_payload(registration.cdf_options),
-    }
-    if fingerprint_details:
-        artifact_details.update(fingerprint_details)
-    _record_table_provider_artifact(
-        runtime_profile,
-        artifact=_TableProviderArtifact(
-            name=name,
-            provider=provider,
-            provider_kind="cdf_table_provider",
-            source=None,
-            details=artifact_details,
-        ),
-    )
-    _update_table_provider_capabilities(
-        ctx,
-        name=name,
-        supports_cdf=True,
-    )
-    _record_delta_cdf_artifact(
-        runtime_profile,
-        artifact=DeltaCdfArtifact(
-            name=name,
-            path=path,
-            provider="table_provider",
-            options=registration.cdf_options,
-            log_storage_options=registration.log_storage_options,
-            snapshot=registration.bundle.snapshot,
-            storage_options_hash=hash_storage_options(
-                registration.storage_options,
-                registration.log_storage_options,
-            ),
-        ),
-    )
-    _invalidate_information_schema_cache(runtime_profile, ctx)
-    return df
-
-
-def _delta_cdf_table_provider(
-    *,
-    path: str,
-    storage_options: Mapping[str, str] | None,
-    options: DeltaCdfOptions | None,
-    gate: DeltaFeatureGate | None,
-) -> DeltaCdfProviderBundle | None:
-    try:
-        from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
-
-        return delta_cdf_provider(
-            request=DeltaCdfRequest(
-                table_uri=path,
-                storage_options=storage_options,
-                version=None,
-                timestamp=None,
-                options=options,
-                gate=gate,
-            )
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-
-
 def _record_delta_cdf_artifact(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
@@ -2366,7 +2224,6 @@ def _record_delta_cdf_artifact(
             dict(artifact.log_storage_options) if artifact.log_storage_options else None
         ),
         "delta_snapshot": artifact.snapshot,
-        "delta_storage_options_hash": artifact.storage_options_hash,
     }
     record_artifact(runtime_profile, "datafusion_delta_cdf_v1", payload)
 
@@ -2530,6 +2387,5 @@ __all__ = [
     "input_plugin_prefixes",
     "register_dataset_df",
     "register_dataset_spec",
-    "register_delta_cdf_df",
     "resolve_registry_options",
 ]

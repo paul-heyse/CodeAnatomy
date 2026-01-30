@@ -29,16 +29,16 @@ from hamilton_pipeline.lifecycle import (
 )
 from hamilton_pipeline.materializers import build_hamilton_materializers
 from hamilton_pipeline.modules.execution_plan import build_execution_plan_module
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.task_module_builder import (
+    TaskExecutionModuleOptions,
+    build_task_execution_module,
+)
+from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
     ExecutorKind,
     GraphAdapterConfig,
     GraphAdapterKind,
-)
-from hamilton_pipeline.task_module_builder import (
-    TaskExecutionModuleOptions,
-    build_task_execution_module,
 )
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.hamilton import OtelNodeHook, OtelPlanHook

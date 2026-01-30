@@ -17,7 +17,7 @@ from cpg.schemas import SCHEMA_VERSION
 from engine.plan_policy import WriterStrategy
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.execution import ImpactStrategy
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
     GraphAdapterConfig,

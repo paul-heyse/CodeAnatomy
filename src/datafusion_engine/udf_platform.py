@@ -263,9 +263,47 @@ def install_rust_udf_platform(
     )
 
 
+def ensure_rust_udfs(
+    ctx: SessionContext,
+    *,
+    enable_async: bool = False,
+    async_udf_timeout_ms: int | None = None,
+    async_udf_batch_size: int | None = None,
+) -> Mapping[str, object]:
+    """Ensure Rust UDFs are registered via the unified platform.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Rust UDF registry snapshot.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Rust UDF registry snapshot is unavailable.
+    """
+    platform = install_rust_udf_platform(
+        ctx,
+        options=RustUdfPlatformOptions(
+            enable_udfs=True,
+            enable_async_udfs=enable_async,
+            async_udf_timeout_ms=async_udf_timeout_ms,
+            async_udf_batch_size=async_udf_batch_size,
+            enable_function_factory=False,
+            enable_expr_planners=False,
+            strict=False,
+        ),
+    )
+    if platform.snapshot is None:
+        msg = "Rust UDF platform did not return a registry snapshot."
+        raise RuntimeError(msg)
+    return platform.snapshot
+
+
 __all__ = [
     "ExtensionInstallStatus",
     "RustUdfPlatform",
     "RustUdfPlatformOptions",
+    "ensure_rust_udfs",
     "install_rust_udf_platform",
 ]

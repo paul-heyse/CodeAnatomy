@@ -10,7 +10,7 @@ from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
 from datafusion_engine.arrow_interop import SchemaLike
 from datafusion_engine.arrow_schema.abi import schema_to_dict
-from datafusion_engine.delta_protocol import DeltaFeatureGate, delta_feature_gate_payload
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.delta_scan_config import delta_scan_config_snapshot_from_options
 from datafusion_engine.identity import schema_identity_hash
 from schema_spec.specs import TableSchemaSpec
@@ -220,7 +220,6 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "schema_mode": loc.delta_schema_policy.schema_mode,
                 "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
             }
-        delta_feature_gate = delta_feature_gate_payload(loc.delta_feature_gate)
         provider = resolve_datafusion_provider(loc)
         snapshot.append(
             {
@@ -236,13 +235,14 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_scan": delta_scan,
                 "delta_write_policy": delta_write_policy,
                 "delta_schema_policy": delta_schema_policy,
-                "delta_feature_gate": delta_feature_gate,
                 "delta_constraints": list(loc.delta_constraints) if loc.delta_constraints else None,
                 "delta_version": loc.delta_version,
                 "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
                 "ddl_fingerprint": None,
-                "schema_identity_hash": schema_identity_hash(schema) if schema is not None else None,
+                "schema_identity_hash": schema_identity_hash(schema)
+                if schema is not None
+                else None,
                 "schema": schema_to_dict(schema) if schema is not None else None,
             }
         )

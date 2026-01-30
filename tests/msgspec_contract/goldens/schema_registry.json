@@ -987,10 +987,6 @@
           "title": "Hash Value",
           "type": "string"
         },
-        "function_registry_snapshot_msgpack": {
-          "contentEncoding": "base64",
-          "type": "string"
-        },
         "information_schema_hash": {
           "description": "Deterministic hash value.",
           "examples": [
@@ -1236,7 +1232,6 @@
         "scan_units_msgpack",
         "scan_keys",
         "plan_details_msgpack",
-        "function_registry_snapshot_msgpack",
         "udf_snapshot_msgpack",
         "udf_planner_snapshot_msgpack",
         "udf_compatibility_ok",
@@ -1328,9 +1323,6 @@
           "minLength": 1,
           "title": "Hash Value",
           "type": "string"
-        },
-        "function_registry_snapshot": {
-          "type": "object"
         },
         "information_schema_hash": {
           "description": "Deterministic hash value.",
@@ -1459,7 +1451,6 @@
         "execution_plan_proto",
         "udf_snapshot_hash",
         "function_registry_hash",
-        "function_registry_snapshot",
         "rewrite_tags",
         "domain_planner_names",
         "udf_snapshot",

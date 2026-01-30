@@ -973,9 +973,9 @@ def _normalize_table_return_type(return_type: pa.DataType) -> pa.DataType:
 
 
 def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    from datafusion_engine.udf_runtime import register_rust_udfs
+    from datafusion_engine.udf_runtime import rust_udf_snapshot
 
-    return register_rust_udfs(ctx)
+    return rust_udf_snapshot(ctx)
 
 
 def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:

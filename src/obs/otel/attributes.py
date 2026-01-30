@@ -8,13 +8,12 @@ from typing import cast
 
 from opentelemetry.util.types import AttributeValue
 
-from utils.env_utils import env_value
+from utils.env_utils import env_list, env_value
 
 _ATTRIBUTE_COUNT_LIMIT = env_value("OTEL_ATTRIBUTE_COUNT_LIMIT")
 _ATTRIBUTE_VALUE_LENGTH_LIMIT = env_value("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT")
 _LOGRECORD_ATTRIBUTE_COUNT_LIMIT = env_value("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT")
 _LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT = env_value("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT")
-_REDACT_KEYS_ENV = env_value("CODEANATOMY_OTEL_REDACT_KEYS")
 
 
 def _limit_to_int(value: str | None) -> int | None:
@@ -30,11 +29,20 @@ _MAX_ATTRIBUTES = _limit_to_int(_ATTRIBUTE_COUNT_LIMIT)
 _MAX_ATTRIBUTE_LENGTH = _limit_to_int(_ATTRIBUTE_VALUE_LENGTH_LIMIT)
 _MAX_LOGRECORD_ATTRIBUTES = _limit_to_int(_LOGRECORD_ATTRIBUTE_COUNT_LIMIT)
 _MAX_LOGRECORD_ATTRIBUTE_LENGTH = _limit_to_int(_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT)
-_DEFAULT_REDACT_KEYS = "authorization,cookie,password,secret,token,api_key"
+_DEFAULT_REDACT_KEYS = [
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+    "api_key",
+]
 _REDACT_KEYS = {
-    part.strip().lower()
-    for part in (_REDACT_KEYS_ENV or _DEFAULT_REDACT_KEYS).split(",")
-    if part.strip()
+    key.lower()
+    for key in env_list(
+        "CODEANATOMY_OTEL_REDACT_KEYS",
+        default=_DEFAULT_REDACT_KEYS,
+    )
 }
 
 

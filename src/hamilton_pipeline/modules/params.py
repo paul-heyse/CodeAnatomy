@@ -33,12 +33,7 @@ from datafusion_engine.runtime import read_delta_as_reader
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
 from engine.session import EngineSession
-from hamilton_pipeline.pipeline_types import (
-    ActiveParamSet,
-    OutputConfig,
-    ParamBundle,
-    TaskDependencyReport,
-)
+from hamilton_pipeline.types import ActiveParamSet, OutputConfig, ParamBundle, TaskDependencyReport
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake import delta_schema_configuration, delta_write_configuration

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from enum import Enum
 from typing import Literal, overload
 
 _LOGGER = logging.getLogger(__name__)
@@ -12,8 +13,6 @@ OnInvalid = Literal["default", "none", "false"]
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "y"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "n"})
-
-
 # -----------------------------------------------------------------------------
 # String Helpers
 # -----------------------------------------------------------------------------
@@ -71,6 +70,105 @@ def env_text(
     if not value and not allow_empty:
         return default
     return value
+
+
+# -----------------------------------------------------------------------------
+# List Parsing
+# -----------------------------------------------------------------------------
+
+
+def env_list(
+    name: str,
+    *,
+    default: list[str] | None = None,
+    separator: str = ",",
+    strip: bool = True,
+) -> list[str]:
+    """Parse environment variable as list of strings.
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    default
+        Default value if not set.
+    separator
+        Separator character (default: comma).
+    strip
+        Whether to strip whitespace from each item.
+
+    Returns
+    -------
+    list[str]
+        Parsed list or default.
+    """
+    raw = env_value(name)
+    if raw is None:
+        return default or []
+    items = raw.split(separator)
+    if not strip:
+        return [item for item in items if item]
+    return [item.strip() for item in items if item.strip()]
+
+
+# -----------------------------------------------------------------------------
+# Enum Parsing
+# -----------------------------------------------------------------------------
+
+
+@overload
+def env_enum[TEnum: Enum](name: str, enum_type: type[TEnum]) -> TEnum | None: ...
+
+
+@overload
+def env_enum[TEnum: Enum](name: str, enum_type: type[TEnum], *, default: TEnum) -> TEnum: ...
+
+
+@overload
+def env_enum[TEnum: Enum](
+    name: str,
+    enum_type: type[TEnum],
+    *,
+    default: TEnum | None,
+) -> TEnum | None: ...
+
+
+def env_enum[TEnum: Enum](
+    name: str,
+    enum_type: type[TEnum],
+    *,
+    default: TEnum | None = None,
+) -> TEnum | None:
+    """Parse environment variable as enum value.
+
+    Parameters
+    ----------
+    name
+        Environment variable name.
+    enum_type
+        Enum class to convert to.
+    default
+        Default value if not set or invalid.
+
+    Returns
+    -------
+    TEnum | None
+        Parsed enum value or default.
+    """
+    raw = env_value(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    value_lower = value.lower()
+    try:
+        return enum_type(value_lower)
+    except (ValueError, KeyError, TypeError):
+        for member in enum_type:
+            if member.name.lower() == value_lower:
+                return member
+            if isinstance(member.value, str) and member.value.lower() == value_lower:
+                return member
+        return default
 
 
 # -----------------------------------------------------------------------------
@@ -279,8 +377,10 @@ def env_truthy(value: str | None) -> bool:
 __all__ = [
     "env_bool",
     "env_bool_strict",
+    "env_enum",
     "env_float",
     "env_int",
+    "env_list",
     "env_truthy",
     "env_value",
 ]

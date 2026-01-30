@@ -14,7 +14,6 @@
   "explain_tree_rows_msgpack": null,
   "explain_verbose_rows_msgpack": null,
   "function_registry_hash": "registry-hash",
-  "function_registry_snapshot_msgpack": "gaRoYXNorXJlZ2lzdHJ5LWhhc2g=",
   "information_schema_hash": "info-hash",
   "information_schema_msgpack": "gaZ0YWJsZXOQ",
   "lineage_msgpack": "gaVub2Rlc5A=",

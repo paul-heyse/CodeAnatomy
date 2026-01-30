@@ -22,6 +22,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 from tools.cq.index.def_index import DefIndex
 
 if TYPE_CHECKING:
@@ -359,7 +366,11 @@ def _analyze_sites(
     return arg_shapes, kwarg_usage, forwarding_count, contexts
 
 
-def _add_shape_section(result: CqResult, arg_shapes: Counter[str]) -> None:
+def _add_shape_section(
+    result: CqResult,
+    arg_shapes: Counter[str],
+    scoring_details: dict[str, object],
+) -> None:
     shape_section = Section(title="Argument Shape Histogram")
     for shape, count in arg_shapes.most_common(10):
         shape_section.findings.append(
@@ -367,12 +378,17 @@ def _add_shape_section(result: CqResult, arg_shapes: Counter[str]) -> None:
                 category="shape",
                 message=f"{shape}: {count} calls",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(shape_section)
 
 
-def _add_kw_section(result: CqResult, kwarg_usage: Counter[str]) -> None:
+def _add_kw_section(
+    result: CqResult,
+    kwarg_usage: Counter[str],
+    scoring_details: dict[str, object],
+) -> None:
     if not kwarg_usage:
         return
     kw_section = Section(title="Keyword Argument Usage")
@@ -382,12 +398,17 @@ def _add_kw_section(result: CqResult, kwarg_usage: Counter[str]) -> None:
                 category="kwarg",
                 message=f"{kw}: {count} uses",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(kw_section)
 
 
-def _add_context_section(result: CqResult, contexts: Counter[str]) -> None:
+def _add_context_section(
+    result: CqResult,
+    contexts: Counter[str],
+    scoring_details: dict[str, object],
+) -> None:
     ctx_section = Section(title="Calling Contexts")
     for ctx, count in contexts.most_common(10):
         ctx_section.findings.append(
@@ -395,6 +416,7 @@ def _add_context_section(result: CqResult, contexts: Counter[str]) -> None:
                 category="context",
                 message=f"{ctx}: {count} calls",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(ctx_section)
@@ -404,22 +426,25 @@ def _add_sites_section(
     result: CqResult,
     function_name: str,
     all_sites: list[CallSite],
+    scoring_details: dict[str, object],
 ) -> None:
     sites_section = Section(title="Call Sites")
     for site in all_sites[:50]:
+        details = {
+            "context": site.context,
+            "num_args": site.num_args,
+            "num_kwargs": site.num_kwargs,
+            "kwargs": site.kwargs,
+            "forwarding": site.has_star_args or site.has_star_kwargs,
+            **scoring_details,
+        }
         sites_section.findings.append(
             Finding(
                 category="call",
                 message=f"{function_name}({site.arg_preview})",
                 anchor=Anchor(file=site.file, line=site.line, col=site.col),
                 severity="info",
-                details={
-                    "context": site.context,
-                    "num_args": site.num_args,
-                    "num_kwargs": site.num_kwargs,
-                    "kwargs": site.kwargs,
-                    "forwarding": site.has_star_args or site.has_star_kwargs,
-                },
+                details=details,
             )
         )
     result.sections.append(sites_section)
@@ -429,14 +454,16 @@ def _add_evidence(
     result: CqResult,
     function_name: str,
     all_sites: list[CallSite],
+    scoring_details: dict[str, object],
 ) -> None:
     for site in all_sites:
+        details = {"preview": site.arg_preview, **scoring_details}
         result.evidence.append(
             Finding(
                 category="call_site",
                 message=f"{site.context} calls {function_name}",
                 anchor=Anchor(file=site.file, line=site.line),
-                details={"preview": site.arg_preview},
+                details=details,
             )
         )
 
@@ -498,12 +525,32 @@ def cmd_calls(
 
     arg_shapes, kwarg_usage, forwarding_count, contexts = _analyze_sites(all_sites)
 
+    # Compute scoring signals
+    imp_signals = ImpactSignals(
+        sites=len(all_sites),
+        files=len(by_file),
+        depth=0,
+        breakages=0,
+        ambiguities=forwarding_count,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     result.key_findings.append(
         Finding(
             category="summary",
             message=f"Found {len(all_sites)} calls to {function_name} across {len(by_file)} files",
             severity="info",
+            details=dict(scoring_details),
         )
     )
 
@@ -513,13 +560,14 @@ def cmd_calls(
                 category="forwarding",
                 message=f"{forwarding_count} calls use *args/**kwargs forwarding",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
 
-    _add_shape_section(result, arg_shapes)
-    _add_kw_section(result, kwarg_usage)
-    _add_context_section(result, contexts)
-    _add_sites_section(result, function_name, all_sites)
-    _add_evidence(result, function_name, all_sites)
+    _add_shape_section(result, arg_shapes, scoring_details)
+    _add_kw_section(result, kwarg_usage, scoring_details)
+    _add_context_section(result, contexts, scoring_details)
+    _add_sites_section(result, function_name, all_sites, scoring_details)
+    _add_evidence(result, function_name, all_sites, scoring_details)
 
     return result

@@ -315,21 +315,14 @@ def engine_runtime_artifact(
         except (RuntimeError, TypeError, ValueError):
             session = None
         if session is not None:
-            from datafusion_engine.udf_runtime import register_rust_udfs
+            from datafusion_engine.udf_runtime import rust_udf_snapshot
 
-            registry_snapshot = register_rust_udfs(
-                session,
-                enable_async=profile.enable_async_udfs,
-                async_udf_timeout_ms=profile.async_udf_timeout_ms,
-                async_udf_batch_size=profile.async_udf_batch_size,
-            )
+            registry_snapshot = rust_udf_snapshot(session)
     registry_hash = None
-    registry_payload = None
     if registry_snapshot is not None:
-        from datafusion_engine.udf_runtime import rust_udf_snapshot_bytes, rust_udf_snapshot_hash
+        from datafusion_engine.udf_runtime import rust_udf_snapshot_hash
 
         registry_hash = rust_udf_snapshot_hash(registry_snapshot)
-        registry_payload = rust_udf_snapshot_bytes(registry_snapshot)
     datafusion_settings = profile.settings_payload()
     return {
         "event_time_unix_ms": int(time.time() * 1000),
@@ -338,7 +331,6 @@ def engine_runtime_artifact(
         "runtime_profile_hash": snapshot.profile_hash,
         "runtime_profile_snapshot": dumps_msgpack(snapshot.payload()),
         "function_registry_hash": registry_hash,
-        "function_registry_snapshot": registry_payload,
         "datafusion_settings_hash": snapshot.datafusion_settings_hash,
         "datafusion_settings": dumps_msgpack(datafusion_settings),
     }

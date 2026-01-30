@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from datafusion_engine.dataset_registration import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.dataset_registry import DatasetCatalog, registry_snapshot
-from datafusion_engine.registry_bridge import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.runtime import feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime import build_engine_runtime
@@ -15,7 +15,7 @@ from engine.runtime_profile import (
     runtime_profile_snapshot,
 )
 from engine.session import EngineSession
-from obs.diagnostics import DiagnosticsCollector, record_plugin_diagnostics
+from obs.diagnostics import DiagnosticsCollector
 from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
@@ -54,14 +54,16 @@ def build_engine_session(
             runtime_profile=df_profile,
         )
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
-        record_plugin_diagnostics(diagnostics)
     datasets = DatasetCatalog()
     input_plugin_names: list[str] = []
     if df_profile is not None:
         plugin = dataset_input_plugin(datasets, runtime_profile=df_profile)
+        registry_catalogs = dict(df_profile.registry_catalogs)
+        registry_catalogs.setdefault(df_profile.default_schema, datasets)
         df_profile = replace(
             df_profile,
             input_plugins=(*df_profile.input_plugins, plugin),
+            registry_catalogs=registry_catalogs,
         )
         engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
         input_plugin_names = [plugin.__name__]
@@ -72,9 +74,9 @@ def build_engine_session(
         determinism_tier=runtime_spec.determinism_tier,
     )
     if diagnostics is not None:
-        if not diagnostics.artifacts_snapshot().get("engine_runtime_v1"):
+        if not diagnostics.artifacts_snapshot().get("engine_runtime_v2"):
             diagnostics.record_artifact(
-                "engine_runtime_v1",
+                "engine_runtime_v2",
                 engine_runtime_artifact(
                     df_profile,
                     name=profile_name,

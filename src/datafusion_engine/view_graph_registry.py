@@ -160,7 +160,7 @@ def register_view_graph(
                 runtime_profile=runtime.runtime_profile,
             )
             if scan_units:
-                from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+                from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
                 apply_scan_unit_overrides(
                     ctx,
@@ -257,8 +257,8 @@ def _register_view_with_cache(
             msg = "Delta staging cache requires a runtime profile."
             raise ValueError(msg)
         staging_path = _delta_staging_path(node)
+        from datafusion_engine.dataset_registration import register_dataset_df
         from datafusion_engine.dataset_registry import DatasetLocation
-        from datafusion_engine.registry_bridge import register_dataset_df
         from datafusion_engine.write_pipeline import (
             WriteFormat,
             WriteMode,
@@ -302,7 +302,7 @@ def _register_view_with_cache(
             msg = f"Delta output cache missing dataset location for {node.name!r}."
             raise ValueError(msg)
         target_path = str(location.path)
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.dataset_registration import register_dataset_df
         from datafusion_engine.write_pipeline import (
             WriteFormat,
             WriteMode,

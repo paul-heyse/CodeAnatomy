@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-SCOPE_ROOT = "codeanatomy"
-SCOPE_PIPELINE = "codeanatomy.pipeline"
-SCOPE_EXTRACT = "codeanatomy.extract"
-SCOPE_NORMALIZE = "codeanatomy.normalize"
-SCOPE_PLANNING = "codeanatomy.planning"
-SCOPE_SCHEDULING = "codeanatomy.scheduling"
-SCOPE_DATAFUSION = "codeanatomy.datafusion"
-SCOPE_HAMILTON = "codeanatomy.hamilton"
-SCOPE_CPG = "codeanatomy.cpg"
-SCOPE_OBS = "codeanatomy.obs"
-SCOPE_DIAGNOSTICS = "codeanatomy.diagnostics"
+from obs.otel.constants import ScopeName
+
+SCOPE_ROOT = ScopeName.ROOT
+SCOPE_PIPELINE = ScopeName.PIPELINE
+SCOPE_EXTRACT = ScopeName.EXTRACT
+SCOPE_NORMALIZE = ScopeName.NORMALIZE
+SCOPE_PLANNING = ScopeName.PLANNING
+SCOPE_SCHEDULING = ScopeName.SCHEDULING
+SCOPE_DATAFUSION = ScopeName.DATAFUSION
+SCOPE_HAMILTON = ScopeName.HAMILTON
+SCOPE_CPG = ScopeName.CPG
+SCOPE_OBS = ScopeName.OBS
+SCOPE_DIAGNOSTICS = ScopeName.DIAGNOSTICS
 
 _LAYER_SCOPE_MAP = {
     "inputs": SCOPE_EXTRACT,

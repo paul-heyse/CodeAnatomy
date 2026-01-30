@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from hamilton_pipeline.types.incremental import IncrementalRunConfig
 
 
 @dataclass(frozen=True)
-class IncrementalSettings:
+class IncrementalConfig:
     """Shared incremental pipeline settings."""
 
     enabled: bool = False
@@ -19,8 +22,24 @@ class IncrementalSettings:
     git_head_ref: str | None = None
     git_changed_only: bool = False
 
+    def to_run_snapshot(self) -> IncrementalRunConfig:
+        """Return a run snapshot for manifests and artifacts.
 
-IncrementalConfig = IncrementalSettings
+        Returns
+        -------
+        IncrementalRunConfig
+            Snapshot used by manifests and artifacts.
+        """
+        from hamilton_pipeline.types.incremental import IncrementalRunConfig
+
+        return IncrementalRunConfig(
+            enabled=self.enabled,
+            state_dir=str(self.state_dir) if self.state_dir is not None else None,
+            repo_id=self.repo_id,
+            git_base_ref=self.git_base_ref,
+            git_head_ref=self.git_head_ref,
+            git_changed_only=self.git_changed_only,
+        )
 
 
 @dataclass(frozen=True)
@@ -46,5 +65,4 @@ __all__ = [
     "IncrementalConfig",
     "IncrementalFileChanges",
     "IncrementalImpact",
-    "IncrementalSettings",
 ]

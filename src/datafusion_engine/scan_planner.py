@@ -17,10 +17,8 @@ from datafusion_engine.dataset_registry import (
 )
 from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
 from datafusion_engine.delta_protocol import (
-    DeltaFeatureGate,
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
-    delta_feature_gate_tuple,
     delta_protocol_compatibility,
 )
 from datafusion_engine.delta_scan_config import (
@@ -39,8 +37,7 @@ from storage.deltalake.file_pruning import (
     StatsFilter,
     evaluate_and_select_files,
 )
-from utils.hashing import hash_msgpack_canonical, hash_storage_options
-from utils.storage_options import merged_storage_options, normalize_storage_options
+from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -69,9 +66,7 @@ class _ScanUnitKeyRequest:
     dataset_name: str
     delta_version: int | None
     delta_timestamp: str | None
-    delta_feature_gate: DeltaFeatureGate | None
     delta_protocol: DeltaProtocolSnapshot | None
-    storage_options_hash: str | None
     delta_scan_config_hash: str | None
     datafusion_provider: str | None
     projected_columns: tuple[str, ...]
@@ -83,9 +78,7 @@ def _scan_unit_key(request: _ScanUnitKeyRequest) -> str:
         "dataset_name": request.dataset_name,
         "delta_version": request.delta_version,
         "delta_timestamp": request.delta_timestamp,
-        "delta_feature_gate": delta_feature_gate_tuple(request.delta_feature_gate),
         "delta_protocol": request.delta_protocol,
-        "storage_options_hash": request.storage_options_hash,
         "delta_scan_config_hash": request.delta_scan_config_hash,
         "datafusion_provider": request.datafusion_provider,
         "projected_columns": request.projected_columns,
@@ -110,9 +103,7 @@ class ScanUnit:
     delta_version: int | None
     delta_timestamp: str | None
     snapshot_timestamp: int | None
-    delta_feature_gate: DeltaFeatureGate | None
     delta_protocol: DeltaProtocolSnapshot | None
-    storage_options_hash: str | None
     delta_scan_config: DeltaScanConfigSnapshot | None
     delta_scan_config_hash: str | None
     datafusion_provider: str | None
@@ -178,12 +169,6 @@ def plan_scan_unit(
             "codeanatomy.has_location": location is not None,
         },
     ):
-        delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
-        storage_options, log_storage_options = normalize_storage_options(
-            location.storage_options if location is not None else None,
-            location.delta_log_storage_options if location is not None else None,
-        )
-        storage_options_hash = hash_storage_options(storage_options, log_storage_options)
         delta_scan_config = delta_scan_config_snapshot(location)
         scan_config_hash = delta_scan_identity_hash(delta_scan_config)
         datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
@@ -199,9 +184,7 @@ def plan_scan_unit(
                 dataset_name=dataset_name,
                 delta_version=delta_resolution.delta_version,
                 delta_timestamp=delta_resolution.delta_timestamp,
-                delta_feature_gate=delta_feature_gate,
                 delta_protocol=delta_resolution.delta_protocol,
-                storage_options_hash=storage_options_hash,
                 delta_scan_config_hash=scan_config_hash,
                 datafusion_provider=datafusion_provider,
                 projected_columns=lineage.projected_columns,
@@ -214,9 +197,7 @@ def plan_scan_unit(
             delta_version=delta_resolution.delta_version,
             delta_timestamp=delta_resolution.delta_timestamp,
             snapshot_timestamp=delta_resolution.snapshot_timestamp,
-            delta_feature_gate=delta_feature_gate,
             delta_protocol=delta_resolution.delta_protocol,
-            storage_options_hash=storage_options_hash,
             delta_scan_config=delta_scan_config,
             delta_scan_config_hash=scan_config_hash,
             datafusion_provider=datafusion_provider,
@@ -621,17 +602,19 @@ def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], 
 
 
 def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
-    """Normalize Delta storage and log-store options.
+    """Return merged Delta storage and log-store options.
 
     Returns
     -------
     Mapping[str, str] | None
         Combined storage options, or ``None`` when no options are provided.
     """
-    return merged_storage_options(
-        location.storage_options,
-        location.delta_log_storage_options,
-    )
+    merged: dict[str, str] = {}
+    if location.storage_options:
+        merged.update(location.storage_options)
+    if location.delta_log_storage_options:
+        merged.update(location.delta_log_storage_options)
+    return merged or None
 
 
 def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
@@ -658,13 +641,6 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
             pushed_filters=request.lineage.pushed_filters,
             projected_columns=request.lineage.projected_columns,
             delta_protocol=request.payload.delta_protocol,
-            delta_feature_gate=resolve_delta_feature_gate(request.location),
-            storage_options_hash=hash_storage_options(
-                *normalize_storage_options(
-                    request.location.storage_options,
-                    request.location.delta_log_storage_options,
-                )
-            ),
         ),
     )
 

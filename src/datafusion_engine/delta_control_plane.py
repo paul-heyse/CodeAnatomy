@@ -51,7 +51,7 @@ class DeltaCdfProviderBundle:
 
     provider: object
     snapshot: Mapping[str, object]
-    cdf_options: Mapping[str, object]
+    cdf_options: DeltaCdfOptions | None
 
 
 @dataclass(frozen=True)
@@ -652,7 +652,7 @@ def delta_cdf_provider(
     return DeltaCdfProviderBundle(
         provider=provider,
         snapshot=snapshot,
-        cdf_options=_cdf_options_payload(request.options),
+        cdf_options=request.options,
     )
 
 

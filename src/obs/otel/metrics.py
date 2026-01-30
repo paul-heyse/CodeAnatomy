@@ -12,20 +12,21 @@ from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, V
 from opentelemetry.util.types import AttributeValue
 
 from obs.otel.attributes import normalize_attributes
+from obs.otel.constants import AttributeName, MetricName
 from obs.otel.run_context import get_run_id
 from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_OBS
 
-_STAGE_DURATION = "codeanatomy.stage.duration"
-_TASK_DURATION = "codeanatomy.task.duration"
-_DATAFUSION_DURATION = "codeanatomy.datafusion.execute.duration"
-_WRITE_DURATION = "codeanatomy.datafusion.write.duration"
-_ARTIFACT_COUNT = "codeanatomy.artifact.count"
-_ERROR_COUNT = "codeanatomy.error.count"
-_DATASET_ROWS = "codeanatomy.dataset.rows"
-_DATASET_COLUMNS = "codeanatomy.dataset.columns"
-_SCAN_ROW_GROUPS = "codeanatomy.scan.row_groups"
-_SCAN_FRAGMENTS = "codeanatomy.scan.fragments"
+_STAGE_DURATION = MetricName.STAGE_DURATION
+_TASK_DURATION = MetricName.TASK_DURATION
+_DATAFUSION_DURATION = MetricName.DATAFUSION_DURATION
+_WRITE_DURATION = MetricName.WRITE_DURATION
+_ARTIFACT_COUNT = MetricName.ARTIFACT_COUNT
+_ERROR_COUNT = MetricName.ERROR_COUNT
+_DATASET_ROWS = MetricName.DATASET_ROWS
+_DATASET_COLUMNS = MetricName.DATASET_COLUMNS
+_SCAN_ROW_GROUPS = MetricName.SCAN_ROW_GROUPS
+_SCAN_FRAGMENTS = MetricName.SCAN_FRAGMENTS
 
 _DEFAULT_BUCKETS_S = (
     0.005,
@@ -107,7 +108,7 @@ def _meter() -> metrics.Meter:
 def _with_run_id(payload: dict[str, object]) -> dict[str, object]:
     run_id = get_run_id()
     if run_id:
-        payload["codeanatomy.run_id"] = run_id
+        payload[AttributeName.RUN_ID.value] = run_id
     return payload
 
 
@@ -124,30 +125,54 @@ def metric_views() -> list[View]:
         View(
             instrument_name=_STAGE_DURATION,
             aggregation=histogram,
-            attribute_keys={"codeanatomy.run_id", "stage", "status"},
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.STAGE.value,
+                AttributeName.STATUS.value,
+            },
         ),
         View(
             instrument_name=_TASK_DURATION,
             aggregation=histogram,
-            attribute_keys={"codeanatomy.run_id", "task_kind", "status"},
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.TASK_KIND.value,
+                AttributeName.STATUS.value,
+            },
         ),
         View(
             instrument_name=_DATAFUSION_DURATION,
             aggregation=histogram,
-            attribute_keys={"codeanatomy.run_id", "status", "plan_kind"},
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.STATUS.value,
+                AttributeName.PLAN_KIND.value,
+            },
         ),
         View(
             instrument_name=_WRITE_DURATION,
             aggregation=histogram,
-            attribute_keys={"codeanatomy.run_id", "status", "destination"},
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.STATUS.value,
+                AttributeName.DESTINATION.value,
+            },
         ),
         View(
             instrument_name=_ARTIFACT_COUNT,
-            attribute_keys={"artifact_kind", "codeanatomy.run_id", "status"},
+            attribute_keys={
+                AttributeName.ARTIFACT_KIND.value,
+                AttributeName.RUN_ID.value,
+                AttributeName.STATUS.value,
+            },
         ),
         View(
             instrument_name=_ERROR_COUNT,
-            attribute_keys={"codeanatomy.run_id", "error_type", "stage"},
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.ERROR_TYPE.value,
+                AttributeName.STAGE.value,
+            },
         ),
     ]
 
@@ -251,7 +276,10 @@ def record_stage_duration(
 ) -> None:
     """Record a stage duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {"stage": stage, "status": status}
+    payload: dict[str, object] = {
+        AttributeName.STAGE.value: stage,
+        AttributeName.STATUS.value: status,
+    }
     if attributes:
         payload.update(attributes)
     registry.stage_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
@@ -266,7 +294,10 @@ def record_task_duration(
 ) -> None:
     """Record a task duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {"task_kind": task_kind, "status": status}
+    payload: dict[str, object] = {
+        AttributeName.TASK_KIND.value: task_kind,
+        AttributeName.STATUS.value: status,
+    }
     if attributes:
         payload.update(attributes)
     registry.task_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
@@ -281,7 +312,10 @@ def record_datafusion_duration(
 ) -> None:
     """Record a DataFusion execution duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {"status": status, "plan_kind": plan_kind}
+    payload: dict[str, object] = {
+        AttributeName.STATUS.value: status,
+        AttributeName.PLAN_KIND.value: plan_kind,
+    }
     if attributes:
         payload.update(attributes)
     registry.datafusion_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
@@ -296,7 +330,10 @@ def record_write_duration(
 ) -> None:
     """Record a DataFusion write duration histogram value."""
     registry = _registry()
-    payload: dict[str, object] = {"status": status, "destination": destination}
+    payload: dict[str, object] = {
+        AttributeName.STATUS.value: status,
+        AttributeName.DESTINATION.value: destination,
+    }
     if attributes:
         payload.update(attributes)
     registry.write_duration.record(duration_s, normalize_attributes(_with_run_id(payload)))
@@ -310,7 +347,10 @@ def record_artifact_count(
 ) -> None:
     """Increment the artifact count metric."""
     registry = _registry()
-    payload: dict[str, object] = {"artifact_kind": artifact_kind, "status": status}
+    payload: dict[str, object] = {
+        AttributeName.ARTIFACT_KIND.value: artifact_kind,
+        AttributeName.STATUS.value: status,
+    }
     if attributes:
         payload.update(attributes)
     registry.artifact_count.add(1, normalize_attributes(_with_run_id(payload)))
@@ -324,7 +364,10 @@ def record_error(
 ) -> None:
     """Increment the error count metric."""
     registry = _registry()
-    payload: dict[str, object] = {"stage": stage, "error_type": error_type}
+    payload: dict[str, object] = {
+        AttributeName.STAGE.value: stage,
+        AttributeName.ERROR_TYPE.value: error_type,
+    }
     if attributes:
         payload.update(attributes)
     registry.error_count.add(1, normalize_attributes(_with_run_id(payload)))
@@ -338,7 +381,7 @@ def set_dataset_stats(
 ) -> None:
     """Set dataset row and column gauge values."""
     registry = _registry()
-    attrs = normalize_attributes(_with_run_id({"dataset": dataset}))
+    attrs = normalize_attributes(_with_run_id({AttributeName.DATASET.value: dataset}))
     registry.dataset_rows.set_value(float(rows), attrs)
     registry.dataset_columns.set_value(float(columns), attrs)
 
@@ -351,7 +394,7 @@ def set_scan_telemetry(
 ) -> None:
     """Set scan telemetry gauge values."""
     registry = _registry()
-    attrs = normalize_attributes(_with_run_id({"dataset": dataset}))
+    attrs = normalize_attributes(_with_run_id({AttributeName.DATASET.value: dataset}))
     registry.scan_fragments.set_value(float(fragment_count), attrs)
     registry.scan_row_groups.set_value(float(row_group_count), attrs)
 

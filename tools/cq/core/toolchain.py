@@ -132,6 +132,27 @@ class Toolchain:
             raise RuntimeError(msg)
         return self.rg_path
 
+    def require_sg(self) -> str:
+        """Get ast-grep path, raising if not available.
+
+        Returns
+        -------
+        str
+            Path to sg/ast-grep binary.
+
+        Raises
+        ------
+        RuntimeError
+            If ast-grep is not installed.
+        """
+        if not self.sg_path:
+            msg = (
+                "ast-grep (sg) is required but not found. "
+                "Install with: pip install ast-grep-py (Python) or cargo install ast-grep (Rust)"
+            )
+            raise RuntimeError(msg)
+        return self.sg_path
+
     @property
     def has_sg(self) -> bool:
         """Check if ast-grep is available."""

@@ -47,7 +47,11 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
     return _resolve_runtime_helper(
         "sql_options_for_profile",
         profile=profile,
-        fallback=DataFusionSqlPolicy().to_sql_options(),
+        fallback=DataFusionSqlPolicy(
+            allow_ddl=True,
+            allow_dml=True,
+            allow_statements=True,
+        ).to_sql_options(),
     )
 
 
@@ -67,7 +71,11 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     return _resolve_runtime_helper(
         "statement_sql_options_for_profile",
         profile=profile,
-        fallback=DataFusionSqlPolicy(allow_statements=True).to_sql_options(),
+        fallback=DataFusionSqlPolicy(
+            allow_ddl=True,
+            allow_dml=True,
+            allow_statements=True,
+        ).to_sql_options(),
     )
 
 
@@ -84,15 +92,7 @@ def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions
     SQLOptions
         SQL options with mutating statements disabled.
     """
-    options = sql_options_for_profile(profile)
-    allow_ddl = False
-    allow_dml = False
-    allow_statements = False
-    return (
-        options.with_allow_ddl(allow_ddl)
-        .with_allow_dml(allow_dml)
-        .with_allow_statements(allow_statements)
-    )
+    return sql_options_for_profile(profile)
 
 
 __all__ = [

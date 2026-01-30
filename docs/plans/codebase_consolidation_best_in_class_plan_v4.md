@@ -26,13 +26,13 @@ This plan is a **supplemental consolidation roadmap** that assumes the **v3 foll
 
 ## Scope Index
 
-1. Environment Parsing Extensions (env_list/env_enum)
-2. Extract Result Consolidation (generic ExtractResult)
-3. Pipeline Types Module Split (modularization)
-4. Telemetry Constants Registry (StrEnum based)
-5. Validation Utilities Extension
-6. Registry Protocol Adoption (targeted)
-7. Incremental Config Unification (single config + snapshot conversion)
+1. Environment Parsing Extensions (env_list/env_enum) — ✅ Completed
+2. Extract Result Consolidation (generic ExtractResult) — ✅ Completed
+3. Pipeline Types Module Split (modularization) — ✅ Completed
+4. Telemetry Constants Registry (StrEnum based) — ✅ Completed
+5. Validation Utilities Extension — ✅ Completed
+6. Registry Protocol Adoption (targeted) — ✅ Completed
+7. Incremental Config Unification (single config + snapshot conversion) — ✅ Completed
 
 ---
 
@@ -40,6 +40,9 @@ This plan is a **supplemental consolidation roadmap** that assumes the **v3 foll
 
 ### Goal
 Provide canonical parsing helpers for list and enum environment variables and remove ad‑hoc parsing in OTel configuration.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -92,9 +95,9 @@ def env_enum(
   - `src/obs/otel/config.py`
 
 ### Checklist
-- [ ] Add `env_list()` and `env_enum()` helpers with type overloads.
-- [ ] Update OTel config parsing to use new helpers.
-- [ ] Add unit tests for new helpers.
+- [x] Add `env_list()` and `env_enum()` helpers with type overloads.
+- [x] Update OTel config parsing to use new helpers.
+- [x] Add unit tests for new helpers.
 
 ---
 
@@ -102,6 +105,9 @@ def env_enum(
 
 ### Goal
 Replace per‑extractor result dataclasses with a single generic `ExtractResult` type.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -131,9 +137,9 @@ class ExtractResult(Generic[T]):
 - Remove per‑extractor `*ExtractResult` dataclasses from the above modules.
 
 ### Checklist
-- [ ] Add `ExtractResult` in `result_types.py`.
-- [ ] Update all extractors to return `ExtractResult`.
-- [ ] Remove old result dataclasses.
+- [x] Add `ExtractResult` in `result_types.py`.
+- [x] Update all extractors to return `ExtractResult`.
+- [x] Remove old result dataclasses.
 
 ---
 
@@ -141,6 +147,9 @@ class ExtractResult(Generic[T]):
 
 ### Goal
 Split the Hamilton pipeline type monolith into focused submodules and remove the single giant file.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -165,10 +174,10 @@ class OutputConfig:
 - Delete: `src/hamilton_pipeline/pipeline_types.py` after imports migrate.
 
 ### Checklist
-- [ ] Create the `types/` subpackage.
-- [ ] Move dataclasses into module‑specific files.
-- [ ] Update all imports across the codebase.
-- [ ] Remove `pipeline_types.py`.
+- [x] Create the `types/` subpackage.
+- [x] Move dataclasses into module‑specific files.
+- [x] Update all imports across the codebase.
+- [x] Remove `pipeline_types.py`.
 
 ---
 
@@ -176,6 +185,9 @@ class OutputConfig:
 
 ### Goal
 Centralize all OpenTelemetry metric/attribute/scope/resource names.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -197,8 +209,8 @@ class MetricName(StrEnum):
 - Remove scattered string constants in `metrics.py`, `attributes.py`, `scopes.py`, `resources.py`.
 
 ### Checklist
-- [ ] Define StrEnum classes for metrics, attributes, scopes, resources.
-- [ ] Update all OTel modules to use constants.
+- [x] Define StrEnum classes for metrics, attributes, scopes, resources.
+- [x] Update all OTel modules to use constants.
 
 ---
 
@@ -206,6 +218,9 @@ class MetricName(StrEnum):
 
 ### Goal
 Add missing validators for non‑empty sequences, subset validation, and uniqueness.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -232,9 +247,9 @@ def ensure_unique(items: Iterable[T], *, label: str = "items") -> list[T]:
 - None (additive change).
 
 ### Checklist
-- [ ] Add `ensure_not_empty`, `ensure_subset`, `ensure_unique`.
-- [ ] Update `__all__` exports.
-- [ ] Add unit tests.
+- [x] Add `ensure_not_empty`, `ensure_subset`, `ensure_unique`.
+- [x] Update `__all__` exports.
+- [x] Add unit tests.
 
 ---
 
@@ -242,6 +257,9 @@ def ensure_unique(items: Iterable[T], *, label: str = "items") -> list[T]:
 
 ### Goal
 Replace any remaining ad‑hoc registry dictionaries with `MutableRegistry` or `ImmutableRegistry`.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -262,9 +280,9 @@ class ViewRegistry:
 - Remove any ad‑hoc dict registry implementations uncovered in the audit.
 
 ### Checklist
-- [ ] Audit registries for direct dict storage.
-- [ ] Replace with `MutableRegistry`/`ImmutableRegistry` where appropriate.
-- [ ] Keep behavior identical.
+- [x] Audit registries for direct dict storage.
+- [x] Replace with `MutableRegistry`/`ImmutableRegistry` where appropriate.
+- [x] Keep behavior identical.
 
 ---
 
@@ -272,6 +290,9 @@ class ViewRegistry:
 
 ### Goal
 Consolidate incremental configuration into a single canonical type and provide explicit conversion for runtime snapshots.
+
+### Status
+✅ Completed (2026-01-30)
 
 ### Representative Pattern
 ```python
@@ -309,9 +330,9 @@ class IncrementalConfig:
 - Remove any duplicate incremental config types after migration.
 
 ### Checklist
-- [ ] Define canonical `IncrementalConfig` in `incremental/types.py`.
-- [ ] Add conversion helper for runtime snapshots.
-- [ ] Update call sites to use canonical config.
+- [x] Define canonical `IncrementalConfig` in `incremental/types.py`.
+- [x] Add conversion helper for runtime snapshots.
+- [x] Update call sites to use canonical config.
 
 ---
 

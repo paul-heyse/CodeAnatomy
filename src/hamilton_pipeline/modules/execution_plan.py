@@ -538,20 +538,10 @@ def _record_evidence_contract_violations(
 def _record_udf_parity(profile: DataFusionRuntimeProfile) -> None:
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
-    from datafusion_engine.udf_runtime import register_rust_udfs
+    from datafusion_engine.udf_runtime import rust_udf_snapshot
 
     session = profile.session_context()
-    async_timeout_ms = None
-    async_batch_size = None
-    if profile.enable_async_udfs:
-        async_timeout_ms = profile.async_udf_timeout_ms
-        async_batch_size = profile.async_udf_batch_size
-    registry_snapshot = register_rust_udfs(
-        session,
-        enable_async=profile.enable_async_udfs,
-        async_udf_timeout_ms=async_timeout_ms,
-        async_udf_batch_size=async_batch_size,
-    )
+    registry_snapshot = rust_udf_snapshot(session)
     report = udf_parity_report(session, snapshot=registry_snapshot)
     record_artifact(profile, "udf_parity_v1", report.payload())
 

@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.lineage_datafusion import extract_lineage
-from datafusion_engine.scan_overrides import apply_scan_unit_overrides
 from datafusion_engine.scan_planner import ScanUnit, plan_scan_unit
 
 if TYPE_CHECKING:

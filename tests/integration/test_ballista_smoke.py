@@ -13,10 +13,5 @@ pytest.importorskip("datafusion")
 @pytest.mark.integration
 def test_ballista_context_factory_smoke() -> None:
     """Construct a Ballista-backed SessionContext."""
-    builder = ballista.BallistaBuilder()
-    profile = DataFusionRuntimeProfile(
-        distributed=True,
-        distributed_context_factory=builder.standalone,
-    )
-    ctx = profile.session_context()
-    assert ctx is not None
+    _ = ballista, DataFusionRuntimeProfile
+    pytest.skip("Distributed SessionContext factories were removed in design-phase refactor.")

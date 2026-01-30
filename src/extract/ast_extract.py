@@ -42,6 +42,7 @@ from extract.helpers import (
 )
 from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers
+from extract.result_types import ExtractResult
 from extract.schema_cache import ast_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
@@ -71,13 +72,6 @@ class AstExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
     max_bytes: int | None = 50_000_000
     max_nodes: int | None = 1_000_000
     cache_by_sha: bool = True
-
-
-@dataclass(frozen=True)
-class AstExtractResult:
-    """Hold extracted AST tables for nodes, edges, and errors."""
-
-    ast_files: TableLike
 
 
 _PYTHON_VERSION_RE = re.compile(r"(\\d+)\\.(\\d+)")
@@ -975,12 +969,12 @@ def extract_ast(
     options: AstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> AstExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract a minimal AST fact set per file.
 
     Returns
     -------
-    AstExtractResult
+    ExtractResult[TableLike]
         Tables of AST nodes, edges, and errors.
     """
     normalized_options = normalize_options("ast", options, AstExtractOptions)
@@ -995,21 +989,20 @@ def extract_ast(
         options=normalized_options,
         context=exec_context,
     )
-    return AstExtractResult(
-        ast_files=cast(
-            "TableLike",
-            materialize_extract_plan(
-                "ast_files_v1",
-                plans["ast_files"],
-                runtime_profile=runtime_profile,
-                determinism_tier=determinism_tier,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    apply_post_kernels=True,
-                ),
+    table = cast(
+        "TableLike",
+        materialize_extract_plan(
+            "ast_files_v1",
+            plans["ast_files"],
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
             ),
         ),
     )
+    return ExtractResult(table=table, extractor_name="ast")
 
 
 def extract_ast_plans(

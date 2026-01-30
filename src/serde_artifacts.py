@@ -15,7 +15,6 @@ from core_types import (
     JsonValueLax,
 )
 from datafusion_engine.delta_protocol import (
-    DeltaFeatureGate,
     DeltaProtocolCompatibility,
     DeltaProtocolSnapshot,
 )
@@ -187,7 +186,6 @@ class PlanArtifacts(StructBaseCompat, frozen=True):
     execution_plan_proto: ExecutionPlanProtoBytes | None
     udf_snapshot_hash: HashValue
     function_registry_hash: HashValue
-    function_registry_snapshot: dict[str, JsonValueLax]
     rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
     udf_snapshot: dict[str, JsonValueLax]
@@ -249,9 +247,7 @@ class DeltaInputPin(StructBaseCompat, frozen=True):
     dataset_name: DatasetName
     version: int | None
     timestamp: str | None
-    feature_gate: DeltaFeatureGate | None = None
     protocol: DeltaProtocolSnapshot | None = None
-    storage_options_hash: str | None = None
     delta_scan_config: DeltaScanConfigSnapshot | None = None
     delta_scan_config_hash: str | None = None
     datafusion_provider: str | None = None
@@ -304,7 +300,6 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     scan_units_msgpack: bytes
     scan_keys: tuple[str, ...]
     plan_details_msgpack: bytes
-    function_registry_snapshot_msgpack: bytes
     udf_snapshot_msgpack: bytes
     udf_planner_snapshot_msgpack: bytes | None
     udf_compatibility_ok: bool
@@ -354,7 +349,6 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
             "scan_units_msgpack": self.scan_units_msgpack,
             "scan_keys": list(self.scan_keys),
             "plan_details_msgpack": self.plan_details_msgpack,
-            "function_registry_snapshot_msgpack": self.function_registry_snapshot_msgpack,
             "udf_snapshot_msgpack": self.udf_snapshot_msgpack,
             "udf_planner_snapshot_msgpack": self.udf_planner_snapshot_msgpack,
             "udf_compatibility_ok": self.udf_compatibility_ok,

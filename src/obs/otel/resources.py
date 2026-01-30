@@ -5,14 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import opentelemetry.semconv._incubating.attributes.service_attributes as inc_service_attributes
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.semconv.attributes import service_attributes
 
+from obs.otel.constants import ResourceAttribute
 from utils.env_utils import env_value
 
 _DEFAULT_SERVICE_NAME = "codeanatomy"
-_DEPLOYMENT_ENVIRONMENT_NAME = "deployment.environment.name"
 
 
 @dataclass(frozen=True)
@@ -59,15 +57,15 @@ def build_resource(service_name: str, options: ResourceOptions | None = None) ->
         OpenTelemetry resource with merged attributes.
     """
     resolved = options or ResourceOptions()
-    payload: dict[str, str] = {service_attributes.SERVICE_NAME: service_name}
+    payload: dict[str, str] = {ResourceAttribute.SERVICE_NAME.value: service_name}
     if resolved.service_version:
-        payload[service_attributes.SERVICE_VERSION] = resolved.service_version
+        payload[ResourceAttribute.SERVICE_VERSION.value] = resolved.service_version
     if resolved.service_namespace:
-        payload[inc_service_attributes.SERVICE_NAMESPACE] = resolved.service_namespace
+        payload[ResourceAttribute.SERVICE_NAMESPACE.value] = resolved.service_namespace
     if resolved.environment:
-        payload[_DEPLOYMENT_ENVIRONMENT_NAME] = resolved.environment
+        payload[ResourceAttribute.DEPLOYMENT_ENVIRONMENT.value] = resolved.environment
     if resolved.instance_id:
-        payload[inc_service_attributes.SERVICE_INSTANCE_ID] = resolved.instance_id
+        payload[ResourceAttribute.SERVICE_INSTANCE_ID.value] = resolved.instance_id
     if resolved.attributes:
         payload.update({str(key): str(value) for key, value in resolved.attributes.items()})
     return Resource.create(payload)

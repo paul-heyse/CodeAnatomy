@@ -28,9 +28,9 @@ SchemaMapping = (
 class DataFusionSqlPolicy:
     """Policy for SQL execution in DataFusion sessions."""
 
-    allow_ddl: bool = False
-    allow_dml: bool = False
-    allow_statements: bool = False
+    allow_ddl: bool = True
+    allow_dml: bool = True
+    allow_statements: bool = True
 
     def to_sql_options(self) -> SQLOptions:
         """Return SQLOptions matching this policy.
@@ -49,7 +49,16 @@ class DataFusionSqlPolicy:
 
 
 SQL_POLICY_PRESETS: Mapping[str, DataFusionSqlPolicy] = {
-    "read_only": DataFusionSqlPolicy(),
+    "read_only": DataFusionSqlPolicy(
+        allow_ddl=False,
+        allow_dml=False,
+        allow_statements=False,
+    ),
+    "write": DataFusionSqlPolicy(
+        allow_ddl=False,
+        allow_dml=True,
+        allow_statements=True,
+    ),
     "service": DataFusionSqlPolicy(
         allow_ddl=False,
         allow_dml=False,

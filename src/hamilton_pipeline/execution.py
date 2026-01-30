@@ -6,7 +6,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, cast
-from uuid import uuid4
 
 from hamilton import async_driver as hamilton_async_driver
 from hamilton import driver as hamilton_driver
@@ -31,6 +30,7 @@ from incremental.types import IncrementalConfig
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_PIPELINE
 from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
+from utils.uuid_factory import uuid7_str
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
 
@@ -186,7 +186,7 @@ def _resolve_run_id(execute_overrides: dict[str, object]) -> str:
     value = execute_overrides.get("run_id")
     if isinstance(value, str) and value:
         return value
-    run_id = str(uuid4())
+    run_id = uuid7_str()
     execute_overrides["run_id"] = run_id
     return run_id
 
@@ -306,6 +306,42 @@ def _execution_output_names(
     return list(dict.fromkeys((*output_names, *materializer_ids)))
 
 
+@dataclass(frozen=True)
+class _AsyncExecutionState:
+    repo_root_path: Path
+    execute_overrides: dict[str, object]
+    output_names: list[str]
+    materializer_ids: list[str]
+    materialized_outputs: tuple[str, ...]
+    driver_instance: hamilton_async_driver.AsyncDriver
+
+
+async def _prepare_async_execution(
+    repo_root_path: Path,
+    options: PipelineExecutionOptions,
+) -> _AsyncExecutionState:
+    execute_overrides = _build_execute_overrides(
+        repo_root_path=repo_root_path,
+        options=options,
+    )
+    (
+        output_names,
+        _execution_outputs,
+        materializer_ids,
+        materialized_outputs,
+    ) = _resolve_execution_outputs(options)
+    execute_overrides.setdefault("materialized_outputs", materialized_outputs)
+    driver_instance = await _resolve_async_driver_instance(options)
+    return _AsyncExecutionState(
+        repo_root_path=repo_root_path,
+        execute_overrides=execute_overrides,
+        output_names=output_names,
+        materializer_ids=materializer_ids,
+        materialized_outputs=materialized_outputs,
+        driver_instance=driver_instance,
+    )
+
+
 async def _resolve_async_driver_instance(
     options: PipelineExecutionOptions,
 ) -> hamilton_async_driver.AsyncDriver:
@@ -349,20 +385,9 @@ async def execute_pipeline_async(
     if options.use_materialize:
         msg = "Async driver does not support materialize(); use execute() instead."
         raise ValueError(msg)
-    execute_overrides = _build_execute_overrides(
-        repo_root_path=repo_root_path,
-        options=options,
-    )
-    (
-        output_names,
-        execution_outputs,
-        materializer_ids,
-        materialized_outputs,
-    ) = _resolve_execution_outputs(options)
-    execute_overrides.setdefault("materialized_outputs", materialized_outputs)
-    driver_instance = await _resolve_async_driver_instance(options)
+    state = await _prepare_async_execution(repo_root_path, options)
     tracer = get_tracer(SCOPE_PIPELINE)
-    run_id = _resolve_run_id(execute_overrides)
+    run_id = _resolve_run_id(state.execute_overrides)
     run_token = set_run_id(run_id)
     try:
         with tracer.start_as_current_span(
@@ -370,8 +395,8 @@ async def execute_pipeline_async(
             attributes=span_attributes(
                 attrs={
                     "codeanatomy.execution_mode": options.execution_mode.value,
-                    "codeanatomy.output_count": len(output_names),
-                    "codeanatomy.outputs": list(output_names),
+                    "codeanatomy.output_count": len(state.output_names),
+                    "codeanatomy.outputs": list(state.output_names),
                 }
             ),
         ) as span:
@@ -380,22 +405,22 @@ async def execute_pipeline_async(
                 token = otel_context.attach(current_context)
                 try:
                     async_output_names = _execution_output_names(
-                        output_names,
-                        materializer_ids,
+                        state.output_names,
+                        state.materializer_ids,
                     )
-                    result = await driver_instance.execute(
+                    result = await state.driver_instance.execute(
                         async_output_names,
-                        inputs={"repo_root": str(repo_root_path)},
-                        overrides=execute_overrides,
+                        inputs={"repo_root": str(state.repo_root_path)},
+                        overrides=state.execute_overrides,
                     )
                 finally:
                     otel_context.detach(token)
             except Exception as exc:
                 record_exception(span, exc)
                 raise
-            set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
+            set_span_attributes(span, {"codeanatomy.repo_root": str(state.repo_root_path)})
             results_map = cast("Mapping[str, JsonDict | None]", result)
-            return {name: results_map.get(name) for name in output_names}
+            return {name: results_map.get(name) for name in state.output_names}
     finally:
         reset_run_id(run_token)
 

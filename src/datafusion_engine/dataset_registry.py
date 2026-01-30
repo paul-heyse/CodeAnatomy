@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -14,7 +14,7 @@ from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.scan_profile import build_delta_scan_config
-from utils.registry_protocol import Registry
+from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
     from schema_spec.system import (
@@ -59,13 +59,11 @@ class DatasetLocation:
     delta_timestamp: str | None = None
 
 
-@dataclass(frozen=True)
-class DatasetCatalog(Registry[str, DatasetLocation]):
+@dataclass
+class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
     """Map dataset names to locations for DataFusion registration."""
 
-    _locs: dict[str, DatasetLocation] = field(default_factory=dict)
-
-    def register(self, key: str, value: DatasetLocation) -> None:
+    def register(self, key: str, value: DatasetLocation, *, overwrite: bool = False) -> None:
         """Register a dataset location.
 
         Parameters
@@ -74,6 +72,8 @@ class DatasetCatalog(Registry[str, DatasetLocation]):
             Dataset name.
         value:
             Location metadata.
+        overwrite:
+            Whether to overwrite existing entries.
 
         Raises
         ------
@@ -83,7 +83,7 @@ class DatasetCatalog(Registry[str, DatasetLocation]):
         if not key:
             msg = "DatasetCatalog.register: name must be non-empty."
             raise ValueError(msg)
-        self._locs[key] = value
+        super().register(key, value, overwrite=overwrite)
 
     def get(self, key: str) -> DatasetLocation:
         """Return a registered dataset location.
@@ -103,10 +103,11 @@ class DatasetCatalog(Registry[str, DatasetLocation]):
         KeyError
             Raised when the dataset name is not registered.
         """
-        if key not in self._locs:
+        value = super().get(key)
+        if value is None:
             msg = f"DatasetCatalog: unknown dataset {key!r}."
             raise KeyError(msg)
-        return self._locs[key]
+        return value
 
     def has(self, name: str) -> bool:
         """Return whether a dataset name is registered.
@@ -121,42 +122,7 @@ class DatasetCatalog(Registry[str, DatasetLocation]):
         bool
             ``True`` when the dataset is registered.
         """
-        return name in self._locs
-
-    def __contains__(self, key: str) -> bool:
-        """Return True when a dataset name is registered.
-
-        Parameters
-        ----------
-        key
-            Dataset name.
-
-        Returns
-        -------
-        bool
-            ``True`` when the dataset is registered.
-        """
-        return key in self._locs
-
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over registered dataset names.
-
-        Returns
-        -------
-        Iterator[str]
-            Iterator of registered dataset names.
-        """
-        return iter(self._locs)
-
-    def __len__(self) -> int:
-        """Return the number of registered datasets.
-
-        Returns
-        -------
-        int
-            Count of registered datasets.
-        """
-        return len(self._locs)
+        return name in self
 
     def names(self) -> list[str]:
         """Return registered dataset names in sorted order.
@@ -166,7 +132,7 @@ class DatasetCatalog(Registry[str, DatasetLocation]):
         list[str]
             Sorted dataset names.
         """
-        return sorted(self._locs)
+        return sorted(self._entries)
 
 
 def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:

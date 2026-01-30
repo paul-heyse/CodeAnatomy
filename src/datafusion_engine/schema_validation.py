@@ -16,7 +16,7 @@ from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema_introspection import table_constraint_rows
-from datafusion_engine.session_helpers import deregister_table, register_temp_table
+from datafusion_engine.session_helpers import deregister_table, register_temp_table, temp_table
 from datafusion_engine.sql_options import sql_options_for_profile
 
 if TYPE_CHECKING:
@@ -183,14 +183,10 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
         [pa.array([None], type=dtype)],
         names=["value"],
     )
-    from datafusion_engine.ingest import datafusion_from_arrow
-
-    df = datafusion_from_arrow(ctx, name="t", value=table)
-    try:
-        result = _expr_table(df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1))
+    with temp_table(ctx, table, prefix="_dtype_") as temp_name:
+        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
+        result = _expr_table(df)
         value = result["dtype"][0].as_py()
-    finally:
-        deregister_table(ctx, "t")
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)

@@ -1,7 +1,7 @@
 """Rust-backed Delta control-plane adapters.
 
 This module centralizes access to the Rust Delta control plane exposed via
-``datafusion_ext``. It provides a typed, canonical surface for:
+``datafusion._internal``. It provides a typed, canonical surface for:
 1. Snapshot and protocol-aware metadata.
 2. Provider construction with session-derived scan configuration.
 3. File-pruned provider construction for scan planning.
@@ -298,23 +298,23 @@ class DeltaCheckpointRequest:
     gate: DeltaFeatureGate | None = None
 
 
-def _require_datafusion_ext() -> object:
-    """Import and return the ``datafusion_ext`` module.
+def _require_datafusion_internal() -> object:
+    """Import and return the ``datafusion._internal`` module.
 
     Returns
     -------
     object
-        Imported ``datafusion_ext`` module.
+        Imported ``datafusion._internal`` module.
 
     Raises
     ------
     RuntimeError
-        Raised when ``datafusion_ext`` is unavailable.
+        Raised when ``datafusion._internal`` is unavailable.
     """
     try:
-        return importlib.import_module("datafusion_ext")
+        return importlib.import_module("datafusion._internal")
     except ImportError as exc:  # pragma: no cover - environment contract
-        msg = "Delta control-plane operations require datafusion_ext."
+        msg = "Delta control-plane operations require datafusion._internal."
         raise RuntimeError(msg) from exc
 
 
@@ -451,7 +451,7 @@ def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> obje
     """
     options_type = getattr(module, "DeltaCdfOptions", None)
     if options_type is None:
-        msg = "datafusion_ext.DeltaCdfOptions is unavailable."
+        msg = "datafusion._internal.DeltaCdfOptions is unavailable."
         raise TypeError(msg)
     ext_options = options_type()
     payload = _cdf_options_payload(options)
@@ -513,10 +513,10 @@ def delta_provider_from_session(
     TypeError
         Raised when the control-plane response is malformed.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     provider_factory = getattr(module, "delta_table_provider_from_session", None)
     if not callable(provider_factory):
-        msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
+        msg = "datafusion._internal.delta_table_provider_from_session is unavailable."
         raise TypeError(msg)
     schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
@@ -582,10 +582,10 @@ def delta_provider_with_files(
     TypeError
         Raised when the control-plane response is malformed.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     provider_factory = getattr(module, "delta_table_provider_with_files", None)
     if not callable(provider_factory):
-        msg = "datafusion_ext.delta_table_provider_with_files is unavailable."
+        msg = "datafusion._internal.delta_table_provider_with_files is unavailable."
         raise TypeError(msg)
     schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
@@ -644,10 +644,10 @@ def delta_cdf_provider(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     provider_factory = getattr(module, "delta_cdf_table_provider", None)
     if not callable(provider_factory):
-        msg = "datafusion_ext.delta_cdf_table_provider is unavailable."
+        msg = "datafusion._internal.delta_cdf_table_provider is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -696,10 +696,10 @@ def delta_snapshot_info(
     TypeError
         Raised when the control-plane response is malformed.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     snapshot_factory = getattr(module, "delta_snapshot_info", None)
     if not callable(snapshot_factory):
-        msg = "datafusion_ext.delta_snapshot_info is unavailable."
+        msg = "datafusion._internal.delta_snapshot_info is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -736,10 +736,10 @@ def delta_add_actions(
     TypeError
         Raised when the control-plane response is malformed.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     add_actions_factory = getattr(module, "delta_add_actions", None)
     if not callable(add_actions_factory):
-        msg = "datafusion_ext.delta_add_actions is unavailable."
+        msg = "datafusion._internal.delta_add_actions is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -780,10 +780,10 @@ def delta_write_ipc(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     write_fn = getattr(module, "delta_write_ipc", None)
     if not callable(write_fn):
-        msg = "datafusion_ext.delta_write_ipc is unavailable."
+        msg = "datafusion._internal.delta_write_ipc is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -840,10 +840,10 @@ def delta_delete(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     delete_fn = getattr(module, "delta_delete", None)
     if not callable(delete_fn):
-        msg = "datafusion_ext.delta_delete is unavailable."
+        msg = "datafusion._internal.delta_delete is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -957,10 +957,10 @@ def delta_update(
         msg = "Delta update requires at least one column assignment."
         raise ValueError(msg)
     _validate_update_constraints(ctx, request)
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     update_fn = getattr(module, "delta_update", None)
     if not callable(update_fn):
-        msg = "datafusion_ext.delta_update is unavailable."
+        msg = "datafusion._internal.delta_update is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1014,10 +1014,10 @@ def delta_merge(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     merge_fn = getattr(module, "delta_merge", None)
     if not callable(merge_fn):
-        msg = "datafusion_ext.delta_merge is unavailable."
+        msg = "datafusion._internal.delta_merge is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1084,10 +1084,10 @@ def delta_optimize_compact(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     optimize_fn = getattr(module, "delta_optimize_compact", None)
     if not callable(optimize_fn):
-        msg = "datafusion_ext.delta_optimize_compact is unavailable."
+        msg = "datafusion._internal.delta_optimize_compact is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1139,10 +1139,10 @@ def delta_vacuum(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     vacuum_fn = getattr(module, "delta_vacuum", None)
     if not callable(vacuum_fn):
-        msg = "datafusion_ext.delta_vacuum is unavailable."
+        msg = "datafusion._internal.delta_vacuum is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1195,10 +1195,10 @@ def delta_restore(
     TypeError
         Raised when the Rust control-plane entrypoint is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     restore_fn = getattr(module, "delta_restore", None)
     if not callable(restore_fn):
-        msg = "datafusion_ext.delta_restore is unavailable."
+        msg = "datafusion._internal.delta_restore is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1254,10 +1254,10 @@ def delta_set_properties(
     if not request.properties:
         msg = "Delta property update requires at least one key/value pair."
         raise ValueError(msg)
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     set_fn = getattr(module, "delta_set_properties", None)
     if not callable(set_fn):
-        msg = "datafusion_ext.delta_set_properties is unavailable."
+        msg = "datafusion._internal.delta_set_properties is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1313,10 +1313,10 @@ def delta_add_features(
     if not request.features:
         msg = "Delta add-features requires at least one feature name."
         raise ValueError(msg)
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     add_fn = getattr(module, "delta_add_features", None)
     if not callable(add_fn):
-        msg = "datafusion_ext.delta_add_features is unavailable."
+        msg = "datafusion._internal.delta_add_features is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1366,10 +1366,10 @@ def delta_add_constraints(
     if not request.constraints:
         msg = "Delta add-constraints requires at least one constraint."
         raise ValueError(msg)
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     add_fn = getattr(module, "delta_add_constraints", None)
     if not callable(add_fn):
-        msg = "datafusion_ext.delta_add_constraints is unavailable."
+        msg = "datafusion._internal.delta_add_constraints is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1420,10 +1420,10 @@ def delta_drop_constraints(
     if not request.constraints:
         msg = "Delta drop-constraints requires at least one constraint name."
         raise ValueError(msg)
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     drop_fn = getattr(module, "delta_drop_constraints", None)
     if not callable(drop_fn):
-        msg = "datafusion_ext.delta_drop_constraints is unavailable."
+        msg = "datafusion._internal.delta_drop_constraints is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1467,10 +1467,10 @@ def delta_create_checkpoint(
     TypeError
         Raised when the Rust control-plane function is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     checkpoint_fn = getattr(module, "delta_create_checkpoint", None)
     if not callable(checkpoint_fn):
-        msg = "datafusion_ext.delta_create_checkpoint is unavailable."
+        msg = "datafusion._internal.delta_create_checkpoint is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
@@ -1505,10 +1505,10 @@ def delta_cleanup_metadata(
     TypeError
         Raised when the Rust control-plane function is unavailable.
     """
-    module = _require_datafusion_ext()
+    module = _require_datafusion_internal()
     cleanup_fn = getattr(module, "delta_cleanup_metadata", None)
     if not callable(cleanup_fn):
-        msg = "datafusion_ext.delta_cleanup_metadata is unavailable."
+        msg = "datafusion._internal.delta_cleanup_metadata is unavailable."
         raise TypeError(msg)
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)

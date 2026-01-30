@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
-from uuid import uuid4
 
 import pyarrow as pa
 from datafusion import col, lit
@@ -20,6 +19,7 @@ from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from incremental.types import IncrementalFileChanges
+from utils.uuid_factory import uuid7_hex
 
 _EXPORT_KEY_SCHEMA = pa.schema(
     [
@@ -48,7 +48,7 @@ def _df_from_delta(
     registry: TempTableRegistry,
     prefix: str,
 ) -> DataFrame:
-    name = f"__incremental_{prefix}_{uuid4().hex}"
+    name = f"__incremental_{prefix}_{uuid7_hex()}"
     df = register_delta_df(
         DeltaAccessContext(runtime=runtime),
         path=path,

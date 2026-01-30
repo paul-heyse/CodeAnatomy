@@ -43,7 +43,7 @@ from obs.otel.resource_detectors import (
     resolve_service_instance_id,
 )
 from obs.otel.resources import ResourceOptions, build_resource, resolve_service_name
-from utils.env_utils import env_value
+from utils.env_utils import env_bool_strict, env_text, env_value
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import ExemplarFilter
@@ -175,7 +175,11 @@ _STATE: dict[str, OtelProviders | None] = {"providers": None}
 
 def _resolve_protocol(signal: str) -> str:
     key = f"OTEL_EXPORTER_OTLP_{signal.upper()}_PROTOCOL"
-    protocol = os.environ.get(key) or os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
+    protocol = env_text(key, allow_empty=True, strip=False) or env_text(
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        allow_empty=True,
+        strip=False,
+    )
     return (protocol or "grpc").strip().lower()
 
 
@@ -256,21 +260,10 @@ def _configure_otel_log_level(level: int | None) -> None:
 
 
 def _logging_auto_instrumentation_enabled() -> bool:
-    raw = os.environ.get("OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED")
-    if raw is None:
-        return False
-    value = raw.strip().lower()
-    if not value:
-        return False
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    _LOGGER.warning(
-        "Invalid OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: %r",
-        raw,
+    return env_bool_strict(
+        "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED",
+        default=False,
     )
-    return False
 
 
 def _install_logging_handler(logger_provider: LoggerProvider) -> None:
@@ -287,7 +280,8 @@ def _install_logging_handler(logger_provider: LoggerProvider) -> None:
 
 
 def _set_propagators() -> None:
-    if os.environ.get("OTEL_PROPAGATORS"):
+    raw = env_text("OTEL_PROPAGATORS", allow_empty=True, strip=False)
+    if raw:
         return
     set_global_textmap(
         CompositePropagator([TraceContextTextMapPropagator(), W3CBaggagePropagator()])
@@ -593,7 +587,7 @@ def configure_otel(
             "urllib,urllib3",
         )
         os.environ.setdefault("OTEL_PYTHON_EXCLUDED_URLS", ".*health.*")
-        if os.environ.get("OTEL_SEMCONV_STABILITY_OPT_IN") is None:
+        if env_text("OTEL_SEMCONV_STABILITY_OPT_IN", allow_empty=True) is None:
             os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "http,db"
         _enable_auto_instrumentation()
 

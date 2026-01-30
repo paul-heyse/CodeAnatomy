@@ -29,9 +29,6 @@ type RowStrict = dict[str, RowValueStrict]
 type RowRich = dict[str, RowValueRich]
 type RowPermissive = dict[str, object]
 
-type Row = RowPermissive
-type RowValue = RowValueRich
-
 
 class DeterminismTier(StrEnum):
     """Determinism budgets for the pipeline."""
@@ -98,11 +95,9 @@ __all__ = [
     "JsonValueLax",
     "PathLike",
     "RepoId",
-    "Row",
     "RowPermissive",
     "RowRich",
     "RowStrict",
-    "RowValue",
     "RowValueRich",
     "RowValueStrict",
     "StrictnessMode",

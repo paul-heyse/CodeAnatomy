@@ -6,7 +6,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Final
-from uuid import uuid4
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -14,6 +13,12 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
+from datafusion_engine.arrow_schema.field_builders import (
+    bool_field,
+    int32_field,
+    int64_field,
+    string_field,
+)
 from datafusion_engine.expr_udf_shims import (
     arrow_metadata,
     list_extract,
@@ -36,6 +41,7 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.view_graph_registry import ViewNode
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -2536,19 +2542,19 @@ def _symtable_namespace_edges_df(ctx: SessionContext) -> DataFrame:
 def _empty_ts_ast_check_df(ctx: SessionContext) -> DataFrame:
     empty_schema = pa.schema(
         [
-            pa.field("file_id", pa.string(), nullable=False),
-            pa.field("path", pa.string(), nullable=False),
-            pa.field("ts_start_byte", pa.int64(), nullable=True),
-            pa.field("ts_end_byte", pa.int64(), nullable=True),
-            pa.field("ast_start_byte", pa.int64(), nullable=True),
-            pa.field("ast_end_byte", pa.int64(), nullable=True),
+            string_field("file_id", nullable=False),
+            string_field("path", nullable=False),
+            int64_field("ts_start_byte"),
+            int64_field("ts_end_byte"),
+            int64_field("ast_start_byte"),
+            int64_field("ast_end_byte"),
         ]
     )
     empty_table = pa.Table.from_arrays(
         [pa.array([], type=field.type) for field in empty_schema],
         schema=empty_schema,
     )
-    empty_name = f"__ts_ast_check_empty_{uuid4().hex}"
+    empty_name = f"__ts_ast_check_empty_{uuid7_hex()}"
     ctx.from_arrow(empty_table, name=empty_name)
     return ctx.table(empty_name)
 
@@ -2742,22 +2748,22 @@ def _python_imports_df(ctx: SessionContext) -> DataFrame:
 def _empty_python_imports_df(ctx: SessionContext) -> DataFrame:
     empty_schema = pa.schema(
         [
-            pa.field("file_id", pa.string(), nullable=False),
-            pa.field("path", pa.string(), nullable=False),
-            pa.field("source", pa.string(), nullable=True),
-            pa.field("kind", pa.string(), nullable=True),
-            pa.field("module", pa.string(), nullable=True),
-            pa.field("name", pa.string(), nullable=True),
-            pa.field("asname", pa.string(), nullable=True),
-            pa.field("level", pa.int32(), nullable=True),
-            pa.field("is_star", pa.bool_(), nullable=True),
+            string_field("file_id", nullable=False),
+            string_field("path", nullable=False),
+            string_field("source"),
+            string_field("kind"),
+            string_field("module"),
+            string_field("name"),
+            string_field("asname"),
+            int32_field("level"),
+            bool_field("is_star"),
         ]
     )
     empty_table = pa.Table.from_arrays(
         [pa.array([], type=field.type) for field in empty_schema],
         schema=empty_schema,
     )
-    empty_name = f"__python_imports_empty_{uuid4().hex}"
+    empty_name = f"__python_imports_empty_{uuid7_hex()}"
     ctx.from_arrow(empty_table, name=empty_name)
     return ctx.table(empty_name)
 

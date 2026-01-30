@@ -11,6 +11,8 @@ import msgspec
 from serde_msgspec import JSON_ENCODER, JSON_ENCODER_SORTED, MSGPACK_ENCODER, to_builtins
 from utils.hashing import (
     config_fingerprint,
+    hash64_from_text,
+    hash128_from_text,
     hash_file_sha256,
     hash_json_canonical,
     hash_json_default,
@@ -29,6 +31,21 @@ def test_hash_sha256_hex_length() -> None:
     expected = hashlib.sha256(payload).hexdigest()
     assert hash_sha256_hex(payload) == expected
     assert hash_sha256_hex(payload, length=16) == expected[:16]
+
+
+def test_hash64_from_text_matches_blake2b() -> None:
+    """Verify hash64_from_text uses blake2b digest semantics."""
+    value = "stable-hash"
+    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest()
+    expected = int.from_bytes(digest, "big", signed=False) & ((1 << 63) - 1)
+    assert hash64_from_text(value) == expected
+
+
+def test_hash128_from_text_matches_blake2b() -> None:
+    """Verify hash128_from_text uses blake2b hex digest semantics."""
+    value = "stable-hash"
+    expected = hashlib.blake2b(value.encode("utf-8"), digest_size=16).hexdigest()
+    assert hash128_from_text(value) == expected
 
 
 def test_hash_msgpack_default_matches_msgspec() -> None:

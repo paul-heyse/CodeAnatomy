@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -31,7 +30,7 @@ from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema_validation import ArrowValidationOptions
-from datafusion_engine.session_helpers import deregister_table, register_temp_table
+from datafusion_engine.session_helpers import deregister_table, register_temp_table, temp_table
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
@@ -564,11 +563,7 @@ def _row_id_for_errors(
             msg = "DataFusion SessionContext required to compute error row ids."
             raise TypeError(msg)
         resolved_table = to_arrow_table(errors)
-        table_name = f"_finalize_errors_{uuid.uuid4().hex}"
-        from datafusion_engine.ingest import datafusion_from_arrow
-
-        datafusion_from_arrow(df_ctx, name=table_name, value=resolved_table)
-        try:
+        with temp_table(df_ctx, resolved_table, prefix="_finalize_errors_") as table_name:
             prefix = f"{contract.name}:row"
             df = df_ctx.table(table_name)
             parts = [lit(prefix)]
@@ -581,8 +576,6 @@ def _row_id_for_errors(
                 parts.append(expr)
             concat_expr = f.concat_ws(_HASH_JOIN_SEPARATOR, *parts)
             result = df.select(stable_hash64(concat_expr).alias("row_id")).to_arrow_table()
-        finally:
-            deregister_table(df_ctx, table_name)
         return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 

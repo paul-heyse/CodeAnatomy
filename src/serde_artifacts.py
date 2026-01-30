@@ -28,8 +28,7 @@ from serde_msgspec_ext import (
 )
 from utils.hashing import hash_msgpack_canonical
 
-# Any is required to model arbitrary JSON payloads in schema exports.
-type JsonValue = JsonValueLax
+# JsonValueLax is required to model arbitrary JSON payloads in schema exports.
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 NonNegFloat = Annotated[float, msgspec.Meta(ge=0)]
@@ -171,28 +170,28 @@ ArtifactStatus = Annotated[
 class PlanArtifacts(StructBaseCompat, frozen=True):
     """Serializable plan artifacts captured during planning."""
 
-    explain_tree_rows: tuple[dict[str, JsonValue], ...] | None
-    explain_verbose_rows: tuple[dict[str, JsonValue], ...] | None
+    explain_tree_rows: tuple[dict[str, JsonValueLax], ...] | None
+    explain_verbose_rows: tuple[dict[str, JsonValueLax], ...] | None
     explain_analyze_duration_ms: NonNegFloat | None
     explain_analyze_output_rows: NonNegInt | None
     df_settings: dict[str, str]
-    planning_env_snapshot: dict[str, JsonValue]
+    planning_env_snapshot: dict[str, JsonValueLax]
     planning_env_hash: HashValue
-    rulepack_snapshot: dict[str, JsonValue] | None
+    rulepack_snapshot: dict[str, JsonValueLax] | None
     rulepack_hash: HashValue | None
-    information_schema_snapshot: dict[str, JsonValue]
+    information_schema_snapshot: dict[str, JsonValueLax]
     information_schema_hash: HashValue
-    substrait_validation: dict[str, JsonValue] | None
+    substrait_validation: dict[str, JsonValueLax] | None
     logical_plan_proto: LogicalPlanProtoBytes | None
     optimized_plan_proto: OptimizedPlanProtoBytes | None
     execution_plan_proto: ExecutionPlanProtoBytes | None
     udf_snapshot_hash: HashValue
     function_registry_hash: HashValue
-    function_registry_snapshot: dict[str, JsonValue]
+    function_registry_snapshot: dict[str, JsonValueLax]
     rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
-    udf_snapshot: dict[str, JsonValue]
-    udf_planner_snapshot: dict[str, JsonValue] | None
+    udf_snapshot: dict[str, JsonValueLax]
+    udf_planner_snapshot: dict[str, JsonValueLax] | None
 
 
 class PlanProtoStatus(StructBaseCompat, frozen=True):
@@ -267,7 +266,7 @@ class DeltaScanConfigSnapshot(StructBaseCompat, frozen=True):
     enable_parquet_pushdown: bool = True
     schema_force_view_types: bool | None = None
     wrap_partition_values: bool = False
-    schema: dict[str, JsonValue] | None = None
+    schema: dict[str, JsonValueLax] | None = None
 
 
 class PlanArtifactRow(StructBaseCompat, frozen=True):
@@ -439,9 +438,9 @@ class ViewArtifactPayload(StructBaseCompat, frozen=True):
     name: ViewName
     plan_fingerprint: PlanFingerprint
     plan_task_signature: PlanSignature
-    schema: dict[str, JsonValue]
-    schema_describe: tuple[dict[str, JsonValue], ...]
-    schema_provenance: dict[str, JsonValue]
+    schema: dict[str, JsonValueLax]
+    schema_describe: tuple[dict[str, JsonValueLax], ...]
+    schema_provenance: dict[str, JsonValueLax]
     required_udfs: tuple[str, ...]
     referenced_tables: tuple[str, ...]
 
@@ -454,7 +453,7 @@ class RuntimeProfileSnapshot(StructBaseCompat, frozen=True):
     determinism_tier: NonEmptyStr
     datafusion_settings_hash: HashValue
     datafusion_settings: dict[str, str]
-    telemetry_payload: dict[str, JsonValue]
+    telemetry_payload: dict[str, JsonValueLax]
     profile_hash: HashValue
 
     def payload(self) -> dict[str, object]:
@@ -492,8 +491,8 @@ class RunManifest(StructBaseHotPath, frozen=True):
     event_time_unix_ms: NonNegInt
     plan_signature: PlanSignature | None
     plan_fingerprints: dict[str, PlanFingerprint]
-    delta_inputs: tuple[dict[str, JsonValue], ...]
-    outputs: tuple[dict[str, JsonValue], ...]
+    delta_inputs: tuple[dict[str, JsonValueLax], ...]
+    outputs: tuple[dict[str, JsonValueLax], ...]
     runtime_profile_name: ProfileName | None
     runtime_profile_hash: HashValue | None
     determinism_tier: NonEmptyStr | None
@@ -588,7 +587,7 @@ class PlanValidationArtifact(StructBaseCompat, frozen=True):
     total_edges: NonNegInt
     valid_edges: NonNegInt
     invalid_edges: NonNegInt
-    task_results: tuple[dict[str, JsonValue], ...]
+    task_results: tuple[dict[str, JsonValueLax], ...]
 
 
 class PlanValidationEnvelope(ArtifactEnvelopeBase, tag="plan_validation", frozen=True):

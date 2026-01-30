@@ -29,7 +29,7 @@ from datafusion_engine.lineage_datafusion import ScanLineage
 from obs.otel.scopes import SCOPE_SCHEDULING
 from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaScanConfigSnapshot
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import to_builtins
 from storage.deltalake import build_delta_file_index_from_add_actions
 from storage.deltalake.file_pruning import (
     FilePruningPolicy,
@@ -37,7 +37,7 @@ from storage.deltalake.file_pruning import (
     StatsFilter,
     evaluate_and_select_files,
 )
-from utils.hashing import hash_msgpack_canonical, hash_sha256_hex, hash_storage_options
+from utils.hashing import hash_msgpack_canonical, hash_storage_options
 from utils.storage_options import merged_storage_options, normalize_storage_options
 
 if TYPE_CHECKING:
@@ -541,8 +541,7 @@ def _delta_scan_config_snapshot(
 def _delta_scan_config_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | None:
     if snapshot is None:
         return None
-    payload = dumps_msgpack(snapshot)
-    return hash_sha256_hex(payload)
+    return hash_msgpack_canonical(snapshot)
 
 
 def _provider_marker(

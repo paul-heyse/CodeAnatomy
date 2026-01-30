@@ -63,7 +63,7 @@ def _load_extension() -> object:
     Returns
     -------
     object
-        Imported datafusion_ext module.
+        Imported datafusion._internal module.
 
     Raises
     ------
@@ -73,11 +73,11 @@ def _load_extension() -> object:
         Raised when a nested dependency import fails.
     """
     try:
-        return importlib.import_module("datafusion_ext")
+        return importlib.import_module("datafusion._internal")
     except ModuleNotFoundError as exc:
-        if exc.name != "datafusion_ext":
+        if exc.name != "datafusion._internal":
             raise
-        msg = "datafusion_ext is required for ExprPlanner installation."
+        msg = "datafusion._internal is required for ExprPlanner installation."
         raise ImportError(msg) from exc
 
 
@@ -90,7 +90,7 @@ def _install_native_expr_planners(
     module = _load_extension()
     install = getattr(module, "install_expr_planners", None)
     if not callable(install):
-        msg = "datafusion_ext.install_expr_planners is unavailable."
+        msg = "datafusion._internal.install_expr_planners is unavailable."
         raise TypeError(msg)
     try:
         install(ctx, list(planner_names))

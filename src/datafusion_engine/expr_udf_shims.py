@@ -5,35 +5,53 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from types import ModuleType
-from typing import cast
 
 from datafusion import Expr
 
 
 def _require_module() -> ModuleType:
     try:
-        return importlib.import_module("datafusion_ext")
+        return importlib.import_module("datafusion._internal")
     except ImportError as exc:
-        msg = "datafusion_ext is required for expression UDF shims."
+        msg = "datafusion._internal is required for expression UDF shims."
         raise RuntimeError(msg) from exc
 
 
-def _require_callable(module: ModuleType, name: str) -> Callable[..., Expr]:
+def _require_callable(module: ModuleType, name: str) -> Callable[..., object]:
     func = getattr(module, name, None)
-    if not callable(func):
-        msg = f"datafusion_ext.{name} is unavailable."
+    if not isinstance(func, Callable):
+        msg = f"datafusion._internal.{name} is unavailable."
         raise TypeError(msg)
-    return cast("Callable[..., Expr]", func)
+    return func
+
+
+def _unwrap_expr_arg(value: object) -> object:
+    if isinstance(value, Expr):
+        return value.expr
+    return value
+
+
+def _wrap_result(result: object) -> Expr:
+    if isinstance(result, Expr):
+        return result
+    try:
+        return Expr(result)
+    except TypeError as exc:
+        msg = "datafusion._internal returned a non-Expr result."
+        raise TypeError(msg) from exc
 
 
 def _call_expr(name: str, *args: object, **kwargs: object) -> Expr:
     module = _require_module()
     func = _require_callable(module, name)
-    result = func(*args, **kwargs)
-    if not isinstance(result, Expr):
-        msg = f"datafusion_ext.{name} returned a non-Expr result."
-        raise TypeError(msg)
-    return result
+    resolved_args = tuple(_unwrap_expr_arg(arg) for arg in args)
+    resolved_kwargs = {key: _unwrap_expr_arg(value) for key, value in kwargs.items()}
+    result = func(*resolved_args, **resolved_kwargs)
+    try:
+        return _wrap_result(result)
+    except TypeError as exc:
+        msg = f"datafusion._internal.{name} returned a non-Expr result."
+        raise TypeError(msg) from exc
 
 
 def map_entries(expr: Expr) -> Expr:

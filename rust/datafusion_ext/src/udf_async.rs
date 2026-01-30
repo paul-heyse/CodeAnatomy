@@ -15,8 +15,9 @@ use datafusion_expr::{
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
-use tokio::runtime::Runtime;
 use tokio::time;
+
+use crate::async_runtime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AsyncUdfPolicy {
@@ -34,14 +35,8 @@ impl Default for AsyncUdfPolicy {
 }
 
 static ASYNC_UDF_POLICY: OnceLock<RwLock<AsyncUdfPolicy>> = OnceLock::new();
-static ASYNC_RUNTIME: OnceLock<Runtime> = OnceLock::new();
-
 fn async_udf_policy_lock() -> &'static RwLock<AsyncUdfPolicy> {
     ASYNC_UDF_POLICY.get_or_init(|| RwLock::new(AsyncUdfPolicy::default()))
-}
-
-fn async_runtime() -> &'static Runtime {
-    ASYNC_RUNTIME.get_or_init(|| Runtime::new().expect("async udf runtime"))
 }
 
 pub fn set_async_udf_policy(
@@ -187,7 +182,7 @@ impl AsyncScalarUDFImpl for AsyncEchoUdf {
 
     async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let policy = self.policy;
-        let handle = async_runtime().spawn(async move {
+        let handle = async_runtime::runtime_handle().spawn(async move {
             let value = args.args.first().ok_or_else(|| {
                 DataFusionError::Plan("async_echo expects exactly one argument".into())
             })?;

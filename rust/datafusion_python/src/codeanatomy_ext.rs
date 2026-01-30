@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,11 +34,12 @@ use datafusion_common::{
 };
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::file_format::ParquetFormat;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
     CreateExternalTable, DdlStatement, Expr, LogicalPlan, SortExpr, TableProviderFilterPushDown,
     TableType,
 };
+use datafusion_ext::install_expr_planners_native;
+use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use crate::delta_control_plane::{
     delta_add_actions as delta_add_actions_native,
@@ -72,62 +73,7 @@ use crate::delta_observability::{
 use crate::delta_protocol::{gate_from_parts, DeltaFeatureGate, DeltaSnapshotInfo};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
-use crate::{
-    expr_planner,
-    function_factory,
-    function_rewrite,
-    registry_snapshot,
-    udf_builtin,
-    udf_custom,
-    udf_docs,
-};
-
-pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
-    let state_ref = ctx.state_ref();
-    let mut state = state_ref.write();
-    let new_state = function_factory::with_sql_macro_factory(&state);
-    *state = new_state;
-    Ok(())
-}
-
-pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]) -> Result<()> {
-    if planner_names.is_empty() {
-        return Err(DataFusionError::Plan(
-            "ExprPlanner installation requires at least one planner name.".into(),
-        ));
-    }
-    let mut unknown: Vec<String> = Vec::new();
-    let mut install_domain = false;
-    for name in planner_names {
-        match *name {
-            "codeanatomy_domain" => {
-                install_domain = true;
-            }
-            _ => unknown.push((*name).to_string()),
-        }
-    }
-    if !unknown.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-            "Unsupported ExprPlanner names: {}",
-            unknown.join(", ")
-        )));
-    }
-    let state_ref = ctx.state_ref();
-    let mut state = state_ref.write();
-    state.register_expr_planner(Arc::new(
-        datafusion_functions_nested::planner::NestedFunctionPlanner,
-    ))?;
-    state.register_expr_planner(Arc::new(
-        datafusion_functions_nested::planner::FieldAccessPlanner,
-    ))?;
-    if install_domain {
-        state.register_expr_planner(Arc::new(expr_planner::CodeAnatomyDomainPlanner::default()))?;
-        state.register_function_rewrite(Arc::new(
-            function_rewrite::CodeAnatomyOperatorRewrite::default(),
-        ))?;
-    }
-    Ok(())
-}
+use crate::{registry_snapshot, udf_builtin, udf_custom_py, udf_docs};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
@@ -366,6 +312,17 @@ fn extract_plugin_handle(py: Python<'_>, plugin: &Py<PyAny>) -> PyResult<Arc<Plu
     Ok(handle.clone())
 }
 
+#[pyfunction]
+fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let config = state.config_mut();
+    if config.get_extension::<CodeAnatomyUdfConfig>().is_none() {
+        config.set_extension(Arc::new(CodeAnatomyUdfConfig::default()));
+    }
+    Ok(())
+}
+
 #[pyfunction(name = "registry_snapshot")]
 fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
     let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
@@ -394,6 +351,21 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
         rewrite_payload.set_item(name, PyList::new(py, tags)?)?;
     }
     payload.set_item("rewrite_tags", rewrite_payload)?;
+    let simplify_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.simplify {
+        simplify_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("simplify", simplify_payload)?;
+    let coerce_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.coerce_types {
+        coerce_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("coerce_types", coerce_payload)?;
+    let short_payload = PyDict::new(py);
+    for (name, enabled) in snapshot.short_circuits {
+        short_payload.set_item(name, enabled)?;
+    }
+    payload.set_item("short_circuits", short_payload)?;
     let signature_payload = PyDict::new(py);
     for (name, signatures) in snapshot.signature_inputs {
         let mut rows: Vec<Py<PyAny>> = Vec::with_capacity(signatures.len());
@@ -408,6 +380,25 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
         return_payload.set_item(name, PyList::new(py, return_types)?)?;
     }
     payload.set_item("return_types", return_payload)?;
+    let config_payload = PyDict::new(py);
+    for (name, defaults) in snapshot.config_defaults {
+        let entry = PyDict::new(py);
+        for (key, value) in defaults {
+            match value {
+                UdfConfigValue::Bool(flag) => {
+                    entry.set_item(key, flag)?;
+                }
+                UdfConfigValue::Int(value) => {
+                    entry.set_item(key, value)?;
+                }
+                UdfConfigValue::String(text) => {
+                    entry.set_item(key, text)?;
+                }
+            }
+        }
+        config_payload.set_item(name, entry)?;
+    }
+    payload.set_item("config_defaults", config_payload)?;
     payload.set_item("custom_udfs", PyList::new(py, snapshot.custom_udfs)?)?;
     payload.set_item("pycapsule_udfs", PyList::empty(py))?;
     Ok(payload.into())
@@ -492,6 +483,27 @@ fn register_df_plugin_table_functions(
 }
 
 #[pyfunction]
+fn create_df_plugin_table_provider(
+    py: Python<'_>,
+    plugin: Py<PyAny>,
+    provider_name: String,
+    options_json: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    let provider = handle
+        .create_table_provider(provider_name.as_str(), options_json.as_deref())
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to create plugin table provider {provider_name:?}: {err}"
+            ))
+        })?;
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, provider, Some(name))?;
+    Ok(capsule.unbind().into())
+}
+
+#[pyfunction]
 fn register_df_plugin_table_providers(
     py: Python<'_>,
     ctx: PyRef<PySessionContext>,
@@ -531,6 +543,66 @@ fn register_df_plugin(
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
     Ok(())
+}
+
+fn plugin_library_filename(crate_name: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{crate_name}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{crate_name}.dylib")
+    } else {
+        format!("lib{crate_name}.so")
+    }
+}
+
+#[pyfunction]
+fn plugin_library_path(py: Python<'_>) -> PyResult<String> {
+    let module = py.import("datafusion_ext")?;
+    let module_file: String = module.getattr("__file__")?.extract()?;
+    let module_path = PathBuf::from(module_file);
+    let lib_name = plugin_library_filename("df_plugin_codeanatomy");
+    let base = module_path
+        .parent()
+        .ok_or_else(|| PyRuntimeError::new_err("datafusion_ext.__file__ has no parent directory"))?;
+    let plugin_path = base.join("plugin").join(&lib_name);
+    if plugin_path.exists() {
+        return Ok(plugin_path.display().to_string());
+    }
+    Ok(base.join(lib_name).display().to_string())
+}
+
+#[pyfunction]
+#[pyo3(signature = (path = None))]
+fn plugin_manifest(py: Python<'_>, path: Option<String>) -> PyResult<Py<PyAny>> {
+    let resolved = if let Some(value) = path {
+        value
+    } else {
+        plugin_library_path(py)?
+    };
+    let handle = load_plugin(Path::new(&resolved)).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load plugin manifest for {resolved:?}: {err}"))
+    })?;
+    let manifest = handle.manifest();
+    let payload = PyDict::new(py);
+    payload.set_item("plugin_path", resolved)?;
+    payload.set_item("struct_size", manifest.struct_size)?;
+    payload.set_item("plugin_abi_major", manifest.plugin_abi_major)?;
+    payload.set_item("plugin_abi_minor", manifest.plugin_abi_minor)?;
+    payload.set_item("df_ffi_major", manifest.df_ffi_major)?;
+    payload.set_item("datafusion_major", manifest.datafusion_major)?;
+    payload.set_item("arrow_major", manifest.arrow_major)?;
+    payload.set_item("plugin_name", manifest.plugin_name.to_string())?;
+    payload.set_item("plugin_version", manifest.plugin_version.to_string())?;
+    payload.set_item("build_id", manifest.build_id.to_string())?;
+    payload.set_item("capabilities", manifest.capabilities)?;
+    let features: Vec<String> = manifest
+        .features
+        .iter()
+        .map(|value| value.to_string())
+        .collect();
+    let features_list = PyList::new(py, features)?;
+    payload.set_item("features", features_list)?;
+    Ok(payload.into())
 }
 
 #[derive(Debug, Default)]
@@ -2288,9 +2360,10 @@ fn delta_data_checker(
 
 pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(
-        udf_custom::install_function_factory,
+        udf_custom_py::install_function_factory,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
@@ -2300,10 +2373,16 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        create_df_plugin_table_provider,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         register_df_plugin_table_providers,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(register_df_plugin, module)?)?;
+    module.add_function(wrap_pyfunction!(plugin_library_path, module)?)?;
+    module.add_function(wrap_pyfunction!(plugin_manifest, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_entries, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_keys, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_values, module)?)?;
@@ -2317,35 +2396,35 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(udf_builtin::row_number_window, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::lag_window, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::lead_window, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::arrow_metadata, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::arrow_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::union_tag, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::union_extract, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::stable_hash64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::stable_hash128, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::prefixed_hash64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::stable_id, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::semantic_tag, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::stable_id_parts, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::prefixed_hash_parts64, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::stable_hash_any, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::span_make, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::span_len, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::span_overlaps, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::span_contains, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::interval_align_score, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::span_id, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::utf8_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::utf8_null_if_blank, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::qname_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::map_get_default, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::map_normalize, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::list_compact, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::list_unique_sorted, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::struct_pick, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::cdf_change_rank, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::cdf_is_upsert, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::cdf_is_delete, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_custom::col_to_byte, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash64, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash128, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::prefixed_hash64, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::stable_id, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::semantic_tag, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::stable_id_parts, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::prefixed_hash_parts64, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::stable_hash_any, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::span_make, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::span_len, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::span_overlaps, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::span_contains, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::interval_align_score, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::span_id, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::utf8_normalize, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::utf8_null_if_blank, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::qname_normalize, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::map_get_default, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::map_normalize, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::list_compact, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::list_unique_sorted, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::struct_pick, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_change_rank, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_is_upsert, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::cdf_is_delete, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom_py::col_to_byte, module)?)?;
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider_with_files, module)?)?;
@@ -2383,5 +2462,16 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(delta_drop_constraints, module)?)?;
     module.add_function(wrap_pyfunction!(delta_create_checkpoint, module)?)?;
     module.add_function(wrap_pyfunction!(delta_cleanup_metadata, module)?)?;
+    Ok(())
+}
+
+pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        create_df_plugin_table_provider,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(plugin_library_path, module)?)?;
+    module.add_function(wrap_pyfunction!(plugin_manifest, module)?)?;
     Ok(())
 }

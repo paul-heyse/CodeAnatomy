@@ -141,6 +141,14 @@ def pytest_sessionstart(session: object) -> None:
     """Initialize diagnostic capture for the pytest session."""
     _DIAG_DIR.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "true")
+    from datafusion_engine.plugin_discovery import assert_plugin_available, plugin_stub_enabled
+
+    if plugin_stub_enabled():
+        from test_support import datafusion_ext_stub
+
+        sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
+    else:
+        assert_plugin_available()
     _write_json(_ENV_PATH, _collect_env())
     _write_json(_VERSIONS_PATH, _collect_versions())
     _write_json(_RESOURCES_PATH, _collect_resources())

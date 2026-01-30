@@ -24,11 +24,6 @@ use datafusion_expr::{
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
-use datafusion_python::context::PySessionContext;
-use datafusion_python::expr::PyExpr;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyBytesMethods, PyTuple};
 use unicode_normalization::UnicodeNormalization;
 
 #[cfg(feature = "async-udf")]
@@ -68,19 +63,14 @@ struct FunctionFactoryPolicy {
 
 const POLICY_SCHEMA_VERSION: i32 = 1;
 
-#[pyfunction]
-pub fn install_function_factory(
-    ctx: PyRef<PySessionContext>,
-    policy_ipc: &Bound<'_, PyBytes>,
-) -> PyResult<()> {
-    let policy = policy_from_ipc(policy_ipc.as_bytes())
-        .map_err(|err| PyValueError::new_err(format!("Invalid policy payload: {err}")))?;
+pub fn install_function_factory_native(
+    ctx: &SessionContext,
+    policy_ipc: &[u8],
+) -> Result<()> {
+    let policy = policy_from_ipc(policy_ipc)?;
     touch_policy_fields(&policy);
-    register_primitives(&ctx.ctx, &policy)
-        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
-    install_sql_macro_factory(&ctx.ctx)
-        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
-    Ok(())
+    register_primitives(ctx, &policy)?;
+    install_sql_macro_factory(ctx)
 }
 
 fn install_sql_macro_factory(ctx: &SessionContext) -> Result<()> {
@@ -324,6 +314,11 @@ fn register_primitives(ctx: &SessionContext, policy: &FunctionFactoryPolicy) -> 
 fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF> {
     let signature = primitive_signature(primitive, prefer_named)?;
     match primitive.name.as_str() {
+        "arrow_metadata" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            ArrowMetadataUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "cpg_score" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(CpgScoreUdf {
             signature: SignatureEqHash::new(signature),
         }))),
@@ -434,6 +429,9 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "col_to_byte" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
             signature: SignatureEqHash::new(signature),
         }))),
+        "semantic_tag" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SemanticTagUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
         name => Err(DataFusionError::Plan(format!(
             "Unsupported rule primitive: {name}"
         ))),
@@ -467,13 +465,14 @@ fn primitive_signature(primitive: &RulePrimitive, prefer_named: bool) -> Result<
 }
 
 fn signature_from_arg_types(arg_types: Vec<DataType>, volatility: Volatility) -> Signature {
-    let has_string = arg_types
-        .iter()
-        .any(|dtype| matches!(dtype, DataType::Utf8));
-    if arg_types
-        .iter()
-        .all(|dtype| matches!(dtype, DataType::Utf8))
-    {
+    if arg_types.is_empty() {
+        return Signature::nullary(volatility);
+    }
+    if arg_types.iter().all(|dtype| matches!(dtype, DataType::Null)) {
+        return Signature::any(arg_types.len(), volatility);
+    }
+    let has_string = arg_types.iter().any(is_string_type);
+    if arg_types.iter().all(is_string_type) {
         Signature::string(arg_types.len(), volatility)
     } else if has_string {
         Signature::one_of(expand_string_signatures(&arg_types), volatility)
@@ -482,11 +481,15 @@ fn signature_from_arg_types(arg_types: Vec<DataType>, volatility: Volatility) ->
     }
 }
 
+fn is_string_type(dtype: &DataType) -> bool {
+    matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+}
+
 fn expand_string_signatures(arg_types: &[DataType]) -> Vec<TypeSignature> {
     let variants = [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View];
     let mut expanded: Vec<Vec<DataType>> = vec![Vec::new()];
     for dtype in arg_types {
-        if matches!(dtype, DataType::Utf8) {
+        if is_string_type(dtype) {
             let mut next = Vec::new();
             for existing in &expanded {
                 for variant in &variants {
@@ -506,15 +509,184 @@ fn expand_string_signatures(arg_types: &[DataType]) -> Vec<TypeSignature> {
 }
 
 fn dtype_from_str(value: &str) -> Result<DataType> {
-    match value {
-        "string" => Ok(DataType::Utf8),
-        "int64" => Ok(DataType::Int64),
-        "int32" => Ok(DataType::Int32),
-        "float64" => Ok(DataType::Float64),
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported dtype in primitive policy: {value}"
-        ))),
+    let text = normalize_type(value)?;
+    parse_type_signature(&text).map_err(|err| {
+        DataFusionError::Plan(format!("Unsupported dtype in primitive policy: {value} ({err})"))
+    })
+}
+
+fn normalize_type(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(DataFusionError::Plan(
+            "Unsupported dtype in primitive policy: empty string".into(),
+        ));
     }
+    Ok(trimmed.to_lowercase())
+}
+
+fn parse_type_signature(text: &str) -> Result<DataType> {
+    if let Some(simple) = simple_type_from_str(text) {
+        return Ok(simple);
+    }
+    if let Some(container) = parse_container_type(text)? {
+        return Ok(container);
+    }
+    if let Some(decimal) = parse_decimal(text)? {
+        return Ok(decimal);
+    }
+    Err(DataFusionError::Plan(format!(
+        "Unsupported dtype in primitive policy: {text}"
+    )))
+}
+
+fn simple_type_from_str(text: &str) -> Option<DataType> {
+    match text {
+        "null" => Some(DataType::Null),
+        "bool" | "boolean" => Some(DataType::Boolean),
+        "int8" => Some(DataType::Int8),
+        "int16" => Some(DataType::Int16),
+        "int32" => Some(DataType::Int32),
+        "int64" => Some(DataType::Int64),
+        "uint8" => Some(DataType::UInt8),
+        "uint16" => Some(DataType::UInt16),
+        "uint32" => Some(DataType::UInt32),
+        "uint64" => Some(DataType::UInt64),
+        "float16" => Some(DataType::Float16),
+        "float32" | "float" => Some(DataType::Float32),
+        "float64" | "double" => Some(DataType::Float64),
+        "binary" => Some(DataType::Binary),
+        "largebinary" | "large_binary" => Some(DataType::LargeBinary),
+        "string" | "utf8" => Some(DataType::Utf8),
+        "largeutf8" | "large_string" => Some(DataType::LargeUtf8),
+        "utf8view" | "utf8_view" => Some(DataType::Utf8View),
+        _ => None,
+    }
+}
+
+fn parse_container_type(text: &str) -> Result<Option<DataType>> {
+    if let Some(inner) = text.strip_prefix("list<") {
+        return parse_list(inner, false).map(Some);
+    }
+    if let Some(inner) = text.strip_prefix("large_list<") {
+        return parse_list(inner, true).map(Some);
+    }
+    if let Some(inner) = text.strip_prefix("struct<") {
+        return parse_struct(inner).map(Some);
+    }
+    if let Some(inner) = text.strip_prefix("map<") {
+        return parse_map(inner).map(Some);
+    }
+    Ok(None)
+}
+
+fn parse_list(inner: &str, large: bool) -> Result<DataType> {
+    let body = strip_suffix(inner, ">")?;
+    let item_type = strip_named_type(body);
+    let dtype = parse_type_signature(item_type)?;
+    let field = Arc::new(Field::new("item", dtype, true));
+    Ok(if large {
+        DataType::LargeList(field)
+    } else {
+        DataType::List(field)
+    })
+}
+
+fn parse_struct(inner: &str) -> Result<DataType> {
+    let body = strip_suffix(inner, ">")?;
+    if body.is_empty() {
+        return Ok(DataType::Struct(Fields::empty()));
+    }
+    let mut fields: Vec<Field> = Vec::new();
+    for item in split_top_level(body, ',') {
+        let (name, type_str) = item
+            .split_once(':')
+            .ok_or_else(|| DataFusionError::Plan(format!("Invalid struct field: {item}")))?;
+        let dtype = parse_type_signature(type_str.trim())?;
+        fields.push(Field::new(name.trim(), dtype, true));
+    }
+    Ok(DataType::Struct(Fields::from(fields)))
+}
+
+fn parse_map(inner: &str) -> Result<DataType> {
+    let body = strip_suffix(inner, ">")?;
+    let parts = split_top_level(body, ',');
+    if parts.len() != 2 {
+        return Err(DataFusionError::Plan(format!(
+            "Invalid map signature: {body}"
+        )));
+    }
+    let key_type = parse_type_signature(strip_named_type(parts[0]))?;
+    let value_type = parse_type_signature(strip_named_type(parts[1]))?;
+    let fields = Fields::from(vec![
+        Field::new("key", key_type, false),
+        Field::new("value", value_type, true),
+    ]);
+    let entry = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+    Ok(DataType::Map(entry, false))
+}
+
+fn parse_decimal(text: &str) -> Result<Option<DataType>> {
+    let body = match text.strip_prefix("decimal(") {
+        Some(rest) => rest,
+        None => return Ok(None),
+    };
+    let parts = strip_suffix(body, ")")?
+        .split(',')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err(DataFusionError::Plan(format!(
+            "Invalid decimal signature: {text}"
+        )));
+    }
+    let precision: u8 = parts[0].parse().map_err(|err| {
+        DataFusionError::Plan(format!("Invalid decimal precision {parts:?}: {err}"))
+    })?;
+    let scale: i8 = parts[1].parse().map_err(|err| {
+        DataFusionError::Plan(format!("Invalid decimal scale {parts:?}: {err}"))
+    })?;
+    Ok(Some(DataType::Decimal128(precision, scale)))
+}
+
+fn split_top_level(value: &str, delimiter: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if ch == delimiter && depth == 0 {
+            let part = value[start..index].trim();
+            if !part.is_empty() {
+                parts.push(part);
+            }
+            start = index + ch.len_utf8();
+        }
+    }
+    let tail = value[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts
+}
+
+fn strip_suffix<'a>(value: &'a str, suffix: &str) -> Result<&'a str> {
+    value.strip_suffix(suffix).ok_or_else(|| {
+        DataFusionError::Plan(format!("Invalid type signature: {value}"))
+    })
+}
+
+fn strip_named_type(value: &str) -> &str {
+    let trimmed = value.trim();
+    trimmed
+        .split_once(':')
+        .map(|(_, dtype)| dtype.trim())
+        .unwrap_or(trimmed)
 }
 
 fn volatility_from_str(value: &str) -> Result<Volatility> {
@@ -1541,292 +1713,6 @@ pub fn col_to_byte_udf() -> ScalarUDF {
     ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
         signature: SignatureEqHash::new(signature),
     }))
-}
-
-#[pyfunction]
-#[pyo3(signature = (expr, key=None))]
-pub fn arrow_metadata(expr: PyExpr, key: Option<&str>) -> PyExpr {
-    let udf = arrow_metadata_udf();
-    let mut args = vec![expr.into()];
-    if let Some(key) = key {
-        args.push(lit(key));
-    }
-    udf.call(args).into()
-}
-
-#[pyfunction]
-pub fn stable_hash64(value: PyExpr) -> PyExpr {
-    stable_hash64_udf().call(vec![value.into()]).into()
-}
-
-#[pyfunction]
-pub fn stable_hash128(value: PyExpr) -> PyExpr {
-    stable_hash128_udf().call(vec![value.into()]).into()
-}
-
-#[pyfunction]
-pub fn prefixed_hash64(prefix: &str, value: PyExpr) -> PyExpr {
-    prefixed_hash64_udf()
-        .call(vec![lit(prefix), value.into()])
-        .into()
-}
-
-#[pyfunction]
-pub fn stable_id(prefix: &str, value: PyExpr) -> PyExpr {
-    stable_id_udf().call(vec![lit(prefix), value.into()]).into()
-}
-
-#[pyfunction]
-pub fn semantic_tag(semantic_type: &str, value: PyExpr) -> PyExpr {
-    semantic_tag_udf()
-        .call(vec![lit(semantic_type), value.into()])
-        .into()
-}
-
-fn push_optional_expr(args: &mut Vec<Expr>, value: Option<PyExpr>) {
-    if let Some(expr) = value {
-        args.push(expr.into());
-    }
-}
-
-fn extend_expr_args_from_tuple(args: &mut Vec<Expr>, parts: &Bound<'_, PyTuple>) -> PyResult<()> {
-    for item in parts.iter() {
-        let expr: PyExpr = item.extract()?;
-        args.push(expr.into());
-    }
-    Ok(())
-}
-
-#[pyfunction]
-#[pyo3(signature = (prefix, part1, *parts))]
-pub fn stable_id_parts(
-    prefix: &str,
-    part1: PyExpr,
-    parts: &Bound<'_, PyTuple>,
-) -> PyResult<PyExpr> {
-    let mut args: Vec<Expr> = vec![lit(prefix), part1.into()];
-    extend_expr_args_from_tuple(&mut args, parts)?;
-    Ok(stable_id_parts_udf().call(args).into())
-}
-
-#[pyfunction]
-#[pyo3(signature = (prefix, part1, *parts))]
-pub fn prefixed_hash_parts64(
-    prefix: &str,
-    part1: PyExpr,
-    parts: &Bound<'_, PyTuple>,
-) -> PyResult<PyExpr> {
-    let mut args: Vec<Expr> = vec![lit(prefix), part1.into()];
-    extend_expr_args_from_tuple(&mut args, parts)?;
-    Ok(prefixed_hash_parts64_udf().call(args).into())
-}
-
-#[pyfunction]
-#[pyo3(signature = (value, canonical=None, null_sentinel=None))]
-pub fn stable_hash_any(
-    value: PyExpr,
-    canonical: Option<bool>,
-    null_sentinel: Option<&str>,
-) -> PyExpr {
-    let mut args: Vec<Expr> = vec![value.into()];
-    if let Some(flag) = canonical {
-        args.push(lit(flag));
-    }
-    if let Some(sentinel) = null_sentinel {
-        args.push(lit(sentinel));
-    }
-    stable_hash_any_udf().call(args).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (bstart, bend, line_base=None, col_unit=None, end_exclusive=None))]
-pub fn span_make(
-    bstart: PyExpr,
-    bend: PyExpr,
-    line_base: Option<PyExpr>,
-    col_unit: Option<PyExpr>,
-    end_exclusive: Option<PyExpr>,
-) -> PyExpr {
-    let mut args: Vec<Expr> = vec![bstart.into(), bend.into()];
-    push_optional_expr(&mut args, line_base);
-    push_optional_expr(&mut args, col_unit);
-    push_optional_expr(&mut args, end_exclusive);
-    span_make_udf().call(args).into()
-}
-
-#[pyfunction]
-pub fn span_len(span: PyExpr) -> PyExpr {
-    span_len_udf().call(vec![span.into()]).into()
-}
-
-#[pyfunction]
-pub fn span_overlaps(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
-    span_overlaps_udf()
-        .call(vec![span_a.into(), span_b.into()])
-        .into()
-}
-
-#[pyfunction]
-pub fn span_contains(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
-    span_contains_udf()
-        .call(vec![span_a.into(), span_b.into()])
-        .into()
-}
-
-#[pyfunction]
-pub fn interval_align_score(
-    left_start: PyExpr,
-    left_end: PyExpr,
-    right_start: PyExpr,
-    right_end: PyExpr,
-) -> PyExpr {
-    interval_align_score_udf()
-        .call(vec![
-            left_start.into(),
-            left_end.into(),
-            right_start.into(),
-            right_end.into(),
-        ])
-        .into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (prefix, path, bstart, bend, kind=None))]
-pub fn span_id(
-    prefix: &str,
-    path: PyExpr,
-    bstart: PyExpr,
-    bend: PyExpr,
-    kind: Option<PyExpr>,
-) -> PyExpr {
-    let mut args: Vec<Expr> = vec![lit(prefix), path.into(), bstart.into(), bend.into()];
-    push_optional_expr(&mut args, kind);
-    span_id_udf().call(args).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (value, form=None, casefold=None, collapse_ws=None))]
-pub fn utf8_normalize(
-    value: PyExpr,
-    form: Option<&str>,
-    casefold: Option<bool>,
-    collapse_ws: Option<bool>,
-) -> PyExpr {
-    let mut args: Vec<Expr> = vec![value.into()];
-    if let Some(form) = form {
-        args.push(lit(form));
-    }
-    if let Some(flag) = casefold {
-        args.push(lit(flag));
-    }
-    if let Some(flag) = collapse_ws {
-        args.push(lit(flag));
-    }
-    utf8_normalize_udf().call(args).into()
-}
-
-#[pyfunction]
-pub fn utf8_null_if_blank(value: PyExpr) -> PyExpr {
-    utf8_null_if_blank_udf().call(vec![value.into()]).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (symbol, module=None, lang=None))]
-pub fn qname_normalize(symbol: PyExpr, module: Option<PyExpr>, lang: Option<PyExpr>) -> PyExpr {
-    let mut args: Vec<Expr> = vec![symbol.into()];
-    push_optional_expr(&mut args, module);
-    push_optional_expr(&mut args, lang);
-    qname_normalize_udf().call(args).into()
-}
-
-#[pyfunction]
-pub fn map_get_default(map_expr: PyExpr, key: &str, default_value: PyExpr) -> PyExpr {
-    map_get_default_udf()
-        .call(vec![map_expr.into(), lit(key), default_value.into()])
-        .into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (map_expr, key_case=None, sort_keys=None))]
-pub fn map_normalize(map_expr: PyExpr, key_case: Option<&str>, sort_keys: Option<bool>) -> PyExpr {
-    let mut args: Vec<Expr> = vec![map_expr.into()];
-    if let Some(key_case) = key_case {
-        args.push(lit(key_case));
-    }
-    if let Some(sort_keys) = sort_keys {
-        args.push(lit(sort_keys));
-    }
-    map_normalize_udf().call(args).into()
-}
-
-#[pyfunction]
-pub fn list_compact(list_expr: PyExpr) -> PyExpr {
-    list_compact_udf().call(vec![list_expr.into()]).into()
-}
-
-#[pyfunction]
-pub fn list_unique_sorted(list_expr: PyExpr) -> PyExpr {
-    list_unique_sorted_udf().call(vec![list_expr.into()]).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (
-    struct_expr,
-    field1,
-    field2=None,
-    field3=None,
-    field4=None,
-    field5=None,
-    field6=None
-))]
-pub fn struct_pick(
-    struct_expr: PyExpr,
-    field1: &str,
-    field2: Option<&str>,
-    field3: Option<&str>,
-    field4: Option<&str>,
-    field5: Option<&str>,
-    field6: Option<&str>,
-) -> PyExpr {
-    let mut args: Vec<Expr> = vec![struct_expr.into(), lit(field1)];
-    if let Some(field) = field2 {
-        args.push(lit(field));
-    }
-    if let Some(field) = field3 {
-        args.push(lit(field));
-    }
-    if let Some(field) = field4 {
-        args.push(lit(field));
-    }
-    if let Some(field) = field5 {
-        args.push(lit(field));
-    }
-    if let Some(field) = field6 {
-        args.push(lit(field));
-    }
-    struct_pick_udf().call(args).into()
-}
-
-#[pyfunction]
-pub fn cdf_change_rank(change_type: PyExpr) -> PyExpr {
-    cdf_change_rank_udf().call(vec![change_type.into()]).into()
-}
-
-#[pyfunction]
-pub fn cdf_is_upsert(change_type: PyExpr) -> PyExpr {
-    cdf_is_upsert_udf().call(vec![change_type.into()]).into()
-}
-
-#[pyfunction]
-pub fn cdf_is_delete(change_type: PyExpr) -> PyExpr {
-    cdf_is_delete_udf().call(vec![change_type.into()]).into()
-}
-
-#[pyfunction]
-pub fn col_to_byte(line_text: PyExpr, col_index: PyExpr, col_unit: PyExpr) -> PyExpr {
-    col_to_byte_udf()
-        .call(vec![line_text.into(), col_index.into(), col_unit.into()])
-        .into()
 }
 
 #[user_doc(
@@ -3802,11 +3688,11 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
             .all(|value| matches!(value, ColumnarValue::Scalar(_)))
         {
             let symbol = scalar_to_string(
-                scalar_columnar_value(&args.args[0], "qname_normalize symbol literal")?,
+                &scalar_columnar_value(&args.args[0], "qname_normalize symbol literal")?,
             )?;
             let module = if args.args.len() >= 2 {
                 scalar_to_string(
-                    scalar_columnar_value(&args.args[1], "qname_normalize module literal")?,
+                    &scalar_columnar_value(&args.args[1], "qname_normalize module literal")?,
                 )?
             } else {
                 None

@@ -9,7 +9,6 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from uuid import uuid4
 
 from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
@@ -17,6 +16,7 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from storage.deltalake import DeltaWriteOptions, write_delta_table
+from utils.uuid_factory import uuid7_hex
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,7 @@ def clone_delta_snapshot(
         ),
     )
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    table_name = f"__delta_snapshot_{uuid4().hex}"
+    table_name = f"__delta_snapshot_{uuid7_hex()}"
     adapter.register_delta_table_provider(
         table_name,
         TableProviderCapsule(bundle.provider),

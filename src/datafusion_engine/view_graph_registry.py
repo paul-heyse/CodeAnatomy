@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tempfile
-import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -34,7 +33,8 @@ from datafusion_engine.view_artifacts import (
 )
 from serde_artifacts import ViewCacheArtifact, ViewCacheArtifactEnvelope
 from serde_msgspec import convert, to_builtins
-from utils.validation import find_missing
+from utils.uuid_factory import uuid7_hex
+from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage_datafusion import LineageReport
@@ -351,9 +351,7 @@ def _delta_staging_path(
 ) -> str:
     cache_root = Path(tempfile.gettempdir()) / "datafusion_view_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
-    fingerprint = (
-        node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else uuid.uuid4().hex
-    )
+    fingerprint = node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else uuid7_hex()
     safe_name = node.name.replace("/", "_").replace(":", "_")
     return str(cache_root / f"{safe_name}__{fingerprint}")
 
@@ -386,11 +384,18 @@ def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
     if not required_udfs:
         return
     available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
-    missing_lower = find_missing([name.lower() for name in required_udfs], available)
-    missing = [name for name in required_udfs if name.lower() in missing_lower]
-    if missing:
+    required_lower = [name.lower() for name in required_udfs]
+    try:
+        validate_required_items(
+            required_lower,
+            available,
+            item_label=f"UDFs referenced by view {node.name!r}",
+            error_type=ValueError,
+        )
+    except ValueError:
+        missing = [name for name in required_udfs if name.lower() not in available]
         msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
-        raise ValueError(msg)
+        raise ValueError(msg) from None
 
 
 def _materialize_nodes(
@@ -587,11 +592,18 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         name = row.get("function_name") or row.get("routine_name") or row.get("name")
         if isinstance(name, str):
             available.add(name.lower())
-    missing_lower = find_missing([name.lower() for name in required], available)
-    missing = [name for name in required if name.lower() in missing_lower]
-    if missing:
+    required_lower = [name.lower() for name in required]
+    try:
+        validate_required_items(
+            required_lower,
+            available,
+            item_label="information_schema functions",
+            error_type=ValueError,
+        )
+    except ValueError:
+        missing = [name for name in required if name.lower() not in available]
         msg = f"information_schema missing required functions: {sorted(missing)}."
-        raise ValueError(msg)
+        raise ValueError(msg) from None
 
 
 def _schema_from_df(df: DataFrame) -> pa.Schema:

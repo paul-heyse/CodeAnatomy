@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -19,6 +18,7 @@ from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from storage.ipc_utils import payload_hash
 from utils.hashing import hash_sha256_hex
+from utils.uuid_factory import uuid7_suffix
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
 _PARAM_SIGNATURE_SEPARATOR = "\x1f"
@@ -284,7 +284,7 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
 
 
 def _new_scope_key() -> str:
-    return uuid.uuid4().hex[:12]
+    return uuid7_suffix(12)
 
 
 def _normalize_scope_key(value: str) -> str:

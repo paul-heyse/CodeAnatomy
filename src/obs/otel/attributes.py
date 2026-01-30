@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Mapping, Sequence
 from typing import cast
 
 from opentelemetry.util.types import AttributeValue
 
-_ATTRIBUTE_COUNT_LIMIT = os.environ.get("OTEL_ATTRIBUTE_COUNT_LIMIT")
-_ATTRIBUTE_VALUE_LENGTH_LIMIT = os.environ.get("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT")
-_LOGRECORD_ATTRIBUTE_COUNT_LIMIT = os.environ.get("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT")
-_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT = os.environ.get(
-    "OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT"
-)
-_REDACT_KEYS_ENV = os.environ.get("CODEANATOMY_OTEL_REDACT_KEYS")
+from utils.env_utils import env_value
+
+_ATTRIBUTE_COUNT_LIMIT = env_value("OTEL_ATTRIBUTE_COUNT_LIMIT")
+_ATTRIBUTE_VALUE_LENGTH_LIMIT = env_value("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT")
+_LOGRECORD_ATTRIBUTE_COUNT_LIMIT = env_value("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT")
+_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT = env_value("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT")
+_REDACT_KEYS_ENV = env_value("CODEANATOMY_OTEL_REDACT_KEYS")
 
 
 def _limit_to_int(value: str | None) -> int | None:

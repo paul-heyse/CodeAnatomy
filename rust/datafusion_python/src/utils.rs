@@ -33,18 +33,17 @@ use tokio::time::sleep;
 
 use crate::common::data_type::PyScalarValue;
 use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionError, PyDataFusionResult};
-use crate::TokioRuntime;
+use datafusion_ext::async_runtime::shared_runtime;
 
 /// Utility to get the Tokio Runtime from Python
 #[inline]
-pub(crate) fn get_tokio_runtime() -> &'static TokioRuntime {
+pub(crate) fn get_tokio_runtime() -> &'static Runtime {
     // NOTE: Other pyo3 python libraries have had issues with using tokio
     // behind a forking app-server like `gunicorn`
     // If we run into that problem, in the future we can look to `delta-rs`
     // which adds a check in that disallows calls from a forked process
     // https://github.com/delta-io/delta-rs/blob/87010461cfe01563d91a4b9cd6fa468e2ad5f283/python/src/utils.rs#L10-L31
-    static RUNTIME: OnceLock<TokioRuntime> = OnceLock::new();
-    RUNTIME.get_or_init(|| TokioRuntime(tokio::runtime::Runtime::new().unwrap()))
+    shared_runtime()
 }
 
 #[inline]
@@ -74,7 +73,7 @@ where
     F: Future + Send,
     F::Output: Send,
 {
-    let runtime: &Runtime = &get_tokio_runtime().0;
+    let runtime = get_tokio_runtime();
     const INTERVAL_CHECK_SIGNALS: Duration = Duration::from_millis(1_000);
 
     py.detach(|| {
@@ -108,7 +107,7 @@ where
     F: Future<Output = datafusion::common::Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    let rt = &get_tokio_runtime().0;
+    let rt = get_tokio_runtime();
     let handle: JoinHandle<datafusion::common::Result<T>> = rt.spawn(fut);
     // Wait for the join handle while respecting Python signal handling.
     // We handle errors in two steps so `?` maps the error types correctly:
@@ -144,7 +143,7 @@ pub(crate) fn parse_volatility(value: &str) -> PyDataFusionResult<Volatility> {
     })
 }
 
-pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
+pub fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule.name()?;
     if capsule_name.is_none() {
         return Err(PyValueError::new_err(format!(
@@ -162,7 +161,7 @@ pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyRe
     Ok(())
 }
 
-pub(crate) fn table_provider_from_pycapsule(
+pub fn table_provider_from_pycapsule(
     obj: &Bound<PyAny>,
 ) -> PyResult<Option<Arc<dyn TableProvider>>> {
     if obj.hasattr("__datafusion_table_provider__")? {
@@ -179,7 +178,7 @@ pub(crate) fn table_provider_from_pycapsule(
     }
 }
 
-pub(crate) fn py_obj_to_scalar_value(py: Python, obj: Py<PyAny>) -> PyResult<ScalarValue> {
+pub fn py_obj_to_scalar_value(py: Python, obj: Py<PyAny>) -> PyResult<ScalarValue> {
     // convert Python object to PyScalarValue to ScalarValue
 
     let pa = py.import("pyarrow")?;

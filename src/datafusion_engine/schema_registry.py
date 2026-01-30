@@ -30,6 +30,13 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from datafusion_engine.arrow_schema.build import list_view_type, struct_type
+from datafusion_engine.arrow_schema.field_builders import (
+    bool_field,
+    int32_field,
+    int64_field,
+    list_field,
+    string_field,
+)
 from datafusion_engine.arrow_schema.metadata import (
     function_requirements_metadata_spec,
     metadata_list_bytes,
@@ -76,6 +83,8 @@ BYTECODE_ATTR_VALUE_T = pa.union(
     ],
     mode="sparse",
 )
+
+
 BYTECODE_ATTRS_T = pa.map_(pa.string(), BYTECODE_ATTR_VALUE_T)
 
 DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
@@ -116,60 +125,60 @@ def default_attrs_value() -> dict[str, str]:
 
 SCIP_METADATA_SCHEMA = pa.schema(
     [
-        ("index_id", pa.string()),
-        ("protocol_version", pa.int32()),
-        ("tool_name", pa.string()),
-        ("tool_version", pa.string()),
-        ("tool_arguments", pa.list_(pa.string())),
-        ("project_root", pa.string()),
-        ("text_document_encoding", pa.int32()),
-        ("project_name", pa.string()),
-        ("project_version", pa.string()),
-        ("project_namespace", pa.string()),
+        string_field("index_id"),
+        int32_field("protocol_version"),
+        string_field("tool_name"),
+        string_field("tool_version"),
+        list_field("tool_arguments", pa.string()),
+        string_field("project_root"),
+        int32_field("text_document_encoding"),
+        string_field("project_name"),
+        string_field("project_version"),
+        string_field("project_namespace"),
     ]
 )
 
 SCIP_INDEX_STATS_SCHEMA = pa.schema(
     [
-        ("index_id", pa.string()),
-        ("document_count", pa.int64()),
-        ("occurrence_count", pa.int64()),
-        ("diagnostic_count", pa.int64()),
-        ("symbol_count", pa.int64()),
-        ("external_symbol_count", pa.int64()),
-        ("missing_position_encoding_count", pa.int64()),
-        ("document_text_count", pa.int64()),
-        ("document_text_bytes", pa.int64()),
+        string_field("index_id"),
+        int64_field("document_count"),
+        int64_field("occurrence_count"),
+        int64_field("diagnostic_count"),
+        int64_field("symbol_count"),
+        int64_field("external_symbol_count"),
+        int64_field("missing_position_encoding_count"),
+        int64_field("document_text_count"),
+        int64_field("document_text_bytes"),
     ]
 )
 
 SCIP_DOCUMENTS_SCHEMA = pa.schema(
     [
-        ("index_id", pa.string()),
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("language", pa.string()),
-        ("position_encoding", pa.int32()),
+        string_field("index_id"),
+        string_field("document_id"),
+        string_field("path"),
+        string_field("language"),
+        int32_field("position_encoding"),
     ]
 )
 
 SCIP_DOCUMENT_TEXTS_SCHEMA = pa.schema(
     [
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("text", pa.string()),
+        string_field("document_id"),
+        string_field("path"),
+        string_field("text"),
     ]
 )
 
 SCIP_SYMBOL_INFO_FIELDS: tuple[pa.Field, ...] = (
-    pa.field("symbol", pa.string()),
-    pa.field("display_name", pa.string()),
-    pa.field("kind", pa.int32()),
-    pa.field("kind_name", pa.string()),
-    pa.field("enclosing_symbol", pa.string()),
-    pa.field("documentation", pa.list_(pa.string())),
-    pa.field("signature_text", pa.string()),
-    pa.field("signature_language", pa.string()),
+    string_field("symbol"),
+    string_field("display_name"),
+    int32_field("kind"),
+    string_field("kind_name"),
+    string_field("enclosing_symbol"),
+    list_field("documentation", pa.string()),
+    string_field("signature_text"),
+    string_field("signature_language"),
 )
 
 SCIP_SYMBOL_INFORMATION_SCHEMA = pa.schema(SCIP_SYMBOL_INFO_FIELDS)
@@ -186,12 +195,12 @@ SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA = pa.schema(SCIP_SYMBOL_INFO_FIELDS)
 
 SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = pa.schema(
     [
-        ("symbol", pa.string()),
-        ("related_symbol", pa.string()),
-        ("is_reference", pa.bool_()),
-        ("is_implementation", pa.bool_()),
-        ("is_type_definition", pa.bool_()),
-        ("is_definition", pa.bool_()),
+        string_field("symbol"),
+        string_field("related_symbol"),
+        bool_field("is_reference"),
+        bool_field("is_implementation"),
+        bool_field("is_type_definition"),
+        bool_field("is_definition"),
     ]
 )
 
@@ -3639,8 +3648,6 @@ def validate_required_symtable_functions(ctx: SessionContext) -> None:
     ValueError
         Raised when required functions or signatures are missing.
     """
-    _ = ctx
-    return
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
     requirements = _function_requirements(SYMTABLE_FILES_SCHEMA)
@@ -3677,8 +3684,6 @@ def validate_required_bytecode_functions(ctx: SessionContext) -> None:
     ValueError
         Raised when required functions or signatures are missing.
     """
-    _ = ctx
-    return
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
     requirements = _function_requirements(BYTECODE_FILES_SCHEMA)

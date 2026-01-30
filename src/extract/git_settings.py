@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from functools import cache
 
 import pygit2
 
-from utils.env_utils import env_bool, env_int
+from utils.env_utils import env_bool, env_int, env_value
 
 
 @dataclass(frozen=True)
@@ -54,7 +53,7 @@ def git_settings_from_env() -> GitSettingsSpec | None:
     """
     owner_validation = env_bool("CODEANATOMY_GIT_OWNER_VALIDATION")
     server_timeout_ms = env_int("CODEANATOMY_GIT_SERVER_TIMEOUT_MS")
-    ssl_cert_file = os.getenv("CODEANATOMY_GIT_SSL_CERT_FILE")
+    ssl_cert_file = env_value("CODEANATOMY_GIT_SSL_CERT_FILE")
     if owner_validation is None and server_timeout_ms is None and not ssl_cert_file:
         return None
     return GitSettingsSpec(

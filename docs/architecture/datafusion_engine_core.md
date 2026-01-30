@@ -39,7 +39,7 @@ class DataFusionPlanBundle:
     plan_details: Mapping[str, object]      # Diagnostics payload
 ```
 
-**Design Invariant**: The `plan_fingerprint` (line 164) is a stable hash computed from:
+**Design Invariant**: The `plan_fingerprint` (line 138) is a stable hash computed from:
 - Substrait bytes (serialized optimized plan)
 - Session configuration settings
 - Planning environment hash (DataFusion version, optimizer rules)
@@ -47,8 +47,55 @@ class DataFusionPlanBundle:
 - Required UDFs and rewrite tags
 - Delta input pins (dataset versions)
 - Delta store policy hash
+- Information schema hash
 
-This fingerprint enables deterministic caching and cross-run comparison. The computation happens in `_hash_plan()` (lines 1264-1319), which validates Substrait bytes availability before hashing.
+This fingerprint enables deterministic caching and cross-run comparison. The computation happens in `_hash_plan()` (lines 1488-1543), which validates Substrait bytes availability before hashing.
+
+**Fingerprinting Detail** (`PlanFingerprintInputs` dataclass, lines 1472-1486):
+
+The fingerprinting system uses a structured input dataclass to ensure all determinism-critical factors are captured:
+
+```python
+@dataclass(frozen=True)
+class PlanFingerprintInputs:
+    substrait_bytes: bytes | None
+    df_settings: Mapping[str, str]
+    planning_env_hash: str | None
+    rulepack_hash: str | None
+    information_schema_hash: str | None
+    udf_snapshot_hash: str
+    required_udfs: Sequence[str]
+    required_rewrite_tags: Sequence[str]
+    delta_inputs: Sequence[DeltaInputPin]
+    delta_store_policy_hash: str | None
+```
+
+**Substrait Fingerprinting for Determinism** (lines 1309-1335):
+
+Substrait serialization provides a stable, cross-platform plan representation that is independent of DataFusion's internal plan node structure. The conversion flow:
+
+1. **Plan Extraction**: Optimized logical plan is obtained via `df.optimized_logical_plan()`
+2. **Substrait Conversion**: `SubstraitProducer.to_substrait_plan(optimized, ctx)` converts to Substrait Plan object
+3. **Serialization**: `substrait_plan.encode()` produces portable bytes
+4. **Hashing**: SHA-256 digest of Substrait bytes becomes `substrait_hash` component
+
+**Why Substrait**: DataFusion's internal plan representation may change across versions or depend on compilation flags. Substrait provides a stable wire format that can be:
+- Validated across different DataFusion versions
+- Replayed for execution (`replay_substrait_bytes()` in execution facade)
+- Stored in artifact stores for cross-session plan reuse
+- Used for plan diff analysis in debugging
+
+**Plan Reproducibility Guarantees**:
+
+When `plan_fingerprint` matches across two executions:
+- Identical logical plan structure (via Substrait bytes)
+- Identical session settings (via `df_settings_hash`)
+- Identical optimizer configuration (via `planning_env_hash` + `rulepack_hash`)
+- Identical UDF registry (via `udf_snapshot_hash`)
+- Identical Delta input versions (via `delta_inputs` payload)
+- Identical table schemas (via `information_schema_hash`)
+
+This enables deterministic caching: if fingerprints match, execution results are guaranteed to be equivalent (modulo non-deterministic UDFs or Delta writes between runs).
 
 **Key Mechanism - Plan Fingerprinting**:
 
@@ -82,6 +129,8 @@ The `SessionRuntime` class manages the lifecycle of a DataFusion `SessionContext
 - **Settings Hash**: Stable digest of session configuration for fingerprinting
 - **Rewrite Tags**: Metadata tags for schema transformation rules
 
+> **Cross-reference**: For comprehensive documentation of runtime profiles, configuration options, and environment variables, see [Configuration Reference - DataFusionRuntimeProfile](configuration_reference.md#datafusionruntimeprofile) and [Configuration Reference - Runtime Profiles](configuration_reference.md#runtime-profiles).
+
 **Configuration Options** (referenced in `plan_bundle.py:544-611`):
 - `target_partitions`: Parallelism for execution
 - `batch_size`: Arrow record batch size
@@ -91,6 +140,13 @@ The `SessionRuntime` class manages the lifecycle of a DataFusion `SessionContext
 - `explain_verbose/analyze`: Explain capture settings
 
 The runtime profile is initialized during facade construction and remains immutable throughout the session lifecycle.
+
+**Profile Presets** (see [Configuration Reference](configuration_reference.md#key-profile-presets)):
+- `default`: General-purpose profile (8 GiB memory, moderate concurrency)
+- `dev`: Development profile (4 GiB memory, reduced concurrency)
+- `prod`: Production profile (16 GiB memory, high concurrency)
+- `cst_autoload`: LibCST extraction with catalog auto-loading
+- `symtable`: Symtable extraction with statistics disabled
 
 ### Execution Facade
 
@@ -322,6 +378,8 @@ This ensures validation runs once per context and snapshots persist for the sess
 
 The Rust UDF Platform provides a unified installation mechanism for planning-critical extensions. Planner extensions (Rust UDFs, ExprPlanners, FunctionFactory, and RelationPlanners) are installed before any plan-bundle construction to ensure deterministic query planning.
 
+> **Cross-reference**: For comprehensive documentation of the Rust UDF implementation, architecture, and 40+ custom functions, see [Part VIII: Rust Architecture](part_viii_rust_architecture.md), specifically the "Custom UDF System" section.
+
 **RustUdfPlatformOptions** (lines 79-93):
 ```python
 @dataclass(frozen=True)
@@ -384,6 +442,31 @@ class RustUdfPlatform:
 ```
 
 All DataFusion execution facades automatically install the platform in `__post_init__` to ensure extensions are available before plan operations. The platform snapshot is captured in plan bundles for reproducibility.
+
+#### Python ↔ Rust UDF Boundary
+
+The Rust UDF system integrates with DataFusion through a multi-layer architecture:
+
+**Installation Flow**:
+1. Python calls `install_function_factory()` from `datafusion_ext` module
+2. Rust `install_function_factory_native()` receives Arrow IPC policy payload
+3. Rust registers UDF primitives with DataFusion SessionContext
+4. Python captures UDF snapshot via `rust_udf_snapshot()` for fingerprinting
+
+**Key Integration Points**:
+- **datafusion_ext crate** (`rust/datafusion_ext/src/udf_custom.rs`): Implements 40+ custom UDFs with `ScalarUDFImpl` trait
+- **datafusion_ext_py wrapper** (`rust/datafusion_ext_py/`): Thin PyO3 cdylib exposing Rust functions to Python
+- **UDF catalog** (`src/datafusion_engine/udf_catalog.py`): Python-side UDF spec definitions and metadata extraction
+- **UDF runtime** (`src/datafusion_engine/udf_runtime.py`): Snapshot caching, validation, and hash computation
+
+**Rust UDF Categories** (from Part VIII):
+- Hashing & ID Generation (8 functions): `stable_hash64`, `stable_hash128`, `prefixed_hash64`, `stable_id`, etc.
+- Span Arithmetic (5 functions): `span_make`, `span_len`, `span_overlaps`, `span_contains`, `interval_align_score`
+- String Normalization (3 functions): `utf8_normalize`, `utf8_null_if_blank`, `qname_normalize`
+- Collection Utilities (4 functions): `list_compact`, `list_unique_sorted`, `map_get_default`, `map_normalize`
+- Delta CDF Utilities (3 functions): `cdf_change_rank`, `cdf_is_upsert`, `cdf_is_delete`
+
+See [Part VIII: Rust Architecture - Custom UDF System](part_viii_rust_architecture.md#custom-udf-system) for complete UDF listings and implementation details.
 
 ## Key Data Flow Patterns
 
@@ -551,11 +634,14 @@ This prevents accidental mutation and enables safe sharing across threads and pr
 ## Critical Files Reference
 
 ### Plan Bundle System
-- **`plan_bundle.py`** (1906 lines): Core plan artifact with fingerprinting logic
-  - `build_plan_bundle()` (lines 314-372): Main entrypoint for plan compilation
-  - `_hash_plan()` (lines 1264-1319): Fingerprint computation from Substrait + environment
-  - `_plan_artifacts_from_components()` (lines 836-886): Assembles serializable artifacts
-  - `_delta_inputs_from_scan_units()` (lines 220-280): Derives Delta pins from scan lineage
+- **`plan_bundle.py`** (2140 lines): Core plan artifact with fingerprinting logic
+  - `build_plan_bundle()` (lines 290-362): Main entrypoint for plan compilation
+  - `DataFusionPlanBundle` (lines 108-194): Canonical plan artifact dataclass
+  - `PlanFingerprintInputs` (lines 1472-1486): Fingerprint input specification
+  - `_hash_plan()` (lines 1488-1543): Fingerprint computation from Substrait + environment
+  - `_plan_artifacts_from_components()` (lines 915-985): Assembles serializable artifacts
+  - `_delta_inputs_from_scan_units()` (lines 196-256): Derives Delta pins from scan lineage
+  - `_to_substrait_bytes()` (lines 1309-1335): Substrait serialization for plan portability
 
 ### Execution Infrastructure
 - **`execution_facade.py`** (768 lines): Unified API for compilation and execution
@@ -566,6 +652,7 @@ This prevents accidental mutation and enables safe sharing across threads and pr
 - **`runtime.py`** (referenced but not shown): Session lifecycle management
   - `DataFusionRuntimeProfile`: Configuration container
   - `SessionRuntime`: Session + profile + cached snapshots
+  - Profile presets: `default`, `dev`, `prod`, `cst_autoload`, `symtable`
 
 ### Planning Pipeline
 - **`planning_pipeline.py`** (285 lines): Two-pass Delta pin planning
@@ -597,11 +684,34 @@ This prevents accidental mutation and enables safe sharing across threads and pr
   - `validate_required_udfs()` (lines 161-196): Dependency validation
   - `rust_udf_snapshot_hash()` (referenced): Stable digest computation
 
+- **`udf_platform.py`** (referenced): Rust UDF platform installation
+  - `RustUdfPlatformOptions`: Platform configuration options
+  - `install_rust_udf_platform()`: Unified UDF/ExprPlanner/FunctionFactory installation
+  - See [Part VIII: Rust Architecture](part_viii_rust_architecture.md) for Rust implementation details
+
+### View Registration
+- **`view_registry.py`** (704 lines): Dependency-aware view registration
+  - `ViewNode` (lines 46-74): Declarative view definition with auto-inferred dependencies
+  - `register_view_graph()` (lines 121-200): Topologically-sorted view registration
+  - `_deps_from_plan_bundle()` (lines 417-431): Automatic dependency extraction from lineage
+  - `_topo_sort_nodes()` (lines 639-695): rustworkx/Kahn topological sort
+  - Cache policies: `none`, `memory`, `delta_staging`, `delta_output`
+
+- **`view_graph_registry.py`** (referenced): Graph-level view orchestration
+  - Graph construction and parallel registration
+  - Incremental update support
+
 ### Scan Planning and Delta Integration
-- **`scan_planner.py`** (200+ lines shown): Delta-aware scan planning
-  - `plan_scan_unit()` (lines 148-200): Single scan unit resolution
-  - `_scan_unit_key()` (lines 72-92): Stable key generation with version pins
-  - Delta version resolution and file pruning (referenced but not shown)
+- **`scan_planner.py`** (805 lines): Delta-aware scan planning
+  - `ScanUnit` (lines 103-125): Deterministic scan unit with Delta pins
+  - `plan_scan_unit()` (lines 155-229): Single scan unit resolution with Delta version pinning
+  - `plan_scan_units()` (lines 305-336): Batch scan unit planning for task graph
+  - `_scan_unit_key()` (lines 79-99): Stable key generation with version pins
+  - `_delta_scan_candidates()` (lines 339-392): File pruning and candidate selection
+  - `_policy_from_lineage()` (lines 694-708): Convert lineage filters to pruning policy
+
+- **`scan_overrides.py`** (referenced): Scan configuration overrides
+  - `apply_scan_unit_overrides()`: Re-register table providers with pinned scans
 
 ### Registry and Dataset Management
 - **`registry_bridge.py`** (200+ lines shown): Dataset registration bridge
@@ -615,6 +725,177 @@ This prevents accidental mutation and enables safe sharing across threads and pr
   - Event-time partitioned Delta tables for artifact persistence
   - Determinism validation via artifact replay
 
+### Scan Overrides
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/scan_overrides.py` (not shown in extracts, but referenced in `view_registry.py:162-168`)
+
+Scan overrides enable fine-grained control over table scan behavior after Delta version pinning. The system applies custom scan configurations to registered table providers.
+
+**Key Use Case**: When a view references a Delta table, the two-pass planning pipeline:
+1. **Pass 1**: Plans view without scan units to extract lineage (which tables, which columns, which filters)
+2. **Pass 2**: Resolves Delta versions and file pruning → produces `ScanUnit` objects with candidate files
+3. **Scan Override Application**: `apply_scan_unit_overrides()` re-registers table providers with:
+   - Pinned Delta versions
+   - Pruned file lists (only candidate files from predicate pushdown)
+   - Custom scan configuration (file column injection, schema overrides)
+
+**Override Mechanism** (inferred from `view_registry.py` usage):
+```python
+from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+
+# After scan units are planned
+apply_scan_unit_overrides(
+    ctx,
+    scan_units=scan_units,
+    runtime_profile=runtime_profile,
+)
+# SessionContext now has updated table providers with pinned scans
+```
+
+**ScanUnit Configuration** (`scan_planner.py`, lines 103-125):
+
+Each `ScanUnit` captures:
+- **Delta version pin**: `delta_version` / `delta_timestamp` / `snapshot_timestamp`
+- **Protocol compatibility**: `delta_protocol`, `protocol_compatible`, `protocol_compatibility`
+- **File pruning results**: `total_files`, `candidate_file_count`, `pruned_file_count`, `candidate_files`
+- **Scan config hash**: `delta_scan_config_hash` for deterministic provider comparison
+- **Provider marker**: `datafusion_provider` identifier (e.g., `"delta_table_provider"`)
+
+**File Pruning Integration** (`scan_planner.py`, lines 339-392):
+
+The scan planner uses `storage.deltalake.file_pruning` to evaluate partition and stats filters:
+
+```python
+from storage.deltalake.file_pruning import (
+    FilePruningPolicy,
+    PartitionFilter,
+    StatsFilter,
+    evaluate_and_select_files,
+)
+
+# Build pruning policy from lineage filters
+policy = FilePruningPolicy(
+    partition_filters=[PartitionFilter(column="year", op="=", value="2024")],
+    stats_filters=[StatsFilter(column="event_ts", op=">=", value=start_ts)],
+)
+
+# Apply to Delta file index
+pruning_result = evaluate_and_select_files(index, policy, ctx=ctx)
+# Returns: total_files, candidate_count, pruned_count, candidate_paths
+```
+
+This enables **predicate pushdown to Delta file selection**: only files matching partition/stats filters are registered with the table provider, minimizing scan I/O.
+
+### View Registry
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/view_registry.py` (704 lines)
+
+The view registry provides dependency-aware view registration with automatic topological sorting, schema validation, and artifact recording.
+
+**ViewNode Abstraction** (lines 46-74):
+
+```python
+@dataclass(frozen=True)
+class ViewNode:
+    name: str
+    deps: tuple[str, ...]  # Auto-inferred from plan lineage
+    builder: Callable[[SessionContext], DataFrame]
+    contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
+    required_udfs: tuple[str, ...]  # Auto-inferred from plan lineage
+    plan_bundle: DataFusionPlanBundle | None = None
+    cache_policy: Literal["none", "memory", "delta_staging", "delta_output"] = "none"
+```
+
+**Dependency Inference** (lines 417-431):
+
+View dependencies are automatically extracted from DataFusion plan bundles via lineage analysis:
+
+```python
+def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
+    lineage = extract_lineage(bundle.optimized_logical_plan)
+    return lineage.referenced_tables  # Auto-extracted from TableScan nodes
+```
+
+This eliminates manual dependency declarations. The system walks the optimized logical plan, identifies all `TableScan` nodes, and extracts referenced table names.
+
+**Registration Flow** (`register_view_graph()`, lines 121-200):
+
+1. **UDF Validation**: Validate Rust UDF snapshot structure
+2. **Dependency Materialization**: Extract deps + required UDFs from plan bundles
+3. **Topological Sort**: Order views via rustworkx or Kahn's algorithm
+4. **Per-View Registration**:
+   - Validate dependencies exist (in context or earlier views)
+   - Validate required UDFs exist in snapshot
+   - Apply scan unit overrides (if plan bundle provided)
+   - Build DataFrame via `builder(ctx)`
+   - Apply cache policy (memory, delta_staging, delta_output)
+   - Register view with SessionContext
+   - Validate schema contract (if provided)
+   - Record view artifact to runtime profile
+
+**Topological Sorting** (lines 639-695):
+
+The system uses rustworkx when available for deterministic lexicographical topological sort, falling back to Kahn's algorithm:
+
+```python
+def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:
+    node_map = {node.name: node for node in nodes}
+    ordered = _topo_sort_nodes_rx(node_map, nodes)  # Try rustworkx
+    if ordered is not None:
+        return ordered
+    return _topo_sort_nodes_kahn(node_map, nodes)  # Fallback to Kahn
+```
+
+**Cycle Detection**: If Kahn's algorithm doesn't visit all nodes, a dependency cycle exists, raising `ValueError` with cycle participants.
+
+**Cache Policies** (lines 236-346):
+
+- **`"none"`**: Register as ephemeral view (no caching)
+- **`"memory"`**: Call `df.cache()` before registration (DataFusion in-memory cache)
+- **`"delta_staging"`**: Write to temp Delta table, register as Delta scan
+- **`"delta_output"`**: Write to configured dataset location, register as Delta scan
+
+Delta cache policies enable view materialization with versioned storage and CDF support.
+
+**Schema Contract Validation** (lines 503-566):
+
+Views can declare schema contracts that are validated post-registration:
+
+```python
+contract = SchemaContract(
+    table_name="cpg_nodes",
+    columns=(
+        ColumnContract(name="node_id", dtype=pa.utf8(), nullable=False),
+        ColumnContract(name="node_type", dtype=pa.utf8(), nullable=False),
+    ),
+    evolution_policy=EvolutionPolicy.STRICT,
+)
+```
+
+Validation detects:
+- Missing columns
+- Type mismatches
+- Nullability violations
+- Extra columns (under `STRICT` policy)
+- Schema metadata mismatches (including ABI fingerprints)
+
+Violations raise `SchemaContractViolationError` with detailed diagnostic information.
+
+### View Graph Registry
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/view_graph_registry.py` (referenced but not shown in extracts)
+
+The view graph registry extends the basic view registry with graph-level orchestration capabilities for complex view pipelines.
+
+**Expected Functionality** (inferred from naming and usage patterns):
+
+1. **Graph Construction**: Build dependency graphs from view node collections
+2. **Parallel Registration**: Register independent views concurrently when topologically safe
+3. **Incremental Updates**: Re-register only views affected by upstream changes
+4. **Artifact Correlation**: Track view→task→plan relationships for debugging
+
+This is used in planning pipeline (`planning_pipeline.py`) for view-driven task scheduling.
+
 ## Extension Points
 
 The DataFusion engine exposes several extension mechanisms:
@@ -625,6 +906,7 @@ The DataFusion engine exposes several extension mechanisms:
 4. **Domain Planners**: Domain-specific query transformations with rewrite tags
 5. **TableProviders**: Custom scan implementations via `TableProviderCapsule`
 6. **Schema Adapters**: Schema evolution adapters attached at registration time
+7. **Scan Overrides**: Fine-grained scan configuration via `apply_scan_unit_overrides()`
 
 These extension points enable domain-specific optimizations without modifying core DataFusion logic.
 
@@ -645,6 +927,117 @@ These extension points enable domain-specific optimizations without modifying co
 - Deep expression nesting (>50 levels) can impact lineage extraction
 - High UDF counts (>100) can increase snapshot hash computation time
 
+### Extract Templates
+
+**Context**: Extract templates are DataFrame builder patterns used in the extraction pipeline to standardize data loading and transformation from extraction artifacts.
+
+**Architecture Pattern**:
+
+Extract templates follow a consistent builder function signature:
+
+```python
+from typing import Callable
+from datafusion import SessionContext
+from datafusion.dataframe import DataFrame
+
+ExtractTemplateBuilder = Callable[[SessionContext], DataFrame]
+```
+
+**Common Extract Template Patterns**:
+
+1. **Delta Table Load**:
+```python
+def load_extract_table(ctx: SessionContext) -> DataFrame:
+    """Load extraction artifact from Delta table."""
+    return ctx.table("extract_artifacts")
+```
+
+2. **Parquet Scan with Schema**:
+```python
+def scan_libcst_nodes(ctx: SessionContext) -> DataFrame:
+    """Scan LibCST node extraction with explicit schema."""
+    schema = pa.schema([
+        ("file_id", pa.utf8()),
+        ("node_type", pa.utf8()),
+        ("start_byte", pa.int64()),
+        ("end_byte", pa.int64()),
+    ])
+    return ctx.read_parquet("libcst_nodes/*.parquet", schema=schema)
+```
+
+3. **View-Driven Transformation**:
+```python
+def normalized_spans(ctx: SessionContext) -> DataFrame:
+    """Build normalized spans via registered view."""
+    return ctx.sql("""
+        SELECT
+            stable_id(file_id, start_byte, end_byte) AS span_id,
+            span_make(start_byte, end_byte) AS span,
+            span_len(start_byte, end_byte) AS span_len
+        FROM extract_artifacts
+        WHERE start_byte IS NOT NULL
+    """)
+```
+
+**Integration with View Registry**:
+
+Extract templates are wrapped in `ViewNode` objects for dependency-aware registration:
+
+```python
+from datafusion_engine.view_registry import ViewNode
+
+node = ViewNode(
+    name="libcst_nodes_normalized",
+    builder=normalized_spans,  # Extract template function
+    deps=("extract_artifacts",),  # Auto-inferred from plan bundle
+    required_udfs=("stable_id", "span_make", "span_len"),  # Auto-inferred
+    cache_policy="delta_staging",  # Materialize to Delta for reuse
+)
+```
+
+**Benefits of Template Pattern**:
+- Uniform interface for all extraction data sources
+- Composable with view registry for dependency management
+- Enables plan bundle fingerprinting for caching
+- Supports schema evolution via contracts
+- Integrates with scan planning for Delta version pinning
+
+See extraction pipeline documentation (not yet created) for comprehensive extract template catalog.
+
+## Cross-References
+
+### Internal Documentation
+
+- **[Part VIII: Rust Architecture](part_viii_rust_architecture.md)**: Comprehensive Rust UDF system documentation
+  - Custom UDF System (40+ functions)
+  - Delta Lake Integration (control plane, mutations, maintenance)
+  - PyO3 Bindings and Arrow IPC bridge
+  - Plugin Architecture
+
+- **[Configuration Reference](configuration_reference.md)**: Complete configuration documentation
+  - DataFusion Runtime Profiles (`default`, `dev`, `prod`, `cst_autoload`, `symtable`)
+  - Environment Variables (OpenTelemetry, Hamilton, Delta Lake, Cache)
+  - Determinism Tiers (CANONICAL, STABLE_SET, BEST_EFFORT)
+  - Configuration Naming Conventions (Policy, Settings, Config, Spec, Options, Profile)
+
+- **Observability Documentation** (referenced but not yet created):
+  - OpenTelemetry instrumentation
+  - Hamilton tracker integration
+  - Runtime profile metrics
+
+- **Storage and Incremental Processing** (referenced but not yet created):
+  - Delta Lake integration architecture
+  - Change Data Feed (CDF) runtime
+  - Incremental impact analysis
+
+### Related Modules
+
+- **Extraction Pipeline** (`src/extract/`): Multi-source extractors (LibCST, AST, symtable, bytecode, SCIP)
+- **Normalization** (`src/normalize/`): Byte-span canonicalization, stable ID generation
+- **Task Catalog** (`src/relspec/`): TaskSpec builders, PlanCatalog, inferred dependency graph
+- **CPG Build** (`src/cpg/`): CPG schema definitions, node/edge/property contracts
+- **Hamilton Pipeline** (`src/hamilton_pipeline/`): Hamilton DAG orchestration
+
 ## Future Enhancements
 
 The DataFusion engine architecture enables several planned improvements:
@@ -655,3 +1048,4 @@ The DataFusion engine architecture enables several planned improvements:
 4. **Schema Versioning**: Extend contracts with migration rules for automated schema evolution
 5. **UDF Versioning**: Track UDF implementation versions via snapshot metadata
 6. **Cross-Engine Replay**: Use Substrait for execution on alternative Arrow engines (e.g., Velox, Acero)
+7. **Extract Template Catalog**: Centralized registry of standardized extract templates

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self
 
@@ -13,6 +12,7 @@ from core_types import DeterminismTier
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -95,7 +95,7 @@ class TempTableRegistry:
         str
             Registered table name.
         """
-        name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
+        name = f"__incremental_{prefix}_{uuid7_hex()}"
         self._runtime.io_adapter().register_arrow_table(name, table, overwrite=True)
         self._names.append(name)
         return name

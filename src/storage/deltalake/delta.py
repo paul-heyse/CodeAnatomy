@@ -2352,18 +2352,18 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     Raises
     ------
     ValueError
-        Raised when datafusion_ext is unavailable or Delta inputs are invalid.
+        Raised when datafusion._internal is unavailable or Delta inputs are invalid.
     TypeError
         Raised when the delta data checker entrypoint is missing.
     """
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion._internal")
     except ImportError as exc:
-        msg = "Delta data checks require datafusion_ext."
+        msg = "Delta data checks require datafusion._internal."
         raise ValueError(msg) from exc
     checker = getattr(module, "delta_data_checker", None)
     if not callable(checker):
-        msg = "datafusion_ext.delta_data_checker is unavailable."
+        msg = "datafusion._internal.delta_data_checker is unavailable."
         raise TypeError(msg)
     table = _coerce_table(request.data)
     if not isinstance(table, pa.Table):

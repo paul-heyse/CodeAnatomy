@@ -32,7 +32,7 @@ from datafusion_engine.write_pipeline import (
 from obs.otel.metrics import record_datafusion_duration, record_error, record_write_duration
 from obs.otel.scopes import SCOPE_DATAFUSION
 from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
-from utils.validation import find_missing
+from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
@@ -56,10 +56,12 @@ def _validate_required_rewrite_tags(
     from datafusion_engine.udf_catalog import rewrite_tag_index
 
     tag_index = rewrite_tag_index(snapshot)
-    missing = find_missing(required_tags, tag_index)
-    if missing:
-        msg = f"Missing required rewrite tags at execution time: {sorted(missing)}."
-        raise ValueError(msg)
+    validate_required_items(
+        required_tags,
+        tag_index,
+        item_label="rewrite tags at execution time",
+        error_type=ValueError,
+    )
 
 
 def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle) -> None:

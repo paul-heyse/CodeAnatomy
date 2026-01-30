@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from utils.env_utils import env_bool, env_bool_strict, env_float, env_int, env_truthy, env_value
+from utils.env_utils import (
+    env_bool,
+    env_bool_strict,
+    env_float,
+    env_int,
+    env_text,
+    env_truthy,
+    env_value,
+)
 
 INT_SAMPLE = 42
 INT_DEFAULT = 7
@@ -18,6 +26,19 @@ def test_env_value_strips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert env_value("TEST_ENV_VALUE") == "hello"
     monkeypatch.setenv("TEST_ENV_VALUE", "   ")
     assert env_value("TEST_ENV_VALUE") is None
+
+
+def test_env_text_allows_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure env_text supports empty values when configured."""
+    monkeypatch.delenv("TEXT_VALUE", raising=False)
+    assert env_text("TEXT_VALUE", default="fallback") == "fallback"
+    monkeypatch.setenv("TEXT_VALUE", "  hello ")
+    assert env_text("TEXT_VALUE") == "hello"
+    monkeypatch.setenv("TEXT_VALUE", "   ")
+    assert env_text("TEXT_VALUE", default="fallback") == "fallback"
+    assert not env_text("TEXT_VALUE", allow_empty=True)
+    monkeypatch.setenv("TEXT_VALUE", "  spaced  ")
+    assert env_text("TEXT_VALUE", strip=False) == "  spaced  "
 
 
 def test_env_bool_valid_values(monkeypatch: pytest.MonkeyPatch) -> None:

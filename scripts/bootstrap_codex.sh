@@ -48,6 +48,32 @@ if [ ! -x "${python_bin}" ]; then
   exit 1
 fi
 
+plugin_lib_linux="rust/datafusion_ext_py/plugin/libdf_plugin_codeanatomy.so"
+plugin_lib_macos="rust/datafusion_ext_py/plugin/libdf_plugin_codeanatomy.dylib"
+plugin_lib_windows="rust/datafusion_ext_py/plugin/df_plugin_codeanatomy.dll"
+plugin_lib="${plugin_lib_linux}"
+case "$(uname -s)" in
+  Darwin) plugin_lib="${plugin_lib_macos}" ;;
+  MINGW*|MSYS*|CYGWIN*) plugin_lib="${plugin_lib_windows}" ;;
+esac
+
+if [ ! -f "${plugin_lib}" ]; then
+  cat >&2 <<EOF
+Error: Expected DataFusion plugin library at ${plugin_lib}, but it does not exist.
+
+From a normal shell on this machine run:
+
+  bash scripts/rebuild_rust_artifacts.sh
+
+Or, for a full environment bootstrap:
+
+  bash scripts/bootstrap.sh
+
+That will build and stage the plugin library into rust/datafusion_ext_py/plugin.
+EOF
+  exit 1
+fi
+
 # Optionally mimic "activation" for the *current process* (useful if this script is
 # chained with other commands in a single Codex shell tool call).
 export VIRTUAL_ENV="${venv_path}"
@@ -60,3 +86,4 @@ hash -r 2>/dev/null || true
 echo "Environment looks good:"
 echo "  python: $(${python_bin} -V 2>&1)"
 echo "  where : ${python_bin}"
+echo "  plugin : ${plugin_lib}"

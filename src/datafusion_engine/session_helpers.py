@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.introspection import invalidate_introspection_cache
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -37,7 +37,7 @@ def register_temp_table(
     str
         The generated table name.
     """
-    name = f"{prefix}{uuid4().hex}"
+    name = f"{prefix}{uuid7_hex()}"
     resolved = to_arrow_table(table)
     datafusion_from_arrow(ctx, name=name, value=resolved)
     return name

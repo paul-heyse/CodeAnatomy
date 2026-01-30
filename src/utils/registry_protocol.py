@@ -1,4 +1,9 @@
-"""Standard registry protocols and base implementations."""
+"""Standard registry protocols and base implementations.
+
+Use these base classes for simple key/value registries with minimal behavior.
+Registries that perform richer validation, caching, or computed lookups should
+prefer composition over inheritance to avoid coupling to the base API.
+"""
 
 from __future__ import annotations
 

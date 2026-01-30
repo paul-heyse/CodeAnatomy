@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -21,6 +20,7 @@ from datafusion_engine.write_pipeline import (
 )
 from storage.deltalake import delta_schema_configuration, delta_write_configuration
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from incremental.runtime import IncrementalRuntime
@@ -69,7 +69,7 @@ def write_delta_table_via_pipeline(
     session_runtime = runtime.session_runtime()
     df = datafusion_from_arrow(
         session_runtime.ctx,
-        name=f"__incremental_write_{uuid.uuid4().hex}",
+        name=f"__incremental_write_{uuid7_hex()}",
         value=table,
     )
     configuration: dict[str, str] = {}

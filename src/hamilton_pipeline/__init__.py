@@ -9,8 +9,8 @@ __all__ = [
     "DriverFactory",
     "PipelineExecutionOptions",
     "build_driver",
-    "config_fingerprint",
     "default_modules",
+    "driver_config_fingerprint",
     "execute_pipeline",
 ]
 
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from hamilton_pipeline.driver_factory import (
         DriverFactory,
         build_driver,
-        config_fingerprint,
         default_modules,
+        driver_config_fingerprint,
     )
     from hamilton_pipeline.execution import (
         FULL_PIPELINE_OUTPUTS,
@@ -32,8 +32,8 @@ def __getattr__(name: str) -> object:
     if name in {
         "DriverFactory",
         "build_driver",
-        "config_fingerprint",
         "default_modules",
+        "driver_config_fingerprint",
     }:
         from hamilton_pipeline import driver_factory as _driver_factory
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 import sys
-import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +15,7 @@ from hamilton.caching.stores.sqlite import SQLiteMetadataStore
 from hamilton.function_modifiers import dataloader
 
 from hamilton_pipeline.cache_lineage import _lineage_rows_from_metadata_store
+from utils.uuid_factory import uuid7_hex
 
 logging.getLogger("hamilton").setLevel(logging.ERROR)
 
@@ -24,7 +24,7 @@ _EXPECTED_RECOMPUTE_COUNT = 2
 
 
 def _make_cache_module(counter: dict[str, int]) -> ModuleType:
-    module_name = f"hamilton_cache_test_{uuid.uuid4().hex}"
+    module_name = f"hamilton_cache_test_{uuid7_hex()}"
     module = ModuleType(module_name)
     sys.modules[module_name] = module
 

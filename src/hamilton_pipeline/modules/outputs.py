@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +44,7 @@ from serde_msgspec import convert, dumps_msgpack, to_builtins
 from storage.deltalake import DeltaWritePolicy, delta_table_version
 from storage.deltalake.config import DeltaSchemaPolicy, ParquetWriterPolicy
 from storage.ipc_utils import payload_hash
+from utils.uuid_factory import uuid7_hex, uuid7_str
 
 
 def _rows(table: TableLike) -> int:
@@ -179,6 +179,22 @@ else:
     DataSaverDict = dict
 
 
+def _coerce_datasaver_return[F: Callable[..., object]](fn: F) -> F:
+    annotations = dict(getattr(fn, "__annotations__", {}))
+    annotations["return"] = dict
+    fn.__annotations__ = annotations
+    return fn
+
+
+def datasaver_dict() -> Callable[[F], F]:
+    decorator = datasaver()
+
+    def _wrapped(fn: F) -> F:
+        return decorator(_coerce_datasaver_return(fn))
+
+    return _wrapped
+
+
 def _semantic_tag(*, artifact: str, spec: SemanticTagSpec) -> Callable[[F], F]:
     resolved_join_keys = spec.join_keys if spec.join_keys is not None else spec.entity_keys
     return tag(
@@ -207,7 +223,7 @@ def run_id() -> str:
     str
         Unique run identifier.
     """
-    return str(uuid.uuid4())
+    return uuid7_str()
 
 
 def output_runtime_context(
@@ -442,7 +458,7 @@ def _delta_write(
     )
     df = datafusion_from_arrow(
         session_runtime.ctx,
-        name=f"__output_{details.dataset_name}_{uuid.uuid4().hex}",
+        name=f"__output_{details.dataset_name}_{uuid7_hex()}",
         value=table,
     )
     format_options: dict[str, object] = {
@@ -667,6 +683,8 @@ def delta_output_specs() -> tuple[OutputMaterializationSpec, ...]:
         Ordered output materialization specs.
     """
     return _DELTA_OUTPUT_SPECS
+
+
 _NORMALIZE_OUTPUTS_TABLE_NAME = "normalize_outputs_v1"
 _EXTRACT_ERRORS_TABLE_NAME = "extract_errors_v1"
 
@@ -1072,7 +1090,7 @@ _CPG_DELTA_WRITE_TAGS: dict[str, dict[str, str | list[str]]] = {
 
 @parameterize(**_CPG_DELTA_WRITE_PARAMS)
 @tag_outputs(**_CPG_DELTA_WRITE_TAGS)
-@datasaver()
+@datasaver_dict()
 def write_cpg_delta_output(
     table: TableLike,
     output_runtime_context: OutputRuntimeContext,
@@ -1103,7 +1121,7 @@ def write_cpg_delta_output(
     )
 
 
-@datasaver()
+@datasaver_dict()
 @tag(layer="outputs", artifact="write_normalize_outputs_delta", kind="delta")
 def write_normalize_outputs_delta(
     output_runtime_context: OutputRuntimeContext,
@@ -1156,7 +1174,7 @@ def write_normalize_outputs_delta(
     return result
 
 
-@datasaver()
+@datasaver_dict()
 @tag(layer="outputs", artifact="write_extract_error_artifacts_delta", kind="delta")
 def write_extract_error_artifacts_delta(
     output_runtime_context: OutputRuntimeContext,
@@ -1300,7 +1318,7 @@ def _output_table_write(
     session_runtime = runtime_profile.session_runtime()
     df = datafusion_from_arrow(
         session_runtime.ctx,
-        name=f"__{request.table_name}_{output_plan_context.run_id}_{uuid.uuid4().hex}",
+        name=f"__{request.table_name}_{output_plan_context.run_id}_{uuid7_hex()}",
         value=table,
     )
     commit_metadata = {
@@ -1424,7 +1442,7 @@ def _write_run_manifest_table(
     session_runtime = runtime_profile.session_runtime()
     df = datafusion_from_arrow(
         session_runtime.ctx,
-        name=f"__run_manifest_{run_id}_{uuid.uuid4().hex}",
+        name=f"__run_manifest_{run_id}_{uuid7_hex()}",
         value=table,
     )
     commit_metadata = {
@@ -1471,7 +1489,7 @@ def _write_run_manifest_table(
     }
 
 
-@datasaver()
+@datasaver_dict()
 @tag(layer="outputs", artifact="write_run_manifest_delta", kind="delta")
 def write_run_manifest_delta(
     output_runtime_context: OutputRuntimeContext,
@@ -1533,7 +1551,7 @@ def write_run_manifest_delta(
     return result
 
 
-@datasaver()
+@datasaver_dict()
 @tag(layer="outputs", artifact="write_run_bundle_dir", kind="bundle")
 def write_run_bundle_dir(output_config: OutputConfig, run_id: str) -> DataSaverDict:
     """Return stub metadata for run bundle directory.

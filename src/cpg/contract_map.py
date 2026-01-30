@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from cpg.prop_catalog import PROP_SPECS, PropSpec
 from cpg.specs import PropFieldSpec
+from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from cpg.specs import PropValueType
@@ -100,14 +101,14 @@ def _validate_source_column(
     *,
     source_columns: Sequence[str] | None,
 ) -> None:
-    if source_columns is None:
+    if source_columns is None or field.source_col is None:
         return
-    if field.source_col is None:
-        return
-    if field.source_col in source_columns:
-        return
-    msg = f"Source column {field.source_col!r} missing for prop {field.prop_key!r}."
-    raise ValueError(msg)
+    validate_required_items(
+        [field.source_col],
+        source_columns,
+        item_label=f"source columns for prop {field.prop_key!r}",
+        error_type=ValueError,
+    )
 
 
 __all__ = ["PropFieldInput", "prop_fields_from_catalog"]

@@ -90,11 +90,11 @@ fn record_scalar_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
-        record_scalar_flags(name, udf_ref.signature(), udf_ref, snapshot);
+        record_scalar_flags(name, udf_ref.signature(), udf_ref.inner().as_ref(), snapshot);
         record_signature_details(name, udf_ref.signature(), snapshot, |arg_types| {
             udf_ref.return_type(arg_types).ok()
         });
-        if let Some(defaults) = udf_custom::config_defaults_for(udf_ref) {
+        if let Some(defaults) = udf_custom::config_defaults_for(udf_ref.inner().as_ref()) {
             snapshot.config_defaults.insert(name.clone(), defaults);
         }
     }
@@ -784,9 +784,6 @@ fn apply_table_signatures(
 fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     let docs = udf_docs::registry_docs(state);
     for (name, doc) in docs {
-        if snapshot.parameter_names.contains_key(&name) {
-            continue;
-        }
         let Some(args) = doc.arguments.as_ref() else {
             continue;
         };
@@ -797,21 +794,21 @@ fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnaps
         snapshot.parameter_names.insert(name, names);
     }
     for (name, udf) in state.scalar_functions() {
-        if snapshot.parameter_names.contains_key(&name) {
+        if snapshot.parameter_names.contains_key(name.as_str()) {
             continue;
         }
         let params = signature_param_names(udf.signature());
         snapshot.parameter_names.insert(name.to_string(), params);
     }
     for (name, udaf) in state.aggregate_functions() {
-        if snapshot.parameter_names.contains_key(&name) {
+        if snapshot.parameter_names.contains_key(name.as_str()) {
             continue;
         }
         let params = signature_param_names(udaf.signature());
         snapshot.parameter_names.insert(name.to_string(), params);
     }
     for (name, udwf) in state.window_functions() {
-        if snapshot.parameter_names.contains_key(&name) {
+        if snapshot.parameter_names.contains_key(name.as_str()) {
             continue;
         }
         let params = signature_param_names(udwf.signature());

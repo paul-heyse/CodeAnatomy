@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -13,7 +12,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
 from datafusion_engine.expr_udf_shims import list_extract, map_extract
-from datafusion_engine.session_helpers import deregister_table
+from datafusion_engine.session_helpers import temp_table
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -177,17 +176,9 @@ def evaluate_filters_against_index(
     if predicate is None:
         return index
 
-    # Register the index as a temporary table
-    temp_table_name = f"__file_index_{uuid.uuid4().hex}"
-    try:
-        from datafusion_engine.ingest import datafusion_from_arrow
-
-        df = datafusion_from_arrow(ctx, name=temp_table_name, value=index)
-        df = df.filter(predicate)
+    with temp_table(ctx, index, prefix="__file_index_") as temp_table_name:
+        df = ctx.table(temp_table_name).filter(predicate)
         return df.to_arrow_table()
-    finally:
-        # Deregister temporary table
-        deregister_table(ctx, temp_table_name)
 
 
 def select_candidate_files(

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -146,7 +147,7 @@ def start_run(
     DataFusionRun
         Run envelope with a unique run_id and start timestamp.
     """
-    run_id = str(uuid.uuid4())
+    run_id = uuid7_str()
     start_time = int(time.time() * 1000)
     run = DataFusionRun(
         run_id=run_id,

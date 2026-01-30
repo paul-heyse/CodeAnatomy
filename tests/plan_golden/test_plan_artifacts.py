@@ -15,7 +15,13 @@ import pytest
 
 from test_support import datafusion_ext_stub
 
-sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
+
+def _stub_enabled() -> bool:
+    return os.environ.get("CODEANATOMY_PLUGIN_STUB", "").lower() in {"1", "true", "yes"}
+
+
+if _stub_enabled():
+    sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
 datafusion = pytest.importorskip("datafusion")
 

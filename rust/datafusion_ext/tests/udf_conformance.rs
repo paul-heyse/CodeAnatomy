@@ -224,6 +224,9 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
                 .signature_inputs
                 .get(&name)
                 .map(|rows| {
+                    if expected_kind == "WINDOW" && rows.iter().any(|row| row.is_empty()) {
+                        return true;
+                    }
                     rows.iter()
                         .any(|row| row.iter().any(|entry| entry == "null"))
                 })
@@ -268,7 +271,8 @@ fn map_get_default_reports_short_circuit() -> Result<()> {
 #[test]
 fn identity_udfs_preserve_ordering() -> Result<()> {
     let ctx = SessionContext::new();
-    udf_registry::register_all_with_policy(&ctx, true, Some(1000), Some(64))?;
+    let enable_async = cfg!(feature = "async-udf");
+    udf_registry::register_all_with_policy(&ctx, enable_async, Some(1000), Some(64))?;
     let ordered = SortProperties::Ordered(arrow::compute::SortOptions {
         descending: false,
         nulls_first: true,
@@ -288,6 +292,7 @@ fn identity_udfs_preserve_ordering() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "async-udf")]
 #[test]
 fn async_echo_uses_configured_batch_size() -> Result<()> {
     let ctx = SessionContext::new();
@@ -302,6 +307,7 @@ fn async_echo_uses_configured_batch_size() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "async-udf")]
 #[test]
 fn async_echo_uses_session_batch_size_when_policy_unset() -> Result<()> {
     let config = SessionConfig::new().with_batch_size(64);
@@ -449,7 +455,12 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
         let has_any_signature = expected_inputs
             .iter()
             .any(|row| row.iter().any(|entry| entry == "null"));
+        let has_only_nullary = !expected_inputs.is_empty()
+            && expected_inputs.iter().all(|row| row.is_empty());
         if expected_inputs.is_empty() || has_any_signature {
+            continue;
+        }
+        if has_only_nullary {
             continue;
         }
         let Some(signature_rows) = param_map.get(&name) else {

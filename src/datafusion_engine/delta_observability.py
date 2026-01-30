@@ -11,6 +11,14 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.arrow_schema.field_builders import (
+    binary_field,
+    bool_field,
+    int32_field,
+    int64_field,
+    list_field,
+    string_field,
+)
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
 from serde_msgspec import dumps_msgpack, to_builtins
@@ -406,21 +414,21 @@ def _observability_root(profile: DataFusionRuntimeProfile) -> Path:
 def _delta_snapshot_schema() -> pa.Schema:
     return pa.schema(
         [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("dataset_name", pa.string()),
-            pa.field("table_uri", pa.string(), nullable=False),
-            pa.field("delta_version", pa.int64()),
-            pa.field("snapshot_timestamp", pa.int64()),
-            pa.field("min_reader_version", pa.int32()),
-            pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features", pa.list_(pa.string())),
-            pa.field("writer_features", pa.list_(pa.string())),
+            int64_field("event_time_unix_ms", nullable=False),
+            string_field("dataset_name"),
+            string_field("table_uri", nullable=False),
+            int64_field("delta_version"),
+            int64_field("snapshot_timestamp"),
+            int32_field("min_reader_version"),
+            int32_field("min_writer_version"),
+            list_field("reader_features", pa.string()),
+            list_field("writer_features", pa.string()),
             pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            pa.field("schema_msgpack", pa.binary(), nullable=False),
-            pa.field("schema_fingerprint", pa.string()),
-            pa.field("ddl_fingerprint", pa.string()),
-            pa.field("partition_columns", pa.list_(pa.string())),
-            pa.field("storage_options_hash", pa.string()),
+            binary_field("schema_msgpack", nullable=False),
+            string_field("schema_fingerprint"),
+            string_field("ddl_fingerprint"),
+            list_field("partition_columns", pa.string()),
+            string_field("storage_options_hash"),
         ]
     )
 
@@ -428,25 +436,25 @@ def _delta_snapshot_schema() -> pa.Schema:
 def _delta_mutation_schema() -> pa.Schema:
     return pa.schema(
         [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("dataset_name", pa.string()),
-            pa.field("table_uri", pa.string(), nullable=False),
-            pa.field("operation", pa.string(), nullable=False),
-            pa.field("mode", pa.string()),
-            pa.field("delta_version", pa.int64()),
-            pa.field("min_reader_version", pa.int32()),
-            pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features", pa.list_(pa.string())),
-            pa.field("writer_features", pa.list_(pa.string())),
+            int64_field("event_time_unix_ms", nullable=False),
+            string_field("dataset_name"),
+            string_field("table_uri", nullable=False),
+            string_field("operation", nullable=False),
+            string_field("mode"),
+            int64_field("delta_version"),
+            int32_field("min_reader_version"),
+            int32_field("min_writer_version"),
+            list_field("reader_features", pa.string()),
+            list_field("writer_features", pa.string()),
             pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            pa.field("constraint_status", pa.string()),
-            pa.field("constraint_violations", pa.list_(pa.string())),
-            pa.field("commit_app_id", pa.string()),
-            pa.field("commit_version", pa.int64()),
-            pa.field("commit_run_id", pa.string()),
+            string_field("constraint_status"),
+            list_field("constraint_violations", pa.string()),
+            string_field("commit_app_id"),
+            int64_field("commit_version"),
+            string_field("commit_run_id"),
             pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
-            pa.field("metrics_msgpack", pa.binary(), nullable=False),
-            pa.field("storage_options_hash", pa.string()),
+            binary_field("metrics_msgpack", nullable=False),
+            string_field("storage_options_hash"),
         ]
     )
 
@@ -454,19 +462,19 @@ def _delta_mutation_schema() -> pa.Schema:
 def _delta_scan_plan_schema() -> pa.Schema:
     return pa.schema(
         [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("dataset_name", pa.string(), nullable=False),
-            pa.field("table_uri", pa.string(), nullable=False),
-            pa.field("delta_version", pa.int64()),
-            pa.field("snapshot_timestamp", pa.int64()),
-            pa.field("total_files", pa.int64(), nullable=False),
-            pa.field("candidate_files", pa.int64(), nullable=False),
-            pa.field("pruned_files", pa.int64(), nullable=False),
-            pa.field("pushed_filters", pa.list_(pa.string())),
-            pa.field("projected_columns", pa.list_(pa.string())),
-            pa.field("delta_protocol_msgpack", pa.binary(), nullable=True),
-            pa.field("delta_feature_gate_msgpack", pa.binary(), nullable=True),
-            pa.field("storage_options_hash", pa.string()),
+            int64_field("event_time_unix_ms", nullable=False),
+            string_field("dataset_name", nullable=False),
+            string_field("table_uri", nullable=False),
+            int64_field("delta_version"),
+            int64_field("snapshot_timestamp"),
+            int64_field("total_files", nullable=False),
+            int64_field("candidate_files", nullable=False),
+            int64_field("pruned_files", nullable=False),
+            list_field("pushed_filters", pa.string()),
+            list_field("projected_columns", pa.string()),
+            binary_field("delta_protocol_msgpack"),
+            binary_field("delta_feature_gate_msgpack"),
+            string_field("storage_options_hash"),
         ]
     )
 
@@ -474,25 +482,25 @@ def _delta_scan_plan_schema() -> pa.Schema:
 def _delta_maintenance_schema() -> pa.Schema:
     return pa.schema(
         [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("dataset_name", pa.string()),
-            pa.field("table_uri", pa.string(), nullable=False),
-            pa.field("operation", pa.string(), nullable=False),
-            pa.field("delta_version", pa.int64()),
-            pa.field("min_reader_version", pa.int32()),
-            pa.field("min_writer_version", pa.int32()),
-            pa.field("reader_features", pa.list_(pa.string())),
-            pa.field("writer_features", pa.list_(pa.string())),
+            int64_field("event_time_unix_ms", nullable=False),
+            string_field("dataset_name"),
+            string_field("table_uri", nullable=False),
+            string_field("operation", nullable=False),
+            int64_field("delta_version"),
+            int32_field("min_reader_version"),
+            int32_field("min_writer_version"),
+            list_field("reader_features", pa.string()),
+            list_field("writer_features", pa.string()),
             pa.field("table_properties", pa.map_(pa.string(), pa.string())),
-            pa.field("log_retention_duration", pa.string()),
-            pa.field("checkpoint_interval", pa.string()),
-            pa.field("checkpoint_retention_duration", pa.string()),
-            pa.field("checkpoint_protection", pa.string()),
-            pa.field("retention_hours", pa.int64()),
-            pa.field("dry_run", pa.bool_()),
-            pa.field("metrics_msgpack", pa.binary(), nullable=False),
+            string_field("log_retention_duration"),
+            string_field("checkpoint_interval"),
+            string_field("checkpoint_retention_duration"),
+            string_field("checkpoint_protection"),
+            int64_field("retention_hours"),
+            bool_field("dry_run"),
+            binary_field("metrics_msgpack", nullable=False),
             pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
-            pa.field("storage_options_hash", pa.string()),
+            string_field("storage_options_hash"),
         ]
     )
 

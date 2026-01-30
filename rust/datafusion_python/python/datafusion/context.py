@@ -19,9 +19,10 @@
 
 from __future__ import annotations
 
-import uuid
 import warnings
 from typing import TYPE_CHECKING, Any, Protocol
+
+import uuid6
 
 try:
     from warnings import deprecated  # Python 3.13+
@@ -630,8 +631,7 @@ class SessionContext:
 
         def value_to_string(value: Any) -> str:
             if isinstance(value, DataFrame):
-                view_name = str(uuid.uuid4()).replace("-", "_")
-                view_name = f"view_{view_name}"
+                view_name = f"view_{uuid6.uuid7().hex}"
                 view = value.df.into_view(temporary=True)
                 self.ctx.register_table(view_name, view)
                 return view_name

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +25,7 @@ from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.runtime import TempTableRegistry
 from schema_spec.system import DeltaScanOptions
 from storage.deltalake import DeltaCdfOptions, StorageOptions, delta_table_version
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -238,7 +238,7 @@ def read_cdf_changes(
         )
         return None
     with TempTableRegistry(state.runtime) as registry:
-        cdf_name = f"__cdf_{uuid.uuid4().hex}"
+        cdf_name = f"__cdf_{uuid7_hex()}"
         try:
             location = DatasetLocation(
                 path=str(state.inputs.path),

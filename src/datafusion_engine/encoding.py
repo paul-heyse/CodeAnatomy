@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -18,7 +17,7 @@ from datafusion_engine.arrow_interop import (
 )
 from datafusion_engine.arrow_schema.chunking import ChunkPolicy
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
-from datafusion_engine.session_helpers import deregister_table
+from datafusion_engine.session_helpers import temp_table
 from utils.validation import ensure_table
 
 if TYPE_CHECKING:
@@ -56,21 +55,16 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     """
     if not policy.dictionary_cols:
         return table
-    from datafusion_engine.ingest import datafusion_from_arrow
-
     df_ctx = _datafusion_context()
     resolved = ensure_table(table, label="table")
-    table_name = f"_encoding_{uuid.uuid4().hex}"
-    df = datafusion_from_arrow(df_ctx, name=table_name, value=resolved)
-    try:
+    with temp_table(df_ctx, resolved, prefix="_encoding_") as table_name:
+        df = df_ctx.table(table_name)
         selections = _encoding_select_expr(
             schema=resolved.schema,
             policy=policy,
             ctx=df_ctx,
         )
         return df.select(*selections).to_arrow_table()
-    finally:
-        deregister_table(df_ctx, table_name)
 
 
 def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
@@ -124,16 +118,10 @@ def _datafusion_context() -> SessionContext:
 
 
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
-    temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
-    from datafusion_engine.ingest import datafusion_from_arrow
-
-    df = datafusion_from_arrow(ctx, name=temp_name, value=table)
-    try:
-        df = df.select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
+    with temp_table(ctx, table, prefix="_dtype_") as temp_name:
+        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
         value = df.to_arrow_table()["dtype"][0].as_py()
-    finally:
-        deregister_table(ctx, temp_name)
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)

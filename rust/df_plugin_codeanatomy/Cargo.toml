@@ -16,3 +16,6 @@ datafusion_ext = { path = "../datafusion_ext" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+
+[features]
+async-udf = ["datafusion_ext/async-udf"]

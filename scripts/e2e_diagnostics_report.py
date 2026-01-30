@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
 
 import pyarrow as pa
 
@@ -20,6 +19,7 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from storage.deltalake import delta_table_version
+from utils.uuid_factory import uuid7_hex
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -77,7 +77,7 @@ def _build_delta_reader(
                 gate=None,
             ),
         )
-        table_name = f"__diagnostics_{uuid4().hex}"
+        table_name = f"__diagnostics_{uuid7_hex()}"
         adapter.register_delta_table_provider(
             table_name,
             TableProviderCapsule(bundle.provider),

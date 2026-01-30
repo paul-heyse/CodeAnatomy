@@ -170,7 +170,7 @@ The `DataFusionExecutionFacade` (lines 268-760) provides the unified API for com
 
 3. **`register_dataset()`** (lines 660-699): Registers a dataset location via the registry bridge:
    - Validates runtime profile availability
-   - Delegates to `register_dataset_df()` from `registry_bridge.py`
+   - Delegates to `register_dataset_df()` from `dataset_registration.py`
    - Returns DataFusion DataFrame representing the registered dataset
 
 4. **`write()` / `write_view()`** (lines 591-633): Delegates to `WritePipeline` for write operations:
@@ -710,14 +710,14 @@ This prevents accidental mutation and enables safe sharing across threads and pr
   - `_delta_scan_candidates()` (lines 339-392): File pruning and candidate selection
   - `_policy_from_lineage()` (lines 694-708): Convert lineage filters to pruning policy
 
-- **`scan_overrides.py`** (referenced): Scan configuration overrides
+- **`dataset_resolution.py`**: Scan configuration and dataset resolution
   - `apply_scan_unit_overrides()`: Re-register table providers with pinned scans
 
 ### Registry and Dataset Management
-- **`registry_bridge.py`** (200+ lines shown): Dataset registration bridge
-  - Dataset registration utilities (register_listing_table, register_object_store, DDL)
+- **`dataset_registration.py`**: Dataset registration
+  - `register_dataset_df()`: Dataset registration with schema discovery
+  - Registration utilities for listing tables, object stores, and DDL
   - Schema discovery and validation via DataFusion catalog
-  - Write routing to `WritePipeline`
 
 ### Plan Artifact Persistence
 - **`plan_artifact_store.py`** (200+ lines shown): Delta-backed artifact store
@@ -727,7 +727,7 @@ This prevents accidental mutation and enables safe sharing across threads and pr
 
 ### Scan Overrides
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/scan_overrides.py` (not shown in extracts, but referenced in `view_registry.py:162-168`)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/dataset_resolution.py`
 
 Scan overrides enable fine-grained control over table scan behavior after Delta version pinning. The system applies custom scan configurations to registered table providers.
 
@@ -739,9 +739,9 @@ Scan overrides enable fine-grained control over table scan behavior after Delta 
    - Pruned file lists (only candidate files from predicate pushdown)
    - Custom scan configuration (file column injection, schema overrides)
 
-**Override Mechanism** (inferred from `view_registry.py` usage):
+**Override Mechanism** (from `view_registry.py` usage):
 ```python
-from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
 # After scan units are planned
 apply_scan_unit_overrides(

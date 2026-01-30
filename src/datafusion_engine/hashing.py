@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from arrow_utils.core.expr_types import ScalarValue
 from datafusion_engine.expr_spec import ExprIR, ExprSpec
+from utils.hashing import hash128_from_text
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,83 @@ def hash_expr_spec_factory(
     )
 
 
+TYPE_EXPR_ID_SPEC = hash_expr_spec_factory(
+    prefix="cst_type_expr",
+    cols=("path", "bstart", "bend"),
+    null_sentinel="None",
+)
+
+TYPE_ID_SPEC = hash_expr_spec_factory(
+    prefix="type",
+    cols=("type_repr",),
+    null_sentinel="None",
+)
+
+DEF_USE_EVENT_ID_SPEC = hash_expr_spec_factory(
+    prefix="df_event",
+    cols=("code_unit_id", "instr_id", "kind", "symbol"),
+    null_sentinel="None",
+)
+
+REACH_EDGE_ID_SPEC = hash_expr_spec_factory(
+    prefix="df_reach",
+    cols=("def_event_id", "use_event_id"),
+    null_sentinel="None",
+)
+
+DIAG_ID_SPEC = hash_expr_spec_factory(
+    prefix="diag",
+    cols=("path", "bstart", "bend", "diag_source", "message"),
+    null_sentinel="None",
+)
+
+_HASH_SPECS: dict[str, HashExprSpec] = {
+    "type_expr_id": TYPE_EXPR_ID_SPEC,
+    "type_id": TYPE_ID_SPEC,
+    "def_use_event_id": DEF_USE_EVENT_ID_SPEC,
+    "reach_edge_id": REACH_EDGE_ID_SPEC,
+    "diag_id": DIAG_ID_SPEC,
+}
+
+
+def hash_spec(name: str) -> HashExprSpec:
+    """Return a hash spec by registry key.
+
+    Returns
+    -------
+    HashExprSpec
+        Hash specification for the key.
+    """
+    return _HASH_SPECS[name]
+
 _NULL_SEPARATOR = "\x1f"
+
+
+def stable_id(prefix: str, *parts: str | None) -> str:
+    """Build a deterministic string ID.
+
+    Returns
+    -------
+    str
+        Stable identifier with the requested prefix.
+    """
+    values: list[str | None] = [prefix, *parts]
+    joined = _NULL_SEPARATOR.join(value if value is not None else "None" for value in values)
+    hashed = hash128_from_text(joined)
+    return f"{prefix}:{hashed}"
+
+
+def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
+    """Build a stable ID for a source span.
+
+    Returns
+    -------
+    str
+        Stable span identifier.
+    """
+    if kind:
+        return stable_id("span", kind, path, str(bstart), str(bend))
+    return stable_id("span", path, str(bstart), str(bend))
 
 
 def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec:
@@ -330,13 +407,21 @@ def _require_expr_ir(spec: ExprSpec) -> ExprIR:
 
 
 __all__ = [
+    "DEF_USE_EVENT_ID_SPEC",
+    "DIAG_ID_SPEC",
     "HashExprSpec",
     "HashExprSpecOptions",
+    "REACH_EDGE_ID_SPEC",
+    "TYPE_EXPR_ID_SPEC",
+    "TYPE_ID_SPEC",
     "hash_expr_ir",
     "hash_expr_ir_from_parts",
     "hash_expr_spec_factory",
+    "hash_spec",
     "masked_hash_expr_ir",
     "masked_stable_id_expr_ir",
+    "span_id",
+    "stable_id",
     "stable_id_expr_ir",
     "stable_id_expr_ir_from_parts",
 ]

@@ -27,7 +27,7 @@ from datafusion_engine.delta_provider_contracts import (
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.table_provider_capsule import TableProviderCapsule
+from datafusion_engine.table_provider_metadata import TableProviderCapsule
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:

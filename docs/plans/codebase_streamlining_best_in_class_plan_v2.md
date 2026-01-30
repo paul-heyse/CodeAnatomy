@@ -25,6 +25,27 @@ This plan identifies **additional consolidation opportunities** that can be exec
 
 ---
 
+## Implementation Status (Updated 2026-01-30)
+
+| Scope Item | Status | Notes |
+| --- | --- | --- |
+| 1. Value Coercion Utilities Module | Done | Central module + tests; no `_coerce_*` remain |
+| 2. Session Factory Unification | Done | Delta runtime context helpers live in `DataFusionRuntimeProfile` |
+| 3. Policy Fingerprinting Protocol | Done | Protocol usage consistent; tests/docs pending |
+| 4. Schema Builder Extension | Done | Field factories + schema helpers migrated; type stubs pending |
+| 5. Telemetry Emission Facade | Done | Helper in place; verification/tests pending |
+| 6. Validation Violation Unification | Done | Unified violation objects; tests pending |
+| 7. Storage Options Centralization | Done | All merges via `utils.storage_options` |
+| 8. Rust UDF Registration Macro System | Done | Macro consolidation complete; verification/tests pending |
+| 9. Rust Config Extension Macro | Done | Macro consolidation complete; verification pending |
+| 10. Python Binding Registration Macro | Done | Macro consolidation complete; verification/tests pending |
+| 11. Rust Error Conversion Consolidation | Done | Macro consolidation complete; verification/tests pending |
+| 12. Plan-Bundle Execution Helpers | Done | Unified execution helper in use; verification pending |
+| 13. RecordBatchReader Coercion | Done | Central helper added; no local coercion helpers remain |
+| 14. Single UDF Catalog Source | Done | DDL registration path in place; documentation pending |
+
+---
+
 ## Design Principles
 
 1. **DRY (Don't Repeat Yourself)** - Extract common patterns into reusable utilities
@@ -299,15 +320,15 @@ After migration, delete local `_coerce_*` implementations from:
 - `src/datafusion_engine/extract_metadata.py`
 
 ### Checklist
-- [ ] Create `src/utils/value_coercion.py` with tolerant + strict variants
-- [ ] Add `CoercionError` exception class
-- [ ] Add comprehensive unit tests for each coercion function
-- [ ] Migrate `_coerce_int()` usages (6 files) - use tolerant or strict based on context
-- [ ] Migrate `_coerce_str_list()` usages (2 files)
-- [ ] Migrate `_coerce_bool()` usages (1 file)
-- [ ] Migrate `_coerce_add_actions()` usages (2 files)
-- [ ] Delete local implementations
-- [ ] Verify no remaining `def _coerce_` patterns in src/ (use grep, not ast-grep)
+- [x] Create `src/utils/value_coercion.py` with tolerant + strict variants
+- [x] Add `CoercionError` exception class
+- [x] Add comprehensive unit tests for each coercion function
+- [x] Migrate `_coerce_int()` usages (6 files) - use tolerant or strict based on context
+- [x] Migrate `_coerce_str_list()` usages (2 files)
+- [x] Migrate `_coerce_bool()` usages (1 file)
+- [x] Migrate `_coerce_add_actions()` usages (2 files)
+- [x] Delete local implementations
+- [x] Verify no remaining `def _coerce_` patterns in src/ (use grep, not ast-grep)
 
 ---
 
@@ -408,11 +429,11 @@ ast-grep run -l python -p 'SessionContext($$$)' --globs 'src/**/*.py'
 ```
 
 ### Checklist
-- [ ] Add `delta_runtime_ctx()` method to `DataFusionRuntimeProfile`
-- [ ] Add `delta_runtime_profile_ctx()` method to `DataFusionRuntimeProfile`
-- [ ] Update `storage/deltalake/delta.py` to use runtime profile methods
-- [ ] Delete `_runtime_ctx()` from delta.py
-- [ ] Delete `_runtime_profile_ctx()` from delta.py
+- [x] Add `delta_runtime_ctx()` method to `DataFusionRuntimeProfile`
+- [x] Add `delta_runtime_profile_ctx()` method to `DataFusionRuntimeProfile`
+- [x] Update `storage/deltalake/delta.py` to use runtime profile methods
+- [x] Delete `_runtime_ctx()` from delta.py
+- [x] Delete `_runtime_profile_ctx()` from delta.py
 - [ ] Verify delta operations work correctly
 
 ---
@@ -520,13 +541,13 @@ ast-grep run -l python -p 'def fingerprint(self) -> str:
 ```
 
 ### Checklist
-- [ ] Audit all policy classes for `FingerprintableConfig` compliance
-- [ ] Add `fingerprint_payload()` to `SchemaPolicy`
-- [ ] Add `fingerprint_payload()` to `TagPolicy`
-- [ ] Add `fingerprint_payload()` to `DiagnosticsPolicy`
-- [ ] Add `fingerprint_payload()` to `PipelinePolicy`
-- [ ] Add `fingerprint_payload()` to `ExecutionSurfacePolicy`
-- [ ] Add fingerprint() methods using `hash_msgpack()` consistently
+- [x] Audit all policy classes for `FingerprintableConfig` compliance
+- [x] Add `fingerprint_payload()` to `SchemaPolicy`
+- [x] Add `fingerprint_payload()` to `TagPolicy`
+- [x] Add `fingerprint_payload()` to `DiagnosticsPolicy`
+- [x] Add `fingerprint_payload()` to `PipelinePolicy`
+- [x] Add `fingerprint_payload()` to `ExecutionSurfacePolicy`
+- [x] Add fingerprint() methods using `hash_msgpack()` consistently
 - [ ] Update tests to use protocol-based assertions
 - [ ] Document which fields contribute to fingerprint identity
 
@@ -688,12 +709,12 @@ ast-grep run -l python -p 'pa.struct([$$$])' --globs 'src/**/*.py'
 ```
 
 ### Checklist
-- [ ] Add field factory functions to `src/arrow_utils/core/schema_builders.py`
-- [ ] Add `versioned_metadata_schema()` builder
-- [ ] Add common struct type factories
-- [ ] Migrate `src/incremental/` schema definitions to use factories
-- [ ] Migrate `src/hamilton_pipeline/modules/` schema definitions
-- [ ] Update imports across codebase
+- [x] Add field factory functions to `src/arrow_utils/core/schema_builders.py`
+- [x] Add `versioned_metadata_schema()` builder
+- [x] Add common struct type factories
+- [x] Migrate `src/incremental/` schema definitions to use factories
+- [x] Migrate `src/hamilton_pipeline/modules/` schema definitions
+- [x] Update imports across codebase
 - [ ] Add type stubs for IDE support
 
 ---
@@ -846,15 +867,15 @@ ast-grep run -l python -p 'normalize_attributes($$$)' --globs 'src/obs/**/*.py'
 ```
 
 ### Checklist
-- [ ] Add `_emit_metric()` internal helper to `src/obs/otel/metrics.py`
-- [ ] Refactor `record_stage_duration()` to use helper (preserve signature)
-- [ ] Refactor `record_task_duration()` to use helper (preserve signature)
-- [ ] Refactor `record_datafusion_duration()` to use helper (preserve signature)
-- [ ] Refactor `record_write_duration()` to use helper (preserve signature)
-- [ ] Refactor `record_artifact_count()` to use helper (preserve signature)
-- [ ] Refactor `record_error()` to use helper (preserve signature)
+- [x] Add `_emit_metric()` internal helper to `src/obs/otel/metrics.py`
+- [x] Refactor `record_stage_duration()` to use helper (preserve signature)
+- [x] Refactor `record_task_duration()` to use helper (preserve signature)
+- [x] Refactor `record_datafusion_duration()` to use helper (preserve signature)
+- [x] Refactor `record_write_duration()` to use helper (preserve signature)
+- [x] Refactor `record_artifact_count()` to use helper (preserve signature)
+- [x] Refactor `record_error()` to use helper (preserve signature)
 - [ ] Verify all metrics emit correctly after refactor
-- [ ] Ensure `status` remains a required parameter in all public APIs
+- [x] Ensure `status` remains a required parameter in all public APIs
 - [ ] Update tests
 
 ---
@@ -1013,15 +1034,15 @@ ast-grep run -l python -p 'ValidationReport($$$)' --globs 'src/**/*.py'
 ```
 
 ### Checklist
-- [ ] Create `src/validation/violations.py` with unified `ValidationViolation`
-- [ ] Create `src/validation/__init__.py` with exports
-- [ ] Migrate `SchemaViolation` usages to `ValidationViolation`
-- [ ] Migrate `_ValidationErrorEntry` usages to `ValidationViolation`
-- [ ] Keep `SchemaValidationReport` separate (use `ValidationViolation` internally)
-- [ ] Keep `ConstraintValidationReport` separate (use `ValidationViolation` internally)
-- [ ] Update `schema_validation.py` to use unified violations
-- [ ] Update `schema_contracts.py` to use unified violations
-- [ ] Delete obsolete violation type definitions
+- [x] Create `src/validation/violations.py` with unified `ValidationViolation`
+- [x] Create `src/validation/__init__.py` with exports
+- [x] Migrate `SchemaViolation` usages to `ValidationViolation`
+- [x] Migrate `_ValidationErrorEntry` usages to `ValidationViolation`
+- [x] Keep `SchemaValidationReport` separate (use `ValidationViolation` internally)
+- [x] Keep `ConstraintValidationReport` separate (use `ValidationViolation` internally)
+- [x] Update `schema_validation.py` to use unified violations
+- [x] Update `schema_contracts.py` to use unified violations
+- [x] Delete obsolete violation type definitions
 - [ ] Update tests
 
 ---
@@ -1097,11 +1118,11 @@ ast-grep run -l python -p 'if storage_options:
 ```
 
 ### Checklist
-- [ ] Update `storage/deltalake/delta.py` to use `merged_storage_options()`
-- [ ] Update `scan_planner.py` to use `merged_storage_options()`
-- [ ] Delete `_log_storage_dict()` function
-- [ ] Delete `_delta_storage_options()` function
-- [ ] Verify all storage option usages go through centralized utilities
+- [x] Update `storage/deltalake/delta.py` to use `merged_storage_options()`
+- [x] Update `scan_planner.py` to use `merged_storage_options()`
+- [x] Delete `_log_storage_dict()` function
+- [x] Delete `_delta_storage_options()` function
+- [x] Verify all storage option usages go through centralized utilities
 
 ---
 
@@ -1243,16 +1264,16 @@ ast-grep run -l rust -p '$CTX.register_udtf($$$)' --globs 'rust/**/*.rs'
 ```
 
 ### Checklist
-- [ ] Create `rust/datafusion_ext/src/macros.rs`
-- [ ] Implement `scalar_udfs!` macro
-- [ ] Implement `aggregate_udfs!` macro
-- [ ] Implement `window_udfs!` macro
-- [ ] Implement `table_udfs!` macro
-- [ ] Define separate spec structs: `ScalarUdfSpec`, `AggregateUdfSpec`, `WindowUdfSpec`, `TableUdfSpec`
-- [ ] Refactor `udf_registry.rs` to use kind-explicit macros
-- [ ] Refactor `udaf_builtin.rs` to use macros
-- [ ] Refactor `udwf_builtin.rs` to use macros
-- [ ] Refactor `udtf_builtin.rs` to use macros
+- [x] Create `rust/datafusion_ext/src/macros.rs`
+- [x] Implement `scalar_udfs!` macro
+- [x] Implement `aggregate_udfs!` macro
+- [x] Implement `window_udfs!` macro
+- [x] Implement `table_udfs!` macro
+- [x] Define separate spec structs: `ScalarUdfSpec`, `AggregateUdfSpec`, `WindowUdfSpec`, `TableUdfSpec`
+- [x] Refactor `udf_registry.rs` to use kind-explicit macros
+- [x] Refactor `udaf_builtin.rs` to use macros
+- [x] Refactor `udwf_builtin.rs` to use macros
+- [x] Refactor `udtf_builtin.rs` to use macros
 - [ ] Verify all UDFs register correctly
 - [ ] Update tests
 
@@ -1406,13 +1427,13 @@ impl_extension_options!(
 ```
 
 ### Checklist
-- [ ] Create `rust/datafusion_ext/src/config_macros.rs` with `impl_extension_options!`
-- [ ] Add `ConfigParseable` trait with implementations for common types
-- [ ] Migrate `CodeAnatomyUdfConfig` to use macro
-- [ ] Migrate `CodeAnatomyPlannerRulesConfig` to use macro
-- [ ] Migrate `CodeAnatomyPhysicalRulesConfig` to use macro
-- [ ] Delete duplicate `as_any()`, `as_any_mut()`, `cloned()` implementations
-- [ ] Delete duplicate `parse_bool()`, `parse_i32()` helper functions
+- [x] Create `rust/datafusion_ext/src/config_macros.rs` with `impl_extension_options!`
+- [x] Add `ConfigParseable` trait with implementations for common types
+- [x] Migrate `CodeAnatomyUdfConfig` to use macro
+- [x] Migrate `CodeAnatomyPlannerRulesConfig` to use macro
+- [x] Migrate `CodeAnatomyPhysicalRulesConfig` to use macro
+- [x] Delete duplicate `as_any()`, `as_any_mut()`, `cloned()` implementations
+- [x] Delete duplicate `parse_bool()`, `parse_i32()` helper functions
 - [ ] Verify all configs work correctly
 
 ---
@@ -1486,10 +1507,10 @@ pub fn register_udf_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
 ```
 
 ### Checklist
-- [ ] Add `register_pyfunctions!` macro to `codeanatomy_ext.rs` (crate-local)
-- [ ] Add `register_pyclasses!` macro to `codeanatomy_ext.rs` (crate-local)
-- [ ] Refactor registration calls to use macros
-- [ ] Group related functions for clarity
+- [x] Add `register_pyfunctions!` macro to `codeanatomy_ext.rs` (crate-local)
+- [x] Add `register_pyclasses!` macro to `codeanatomy_ext.rs` (crate-local)
+- [x] Refactor registration calls to use macros
+- [x] Group related functions for clarity
 - [ ] Verify all Python bindings work correctly
 - [ ] Update tests
 
@@ -1547,10 +1568,10 @@ impl_error_from!(PyDataFusionError, ExtError, Ext, |e| e.to_string());
 ```
 
 ### Checklist
-- [ ] Create `rust/datafusion_ext/src/error_conversion.rs`
-- [ ] Implement `impl_error_from!` macro
-- [ ] Refactor `datafusion_ext/src/errors.rs` to use macro
-- [ ] Refactor `datafusion_python/src/errors.rs` to use macro
+- [x] Create `rust/datafusion_ext/src/error_conversion.rs`
+- [x] Implement `impl_error_from!` macro
+- [x] Refactor `datafusion_ext/src/errors.rs` to use macro
+- [x] Refactor `datafusion_python/src/errors.rs` to use macro
 - [ ] Ensure error messages are preserved
 - [ ] Update tests
 
@@ -1628,12 +1649,12 @@ def execute_plan_bundle(
 ```
 
 ### Checklist
-- [ ] Identify common execution patterns across the 3 files
-- [ ] Create `src/datafusion_engine/plan_execution.py`
-- [ ] Implement `execute_plan_bundle()` helper
-- [ ] Migrate `planning_pipeline.py` to use helper
-- [ ] Migrate `execution_plan.py` to use helper
-- [ ] Migrate `plan_bundle_exec.py` to use helper
+- [x] Identify common execution patterns across the 3 files
+- [x] Create `src/datafusion_engine/plan_execution.py`
+- [x] Implement `execute_plan_bundle()` helper
+- [x] Migrate `planning_pipeline.py` to use helper
+- [x] Migrate `execution_plan.py` to use helper
+- [x] Migrate `plan_bundle_exec.py` to use helper
 - [ ] Verify artifact and telemetry emission is consistent
 
 ---
@@ -1698,13 +1719,13 @@ def coerce_to_recordbatch_reader(
 ```
 
 ### Checklist
-- [ ] Add `coerce_to_recordbatch_reader()` to `src/utils/value_coercion.py`
-- [ ] Migrate `io_adapter.py` to use centralized function
-- [ ] Migrate `scan_planner.py` to use centralized function
-- [ ] Migrate `delta.py` to use centralized function
-- [ ] Migrate `materializers.py` to use centralized function
-- [ ] Migrate `plan_bundle_exec.py` to use centralized function
-- [ ] Delete local implementations
+- [x] Add `coerce_to_recordbatch_reader()` to `src/utils/value_coercion.py`
+- [x] Migrate `io_adapter.py` to use centralized function
+- [x] Migrate `scan_planner.py` to use centralized function
+- [x] Migrate `delta.py` to use centralized function
+- [x] Migrate `materializers.py` to use centralized function
+- [x] Migrate `plan_bundle_exec.py` to use centralized function
+- [x] Delete local implementations
 
 ---
 
@@ -1761,11 +1782,11 @@ def register_udfs_via_ddl(ctx: SessionContext, udf_specs: list[UdfSpec]) -> None
 ```
 
 ### Checklist
-- [ ] Audit current UDF registration paths
-- [ ] Implement DDL-based UDF registration
-- [ ] Ensure UDFs visible in information_schema.routines
-- [ ] Update DataFrame API to use catalog UDFs
-- [ ] Update SQL execution to use catalog UDFs
+- [x] Audit current UDF registration paths
+- [x] Implement DDL-based UDF registration
+- [x] Ensure UDFs visible in information_schema.routines
+- [x] Update DataFrame API to use catalog UDFs
+- [x] Update SQL execution to use catalog UDFs
 - [ ] Document single-source UDF pattern
 
 ---

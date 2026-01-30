@@ -28,7 +28,7 @@ from tree_sitter import (
 from core_types import RowPermissive as Row
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.id_utils import span_id
+from datafusion_engine.hashing import span_id
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions

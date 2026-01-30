@@ -6217,7 +6217,7 @@ def read_delta_as_reader(
             runtime_profile=profile,
         )
     )
-    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+    from datafusion_engine.table_provider_metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
     to_reader = getattr(df, "to_arrow_reader", None)

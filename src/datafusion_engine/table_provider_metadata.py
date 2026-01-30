@@ -17,6 +17,31 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class TableProviderCapsule:
+    """Expose a PyCapsule as a DataFusion table provider."""
+
+    capsule: object
+
+    def datafusion_table_provider(self) -> object:
+        """Return the wrapped provider capsule.
+
+        Returns
+        -------
+        object
+            PyCapsule provider used by DataFusion.
+        """
+        return self.capsule
+
+
+_TABLE_PROVIDER_ATTR = "__datafusion_table_provider__"
+setattr(
+    TableProviderCapsule,
+    _TABLE_PROVIDER_ATTR,
+    TableProviderCapsule.datafusion_table_provider,
+)
+
+
+@dataclass(frozen=True)
 class TableProviderMetadata:
     """Metadata associated with a registered TableProvider.
 
@@ -286,6 +311,7 @@ def clear_table_provider_metadata(ctx_id: int) -> None:
 
 
 __all__ = [
+    "TableProviderCapsule",
     "TableProviderMetadata",
     "all_table_provider_metadata",
     "clear_table_provider_metadata",

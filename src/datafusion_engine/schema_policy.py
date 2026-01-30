@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_interop import SchemaLike, TableLike
@@ -13,11 +12,8 @@ from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec, encoding
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, SchemaTransform
+from datafusion_engine.schema_spec_protocol import TableSchemaSpec
 from datafusion_engine.schema_validation import ArrowValidationOptions
-from schema_spec.specs import TableSchemaSpec
-
-if TYPE_CHECKING:
-    from datafusion_engine.schema_spec_protocol import TableSchemaSpec
 
 
 @dataclass(frozen=True)

@@ -95,7 +95,7 @@ from datafusion_engine.schema_introspection import (
     table_constraint_rows,
 )
 from datafusion_engine.schema_validation import _datafusion_type_name
-from datafusion_engine.table_provider_capsule import TableProviderCapsule
+from datafusion_engine.table_provider_metadata import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,

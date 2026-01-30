@@ -352,7 +352,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         )
     except (RuntimeError, TypeError, ValueError):
         return None
-    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+    from datafusion_engine.table_provider_metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
     schema = df.schema()
@@ -411,7 +411,7 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Delta read provider request failed: {exc}"
         raise ValueError(msg) from exc
-    from datafusion_engine.table_provider_capsule import TableProviderCapsule
+    from datafusion_engine.table_provider_metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
     if request.predicate:

@@ -1581,7 +1581,7 @@ class WritePipeline:
             resolve_dataset_provider,
         )
         from datafusion_engine.io_adapter import DataFusionIOAdapter
-        from datafusion_engine.table_provider_capsule import TableProviderCapsule
+        from datafusion_engine.table_provider_metadata import TableProviderCapsule
 
         location = spec.dataset_location
         if location is None:

@@ -88,7 +88,7 @@ def _dataset_from_location(
                 runtime_profile=runtime_profile,
             )
         )
-        from datafusion_engine.table_provider_capsule import TableProviderCapsule
+        from datafusion_engine.table_provider_metadata import TableProviderCapsule
 
         return TableProviderCapsule(resolution.provider)
     return ds.dataset(

@@ -20,7 +20,7 @@ from datafusion_engine.expr_udf_shims import (
     utf8_normalize,
     utf8_null_if_blank,
 )
-from datafusion_engine.normalize_ids import (
+from datafusion_engine.hashing import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,

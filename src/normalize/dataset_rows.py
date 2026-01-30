@@ -16,7 +16,7 @@ from datafusion_engine.hashing import (
     stable_id_expr_ir,
     stable_id_expr_ir_from_parts,
 )
-from datafusion_engine.normalize_ids import (
+from datafusion_engine.hashing import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,

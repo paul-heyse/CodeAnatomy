@@ -6,7 +6,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datafusion_engine.normalize_ids import (
+    from datafusion_engine.hashing import (
         DEF_USE_EVENT_ID_SPEC,
         DIAG_ID_SPEC,
         REACH_EDGE_ID_SPEC,
@@ -49,14 +49,14 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "DEF_USE_EVENT_ID_SPEC": ("datafusion_engine.normalize_ids", "DEF_USE_EVENT_ID_SPEC"),
+    "DEF_USE_EVENT_ID_SPEC": ("datafusion_engine.hashing", "DEF_USE_EVENT_ID_SPEC"),
     "DIAG_DETAILS_TYPE": ("normalize.diagnostic_types", "DIAG_DETAILS_TYPE"),
     "DIAG_DETAIL_STRUCT": ("normalize.diagnostic_types", "DIAG_DETAIL_STRUCT"),
-    "DIAG_ID_SPEC": ("datafusion_engine.normalize_ids", "DIAG_ID_SPEC"),
+    "DIAG_ID_SPEC": ("datafusion_engine.hashing", "DIAG_ID_SPEC"),
     "DIAG_TAGS_TYPE": ("normalize.diagnostic_types", "DIAG_TAGS_TYPE"),
-    "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
-    "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
-    "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
+    "REACH_EDGE_ID_SPEC": ("datafusion_engine.hashing", "REACH_EDGE_ID_SPEC"),
+    "TYPE_EXPR_ID_SPEC": ("datafusion_engine.hashing", "TYPE_EXPR_ID_SPEC"),
+    "TYPE_ID_SPEC": ("datafusion_engine.hashing", "TYPE_ID_SPEC"),
     "VIEW_BUNDLE_BUILDERS": ("normalize.df_view_builders", "VIEW_BUNDLE_BUILDERS"),
     "VIEW_BUILDERS": ("normalize.df_view_builders", "VIEW_BUILDERS"),
     "cfg_blocks_df_builder": ("normalize.df_view_builders", "cfg_blocks_df_builder"),
@@ -83,7 +83,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "field": ("normalize.dataset_builders", "field"),
     "field_name": ("normalize.dataset_builders", "field_name"),
     "fields": ("normalize.dataset_builders", "fields"),
-    "hash_spec": ("datafusion_engine.normalize_ids", "hash_spec"),
+    "hash_spec": ("datafusion_engine.hashing", "hash_spec"),
 }
 
 

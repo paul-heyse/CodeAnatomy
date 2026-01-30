@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from utils.hashing import config_fingerprint
+from core.config_base import config_fingerprint
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -19,6 +19,32 @@ class DeltaStorePolicy:
     storage_options: Mapping[str, str] = field(default_factory=dict)
     log_storage_options: Mapping[str, str] = field(default_factory=dict)
     require_local_paths: bool = False
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "storage_options": sorted((str(k), str(v)) for k, v in self.storage_options.items()),
+            "log_storage_options": sorted(
+                (str(k), str(v)) for k, v in self.log_storage_options.items()
+            ),
+            "require_local_paths": self.require_local_paths,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def resolve_delta_store_policy(
@@ -89,14 +115,7 @@ def delta_store_policy_hash(policy: DeltaStorePolicy | None) -> str | None:
     """
     if policy is None:
         return None
-    payload = {
-        "storage_options": sorted((str(k), str(v)) for k, v in policy.storage_options.items()),
-        "log_storage_options": sorted(
-            (str(k), str(v)) for k, v in policy.log_storage_options.items()
-        ),
-        "require_local_paths": policy.require_local_paths,
-    }
-    return config_fingerprint(payload)
+    return policy.fingerprint()
 
 
 __all__ = [

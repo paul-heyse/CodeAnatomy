@@ -32,6 +32,30 @@ This revision assumes **design-phase freedom**: no backward compatibility, no st
 
 ---
 
+## Status Update (2026-01-30)
+
+| Scope | Status | Notes |
+|-------|--------|-------|
+| #1 Schema-first Delta types | ✅ Complete | Schemas + codegen + generated types wired in. |
+| #2 Delta protocol validation | ✅ Complete | Rust validation + Python error mapping in place. |
+| #3 Schema builders | ✅ Complete | Canonical builders in use; duplicates removed. |
+| #4 Metadata codec | ✅ Complete | MsgPack codec + tests in place. |
+| #5 Field specs | ✅ Complete | `FieldSpec` canonicalized, legacy specs removed. |
+| #6 Identity overhaul | ✅ Complete | Identity helpers live; call sites updated. |
+| #7 Config base | ✅ Complete | Unified fingerprint base applied. |
+| #8 Driver factory | ✅ Complete | Sync-only driver builder in place. |
+| #9 Registry protocol | ✅ Complete | Registries standardized + tests present. |
+| #10 Session factory | ✅ Complete | SessionFactory consolidates config/runtime setup. |
+| #11 Cache keys | ✅ Complete | Hashing centralized in `utils/hashing.py`. |
+| #12 Error handling | ✅ Complete | `DataFusionEngineError` used in control plane. |
+
+**Verification pending**
+- Run tests: `uv run pytest tests/`
+- Run type checks: `uv run pyright --warnings` and `uv run pyrefly`
+- Run linting: `uv run ruff check`
+
+---
+
 ## Table of Contents
 
 1. [Schema-First Delta Types (Rust/Python Codegen)](#1-schema-first-delta-types-rustpython-codegen)
@@ -112,12 +136,12 @@ pub struct DeltaFeatureGate {
 | Modify | `src/serde_schema_registry.py` | Register generated Delta schemas |
 
 ### Implementation Checklist
-- [ ] Add JSON schemas for all Delta protocol/mutation types.
-- [ ] Implement codegen for Python + Rust (serde-compatible).
-- [ ] Replace hand-written dataclasses in Python.
-- [ ] Replace hand-written structs in Rust.
-- [ ] Register generated types in schema registry.
-- [ ] Remove msgspec-only DeltaFeatureGate if redundant.
+- [x] Add JSON schemas for all Delta protocol/mutation types.
+- [x] Implement codegen for Python + Rust (serde-compatible).
+- [x] Replace hand-written dataclasses in Python.
+- [x] Replace hand-written structs in Rust.
+- [x] Register generated types in schema registry.
+- [x] Remove msgspec-only DeltaFeatureGate if redundant.
 
 ### Decommissioning List
 - Delete `DeltaAppTransaction` and `DeltaCommitOptions` in `src/datafusion_engine/delta_control_plane.py`.
@@ -166,12 +190,12 @@ def validate_delta_gate(snapshot: DeltaProtocolSnapshot, gate: DeltaFeatureGate)
 | Modify | `src/datafusion_engine/scan_overrides.py` |
 
 ### Implementation Checklist
-- [ ] Add PyO3 `validate_protocol_gate` function.
-- [ ] Serialize gate via msgpack (generated type).
-- [ ] Remove Python-side validation logic.
-- [ ] Centralize error mapping to Python exception types.
-- [ ] Standardize Delta feature gate payload generation via `delta_feature_gate_payload()`.
-- [ ] Centralize Delta scan config snapshot + hash in one helper.
+- [x] Add PyO3 `validate_protocol_gate` function.
+- [x] Serialize gate via msgpack (generated type).
+- [x] Remove Python-side validation logic.
+- [x] Centralize error mapping to Python exception types.
+- [x] Standardize Delta feature gate payload generation via `delta_feature_gate_payload()`.
+- [x] Centralize Delta scan config snapshot + hash in one helper.
 
 ### Decommissioning List
 - Remove `_validate_reader_version`, `_validate_writer_version`, `_validate_reader_features`, `_validate_writer_features` in Python.
@@ -211,10 +235,10 @@ def map_entry_type(*, with_kind: bool = True) -> pa.StructType:
 | Modify | `src/datafusion_engine/schema_registry.py` |
 
 ### Implementation Checklist
-- [ ] Add canonical schema builder functions.
-- [ ] Replace all duplicated map/list schema definitions.
-- [ ] Normalize on a single map entry shape (key/value_kind/value).
-- [ ] Update payload builders and decoders accordingly.
+- [x] Add canonical schema builder functions.
+- [x] Replace all duplicated map/list schema definitions.
+- [x] Normalize on a single map entry shape (key/value_kind/value).
+- [x] Update payload builders and decoders accordingly.
 
 ### Decommissioning List
 - Delete `_MAP_ENTRY_SCHEMA` and `_MAP_SCHEMA` duplicates.
@@ -253,10 +277,10 @@ def decode_metadata_map(payload: bytes | None) -> dict[str, str]:
 | Modify | `src/datafusion_engine/arrow_schema/encoding_metadata.py` |
 
 ### Implementation Checklist
-- [ ] Replace IPC metadata encoding with msgpack.
-- [ ] Update all metadata read/write call sites.
-- [ ] Remove IPC schema constants tied to metadata encoding.
-- [ ] Add unit tests for metadata codec with msgpack payloads.
+- [x] Replace IPC metadata encoding with msgpack.
+- [x] Update all metadata read/write call sites.
+- [x] Remove IPC schema constants tied to metadata encoding.
+- [x] Add unit tests for metadata codec with msgpack payloads.
 
 ### Decommissioning List
 - Remove `metadata_list_bytes`, `metadata_map_bytes`, and IPC-based decode helpers.
@@ -292,10 +316,10 @@ class FieldSpec:
 | Modify | `src/datafusion_engine/schema_contracts.py` |
 
 ### Implementation Checklist
-- [ ] Introduce `FieldSpec`.
-- [ ] Replace `ColumnContract` and `ArrowFieldSpec` usage.
-- [ ] Update schema contract logic to use `FieldSpec`.
-- [ ] Add conversion tests (field -> schema -> field).
+- [x] Introduce `FieldSpec`.
+- [x] Replace `ColumnContract` and `ArrowFieldSpec` usage.
+- [x] Update schema contract logic to use `FieldSpec`.
+- [x] Add conversion tests (field -> schema -> field).
 
 ### Decommissioning List
 - Remove `ColumnContract` from `schema_contracts.py`.
@@ -332,10 +356,10 @@ def identity_fingerprint(payload: Mapping[str, object]) -> str:
 | Modify | `src/incremental/*` |
 
 ### Implementation Checklist
-- [ ] Create `identity.py` with canonical payload builder.
-- [ ] Replace `schema_fingerprint` and `dataset_fingerprint` with identity-based approach.
-- [ ] Remove expectations of stability in caches and artifacts.
-- [ ] Update all fingerprint call sites to use identity payloads.
+- [x] Create `identity.py` with canonical payload builder.
+- [x] Replace `schema_fingerprint` and `dataset_fingerprint` with identity-based approach.
+- [x] Remove expectations of stability in caches and artifacts.
+- [x] Update all fingerprint call sites to use identity payloads.
 
 ### Decommissioning List
 - Remove `schema_fingerprint()` from `arrow_schema/abi.py`.
@@ -369,9 +393,9 @@ def config_fingerprint(payload: Mapping[str, object]) -> str:
 | Modify | `src/obs/otel/config.py` |
 
 ### Implementation Checklist
-- [ ] Add `FingerprintableConfig` protocol.
-- [ ] Replace custom fingerprint methods.
-- [ ] Ensure all config fingerprints are derived via one function.
+- [x] Add `FingerprintableConfig` protocol.
+- [x] Replace custom fingerprint methods.
+- [x] Ensure all config fingerprints are derived via one function.
 
 ### Decommissioning List
 - Remove custom fingerprint methods on DiskCache and Delta policy classes.
@@ -409,10 +433,10 @@ class DriverBuilder:
 | Modify | `src/hamilton_pipeline/driver_factory.py` |
 
 ### Implementation Checklist
-- [ ] Introduce `DriverBuilder` (sync only).
-- [ ] Remove async builder context and async finalize logic.
-- [ ] Update `build_driver()` to use builder.
-- [ ] Delete async driver entrypoints.
+- [x] Introduce `DriverBuilder` (sync only).
+- [x] Remove async builder context and async finalize logic.
+- [x] Update `build_driver()` to use builder.
+- [x] Delete async driver entrypoints.
 
 ### Decommissioning List
 - Delete `build_async_driver_builder_context()`.
@@ -439,9 +463,9 @@ Adopt `MutableRegistry` and `ImmutableRegistry` composition for all registries, 
 | Modify | `src/hamilton_pipeline/semantic_registry.py` |
 
 ### Implementation Checklist
-- [ ] Replace dicts with `MutableRegistry` composition.
-- [ ] Enforce `Registry` protocol for all registries.
-- [ ] Add lightweight protocol compliance tests.
+- [x] Replace dicts with `MutableRegistry` composition.
+- [x] Enforce `Registry` protocol for all registries.
+- [x] Add lightweight protocol compliance tests.
 
 ### Decommissioning List
 - Remove ad-hoc registry dicts in the above modules.
@@ -480,10 +504,10 @@ class SessionFactory:
 | Modify | `src/engine/session_factory.py` |
 
 ### Implementation Checklist
-- [ ] Implement `SessionFactory`.
-- [ ] Replace `apply_*` helper cluster with a single helper.
-- [ ] Wire runtime/session builders through the factory.
-- [ ] Integrate Delta defaults for SessionConfig and runtime env.
+- [x] Implement `SessionFactory`.
+- [x] Replace `apply_*` helper cluster with a single helper.
+- [x] Wire runtime/session builders through the factory.
+- [x] Integrate Delta defaults for SessionConfig and runtime env.
 
 ### Decommissioning List
 - Remove `apply_config_value`, `apply_optional_config`, etc. from `config_helpers.py`.
@@ -525,9 +549,9 @@ class CacheKeyBuilder:
 | Modify | `src/datafusion_engine/schema_introspection.py` |
 
 ### Implementation Checklist
-- [ ] Add `CacheKeyBuilder` to `utils/hashing.py`.
-- [ ] Remove all direct `hashlib` usage outside `utils/hashing.py`.
-- [ ] Replace DDL/schema map fingerprints with canonical hash helper.
+- [x] Add `CacheKeyBuilder` to `utils/hashing.py`.
+- [x] Remove all direct `hashlib` usage outside `utils/hashing.py`.
+- [x] Replace DDL/schema map fingerprints with canonical hash helper.
 
 ### Decommissioning List
 - Remove inline hashlib usage from `schema_spec/system.py` and `schema_introspection.py`.
@@ -558,9 +582,9 @@ class DataFusionEngineError(Exception):
 | Modify | `src/datafusion_engine/schema_validation.py` |
 
 ### Implementation Checklist
-- [ ] Add `DataFusionEngineError` + kind enum.
-- [ ] Map Rust errors to Python kinds (datafusion/arrow/delta/plugin).
-- [ ] Replace ValueError/RuntimeError usage in Delta control plane.
+- [x] Add `DataFusionEngineError` + kind enum.
+- [x] Map Rust errors to Python kinds (datafusion/arrow/delta/plugin).
+- [x] Replace ValueError/RuntimeError usage in Delta control plane.
 
 ### Decommissioning List
 - Remove ad-hoc `ValueError`/`RuntimeError` usage where error type is known.

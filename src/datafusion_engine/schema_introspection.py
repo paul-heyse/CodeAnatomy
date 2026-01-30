@@ -18,7 +18,6 @@ Key introspection surfaces:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -32,7 +31,8 @@ from datafusion_engine.sql_options import (
     statement_sql_options_for_profile,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import to_builtins
+from utils.hashing import CacheKeyBuilder, hash_msgpack_canonical
 
 SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
 
@@ -53,8 +53,7 @@ def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
     str
         SHA-256 fingerprint for the schema map payload.
     """
-    raw = dumps_msgpack(to_builtins(mapping))
-    return hashlib.sha256(raw).hexdigest()
+    return hash_msgpack_canonical(to_builtins(mapping))
 
 
 def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
@@ -101,9 +100,9 @@ def _introspection_cache_for_ctx(
 
 
 def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
-    raw = dumps_msgpack(to_builtins(payload))
-    digest = hashlib.sha256(raw).hexdigest()
-    return f"{prefix}:{digest}"
+    builder = CacheKeyBuilder(prefix=prefix)
+    builder.add("payload", to_builtins(payload))
+    return builder.build()
 
 
 def _normalized_rows(table: pa.Table) -> list[dict[str, object]]:

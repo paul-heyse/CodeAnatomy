@@ -12,7 +12,8 @@ from datafusion_engine.expr_spec import ExprSpec
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_alignment import SchemaEvolutionSpec
 from datafusion_engine.schema_validation import ArrowValidationOptions
-from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from schema_spec.system import (
     ContractSpec,
     DatasetKind,
@@ -51,7 +52,7 @@ class TableSpecInputKwargs(TypedDict, total=False):
 
     name: str
     version: int | None
-    fields: Sequence[ArrowFieldSpec]
+    fields: Sequence[FieldSpec]
     bundles: Sequence[FieldBundle]
 
 

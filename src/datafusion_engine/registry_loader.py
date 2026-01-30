@@ -12,11 +12,8 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import PathLike, ensure_path
-from datafusion_engine.dataset_registry import (
-    DatasetLocation,
-    resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
-)
+from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_log_storage_options
+from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.registry_bridge import DataFusionCachePolicy
 from datafusion_engine.runtime import DataFusionRuntimeProfile

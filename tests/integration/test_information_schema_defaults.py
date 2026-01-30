@@ -12,7 +12,8 @@ from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import TableSchemaSpec
 
 pytest.importorskip("datafusion")
 pytest.importorskip("datafusion_ext")
@@ -24,8 +25,8 @@ def test_information_schema_column_defaults(tmp_path: Path) -> None:
     table_spec = TableSchemaSpec(
         name="defaults_tbl",
         fields=[
-            ArrowFieldSpec(name="id", dtype=pa.int64(), nullable=False),
-            ArrowFieldSpec(name="status", dtype=pa.string(), default_value="unknown"),
+            FieldSpec(name="id", dtype=pa.int64(), nullable=False),
+            FieldSpec(name="status", dtype=pa.string(), default_value="unknown"),
         ],
         key_fields=("id",),
     )

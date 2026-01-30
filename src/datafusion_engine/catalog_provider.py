@@ -21,24 +21,21 @@ from datafusion_engine.dataset_registry import (
     DatasetCatalog,
     DatasetLocation,
     resolve_dataset_schema,
-    resolve_delta_cdf_policy,
-    resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
 )
-from datafusion_engine.delta_protocol import delta_feature_gate_payload
+from datafusion_engine.dataset_resolution import (
+    DatasetResolutionRequest,
+    resolve_dataset_provider,
+)
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
     table_provider_metadata,
 )
-from utils.storage_options import merged_storage_options
 
 if TYPE_CHECKING:
     from datafusion.context import TableProviderExportable
 
-    from datafusion_engine.plugin_manager import DataFusionPluginManager
-    from storage.deltalake.delta import DeltaCdfOptions
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DATASET_HANDLE_PREFIXES: tuple[str, ...] = ("dataset://", "repo://")
 
@@ -63,128 +60,27 @@ def _table_from_dataset(dataset: object) -> Table:
     return Table(ds.dataset(dataset))
 
 
-def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
-    return merged_storage_options(
-        location.storage_options,
-        resolve_delta_log_storage_options(location),
-    )
-
-
-def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] | None:
-    if options is None:
-        return None
-    return {
-        "starting_version": options.starting_version,
-        "ending_version": options.ending_version,
-        "starting_timestamp": options.starting_timestamp,
-        "ending_timestamp": options.ending_timestamp,
-        "columns": list(options.columns) if options.columns is not None else None,
-        "predicate": options.predicate,
-        "allow_out_of_range": options.allow_out_of_range,
-    }
-
-
-def _requires_delta_cdf(location: DatasetLocation) -> bool:
-    if location.datafusion_provider == "delta_cdf":
-        return True
-    if location.delta_cdf_options is not None:
-        return True
-    cdf_policy = resolve_delta_cdf_policy(location)
-    if cdf_policy is not None and cdf_policy.required:
-        return True
-    return bool(
-        location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf"
-    )
-
-
-def _delta_provider_options(
-    location: DatasetLocation,
-    *,
-    storage_options: Mapping[str, str] | None,
-    delta_scan: object | None,
-    gate_payload: Mapping[str, object] | None,
-) -> dict[str, object]:
-    options: dict[str, object] = {
-        "table_uri": str(location.path),
-        "storage_options": dict(storage_options) if storage_options else None,
-        "version": location.delta_version,
-        "timestamp": location.delta_timestamp,
-        "file_column_name": getattr(delta_scan, "file_column_name", None),
-        "enable_parquet_pushdown": getattr(delta_scan, "enable_parquet_pushdown", None),
-        "schema_force_view_types": getattr(delta_scan, "schema_force_view_types", None),
-        "wrap_partition_values": getattr(delta_scan, "wrap_partition_values", None),
-    }
-    if location.files:
-        options["files"] = list(location.files)
-    if gate_payload is not None:
-        options.update(gate_payload)
-    return options
-
-
-def _delta_cdf_provider_options(
-    location: DatasetLocation,
-    *,
-    storage_options: Mapping[str, str] | None,
-    gate_payload: Mapping[str, object] | None,
-) -> dict[str, object]:
-    cdf_payload = _cdf_options_payload(location.delta_cdf_options) or {}
-    options: dict[str, object] = {
-        "table_uri": str(location.path),
-        "storage_options": dict(storage_options) if storage_options else None,
-        "version": location.delta_version,
-        "timestamp": location.delta_timestamp,
-        "starting_version": cdf_payload.get("starting_version"),
-        "ending_version": cdf_payload.get("ending_version"),
-        "starting_timestamp": cdf_payload.get("starting_timestamp"),
-        "ending_timestamp": cdf_payload.get("ending_timestamp"),
-        "allow_out_of_range": cdf_payload.get("allow_out_of_range"),
-    }
-    if gate_payload is not None:
-        options.update(gate_payload)
-    return options
-
-
 def _dataset_from_location(
     _ctx: SessionContext,
     location: DatasetLocation,
     *,
-    plugin_manager: DataFusionPluginManager | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> object:
     schema = resolve_dataset_schema(location)
     if location.format == "delta":
-        if plugin_manager is None:
-            msg = "Delta registry catalogs require plugin-based providers."
-            raise ValueError(msg)
         if location.delta_version is not None and location.delta_timestamp is not None:
             msg = "Delta dataset open requires either delta_version or delta_timestamp."
             raise ValueError(msg)
-        storage_options = _delta_storage_options(location)
-        gate_payload = delta_feature_gate_payload(resolve_delta_feature_gate(location))
-        delta_scan = resolve_delta_scan_options(location)
-        if _requires_delta_cdf(location):
-            options = _delta_cdf_provider_options(
-                location,
-                storage_options=storage_options,
-                gate_payload=gate_payload,
+        resolution = resolve_dataset_provider(
+            DatasetResolutionRequest(
+                ctx=_ctx,
+                location=location,
+                runtime_profile=runtime_profile,
             )
-            provider = plugin_manager.create_table_provider(
-                provider_name="delta_cdf",
-                options=options,
-            )
-        else:
-            options = _delta_provider_options(
-                location,
-                storage_options=storage_options,
-                delta_scan=delta_scan,
-                gate_payload=gate_payload,
-            )
-            provider = plugin_manager.create_table_provider(
-                provider_name="delta",
-                options=options,
-            )
+        )
         from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
-        return TableProviderCapsule(provider)
+        return TableProviderCapsule(resolution.provider)
     return ds.dataset(
         location.path,
         format=location.format,
@@ -201,7 +97,7 @@ class RegistrySchemaProvider(SchemaProvider):
     catalog: DatasetCatalog
     schema_name: str = "public"
     ctx: SessionContext | None = None
-    plugin_manager: DataFusionPluginManager | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
     def __post_init__(self) -> None:
         """Initialize the schema provider cache."""
@@ -282,7 +178,7 @@ class RegistrySchemaProvider(SchemaProvider):
             msg = "RegistrySchemaProvider requires a SessionContext to resolve tables."
             raise ValueError(msg)
         table = _table_from_dataset(
-            _dataset_from_location(ctx, location, plugin_manager=self.plugin_manager)
+            _dataset_from_location(ctx, location, runtime_profile=self.runtime_profile)
         )
         self._tables[key] = table
         if ctx is not None:
@@ -346,7 +242,7 @@ class RegistryCatalogProvider(CatalogProvider):
     catalog: DatasetCatalog
     schema_name: str = "public"
     ctx: SessionContext | None = None
-    plugin_manager: DataFusionPluginManager | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
     def __post_init__(self) -> None:
         """Initialize the catalog provider state."""
@@ -355,7 +251,7 @@ class RegistryCatalogProvider(CatalogProvider):
                 self.catalog,
                 schema_name=self.schema_name,
                 ctx=self.ctx,
-                plugin_manager=self.plugin_manager,
+                runtime_profile=self.runtime_profile,
             )
         )
 
@@ -428,7 +324,7 @@ class MultiRegistryCatalogProvider(CatalogProvider):
     catalogs: Mapping[str, DatasetCatalog]
     default_schema: str = "public"
     ctx: SessionContext | None = None
-    plugin_manager: DataFusionPluginManager | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
     def __post_init__(self) -> None:
         """Initialize schema providers for registered catalogs."""
@@ -437,7 +333,7 @@ class MultiRegistryCatalogProvider(CatalogProvider):
                 catalog,
                 schema_name=name,
                 ctx=self.ctx,
-                plugin_manager=self.plugin_manager,
+                runtime_profile=self.runtime_profile,
             )
             for name, catalog in self.catalogs.items()
         }
@@ -510,7 +406,7 @@ def register_registry_catalog(
     registry: DatasetCatalog,
     catalog_name: str = "datafusion",
     schema_name: str = "public",
-    plugin_manager: DataFusionPluginManager | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> RegistryCatalogProvider:
     """Register the registry-backed catalog provider on a SessionContext.
 
@@ -524,8 +420,8 @@ def register_registry_catalog(
         Catalog name to register in DataFusion.
     schema_name:
         Schema name to expose from the catalog provider.
-    plugin_manager:
-        Optional plugin manager for Delta provider creation.
+    runtime_profile:
+        Optional runtime profile for provider resolution defaults.
 
     Returns
     -------
@@ -538,7 +434,7 @@ def register_registry_catalog(
         registry,
         schema_name=schema_name,
         ctx=ctx,
-        plugin_manager=plugin_manager,
+        runtime_profile=runtime_profile,
     )
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_catalog_provider(catalog_name, provider)
@@ -551,7 +447,7 @@ def register_registry_catalogs(
     catalogs: Mapping[str, DatasetCatalog],
     catalog_name: str = "datafusion",
     default_schema: str = "public",
-    plugin_manager: DataFusionPluginManager | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> MultiRegistryCatalogProvider:
     """Register multiple registry catalogs on a SessionContext.
 
@@ -565,8 +461,8 @@ def register_registry_catalogs(
         Catalog name to register in DataFusion.
     default_schema:
         Default schema name for diagnostics and policy defaults.
-    plugin_manager:
-        Optional plugin manager for Delta provider creation.
+    runtime_profile:
+        Optional runtime profile for provider resolution defaults.
 
     Returns
     -------
@@ -579,7 +475,7 @@ def register_registry_catalogs(
         catalogs=catalogs,
         default_schema=default_schema,
         ctx=ctx,
-        plugin_manager=plugin_manager,
+        runtime_profile=runtime_profile,
     )
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_catalog_provider(catalog_name, provider)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from typing import cast
@@ -31,9 +31,16 @@ from opentelemetry.sdk.trace.sampling import (
     TraceIdRatioBased,
 )
 
+from core.config_base import config_fingerprint
 from utils.env_utils import env_bool, env_bool_strict, env_float, env_int, env_text, env_value
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _type_name(obj: object | None) -> str | None:
+    if obj is None:
+        return None
+    return f"{obj.__class__.__module__}.{obj.__class__.__qualname__}"
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,66 @@ class OtelConfig:
     test_mode: bool
     auto_instrumentation: bool
     config_file: str | None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for configuration fingerprinting.
+        """
+        return {
+            "enable_traces": self.enable_traces,
+            "enable_metrics": self.enable_metrics,
+            "enable_logs": self.enable_logs,
+            "enable_log_correlation": self.enable_log_correlation,
+            "enable_system_metrics": self.enable_system_metrics,
+            "sampler": _type_name(self.sampler),
+            "metric_export_interval_ms": self.metric_export_interval_ms,
+            "metric_export_timeout_ms": self.metric_export_timeout_ms,
+            "bsp_schedule_delay_ms": self.bsp_schedule_delay_ms,
+            "bsp_export_timeout_ms": self.bsp_export_timeout_ms,
+            "bsp_max_queue_size": self.bsp_max_queue_size,
+            "bsp_max_export_batch_size": self.bsp_max_export_batch_size,
+            "blrp_schedule_delay_ms": self.blrp_schedule_delay_ms,
+            "blrp_export_timeout_ms": self.blrp_export_timeout_ms,
+            "blrp_max_queue_size": self.blrp_max_queue_size,
+            "blrp_max_export_batch_size": self.blrp_max_export_batch_size,
+            "attribute_count_limit": self.attribute_count_limit,
+            "attribute_value_length_limit": self.attribute_value_length_limit,
+            "log_record_attribute_count_limit": self.log_record_attribute_count_limit,
+            "log_record_attribute_value_length_limit": self.log_record_attribute_value_length_limit,
+            "span_attribute_count_limit": self.span_attribute_count_limit,
+            "span_attribute_length_limit": self.span_attribute_length_limit,
+            "span_event_count_limit": self.span_event_count_limit,
+            "span_link_count_limit": self.span_link_count_limit,
+            "span_event_attribute_count_limit": self.span_event_attribute_count_limit,
+            "span_link_attribute_count_limit": self.span_link_attribute_count_limit,
+            "metrics_exemplar_filter": _type_name(self.metrics_exemplar_filter),
+            "metrics_temporality_preference": (
+                str(self.metrics_temporality_preference)
+                if self.metrics_temporality_preference is not None
+                else None
+            ),
+            "metrics_histogram_aggregation": _type_name(self.metrics_histogram_aggregation),
+            "otel_log_level": self.otel_log_level,
+            "python_context": self.python_context,
+            "id_generator": _type_name(self.id_generator),
+            "test_mode": self.test_mode,
+            "auto_instrumentation": self.auto_instrumentation,
+            "config_file": self.config_file,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the config.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the configuration.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)

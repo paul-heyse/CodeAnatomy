@@ -6,12 +6,13 @@ from collections.abc import Sequence
 
 from datafusion_engine.arrow_schema.semantic_types import SPAN_STORAGE
 from schema_spec.bundles import base_bundle_catalog
-from schema_spec.specs import ArrowFieldSpec, FieldBundle
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import FieldBundle
 
 _BUNDLE_CATALOG: dict[str, FieldBundle] = base_bundle_catalog(include_sha256=False)
 _BUNDLE_CATALOG["span"] = FieldBundle(
     name="span",
-    fields=(ArrowFieldSpec(name="span", dtype=SPAN_STORAGE),),
+    fields=(FieldSpec(name="span", dtype=SPAN_STORAGE),),
 )
 
 

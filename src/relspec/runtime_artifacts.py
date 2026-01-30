@@ -19,8 +19,8 @@ from cache.diskcache_factory import (
 )
 from core_types import DeterminismTier
 from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultKind
+from datafusion_engine.identity import schema_identity_hash
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -45,7 +45,7 @@ class ViewReference:
         View name as registered in the context.
     source_task : str
         Name of the task that produced this view.
-    schema_fingerprint : str | None
+    schema_identity_hash : str | None
         Hash of the view schema for validation.
     plan_fingerprint : str | None
         Hash of the plan that created this view.
@@ -57,7 +57,7 @@ class ViewReference:
 
     name: str
     source_task: str
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     plan_fingerprint: str | None = None
     plan_task_signature: str | None = None
     plan_signature: str | None = None
@@ -75,7 +75,7 @@ class MaterializedTable:
         Name of the task that produced this table.
     row_count : int
         Number of rows in the table.
-    schema_fingerprint : str | None
+    schema_identity_hash : str | None
         Hash of the table schema.
     plan_fingerprint : str | None
         Hash of the plan that created this table.
@@ -90,7 +90,7 @@ class MaterializedTable:
     name: str
     source_task: str
     row_count: int = 0
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     plan_fingerprint: str | None = None
     plan_task_signature: str | None = None
     plan_signature: str | None = None
@@ -102,7 +102,7 @@ class MaterializedTableSpec:
     """Metadata for registering a materialized table."""
 
     source_task: str
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     plan_fingerprint: str | None = None
     plan_task_signature: str | None = None
     plan_signature: str | None = None
@@ -117,7 +117,7 @@ class ExecutionArtifactSpec:
     plan_fingerprint: str | None = None
     plan_task_signature: str | None = None
     plan_signature: str | None = None
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     storage_path: str | None = None
 
 
@@ -128,7 +128,7 @@ class ExecutionArtifact:
     name: str
     source_task: str
     result: ExecutionResult
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     plan_fingerprint: str | None = None
     plan_task_signature: str | None = None
     plan_signature: str | None = None
@@ -226,7 +226,7 @@ class RuntimeArtifacts:
         ref = ViewReference(
             name=name,
             source_task=spec.source_task,
-            schema_fingerprint=spec.schema_fingerprint,
+            schema_identity_hash=spec.schema_identity_hash,
             plan_fingerprint=spec.plan_fingerprint,
             plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
@@ -273,7 +273,7 @@ class RuntimeArtifacts:
             name=name,
             source_task=spec.source_task,
             row_count=row_count,
-            schema_fingerprint=spec.schema_fingerprint,
+            schema_identity_hash=spec.schema_identity_hash,
             plan_fingerprint=spec.plan_fingerprint,
             plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
@@ -314,14 +314,14 @@ class RuntimeArtifacts:
             Execution artifact metadata for the output.
         """
         schema = _schema_for_execution_result(result)
-        schema_fp = spec.schema_fingerprint
+        schema_fp = spec.schema_identity_hash
         if schema_fp is None and schema is not None:
-            schema_fp = schema_fingerprint(schema)
+            schema_fp = schema_identity_hash(schema)
         artifact = ExecutionArtifact(
             name=name,
             source_task=spec.source_task,
             result=result,
-            schema_fingerprint=schema_fp,
+            schema_identity_hash=schema_fp,
             plan_fingerprint=spec.plan_fingerprint,
             plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
@@ -334,7 +334,7 @@ class RuntimeArtifacts:
                 result.table,
                 spec=MaterializedTableSpec(
                     source_task=spec.source_task,
-                    schema_fingerprint=schema_fp,
+                    schema_identity_hash=schema_fp,
                     plan_fingerprint=spec.plan_fingerprint,
                     plan_task_signature=spec.plan_task_signature,
                     plan_signature=spec.plan_signature,
@@ -359,7 +359,7 @@ class RuntimeArtifacts:
             cache.set(
                 self._schema_cache_key(name),
                 schema,
-                tag=schema_fingerprint(schema),
+                tag=schema_identity_hash(schema),
                 retry=True,
             )
 

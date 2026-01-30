@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from functools import cache
 from typing import cast
 
 import pyarrow as pa
@@ -16,25 +12,8 @@ from core_types import JsonDict
 from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike
 from datafusion_engine.arrow_schema.semantic_types import register_semantic_extension_types
 from serde_msgspec import dumps_msgpack, loads_msgpack
-from storage.ipc_utils import payload_hash
 
 SCHEMA_ABI_VERSION = 1
-DATASET_FINGERPRINT_VERSION = 1
-
-
-@cache
-def _dataset_fingerprint_schema() -> pa.Schema:
-    module = importlib.import_module("datafusion_engine.runtime")
-    schema = module.dataset_schema_from_context("dataset_fingerprint_v1")
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_pyarrow = getattr(schema, "to_pyarrow", None)
-    if callable(to_pyarrow):
-        resolved = to_pyarrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "DataFusion schema for dataset_fingerprint_v1 is not a pyarrow.Schema."
-    raise TypeError(msg)
 
 
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
@@ -114,49 +93,6 @@ def _extension_info(dtype: DataTypeLike | None) -> JsonDict | None:
     }
 
 
-def schema_fingerprint(schema: SchemaLike) -> str:
-    """Compute a stable schema ABI fingerprint hash.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint of the ABI payload.
-    """
-    payload = schema_abi_payload(schema)
-    encoded = dumps_msgpack(payload)
-    return hashlib.sha256(encoded).hexdigest()
-
-
-@dataclass(frozen=True)
-class DatasetFingerprintInputs:
-    """Inputs used to compute a dataset fingerprint."""
-
-    plan_fingerprint: str
-    schema_fingerprint: str
-    profile_hash: str
-    writer_strategy: str
-    input_fingerprints: Sequence[str] = ()
-
-
-def dataset_fingerprint(inputs: DatasetFingerprintInputs) -> str:
-    """Compute a stable fingerprint for a materialized dataset.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint for the dataset identity payload.
-    """
-    payload = {
-        "version": DATASET_FINGERPRINT_VERSION,
-        "plan_fingerprint": inputs.plan_fingerprint,
-        "schema_fingerprint": inputs.schema_fingerprint,
-        "profile_hash": inputs.profile_hash,
-        "writer_strategy": inputs.writer_strategy,
-        "input_fingerprints": sorted(inputs.input_fingerprints),
-    }
-    return payload_hash(payload, _dataset_fingerprint_schema())
-
-
 def schema_to_dict(schema: SchemaLike) -> JsonDict:
     """Return a JSON-ready ABI payload for a schema.
 
@@ -200,9 +136,7 @@ def schema_from_msgpack(payload: bytes) -> pa.Schema:
 
 
 __all__ = [
-    "dataset_fingerprint",
     "schema_abi_payload",
-    "schema_fingerprint",
     "schema_from_msgpack",
     "schema_to_dict",
     "schema_to_msgpack",

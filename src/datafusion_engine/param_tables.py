@@ -14,10 +14,11 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_array_values
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from storage.ipc_utils import payload_hash
 from utils.hashing import hash_sha256_hex
+from utils.registry_protocol import ImmutableRegistry, MutableRegistry
 from utils.uuid_factory import uuid7_suffix
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
@@ -78,16 +79,16 @@ class ParamTableArtifact:
     table: pa.Table
     signature: str
     rows: int
-    schema_fingerprint: str
+    schema_identity_hash: str
 
 
 @dataclass
 class ParamTableRegistry:
     """Registry for parameter table specs and artifacts."""
 
-    specs: Mapping[str, ParamTableSpec]
+    specs: ImmutableRegistry[str, ParamTableSpec]
     policy: ParamTablePolicy = field(default_factory=ParamTablePolicy)
-    artifacts: dict[str, ParamTableArtifact] = field(default_factory=dict)
+    artifacts: MutableRegistry[str, ParamTableArtifact] = field(default_factory=MutableRegistry)
     scope_key: str | None = None
 
     def __post_init__(self) -> None:
@@ -100,6 +101,27 @@ class ParamTableRegistry:
             self.scope_key = _new_scope_key()
         if self.scope_key is not None:
             self.scope_key = _normalize_scope_key(self.scope_key)
+
+    @classmethod
+    def from_specs(
+        cls,
+        specs: Mapping[str, ParamTableSpec],
+        *,
+        policy: ParamTablePolicy,
+        scope_key: str | None = None,
+    ) -> ParamTableRegistry:
+        """Build a registry from raw spec mappings.
+
+        Returns
+        -------
+        ParamTableRegistry
+            Registry initialized with the provided specs.
+        """
+        return cls(
+            specs=ImmutableRegistry.from_dict(specs),
+            policy=policy,
+            scope_key=scope_key,
+        )
 
     def register_values(self, logical_name: str, values: Sequence[object]) -> ParamTableArtifact:
         """Register values for a param table and return the artifact.
@@ -125,12 +147,12 @@ class ParamTableRegistry:
             raise ValueError(msg)
         values_array = _param_values_array(spec, values)
         signature = param_signature_from_array(logical_name=logical_name, values=values_array)
-        schema_sig = schema_fingerprint(spec.schema)
+        schema_sig = schema_identity_hash(spec.schema)
         existing = self.artifacts.get(logical_name)
         if (
             existing is not None
             and existing.signature == signature
-            and existing.schema_fingerprint == schema_sig
+            and existing.schema_identity_hash == schema_sig
         ):
             return existing
         table = pa.table({spec.key_col: values_array}, schema=spec.schema)
@@ -139,9 +161,9 @@ class ParamTableRegistry:
             table=table,
             signature=signature,
             rows=table.num_rows,
-            schema_fingerprint=schema_sig,
+            schema_identity_hash=schema_sig,
         )
-        self.artifacts[logical_name] = artifact
+        self.artifacts.register(logical_name, artifact, overwrite=True)
         return artifact
 
     def datafusion_tables(self, ctx: SessionContext) -> dict[str, DataFrame]:

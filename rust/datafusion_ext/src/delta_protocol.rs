@@ -2,14 +2,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use deltalake::errors::DeltaTableError;
 use deltalake::DeltaTable;
+use rmp_serde::from_slice;
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Default)]
-pub struct DeltaFeatureGate {
-    pub min_reader_version: Option<i32>,
-    pub min_writer_version: Option<i32>,
-    pub required_reader_features: HashSet<String>,
-    pub required_writer_features: HashSet<String>,
-}
+use crate::DeltaFeatureGate;
 
 #[derive(Debug, Clone)]
 pub struct DeltaSnapshotInfo {
@@ -89,18 +85,87 @@ pub fn protocol_gate(
         }
     }
     let reader_features: HashSet<String> = snapshot.reader_features.iter().cloned().collect();
-    if !gate.required_reader_features.is_subset(&reader_features) {
+    let required_reader: HashSet<String> =
+        gate.required_reader_features.iter().cloned().collect();
+    if !required_reader.is_subset(&reader_features) {
         return Err(DeltaTableError::Generic(
             "Delta reader feature gate failed.".to_owned(),
         ));
     }
     let writer_features: HashSet<String> = snapshot.writer_features.iter().cloned().collect();
-    if !gate.required_writer_features.is_subset(&writer_features) {
+    let required_writer: HashSet<String> =
+        gate.required_writer_features.iter().cloned().collect();
+    if !required_writer.is_subset(&writer_features) {
         return Err(DeltaTableError::Generic(
             "Delta writer feature gate failed.".to_owned(),
         ));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeltaProtocolSnapshotPayload {
+    pub min_reader_version: Option<i32>,
+    pub min_writer_version: Option<i32>,
+    pub reader_features: Vec<String>,
+    pub writer_features: Vec<String>,
+}
+
+pub fn protocol_gate_snapshot(
+    snapshot: &DeltaProtocolSnapshotPayload,
+    gate: &DeltaFeatureGate,
+) -> Result<(), DeltaTableError> {
+    if let Some(min_reader) = gate.min_reader_version {
+        match snapshot.min_reader_version {
+            Some(reader_version) if reader_version >= min_reader => {}
+            _ => {
+                return Err(DeltaTableError::Generic(
+                    "Delta reader protocol gate failed.".to_owned(),
+                ));
+            }
+        }
+    }
+    if let Some(min_writer) = gate.min_writer_version {
+        match snapshot.min_writer_version {
+            Some(writer_version) if writer_version >= min_writer => {}
+            _ => {
+                return Err(DeltaTableError::Generic(
+                    "Delta writer protocol gate failed.".to_owned(),
+                ));
+            }
+        }
+    }
+    let reader_features: HashSet<String> = snapshot.reader_features.iter().cloned().collect();
+    let required_reader: HashSet<String> =
+        gate.required_reader_features.iter().cloned().collect();
+    if !required_reader.is_subset(&reader_features) {
+        return Err(DeltaTableError::Generic(
+            "Delta reader feature gate failed.".to_owned(),
+        ));
+    }
+    let writer_features: HashSet<String> = snapshot.writer_features.iter().cloned().collect();
+    let required_writer: HashSet<String> =
+        gate.required_writer_features.iter().cloned().collect();
+    if !required_writer.is_subset(&writer_features) {
+        return Err(DeltaTableError::Generic(
+            "Delta writer feature gate failed.".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_protocol_gate_payload(
+    snapshot_msgpack: &[u8],
+    gate_msgpack: &[u8],
+) -> Result<(), DeltaTableError> {
+    let snapshot: DeltaProtocolSnapshotPayload =
+        from_slice(snapshot_msgpack).map_err(|err| {
+            DeltaTableError::Generic(format!("Failed to decode Delta snapshot: {err}"))
+        })?;
+    let gate: DeltaFeatureGate = from_slice(gate_msgpack).map_err(|err| {
+        DeltaTableError::Generic(format!("Failed to decode Delta feature gate: {err}"))
+    })?;
+    protocol_gate_snapshot(&snapshot, &gate)
 }
 
 pub fn gate_from_parts(
@@ -109,11 +174,11 @@ pub fn gate_from_parts(
     required_reader_features: Option<Vec<String>>,
     required_writer_features: Option<Vec<String>>,
 ) -> DeltaFeatureGate {
-    let mut reader: HashSet<String> = HashSet::new();
+    let mut reader: Vec<String> = Vec::new();
     if let Some(features) = required_reader_features {
         reader.extend(features);
     }
-    let mut writer: HashSet<String> = HashSet::new();
+    let mut writer: Vec<String> = Vec::new();
     if let Some(features) = required_writer_features {
         writer.extend(features);
     }

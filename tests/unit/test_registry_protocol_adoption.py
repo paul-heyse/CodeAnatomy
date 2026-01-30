@@ -10,14 +10,15 @@ import pyarrow as pa
 
 from datafusion_engine.dataset_registry import DatasetCatalog, DatasetLocation
 from datafusion_engine.runtime import DataFusionViewRegistry
-from datafusion_engine.schema_contracts import ColumnContract, ContractRegistry, SchemaContract
+from datafusion_engine.schema_contracts import ContractRegistry, SchemaContract
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
+from schema_spec.field_spec import FieldSpec
 from utils.registry_protocol import Registry
 
 
 def test_contract_registry_implements_protocol() -> None:
     """Ensure ContractRegistry matches the Registry protocol."""
-    column = ColumnContract(name="id", arrow_type=pa.int32(), nullable=False)
+    column = FieldSpec(name="id", dtype=pa.int32(), nullable=False)
     contract = SchemaContract(table_name="example", columns=(column,))
     registry = ContractRegistry()
     registry.register_contract(contract)

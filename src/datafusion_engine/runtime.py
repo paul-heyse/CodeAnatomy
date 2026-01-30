@@ -42,20 +42,15 @@ from cache.diskcache_factory import (
 )
 from core_types import DeterminismTier
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.arrow_schema.metadata import schema_constraints_from_metadata
+from datafusion_engine.arrow_schema.schema_builders import map_entry_type, versioned_entries_schema
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionSqlPolicy,
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
-)
-from datafusion_engine.config_helpers import (
-    apply_bool_config,
-    apply_int_config,
-    apply_optional_setting,
 )
 from datafusion_engine.delta_protocol import DeltaProtocolSupport
 from datafusion_engine.delta_store_policy import (
@@ -71,8 +66,8 @@ from datafusion_engine.diagnostics import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan_cache import PlanProtoCache
-from datafusion_engine.plugin_discovery import assert_plugin_available, resolve_plugin_path
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -93,6 +88,7 @@ from datafusion_engine.schema_registry import (
     validate_semantic_types,
     validate_udf_info_schema_parity,
 )
+from datafusion_engine.session_factory import SessionFactory
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
@@ -111,10 +107,6 @@ if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
     from datafusion_engine.introspection import IntrospectionCache
-    from datafusion_engine.plugin_manager import (
-        DataFusionPluginManager,
-        DataFusionPluginSpec,
-    )
     from datafusion_engine.udf_catalog import UdfCatalog
     from datafusion_engine.view_graph_registry import ViewNode
     from obs.datafusion_runs import DataFusionRun
@@ -156,30 +148,6 @@ def _encode_telemetry_msgpack(payload: object) -> bytes:
     return bytes(buf)
 
 
-def _default_udf_plugin_options(profile: DataFusionRuntimeProfile) -> dict[str, object]:
-    options: dict[str, object] = {
-        "enable_async": profile.enable_async_udfs,
-    }
-    if profile.async_udf_timeout_ms is not None:
-        options["async_udf_timeout_ms"] = int(profile.async_udf_timeout_ms)
-    if profile.async_udf_batch_size is not None:
-        options["async_udf_batch_size"] = int(profile.async_udf_batch_size)
-    return options
-
-
-def _default_plugin_spec(profile: DataFusionRuntimeProfile) -> DataFusionPluginSpec:
-    from datafusion_engine.plugin_manager import DataFusionPluginSpec
-
-    plugin_path = resolve_plugin_path()
-    return DataFusionPluginSpec(
-        path=str(plugin_path),
-        udf_options=_default_udf_plugin_options(profile),
-        enable_udfs=True,
-        enable_table_functions=True,
-        enable_table_providers=False,
-    )
-
-
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
 logger = logging.getLogger(__name__)
@@ -192,19 +160,8 @@ GIB: int = 1024 * MIB
 SETTINGS_HASH_VERSION: int = 1
 TELEMETRY_PAYLOAD_VERSION: int = 2
 
-_MAP_ENTRY_SCHEMA = pa.struct(
-    [
-        pa.field("key", pa.string()),
-        pa.field("value_kind", pa.string()),
-        pa.field("value", pa.string()),
-    ]
-)
-_SETTINGS_HASH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(_MAP_ENTRY_SCHEMA)),
-    ]
-)
+_MAP_ENTRY_SCHEMA = map_entry_type(with_kind=True)
+_SETTINGS_HASH_SCHEMA = versioned_entries_schema(_MAP_ENTRY_SCHEMA)
 _SESSION_RUNTIME_HASH_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
@@ -360,6 +317,124 @@ def _supports_explain_analyze_level() -> bool:
     if DATAFUSION_MAJOR_VERSION is None:
         return False
     return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+
+
+def effective_catalog_autoload(
+    profile: DataFusionRuntimeProfile,
+) -> tuple[str | None, str | None]:
+    """Return effective catalog autoload settings for a profile.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        Catalog location and file format.
+    """
+    return _effective_catalog_autoload_for_profile(profile)
+
+
+def effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
+    """Return whether identifier normalization is enabled for a profile.
+
+    Returns
+    -------
+    bool
+        True when identifier normalization is enabled.
+    """
+    return _effective_ident_normalization(profile)
+
+
+def supports_explain_analyze_level() -> bool:
+    """Return whether explain analyze level is supported.
+
+    Returns
+    -------
+    bool
+        True when explain analyze level is supported.
+    """
+    return _supports_explain_analyze_level()
+
+
+def resolved_config_policy(
+    profile: DataFusionRuntimeProfile,
+) -> DataFusionConfigPolicy | None:
+    """Return resolved config policy for a profile.
+
+    Returns
+    -------
+    DataFusionConfigPolicy | None
+        Resolved policy or None.
+    """
+    return _resolved_config_policy_for_profile(profile)
+
+
+def resolved_schema_hardening(
+    profile: DataFusionRuntimeProfile,
+) -> SchemaHardeningProfile | None:
+    """Return resolved schema hardening profile for a profile.
+
+    Returns
+    -------
+    SchemaHardeningProfile | None
+        Resolved schema hardening profile or None.
+    """
+    return _resolved_schema_hardening_for_profile(profile)
+
+
+def delta_runtime_env_options(
+    profile: DataFusionRuntimeProfile,
+) -> _DeltaRuntimeEnvOptions | None:
+    """Return delta runtime env options for a profile.
+
+    Returns
+    -------
+    _DeltaRuntimeEnvOptions | None
+        Delta runtime env options or None.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when datafusion._internal is unavailable.
+    TypeError
+        Raised when delta runtime env options are unavailable.
+    """
+    if profile.delta_max_spill_size is None and profile.delta_max_temp_directory_size is None:
+        return None
+    try:
+        module = importlib.import_module("datafusion._internal")
+    except ImportError as exc:
+        msg = "Delta runtime env options require datafusion._internal."
+        raise RuntimeError(msg) from exc
+    options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
+    if not callable(options_cls):
+        msg = "datafusion._internal.DeltaRuntimeEnvOptions is unavailable."
+        raise TypeError(msg)
+    options = cast("_DeltaRuntimeEnvOptions", options_cls())
+    if profile.delta_max_spill_size is not None:
+        options.max_spill_size = int(profile.delta_max_spill_size)
+    if profile.delta_max_temp_directory_size is not None:
+        options.max_temp_directory_size = int(profile.delta_max_temp_directory_size)
+    return options
+
+
+def record_delta_session_defaults(
+    profile: DataFusionRuntimeProfile,
+    *,
+    available: bool,
+    installed: bool,
+    error: str | None,
+) -> None:
+    """Record delta session defaults metadata for a profile."""
+    if profile.diagnostics_sink is None:
+        return
+    profile.record_artifact(
+        "datafusion_delta_session_defaults_v1",
+        {
+            "enabled": profile.enable_delta_session_defaults,
+            "available": available,
+            "installed": installed,
+            "error": error,
+        },
+    )
 
 
 def _introspection_cache_for_ctx(
@@ -1382,74 +1457,6 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
     adapter.register_arrow_table(name, table)
 
 
-def _apply_config_policy(
-    config: SessionConfig,
-    policy: DataFusionConfigPolicy | None,
-) -> SessionConfig:
-    if policy is None:
-        return config
-    return policy.apply(config)
-
-
-def _apply_settings_overrides(
-    config: SessionConfig,
-    overrides: Mapping[str, str],
-) -> SessionConfig:
-    for key, value in overrides.items():
-        config = config.set(key, str(value))
-    return config
-
-
-def _apply_catalog_autoload(
-    config: SessionConfig,
-    *,
-    location: str | None,
-    file_format: str | None,
-) -> SessionConfig:
-    if location is not None:
-        config = config.set("datafusion.catalog.location", location)
-    if file_format is not None:
-        config = config.set("datafusion.catalog.format", file_format)
-    return config
-
-
-def _apply_identifier_settings(
-    config: SessionConfig,
-    *,
-    enable_ident_normalization: bool,
-) -> SessionConfig:
-    return config.set(
-        "datafusion.sql_parser.enable_ident_normalization",
-        str(enable_ident_normalization).lower(),
-    )
-
-
-def _apply_schema_hardening(
-    config: SessionConfig,
-    schema_hardening: SchemaHardeningProfile | None,
-) -> SessionConfig:
-    if schema_hardening is None:
-        return config
-    return schema_hardening.apply(config)
-
-
-def _apply_feature_settings(
-    config: SessionConfig,
-    feature_gates: DataFusionFeatureGates | None,
-) -> SessionConfig:
-    if feature_gates is None:
-        return config
-    for key, value in feature_gates.settings().items():
-        try:
-            config = config.set(key, value)
-        except Exception as exc:  # pragma: no cover - defensive against FFI config panics.
-            message = str(exc)
-            if "Config value" in message and "not found" in message:
-                continue
-            raise
-    return config
-
-
 def _load_schema_evolution_adapter_factory() -> object:
     """Return a schema evolution adapter factory from the native extension.
 
@@ -1508,26 +1515,6 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         msg = "Schema evolution adapter installer is not available in datafusion._internal."
         raise TypeError(msg)
     installer(ctx)
-
-
-def _apply_join_settings(
-    config: SessionConfig,
-    join_policy: DataFusionJoinPolicy | None,
-) -> SessionConfig:
-    if join_policy is None:
-        return config
-    for key, value in join_policy.settings().items():
-        config = config.set(key, value)
-    return config
-
-
-def _apply_explain_analyze_level(
-    config: SessionConfig,
-    level: str | None,
-) -> SessionConfig:
-    if level is None or not _supports_explain_analyze_level():
-        return config
-    return config.set("datafusion.explain.analyze_level", level)
 
 
 def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, str]:
@@ -2955,8 +2942,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     enable_async_udfs: bool = False
     async_udf_timeout_ms: int | None = None
     async_udf_batch_size: int | None = None
-    plugin_specs: tuple[DataFusionPluginSpec, ...] = ()
-    plugin_manager: DataFusionPluginManager | None = None
     udf_catalog_policy: Literal["default", "strict"] = "default"
     enable_delta_session_defaults: bool = False
     enable_delta_querybuilder: bool = False
@@ -3057,33 +3042,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             session_id=self.context_cache_key(),
         )
 
-    def _resolve_plugin_specs(self) -> tuple[DataFusionPluginSpec, ...]:
-        if self.plugin_specs:
-            for spec in self.plugin_specs:
-                assert_plugin_available(Path(spec.path))
-            defaults = _default_udf_plugin_options(self)
-            return tuple(
-                replace(spec, udf_options=defaults)
-                if spec.enable_udfs and not spec.udf_options
-                else spec
-                for spec in self.plugin_specs
-            )
-        assert_plugin_available()
-        return (_default_plugin_spec(self),)
-
-    def _resolve_plugin_manager(
-        self,
-        *,
-        plugin_specs: tuple[DataFusionPluginSpec, ...],
-    ) -> DataFusionPluginManager | None:
-        if self.plugin_manager is not None:
-            return self.plugin_manager
-        if not plugin_specs:
-            return None
-        from datafusion_engine.plugin_manager import DataFusionPluginManager
-
-        return DataFusionPluginManager(plugin_specs)
-
     def __post_init__(self) -> None:
         """Initialize defaults after dataclass construction.
 
@@ -3103,12 +3061,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         diagnostics_sink = self._resolve_diagnostics_sink()
         if diagnostics_sink is not None:
             object.__setattr__(self, "diagnostics_sink", diagnostics_sink)
-        plugin_specs = self._resolve_plugin_specs()
-        if not self.plugin_specs:
-            object.__setattr__(self, "plugin_specs", plugin_specs)
-        plugin_manager = self._resolve_plugin_manager(plugin_specs=plugin_specs)
-        if self.plugin_manager is None and plugin_manager is not None:
-            object.__setattr__(self, "plugin_manager", plugin_manager)
         async_policy = self._validate_async_udf_policy()
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
@@ -3122,87 +3074,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SessionConfig
             Session configuration for the profile.
         """
-        config = SessionConfig()
-        config = config.with_default_catalog_and_schema(
-            self.default_catalog,
-            self.default_schema,
-        )
-        config = config.with_create_default_catalog_and_schema(enabled=True)
-        config = config.with_information_schema(self.enable_information_schema)
-        config = _apply_identifier_settings(
-            config,
-            enable_ident_normalization=_effective_ident_normalization(self),
-        )
-        config = apply_int_config(
-            config,
-            method="with_target_partitions",
-            key="datafusion.execution.target_partitions",
-            value=self.target_partitions,
-        )
-        config = apply_int_config(
-            config,
-            method="with_batch_size",
-            key="datafusion.execution.batch_size",
-            value=self.batch_size,
-        )
-        config = apply_bool_config(
-            config,
-            method="with_repartition_aggregations",
-            key="datafusion.optimizer.repartition_aggregations",
-            value=self.repartition_aggregations,
-        )
-        config = apply_bool_config(
-            config,
-            method="with_repartition_windows",
-            key="datafusion.optimizer.repartition_windows",
-            value=self.repartition_windows,
-        )
-        config = apply_bool_config(
-            config,
-            method="with_repartition_file_scans",
-            key="datafusion.execution.repartition_file_scans",
-            value=self.repartition_file_scans,
-        )
-        config = apply_optional_setting(
-            config,
-            key="datafusion.execution.repartition_file_min_size",
-            value=self.repartition_file_min_size,
-        )
-        config = apply_optional_setting(
-            config,
-            key="datafusion.execution.minimum_parallel_output_files",
-            value=self.minimum_parallel_output_files,
-        )
-        config = apply_optional_setting(
-            config,
-            key="datafusion.execution.soft_max_rows_per_output_file",
-            value=self.soft_max_rows_per_output_file,
-        )
-        config = apply_optional_setting(
-            config,
-            key="datafusion.execution.maximum_parallel_row_group_writers",
-            value=self.maximum_parallel_row_group_writers,
-        )
-        config = apply_optional_setting(
-            config,
-            key="datafusion.execution.objectstore_writer_buffer_size",
-            value=self.objectstore_writer_buffer_size,
-        )
-        catalog_location, catalog_format = self._effective_catalog_autoload()
-        config = _apply_catalog_autoload(
-            config,
-            location=catalog_location,
-            file_format=catalog_format,
-        )
-        config = _apply_config_policy(config, self._resolved_config_policy())
-        config = _apply_schema_hardening(config, self._resolved_schema_hardening())
-        config = _apply_settings_overrides(config, self.settings_overrides)
-        config = _apply_feature_settings(config, self.feature_gates)
-        config = _apply_join_settings(config, self.join_policy)
-        return _apply_explain_analyze_level(config, self.explain_analyze_level)
+        return SessionFactory(self).build_config()
 
     def _effective_catalog_autoload(self) -> tuple[str | None, str | None]:
         return _effective_catalog_autoload_for_profile(self)
+
+    def _effective_ident_normalization(self) -> bool:
+        return _effective_ident_normalization(self)
+
+    @staticmethod
+    def _supports_explain_analyze_level() -> bool:
+        return _supports_explain_analyze_level()
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the profile.
@@ -3515,7 +3397,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalogs=self.registry_catalogs,
             catalog_name=catalog_name,
             default_schema=self.default_schema,
-            plugin_manager=self.plugin_manager,
+            runtime_profile=self,
         )
 
     def _install_view_schema(self, ctx: SessionContext) -> None:
@@ -3975,7 +3857,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             rows = table.to_pylist()
             schema = self._resolved_table_schema(ctx, "ast_files_v1")
             if schema is not None:
-                payload["schema_fingerprint"] = schema_fingerprint(schema)
+                payload["schema_identity_hash"] = schema_identity_hash(schema)
             payload["metadata"] = rows[0] if rows else None
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
@@ -4236,7 +4118,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             actual_schema = df.schema()
             actual_fingerprint = None
             if isinstance(actual_schema, pa.Schema):
-                actual_fingerprint = schema_fingerprint(actual_schema.remove_metadata())
+                actual_fingerprint = schema_identity_hash(actual_schema.remove_metadata())
             snapshot = _ScipRegistrationSnapshot(
                 name=name,
                 location=resolved,
@@ -4384,8 +4266,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
             "delta_constraints": list(location.delta_constraints),
-            "expected_schema_fingerprint": snapshot.expected_fingerprint,
-            "observed_schema_fingerprint": snapshot.actual_fingerprint,
+            "expected_schema_identity_hash": snapshot.expected_fingerprint,
+            "observed_schema_identity_hash": snapshot.actual_fingerprint,
             "schema_match": snapshot.schema_match,
         }
         self.record_artifact("datafusion_scip_datasets_v1", payload)
@@ -4434,7 +4316,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             rows = table.to_pylist()
             schema = self._resolved_table_schema(ctx, "libcst_files_v1")
             if schema is not None:
-                payload["schema_fingerprint"] = schema_fingerprint(schema)
+                payload["schema_identity_hash"] = schema_identity_hash(schema)
             default_entries = _default_value_entries(schema) if schema is not None else None
             payload["default_values"] = default_entries or None
             payload["diagnostics"] = rows[0] if rows else None
@@ -4459,7 +4341,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             rows = table.to_pylist()
             schema = self._resolved_table_schema(ctx, "tree_sitter_files_v1")
             if schema is not None:
-                payload["schema_fingerprint"] = schema_fingerprint(schema)
+                payload["schema_identity_hash"] = schema_identity_hash(schema)
             payload["stats"] = rows[0] if rows else None
             introspector = self._schema_introspector(ctx)
             payload["table_definition"] = introspector.table_definition("tree_sitter_files_v1")
@@ -4633,7 +4515,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             rows = table.to_pylist()
             schema = self._resolved_table_schema(ctx, "bytecode_files_v1")
             if schema is not None:
-                payload["schema_fingerprint"] = schema_fingerprint(schema)
+                payload["schema_identity_hash"] = schema_identity_hash(schema)
             payload["metadata"] = rows[0] if rows else None
             introspector = self._schema_introspector(ctx)
             payload["table_definition"] = introspector.table_definition("bytecode_files_v1")
@@ -5070,110 +4952,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SessionContext
             Base session context for this profile.
         """
-        if not self.distributed:
-            return self._build_local_session_context()
-        return self._build_distributed_session_context()
-
-    def _build_local_session_context(self) -> SessionContext:
-        """Create a non-distributed SessionContext for this profile.
-
-        Returns
-        -------
-        datafusion.SessionContext
-            Local session context for this profile.
-
-        Raises
-        ------
-        RuntimeError
-            Raised when Delta session initialization fails.
-        """
-        if not self.enable_delta_session_defaults:
-            return SessionContext(self.session_config(), self.runtime_env_builder())
-        available = True
-        installed = False
-        error: str | None = None
-        cause: Exception | None = None
-        ctx: SessionContext | None = None
-        try:
-            module = importlib.import_module("datafusion._internal")
-        except ImportError as exc:
-            available = False
-            error = str(exc)
-            cause = exc
-        else:
-            builder = getattr(module, "delta_session_context", None)
-            if not callable(builder):
-                error = "datafusion._internal.delta_session_context is unavailable."
-                cause = TypeError(error)
-            else:
-                builder_fn = cast(
-                    "Callable[[list[tuple[str, str]], RuntimeEnvBuilder, object | None], SessionContext]",
-                    builder,
-                )
-                try:
-                    settings = self.settings_payload()
-                    settings["datafusion.catalog.information_schema"] = str(
-                        self.enable_information_schema
-                    ).lower()
-                    delta_runtime = self._delta_runtime_env_options()
-                    ctx = builder_fn(
-                        list(settings.items()),
-                        self.runtime_env_builder(),
-                        delta_runtime,
-                    )
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    error = str(exc)
-                    cause = exc
-                else:
-                    if not isinstance(ctx, SessionContext):
-                        error = "datafusion._internal.delta_session_context must return a SessionContext."
-                        cause = TypeError(error)
-                        ctx = None
-                    else:
-                        installed = True
-        self._record_delta_session_defaults(
-            available=available,
-            installed=installed,
-            error=error,
-        )
-        if error is not None:
-            msg = "Delta session defaults require datafusion._internal."
-            raise RuntimeError(msg) from cause
-        if ctx is None:
-            msg = "Delta session context construction failed."
-            raise RuntimeError(msg)
-        return ctx
-
-    def _build_distributed_session_context(self) -> SessionContext:
-        """Create a distributed SessionContext for this profile.
-
-        Returns
-        -------
-        datafusion.SessionContext
-            Distributed session context for this profile.
-
-        Raises
-        ------
-        ValueError
-            Raised when distributed execution is misconfigured.
-        TypeError
-            Raised when the distributed factory does not return a SessionContext.
-        """
-        if self.enable_delta_session_defaults:
-            msg = (
-                "Delta session defaults require a non-distributed SessionContext. "
-                "Provide a delta-configured distributed_context_factory or disable "
-                "enable_delta_session_defaults."
-            )
-            raise ValueError(msg)
-        if self.distributed_context_factory is None:
-            msg = "Distributed execution requires distributed_context_factory."
-            raise ValueError(msg)
-        context = self.distributed_context_factory()
-        if not isinstance(context, SessionContext):
-            msg = "distributed_context_factory must return a SessionContext."
-            raise TypeError(msg)
-        return context
+        return SessionFactory(self).build()
 
     def _apply_url_table(self, ctx: SessionContext) -> SessionContext:
         return ctx.enable_url_table() if self.enable_url_table else ctx
@@ -6302,44 +6081,36 @@ def read_delta_as_reader(
 ) -> pa.RecordBatchReader:
     """Return a streaming Delta table snapshot using the Delta TableProvider.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when plugin-based Delta providers are unavailable.
-
     Returns
     -------
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
-    storage: dict[str, str] = dict(storage_options or {})
-    log_storage: dict[str, str] = dict(log_storage_options or {})
-    if log_storage:
-        storage.update(log_storage)
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    manager = profile.plugin_manager
-    if manager is None:
-        from datafusion_engine.plugin_manager import DataFusionPluginManager
+    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.dataset_resolution import (
+        DatasetResolutionRequest,
+        resolve_dataset_provider,
+    )
 
-        if not profile.plugin_specs:
-            msg = "Plugin-based Delta readers require plugin specs."
-            raise RuntimeError(msg)
-        manager = DataFusionPluginManager(profile.plugin_specs)
-    options: dict[str, object] = {
-        "table_uri": path,
-        "storage_options": storage or None,
-        "version": None,
-        "timestamp": None,
-        "file_column_name": delta_scan.file_column_name if delta_scan else None,
-        "enable_parquet_pushdown": delta_scan.enable_parquet_pushdown if delta_scan else None,
-        "schema_force_view_types": delta_scan.schema_force_view_types if delta_scan else None,
-        "wrap_partition_values": delta_scan.wrap_partition_values if delta_scan else None,
-    }
-    provider = manager.create_table_provider(provider_name="delta", options=options)
+    location = DatasetLocation(
+        path=path,
+        format="delta",
+        storage_options=dict(storage_options or {}),
+        delta_log_storage_options=dict(log_storage_options or {}),
+        delta_scan=delta_scan,
+    )
+    resolution = resolve_dataset_provider(
+        DatasetResolutionRequest(
+            ctx=ctx,
+            location=location,
+            runtime_profile=profile,
+        )
+    )
     from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
-    df = ctx.read_table(TableProviderCapsule(provider))
+    df = ctx.read_table(TableProviderCapsule(resolution.provider))
     to_reader = getattr(df, "to_arrow_reader", None)
     if callable(to_reader):
         reader = to_reader()

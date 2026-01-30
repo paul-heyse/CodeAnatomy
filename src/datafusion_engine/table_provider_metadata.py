@@ -33,7 +33,7 @@ class TableProviderMetadata:
         Constraint expressions or constraint names for the table.
     default_values : dict[str, object]
         Column default values by column name.
-    schema_fingerprint : str | None
+    schema_identity_hash : str | None
         Stable fingerprint for the table schema, if available.
     storage_location : str | None
         Storage location URI for external tables.
@@ -62,7 +62,7 @@ class TableProviderMetadata:
     ddl: str | None = None
     constraints: tuple[str, ...] = field(default_factory=tuple)
     default_values: dict[str, object] = field(default_factory=dict)
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     storage_location: str | None = None
     file_format: str | None = None
     partition_columns: tuple[str, ...] = field(default_factory=tuple)
@@ -91,7 +91,7 @@ class TableProviderMetadata:
             ddl=ddl,
             constraints=self.constraints,
             default_values=self.default_values,
-            schema_fingerprint=self.schema_fingerprint,
+            schema_identity_hash=self.schema_identity_hash,
             storage_location=self.storage_location,
             file_format=self.file_format,
             partition_columns=self.partition_columns,
@@ -121,7 +121,7 @@ class TableProviderMetadata:
             ddl=self.ddl,
             constraints=constraints,
             default_values=self.default_values,
-            schema_fingerprint=self.schema_fingerprint,
+            schema_identity_hash=self.schema_identity_hash,
             storage_location=self.storage_location,
             file_format=self.file_format,
             partition_columns=self.partition_columns,
@@ -133,7 +133,7 @@ class TableProviderMetadata:
             schema_adapter_enabled=self.schema_adapter_enabled,
         )
 
-    def with_schema_fingerprint(self, fingerprint: str) -> TableProviderMetadata:
+    def with_schema_identity_hash(self, fingerprint: str) -> TableProviderMetadata:
         """Return a copy with updated schema fingerprint.
 
         Parameters
@@ -151,7 +151,7 @@ class TableProviderMetadata:
             ddl=self.ddl,
             constraints=self.constraints,
             default_values=self.default_values,
-            schema_fingerprint=fingerprint,
+            schema_identity_hash=fingerprint,
             storage_location=self.storage_location,
             file_format=self.file_format,
             partition_columns=self.partition_columns,
@@ -181,7 +181,7 @@ class TableProviderMetadata:
             ddl=self.ddl,
             constraints=self.constraints,
             default_values=self.default_values,
-            schema_fingerprint=self.schema_fingerprint,
+            schema_identity_hash=self.schema_identity_hash,
             storage_location=self.storage_location,
             file_format=self.file_format,
             partition_columns=self.partition_columns,

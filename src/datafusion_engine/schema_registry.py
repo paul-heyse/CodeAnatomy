@@ -39,13 +39,13 @@ from datafusion_engine.arrow_schema.field_builders import (
 )
 from datafusion_engine.arrow_schema.metadata import (
     function_requirements_metadata_spec,
-    metadata_list_bytes,
     optional_functions_from_metadata,
     ordering_metadata_spec,
     required_function_signature_types_from_metadata,
     required_function_signatures_from_metadata,
     required_functions_from_metadata,
 )
+from datafusion_engine.arrow_schema.metadata_codec import encode_metadata_list
 from datafusion_engine.arrow_schema.semantic_types import (
     SEMANTIC_TYPE_META,
     apply_semantic_types,
@@ -363,7 +363,7 @@ CST_PARSE_MANIFEST_T = pa.struct(
         ("libcst_version", pa.string()),
         ("parser_backend", pa.string()),
         ("parsed_python_version", pa.string()),
-        ("schema_fingerprint", pa.string()),
+        ("schema_identity_hash", pa.string()),
     ]
 )
 
@@ -903,8 +903,8 @@ _BYTECODE_ORDERING_META = ordering_metadata_spec(
     keys=(("path", "ascending"), ("file_id", "ascending")),
 )
 _BYTECODE_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(_BYTECODE_IDENTITY_FIELDS),
-    KEY_FIELDS_META: metadata_list_bytes(_BYTECODE_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(_BYTECODE_IDENTITY_FIELDS),
+    KEY_FIELDS_META: encode_metadata_list(_BYTECODE_IDENTITY_FIELDS),
 }
 
 BYTECODE_SCHEMA_META: dict[bytes, bytes] = dict(_BYTECODE_ORDERING_META.schema_metadata)
@@ -1118,8 +1118,8 @@ _AST_ORDERING_META = ordering_metadata_spec(
     keys=(("path", "ascending"), ("file_id", "ascending")),
 )
 _AST_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(_AST_IDENTITY_FIELDS),
-    KEY_FIELDS_META: metadata_list_bytes(_AST_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(_AST_IDENTITY_FIELDS),
+    KEY_FIELDS_META: encode_metadata_list(_AST_IDENTITY_FIELDS),
 }
 _AST_SCHEMA_META: dict[bytes, bytes] = dict(_AST_ORDERING_META.schema_metadata)
 _AST_SCHEMA_META.update(_AST_CONSTRAINT_META)
@@ -1146,8 +1146,8 @@ _LIBCST_ORDERING_META = ordering_metadata_spec(
 )
 _LIBCST_IDENTITY_FIELDS = ("file_id", "path")
 _LIBCST_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(_LIBCST_IDENTITY_FIELDS),
-    KEY_FIELDS_META: metadata_list_bytes(_LIBCST_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(_LIBCST_IDENTITY_FIELDS),
+    KEY_FIELDS_META: encode_metadata_list(_LIBCST_IDENTITY_FIELDS),
 }
 _LIBCST_SCHEMA_META = dict(_LIBCST_ORDERING_META.schema_metadata)
 _LIBCST_SCHEMA_META.update(_LIBCST_CONSTRAINT_META)
@@ -1190,8 +1190,8 @@ _SCIP_INDEX_ORDERING_META = ordering_metadata_spec(
     keys=(("index_path", "ascending"), ("index_id", "ascending")),
 )
 _SCIP_INDEX_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(("index_path",)),
-    KEY_FIELDS_META: metadata_list_bytes(_SCIP_INDEX_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(("index_path",)),
+    KEY_FIELDS_META: encode_metadata_list(_SCIP_INDEX_IDENTITY_FIELDS),
 }
 _SCIP_INDEX_SCHEMA_META = dict(_SCIP_INDEX_ORDERING_META.schema_metadata)
 _SCIP_INDEX_SCHEMA_META.update(_SCIP_INDEX_CONSTRAINT_META)
@@ -1206,8 +1206,8 @@ _SYMTABLE_ORDERING_META = ordering_metadata_spec(
     keys=(("path", "ascending"), ("file_id", "ascending")),
 )
 _SYMTABLE_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(_SYMTABLE_IDENTITY_FIELDS),
-    KEY_FIELDS_META: metadata_list_bytes(_SYMTABLE_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(_SYMTABLE_IDENTITY_FIELDS),
+    KEY_FIELDS_META: encode_metadata_list(_SYMTABLE_IDENTITY_FIELDS),
 }
 _SYMTABLE_SCHEMA_META = dict(_SYMTABLE_ORDERING_META.schema_metadata)
 _SYMTABLE_SCHEMA_META.update(_SYMTABLE_CONSTRAINT_META)
@@ -1222,8 +1222,8 @@ _TREE_SITTER_ORDERING_META = ordering_metadata_spec(
     keys=(("path", "ascending"), ("file_id", "ascending")),
 )
 _TREE_SITTER_CONSTRAINT_META = {
-    REQUIRED_NON_NULL_META: metadata_list_bytes(_TREE_SITTER_IDENTITY_FIELDS),
-    KEY_FIELDS_META: metadata_list_bytes(_TREE_SITTER_IDENTITY_FIELDS),
+    REQUIRED_NON_NULL_META: encode_metadata_list(_TREE_SITTER_IDENTITY_FIELDS),
+    KEY_FIELDS_META: encode_metadata_list(_TREE_SITTER_IDENTITY_FIELDS),
 }
 _TREE_SITTER_SCHEMA_META = dict(_TREE_SITTER_ORDERING_META.schema_metadata)
 _TREE_SITTER_SCHEMA_META.update(_TREE_SITTER_CONSTRAINT_META)
@@ -1241,7 +1241,7 @@ DATAFUSION_EXPLAINS_SCHEMA = _schema_with_metadata(
             pa.field("sql", pa.string(), nullable=False),
             pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
             pa.field("explain_rows_artifact_format", pa.string(), nullable=True),
-            pa.field("explain_rows_schema_fingerprint", pa.string(), nullable=True),
+            pa.field("explain_rows_schema_identity_hash", pa.string(), nullable=True),
             pa.field("explain_analyze", pa.bool_(), nullable=False),
         ]
     ),
@@ -1398,7 +1398,7 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("name", pa.string(), nullable=False),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
             pa.field("plan_task_signature", pa.string(), nullable=False),
-            pa.field("schema_fingerprint", pa.string(), nullable=False),
+            pa.field("schema_identity_hash", pa.string(), nullable=False),
             pa.field("schema_msgpack", pa.binary(), nullable=False),
             pa.field("schema_describe_msgpack", pa.binary(), nullable=True),
             pa.field("schema_provenance_msgpack", pa.binary(), nullable=True),
@@ -1650,7 +1650,7 @@ DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
         [
             pa.field("version", pa.int32(), nullable=False),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
-            pa.field("schema_fingerprint", pa.string(), nullable=False),
+            pa.field("schema_identity_hash", pa.string(), nullable=False),
             pa.field("profile_hash", pa.string(), nullable=False),
             pa.field("writer_strategy", pa.string(), nullable=False),
             pa.field("input_fingerprints", pa.list_(pa.string()), nullable=False),

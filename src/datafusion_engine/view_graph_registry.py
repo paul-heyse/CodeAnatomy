@@ -14,6 +14,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_contracts import (
     SchemaContract,
@@ -528,14 +529,13 @@ def _schema_metadata_violations(
     expected = contract.schema_metadata or {}
     if not expected:
         return []
-    from datafusion_engine.arrow_schema.abi import schema_fingerprint
     from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 
     actual = schema.metadata or {}
     violations: list[SchemaViolation] = []
     expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
     if expected_abi is not None:
-        actual_abi = schema_fingerprint(schema).encode("utf-8")
+        actual_abi = schema_identity_hash(schema).encode("utf-8")
         if actual_abi != expected_abi:
             violations.append(
                 SchemaViolation(

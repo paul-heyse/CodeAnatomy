@@ -323,7 +323,7 @@ def test_semantic_registry_captures_semantic_outputs() -> None:
         driver_instance.graph.nodes,
         plan_signature=plan.plan_signature,
     )
-    semantic_ids = {record.semantic_id for record in registry.records}
+    semantic_ids = {record.semantic_id for record in registry.records.snapshot().values()}
     assert {"cpg.nodes.v1", "cpg.edges.v1", "cpg.props.v1"} <= semantic_ids
     assert registry.errors == ()
 

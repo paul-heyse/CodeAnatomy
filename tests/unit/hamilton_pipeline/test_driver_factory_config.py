@@ -64,7 +64,6 @@ def test_resolve_config_payload_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
         profile_spec=_stub_profile_spec(),
         plan=_stub_plan(),
         execution_mode=None,
-        allow_dynamic_scan_units=True,
     )
     assert payload["runtime_profile_name_override"] == "profile-x"
     assert payload["enable_dynamic_scan_units"] is True
@@ -73,13 +72,12 @@ def test_resolve_config_payload_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert tags["plan_signature"] == "plan123"
 
 
-def test_resolve_config_payload_async_guard() -> None:
-    """Ensure async config rejects dynamic scan units."""
-    with pytest.raises(ValueError, match="dynamic scan units"):
-        _resolve_config_payload(
-            {"enable_dynamic_scan_units": True},
-            profile_spec=_stub_profile_spec(),
-            plan=_stub_plan(),
-            execution_mode=ExecutionMode.PLAN_PARALLEL,
-            allow_dynamic_scan_units=False,
-        )
+def test_resolve_config_payload_deterministic_serial_disables_dynamic_scan_units() -> None:
+    """Ensure deterministic serial execution disables dynamic scan units."""
+    payload = _resolve_config_payload(
+        {"enable_dynamic_scan_units": True},
+        profile_spec=_stub_profile_spec(),
+        plan=_stub_plan(),
+        execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
+    )
+    assert payload["enable_dynamic_scan_units"] is False

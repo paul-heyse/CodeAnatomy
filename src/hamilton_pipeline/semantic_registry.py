@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from hamilton.lifecycle import api as lifecycle_api
 
 from core_types import JsonValue
+from utils.registry_protocol import MutableRegistry
 
 _SEMANTIC_LAYER = "semantic"
 _REQUIRED_SEMANTIC_TAGS: frozenset[str] = frozenset(
@@ -87,7 +88,7 @@ class SemanticRegistry:
     """Compiled semantic registry for a single execution plan."""
 
     plan_signature: str
-    records: tuple[SemanticNodeRecord, ...]
+    records: MutableRegistry[str, SemanticNodeRecord]
     errors: tuple[str, ...] = ()
 
     def payload(self) -> dict[str, object]:
@@ -98,12 +99,14 @@ class SemanticRegistry:
         dict[str, object]
             Registry payload for diagnostics sinks.
         """
+        snapshot = self.records.snapshot()
+        ordered = [record.payload() for record in sorted(snapshot.values(), key=_record_sort_key)]
         return {
             "plan_signature": self.plan_signature,
             "record_count": len(self.records),
             "error_count": len(self.errors),
             "errors": list(self.errors),
-            "records": [record.payload() for record in self.records],
+            "records": ordered,
         }
 
 
@@ -124,7 +127,7 @@ def compile_semantic_registry(
     ValueError
         Raised when semantic outputs are missing required semantic tags.
     """
-    records: list[SemanticNodeRecord] = []
+    record_registry: MutableRegistry[str, SemanticNodeRecord] = MutableRegistry()
     errors: list[str] = []
     for node_name, node_ in sorted(nodes.items()):
         record, node_errors = _semantic_record(
@@ -134,11 +137,10 @@ def compile_semantic_registry(
         )
         errors.extend(node_errors)
         if record is not None:
-            records.append(record)
-    ordered_records = tuple(sorted(records, key=_record_sort_key))
+            record_registry.register(record.node_name, record)
     registry = SemanticRegistry(
         plan_signature=plan_signature,
-        records=ordered_records,
+        records=record_registry,
         errors=tuple(errors),
     )
     if registry.errors:

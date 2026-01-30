@@ -28,8 +28,9 @@ from normalize.dataset_rows import DatasetRow
 from normalize.dataset_templates import template
 from normalize.diagnostic_types import DIAG_DETAILS_TYPE
 from schema_spec.contract_row import ContractRow
+from schema_spec.field_spec import FieldSpec
 from schema_spec.registration import DatasetRegistration, register_dataset
-from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, dict_field
+from schema_spec.specs import TableSchemaSpec, dict_field
 from schema_spec.system import (
     ContractSpec,
     DatasetSpec,
@@ -56,14 +57,14 @@ def _spec(
     *,
     nullable: bool = True,
     metadata: Mapping[str, str] | Mapping[bytes, bytes] | None = None,
-) -> ArrowFieldSpec:
+) -> FieldSpec:
     resolved_metadata: dict[str, str] = {}
     if metadata is not None:
         for key, value in metadata.items():
             decoded_key = key.decode("utf-8") if isinstance(key, bytes) else str(key)
             decoded_value = value.decode("utf-8") if isinstance(value, bytes) else str(value)
             resolved_metadata[decoded_key] = decoded_value
-    return ArrowFieldSpec(
+    return FieldSpec(
         name=name,
         dtype=dtype,
         nullable=nullable,
@@ -71,11 +72,11 @@ def _spec(
     )
 
 
-def _dict(name: str) -> ArrowFieldSpec:
+def _dict(name: str) -> FieldSpec:
     return dict_field(name)
 
 
-_FIELD_SPECS: dict[str, ArrowFieldSpec] = {
+_FIELD_SPECS: dict[str, FieldSpec] = {
     "file_id": _spec("file_id", pa.string()),
     "path": _spec("path", pa.string()),
     "line_base": _spec("line_base", pa.int32()),
@@ -131,23 +132,23 @@ _FIELD_SPECS: dict[str, ArrowFieldSpec] = {
 }
 
 
-def field(key: str) -> ArrowFieldSpec:
-    """Return the ArrowFieldSpec for a field key.
+def field(key: str) -> FieldSpec:
+    """Return the FieldSpec for a field key.
 
     Returns
     -------
-    ArrowFieldSpec
+    FieldSpec
         Field specification for the key.
     """
     return _FIELD_SPECS[key]
 
 
-def fields(keys: Sequence[str]) -> list[ArrowFieldSpec]:
-    """Return ArrowFieldSpec instances for field keys.
+def fields(keys: Sequence[str]) -> list[FieldSpec]:
+    """Return FieldSpec instances for field keys.
 
     Returns
     -------
-    list[ArrowFieldSpec]
+    list[FieldSpec]
         Field specifications for the keys.
     """
     return [field(key) for key in keys]
@@ -175,9 +176,9 @@ def _dedupe(values: Iterable[str]) -> list[str]:
     return out
 
 
-def _dedupe_specs(specs: Iterable[ArrowFieldSpec]) -> list[ArrowFieldSpec]:
+def _dedupe_specs(specs: Iterable[FieldSpec]) -> list[FieldSpec]:
     seen: set[str] = set()
-    out: list[ArrowFieldSpec] = []
+    out: list[FieldSpec] = []
     for spec in specs:
         name = spec.name
         if name in seen:
@@ -205,7 +206,7 @@ def _base_field_keys(row: DatasetRow) -> list[str]:
     return _dedupe((*bundle_keys, *row_keys))
 
 
-def _input_field_specs(row: DatasetRow) -> list[ArrowFieldSpec]:
+def _input_field_specs(row: DatasetRow) -> list[FieldSpec]:
     derived = _derived_names(row)
     bundle_fields = [bundle_field for name in row.bundles for bundle_field in bundle(name).fields]
     base_fields = [field(key) for key in row.fields if field_name(key) not in derived]

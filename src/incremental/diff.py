@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
@@ -112,7 +112,7 @@ def write_incremental_diff(
     target.parent.mkdir(parents=True, exist_ok=True)
     commit_metadata = {
         "snapshot_kind": "incremental_diff",
-        "schema_fingerprint": schema_fingerprint(diff.schema),
+        "schema_identity_hash": schema_identity_hash(diff.schema),
     }
     resolved_storage = context.resolve_storage(table_uri=str(target))
     write_result = write_delta_table_via_pipeline(

@@ -10,12 +10,10 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion import SessionContext
 
-from datafusion_engine.arrow_schema.abi import schema_to_dict
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_datafusion_provider,
     resolve_delta_feature_gate,
-    resolve_delta_scan_options,
 )
 from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
 from datafusion_engine.delta_protocol import (
@@ -24,6 +22,10 @@ from datafusion_engine.delta_protocol import (
     DeltaProtocolSnapshot,
     delta_feature_gate_tuple,
     delta_protocol_compatibility,
+)
+from datafusion_engine.delta_scan_config import (
+    delta_scan_config_snapshot,
+    delta_scan_identity_hash,
 )
 from datafusion_engine.lineage_datafusion import ScanLineage
 from obs.otel.scopes import SCOPE_SCHEDULING
@@ -182,8 +184,8 @@ def plan_scan_unit(
             location.delta_log_storage_options if location is not None else None,
         )
         storage_options_hash = hash_storage_options(storage_options, log_storage_options)
-        delta_scan_config = _delta_scan_config_snapshot(location)
-        delta_scan_config_hash = _delta_scan_config_hash(delta_scan_config)
+        delta_scan_config = delta_scan_config_snapshot(location)
+        scan_config_hash = delta_scan_identity_hash(delta_scan_config)
         datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
         delta_resolution = _resolve_delta_scan_resolution(
             ctx,
@@ -200,7 +202,7 @@ def plan_scan_unit(
                 delta_feature_gate=delta_feature_gate,
                 delta_protocol=delta_resolution.delta_protocol,
                 storage_options_hash=storage_options_hash,
-                delta_scan_config_hash=delta_scan_config_hash,
+                delta_scan_config_hash=scan_config_hash,
                 datafusion_provider=datafusion_provider,
                 projected_columns=lineage.projected_columns,
                 pushed_filters=lineage.pushed_filters,
@@ -216,7 +218,7 @@ def plan_scan_unit(
             delta_protocol=delta_resolution.delta_protocol,
             storage_options_hash=storage_options_hash,
             delta_scan_config=delta_scan_config,
-            delta_scan_config_hash=delta_scan_config_hash,
+            delta_scan_config_hash=scan_config_hash,
             datafusion_provider=datafusion_provider,
             protocol_compatible=delta_resolution.protocol_compatible,
             protocol_compatibility=delta_resolution.protocol_compatibility,
@@ -518,30 +520,6 @@ def _delta_protocol_payload(snapshot: Mapping[str, object]) -> DeltaProtocolSnap
         reader_features=reader_features,
         writer_features=writer_features,
     )
-
-
-def _delta_scan_config_snapshot(
-    location: DatasetLocation | None,
-) -> DeltaScanConfigSnapshot | None:
-    if location is None:
-        return None
-    options = resolve_delta_scan_options(location)
-    if options is None:
-        return None
-    schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
-    return DeltaScanConfigSnapshot(
-        file_column_name=options.file_column_name,
-        enable_parquet_pushdown=options.enable_parquet_pushdown,
-        schema_force_view_types=options.schema_force_view_types,
-        wrap_partition_values=options.wrap_partition_values,
-        schema=dict(schema_payload) if schema_payload is not None else None,
-    )
-
-
-def _delta_scan_config_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | None:
-    if snapshot is None:
-        return None
-    return hash_msgpack_canonical(snapshot)
 
 
 def _provider_marker(

@@ -56,6 +56,6 @@ def test_semantic_registry_accepts_complete_semantic_tags() -> None:
     assert registry.plan_signature == "plan:semantic:test"
     assert not registry.errors
     assert len(registry.records) == 1
-    record = registry.records[0]
+    record = next(iter(registry.records.snapshot().values()))
     assert record.semantic_id == "semantic.good.v1"
     assert record.node_name == "semantic_good"

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from schema_spec.dataset_handle import DatasetHandle
+    from schema_spec.field_spec import FieldSpec
     from schema_spec.registration import DatasetRegistration, register_dataset
     from schema_spec.specs import (
         DICT_STRING,
@@ -18,7 +19,6 @@ if TYPE_CHECKING:
         REQUIRED_NON_NULL_META,
         SCHEMA_META_NAME,
         SCHEMA_META_VERSION,
-        ArrowFieldSpec,
         DerivedFieldSpec,
         FieldBundle,
         NestedFieldSpec,
@@ -78,7 +78,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "REQUIRED_NON_NULL_META": ("schema_spec.specs", "REQUIRED_NON_NULL_META"),
     "SCHEMA_META_NAME": ("schema_spec.specs", "SCHEMA_META_NAME"),
     "SCHEMA_META_VERSION": ("schema_spec.specs", "SCHEMA_META_VERSION"),
-    "ArrowFieldSpec": ("schema_spec.specs", "ArrowFieldSpec"),
+    "FieldSpec": ("schema_spec.field_spec", "FieldSpec"),
     "ArrowValidationOptions": ("schema_spec.system", "ArrowValidationOptions"),
     "ContractCatalogSpec": ("schema_spec.system", "ContractCatalogSpec"),
     "ContractSpec": ("schema_spec.system", "ContractSpec"),
@@ -154,7 +154,6 @@ __all__ = [
     "SCHEMA_EVOLUTION_PRESETS",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
-    "ArrowFieldSpec",
     "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractSpec",
@@ -169,6 +168,7 @@ __all__ = [
     "DeltaWritePolicy",
     "DerivedFieldSpec",
     "FieldBundle",
+    "FieldSpec",
     "NestedFieldSpec",
     "SortKeySpec",
     "TableSchemaContract",

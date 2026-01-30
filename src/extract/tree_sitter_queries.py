@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from hashlib import sha256
 
 from tree_sitter import Language, Query
+
+from utils.hashing import hash_msgpack_canonical
 
 
 @dataclass(frozen=True)
@@ -122,13 +123,8 @@ def compile_query_pack(language: Language) -> TreeSitterQueryPack:
 
 
 def _pack_version(sources: Mapping[str, str]) -> str:
-    digest = sha256()
-    for name in sorted(sources):
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\n")
-        digest.update(sources[name].encode("utf-8"))
-        digest.update(b"\n")
-    return digest.hexdigest()
+    payload = [(name, sources[name]) for name in sorted(sources)]
+    return hash_msgpack_canonical(payload)
 
 
 def _lint_query(spec: QuerySpec, query: Query) -> None:

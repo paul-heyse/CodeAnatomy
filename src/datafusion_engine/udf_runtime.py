@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 from collections.abc import Mapping, Sequence
+from types import ModuleType
 from weakref import WeakKeyDictionary, WeakSet
 
-from datafusion import SessionContext, _internal as datafusion_internal
+from datafusion import SessionContext
+
 from datafusion_engine.plugin_discovery import assert_plugin_available
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
@@ -42,7 +45,7 @@ RustUdfSnapshot = Mapping[str, object]
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     assert_plugin_available()
-    snapshot = datafusion_internal.registry_snapshot(ctx)
+    snapshot = _datafusion_internal().registry_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
@@ -87,6 +90,10 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
             "batch_size": batch_size,
         }
     return payload
+
+
+def _datafusion_internal() -> ModuleType:
+    return importlib.import_module("datafusion._internal")
 
 
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
@@ -369,7 +376,7 @@ def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     assert_plugin_available()
-    snapshot = datafusion_internal.udf_docs_snapshot(ctx)
+    snapshot = _datafusion_internal().udf_docs_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.udf_docs_snapshot returned a non-mapping payload."
         raise TypeError(msg)
@@ -530,7 +537,7 @@ def _async_udf_policy(
 
 
 def _install_udf_config(ctx: SessionContext) -> None:
-    installer = getattr(datafusion_internal, "install_codeanatomy_udf_config", None)
+    installer = getattr(_datafusion_internal(), "install_codeanatomy_udf_config", None)
     if callable(installer):
         with contextlib.suppress(RuntimeError, TypeError, ValueError):
             installer(ctx)

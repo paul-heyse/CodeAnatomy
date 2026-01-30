@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from utils.hashing import hash_json_canonical
+from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -80,7 +81,9 @@ class ProviderRegistry:
 
     ctx: SessionContext
     runtime_profile: DataFusionRuntimeProfile | None = None
-    _registrations: dict[str, RegistrationMetadata] = field(default_factory=dict)
+    _registrations: MutableRegistry[str, RegistrationMetadata] = field(
+        default_factory=MutableRegistry
+    )
     _udf_snapshot_hash: str | None = field(default=None)
 
     def register(
@@ -116,7 +119,7 @@ class ProviderRegistry:
             raise ValueError(msg)
 
         _, metadata = self._do_registration(spec, cache_policy=cache_policy)
-        self._registrations[spec.name] = metadata
+        self._registrations.register(spec.name, metadata, overwrite=overwrite)
         self._emit_registration_diagnostic(metadata)
         return metadata
 
@@ -186,7 +189,7 @@ class ProviderRegistry:
             raise ValueError(msg)
 
         df, metadata = self._do_registration(spec, cache_policy=cache_policy)
-        self._registrations[spec.name] = metadata
+        self._registrations.register(spec.name, metadata, overwrite=overwrite)
         self._emit_registration_diagnostic(metadata)
         return df
 
@@ -218,7 +221,7 @@ class ProviderRegistry:
         Mapping[str, RegistrationMetadata]
             Read-only view of registered tables.
         """
-        return dict(self._registrations)
+        return self._registrations.snapshot()
 
     def is_registered(self, name: str) -> bool:
         """Check if a table is registered.

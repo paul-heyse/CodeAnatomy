@@ -12,12 +12,9 @@ from typing import TYPE_CHECKING
 import msgspec
 import pyarrow as pa
 
-from datafusion_engine.dataset_registry import (
-    DatasetLocation,
-    resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
-)
+from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_log_storage_options
 from datafusion_engine.delta_protocol import delta_feature_gate_payload
+from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.sql_options import planning_sql_options
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow

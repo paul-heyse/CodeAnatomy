@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from core.config_base import config_fingerprint
 from datafusion_engine.delta_store_policy import DeltaStorePolicy, delta_store_policy_hash
-from utils.hashing import config_fingerprint
 
 
 def test_delta_store_policy_hash_none() -> None:

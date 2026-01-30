@@ -184,6 +184,8 @@ class DataFusionPluginManager:
         ------
         RuntimeError
             Raised when plugin configuration or handles are missing.
+        TypeError
+            Raised when the plugin returns an invalid provider capsule.
         """
         if not self.specs:
             msg = "No DataFusion plugins are configured."

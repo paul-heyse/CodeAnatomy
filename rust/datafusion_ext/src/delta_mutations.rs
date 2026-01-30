@@ -16,24 +16,8 @@ use deltalake::protocol::SaveMode;
 use deltalake::table::Constraint;
 
 use crate::delta_control_plane::load_delta_table;
-use crate::delta_protocol::{
-    delta_snapshot_info, protocol_gate, DeltaFeatureGate, DeltaSnapshotInfo,
-};
-
-#[derive(Debug, Clone)]
-pub struct DeltaAppTransaction {
-    pub app_id: String,
-    pub version: i64,
-    pub last_updated: Option<i64>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DeltaCommitOptions {
-    pub app_transaction: Option<DeltaAppTransaction>,
-    pub metadata: HashMap<String, String>,
-    pub max_retries: Option<usize>,
-    pub create_checkpoint: Option<bool>,
-}
+use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
+use crate::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 
 #[derive(Debug, Clone)]
 pub struct DeltaMutationReport {
@@ -49,7 +33,9 @@ pub(crate) fn commit_properties(options: Option<DeltaCommitOptions>) -> CommitPr
         return commit;
     };
     if let Some(max_retries) = options.max_retries {
-        commit = commit.with_max_retries(max_retries);
+        if max_retries >= 0 {
+            commit = commit.with_max_retries(max_retries as usize);
+        }
     }
     if let Some(create_checkpoint) = options.create_checkpoint {
         commit = commit.with_create_checkpoint(create_checkpoint);

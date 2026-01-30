@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
-from hamilton import async_driver, driver
+from hamilton import driver
 from hamilton.execution import executors
 from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 from opentelemetry import trace as otel_trace
 
+from core.config_base import config_fingerprint as hash_config_fingerprint
 from core_types import DeterminismTier, JsonValue, parse_determinism_tier
 from datafusion_engine.arrow_interop import SchemaLike
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
+from hamilton_pipeline.driver_builder import DriverBuilder
 from hamilton_pipeline.execution_manager import PlanExecutionManager
-from hamilton_pipeline.hamilton_tracker import (
-    CodeAnatomyAsyncHamiltonTracker,
-    CodeAnatomyHamiltonTracker,
-)
+from hamilton_pipeline.hamilton_tracker import CodeAnatomyHamiltonTracker
 from hamilton_pipeline.lifecycle import (
     DiagnosticsNodeHook,
     PlanDiagnosticsHook,
@@ -47,8 +45,7 @@ from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
 from obs.otel.run_context import get_run_id
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from utils.env_utils import env_bool, env_value
-from utils.hashing import config_fingerprint as hash_config_fingerprint
-from utils.hashing import hash_json_canonical
+from utils.hashing import CacheKeyBuilder
 
 if TYPE_CHECKING:
     from hamilton.base import HamiltonGraphAdapter
@@ -113,17 +110,14 @@ def driver_cache_key(
     str
         SHA-256 fingerprint for the config and plan signature.
     """
-    executor_payload = _executor_config_payload(executor_config)
-    adapter_payload = _graph_adapter_config_payload(graph_adapter_config)
-    payload = {
-        "version": 3,
-        "plan_signature": plan_signature,
-        "execution_mode": execution_mode.value,
-        "executor_config": executor_payload,
-        "graph_adapter_config": adapter_payload,
-        "config": dict(config),
-    }
-    return hash_json_canonical(payload, str_keys=True)
+    builder = CacheKeyBuilder(prefix="driver")
+    builder.add("version", 3)
+    builder.add("plan_signature", plan_signature)
+    builder.add("execution_mode", execution_mode.value)
+    builder.add("executor_config", _executor_config_payload(executor_config))
+    builder.add("graph_adapter_config", _graph_adapter_config_payload(graph_adapter_config))
+    builder.add("config", dict(config))
+    return builder.build()
 
 
 def _runtime_profile_name(config: Mapping[str, JsonValue]) -> str:
@@ -544,85 +538,6 @@ def _maybe_build_tracker_adapter(
     return cast("lifecycle_base.LifecycleAdapter", tracker)
 
 
-def _maybe_build_async_tracker_adapter(
-    config: Mapping[str, JsonValue],
-    *,
-    profile_spec: RuntimeProfileSpec,
-) -> lifecycle_base.LifecycleAdapter | None:
-    """Build an async Hamilton UI tracker adapter when enabled.
-
-    Returns
-    -------
-    object | None
-        Async tracker adapter when enabled and available.
-    """
-    if hamilton_adapters is None:
-        return None
-    if not bool(config.get("enable_hamilton_tracker", False)):
-        return None
-    project_id = _tracker_project_id(
-        _tracker_value(
-            config,
-            config_key="hamilton_project_id",
-            env_key="HAMILTON_PROJECT_ID",
-        )
-    )
-    username = _tracker_username(
-        _tracker_value(
-            config,
-            config_key="hamilton_username",
-            env_key="HAMILTON_USERNAME",
-        )
-    )
-    if project_id is None or username is None:
-        return None
-    dag_name = _tracker_dag_name(
-        _tracker_value(
-            config,
-            config_key="hamilton_dag_name",
-            env_key="HAMILTON_DAG_NAME",
-        )
-    )
-    tags = _tracker_tags(config.get("hamilton_tags"))
-    api_url_value = _tracker_value(
-        config,
-        config_key="hamilton_api_url",
-        env_key="HAMILTON_API_URL",
-    )
-    api_url = api_url_value if isinstance(api_url_value, str) else None
-    ui_url_value = _tracker_value(
-        config,
-        config_key="hamilton_ui_url",
-        env_key="HAMILTON_UI_URL",
-    )
-    ui_url = ui_url_value if isinstance(ui_url_value, str) else None
-
-    class _AsyncTrackerKwargs(TypedDict, total=False):
-        project_id: int
-        username: str
-        dag_name: str
-        tags: dict[str, str]
-        hamilton_api_url: str
-        hamilton_ui_url: str
-
-    tracker_kwargs: _AsyncTrackerKwargs = {
-        "project_id": project_id,
-        "username": username,
-        "dag_name": dag_name,
-        "tags": tags,
-    }
-    if api_url is not None:
-        tracker_kwargs["hamilton_api_url"] = api_url
-    if ui_url is not None:
-        tracker_kwargs["hamilton_ui_url"] = ui_url
-
-    tracker = CodeAnatomyAsyncHamiltonTracker(
-        **tracker_kwargs,
-        run_tag_provider=_run_tag_provider(config, profile_spec=profile_spec),
-    )
-    return cast("lifecycle_base.LifecycleAdapter", tracker)
-
-
 def _with_graph_tags(
     config: Mapping[str, JsonValue],
     *,
@@ -829,7 +744,6 @@ def _resolve_config_payload(
     profile_spec: RuntimeProfileSpec,
     plan: ExecutionPlan,
     execution_mode: ExecutionMode | None,
-    allow_dynamic_scan_units: bool,
 ) -> dict[str, JsonValue]:
     config_payload = dict(config)
     config_payload.setdefault(
@@ -842,16 +756,10 @@ def _resolve_config_payload(
             "determinism_override_override",
             determinism_override.value,
         )
-    if allow_dynamic_scan_units:
-        config_payload.setdefault(
-            "enable_dynamic_scan_units",
-            (execution_mode or ExecutionMode.PLAN_PARALLEL) != ExecutionMode.DETERMINISTIC_SERIAL,
-        )
-    else:
-        if bool(config_payload.get("enable_dynamic_scan_units")):
-            msg = "Async driver does not support dynamic scan units."
-            raise ValueError(msg)
-        config_payload["enable_dynamic_scan_units"] = False
+    config_payload.setdefault(
+        "enable_dynamic_scan_units",
+        (execution_mode or ExecutionMode.PLAN_PARALLEL) != ExecutionMode.DETERMINISTIC_SERIAL,
+    )
     config_payload.setdefault("hamilton.enable_power_user_mode", True)
     config_payload = _apply_tracker_config_from_profile(
         config_payload,
@@ -1237,17 +1145,6 @@ def _apply_materializers(
     return builder.with_materializers(*materializers)
 
 
-def _apply_materializers_async(
-    builder: async_driver.Builder,
-    *,
-    config: Mapping[str, JsonValue],
-) -> async_driver.Builder:
-    materializers = _build_materializers(config)
-    if not materializers:
-        return builder
-    return builder.with_materializers(*materializers)
-
-
 @dataclass(frozen=True)
 class CachePolicyProfile:
     """Explicit cache policy defaults for correctness boundaries."""
@@ -1393,49 +1290,6 @@ def _apply_adapters(
     return builder
 
 
-def _apply_async_adapters(
-    builder: async_driver.Builder,
-    *,
-    config: Mapping[str, JsonValue],
-    context: _AdapterContext,
-) -> async_driver.Builder:
-    tracker = _maybe_build_async_tracker_adapter(config, profile_spec=context.profile_spec)
-    if tracker is not None:
-        builder = cast("async_driver.Builder", builder.with_adapters(tracker))
-    if bool(config.get("enable_hamilton_type_checker", True)):
-        builder = cast(
-            "async_driver.Builder",
-            builder.with_adapters(FunctionInputOutputTypeChecker()),
-        )
-    if bool(config.get("enable_hamilton_node_diagnostics", True)):
-        builder = cast(
-            "async_driver.Builder",
-            builder.with_adapters(DiagnosticsNodeHook(context.diagnostics)),
-        )
-    if bool(config.get("enable_otel_node_tracing", True)):
-        builder = cast(
-            "async_driver.Builder",
-            builder.with_adapters(OtelNodeHook()),
-        )
-    if bool(config.get("enable_plan_diagnostics", True)):
-        builder = cast(
-            "async_driver.Builder",
-            builder.with_adapters(
-                PlanDiagnosticsHook(
-                    plan=context.plan,
-                    profile=context.profile,
-                    collector=context.diagnostics,
-                )
-            ),
-        )
-    if bool(config.get("enable_otel_plan_tracing", True)):
-        builder = cast(
-            "async_driver.Builder",
-            builder.with_adapters(OtelPlanHook()),
-        )
-    return builder
-
-
 @dataclass(frozen=True)
 class DriverBuildRequest:
     """Inputs required to assemble a Hamilton driver."""
@@ -1461,32 +1315,11 @@ class PlanContext:
     execution_mode: ExecutionMode
     executor_config: ExecutorConfig | None
     graph_adapter_config: GraphAdapterConfig | None
-    allow_dynamic_scan_units: bool
-
-
-@dataclass(frozen=True)
-class DriverBuilderContext:
-    """Builder context for synchronous driver assembly."""
-
-    plan_ctx: PlanContext
-    builder: driver.Builder
-    semantic_registry_hook: SemanticRegistryHook | None
-    cache_lineage_hook: CacheLineageHook | None
-
-
-@dataclass(frozen=True)
-class AsyncBuilderContext:
-    """Builder context for asynchronous driver assembly."""
-
-    plan_ctx: PlanContext
-    builder: async_driver.Builder
-    semantic_registry_hook: SemanticRegistryHook | None
 
 
 def build_plan_context(
     *,
     request: DriverBuildRequest,
-    allow_dynamic_scan_units: bool,
 ) -> PlanContext:
     """Build the plan context used by driver builders.
 
@@ -1520,7 +1353,6 @@ def build_plan_context(
         profile_spec=resolved_view_ctx.runtime_profile_spec,
         plan=resolved_plan,
         execution_mode=execution_mode,
-        allow_dynamic_scan_units=allow_dynamic_scan_units,
     )
     _configure_hamilton_sdk_capture(
         config_payload,
@@ -1537,17 +1369,16 @@ def build_plan_context(
         execution_mode=execution_mode,
         executor_config=request.executor_config,
         graph_adapter_config=request.graph_adapter_config,
-        allow_dynamic_scan_units=allow_dynamic_scan_units,
     )
 
 
-def build_driver_builder_context(plan_ctx: PlanContext) -> DriverBuilderContext:
-    """Build a synchronous driver builder context from a plan context.
+def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
+    """Build a synchronous driver builder from a plan context.
 
     Returns
     -------
-    DriverBuilderContext
-        Builder context for synchronous drivers.
+    DriverBuilder
+        Builder wrapper for synchronous drivers.
     """
     config_payload = plan_ctx.config_payload
     builder = driver.Builder().allow_module_overrides()
@@ -1606,100 +1437,11 @@ def build_driver_builder_context(plan_ctx: PlanContext) -> DriverBuilderContext:
             plan_signature=plan_ctx.plan.plan_signature,
         )
         builder = builder.with_adapters(cache_lineage_hook)
-    return DriverBuilderContext(
-        plan_ctx=plan_ctx,
+    return DriverBuilder(
         builder=builder,
         semantic_registry_hook=semantic_registry_hook,
         cache_lineage_hook=cache_lineage_hook,
     )
-
-
-def build_async_driver_builder_context(plan_ctx: PlanContext) -> AsyncBuilderContext:
-    """Build an async driver builder context from a plan context.
-
-    Returns
-    -------
-    AsyncBuilderContext
-        Builder context for async drivers.
-    """
-    config_payload = plan_ctx.config_payload
-    builder = cast("async_driver.Builder", async_driver.Builder().allow_module_overrides())
-    builder = cast(
-        "async_driver.Builder",
-        builder.with_modules(*plan_ctx.modules).with_config(config_payload),
-    )
-    builder = _apply_materializers_async(builder, config=config_payload)
-    adapter_context = _AdapterContext(
-        diagnostics=plan_ctx.diagnostics,
-        plan=plan_ctx.plan,
-        profile=plan_ctx.view_ctx.profile,
-        profile_spec=plan_ctx.view_ctx.runtime_profile_spec,
-    )
-    builder = _apply_async_adapters(
-        builder,
-        config=config_payload,
-        context=adapter_context,
-    )
-    semantic_registry_hook: SemanticRegistryHook | None = None
-    if bool(config_payload.get("enable_semantic_registry", True)):
-        from hamilton_pipeline.semantic_registry import (
-            SemanticRegistryHook as _SemanticRegistryHook,
-        )
-
-        semantic_registry_hook = _SemanticRegistryHook(
-            profile=plan_ctx.view_ctx.profile,
-            plan_signature=plan_ctx.plan.plan_signature,
-            config=config_payload,
-        )
-        builder = builder.with_adapters(semantic_registry_hook)
-    async_builder = cast("async_driver.Builder", builder)
-    return AsyncBuilderContext(
-        plan_ctx=plan_ctx,
-        builder=async_builder,
-        semantic_registry_hook=semantic_registry_hook,
-    )
-
-
-def finalize_driver(builder_ctx: DriverBuilderContext) -> driver.Driver:
-    """Finalize a synchronous driver build from the builder context.
-
-    Returns
-    -------
-    driver.Driver
-        Built Hamilton driver instance.
-    """
-    driver_instance = builder_ctx.builder.build()
-    if builder_ctx.semantic_registry_hook is not None:
-        builder_ctx.semantic_registry_hook.bind_driver(driver_instance)
-    if builder_ctx.cache_lineage_hook is not None:
-        builder_ctx.cache_lineage_hook.bind_driver(driver_instance)
-    return driver_instance
-
-
-async def finalize_async_driver(
-    builder_ctx: AsyncBuilderContext,
-) -> async_driver.AsyncDriver:
-    """Finalize an async driver build from the builder context.
-
-    Returns
-    -------
-    async_driver.AsyncDriver
-        Built Hamilton async driver instance.
-
-    Raises
-    ------
-    TypeError
-        Raised when the builder returns a non-async driver instance.
-    """
-    built = builder_ctx.builder.build()
-    if inspect.isawaitable(built):
-        built = await built
-    if not isinstance(built, async_driver.AsyncDriver):
-        msg = "Async driver builder returned a non-async driver instance."
-        raise TypeError(msg)
-    if builder_ctx.semantic_registry_hook is not None:
-        builder_ctx.semantic_registry_hook.bind_driver(built)
-    return built
 
 
 def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
@@ -1715,28 +1457,9 @@ def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
     driver.Driver
         Built Hamilton driver instance.
     """
-    plan_ctx = build_plan_context(
-        request=request,
-        allow_dynamic_scan_units=True,
-    )
-    builder_ctx = build_driver_builder_context(plan_ctx)
-    return finalize_driver(builder_ctx)
-
-
-async def build_async_driver(*, request: DriverBuildRequest) -> async_driver.AsyncDriver:
-    """Build an async Hamilton driver for IO-bound execution flows.
-
-    Returns
-    -------
-    async_driver.AsyncDriver
-        Built async Hamilton driver instance.
-    """
-    plan_ctx = build_plan_context(
-        request=request,
-        allow_dynamic_scan_units=False,
-    )
-    builder_ctx = build_async_driver_builder_context(plan_ctx)
-    return await finalize_async_driver(builder_ctx)
+    plan_ctx = build_plan_context(request=request)
+    builder = build_driver_builder(plan_ctx)
+    return builder.build()
 
 
 def _relation_output_schema(session_runtime: SessionRuntime) -> SchemaLike:

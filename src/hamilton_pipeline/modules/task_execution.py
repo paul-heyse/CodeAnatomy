@@ -20,9 +20,9 @@ from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
 from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.arrow_schema.build import empty_table
 from datafusion_engine.execution_facade import ExecutionResult
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.view_registry import ensure_view_graph
 from hamilton_pipeline.modules import cpg_finalize as cpg_finalize_module
 from relspec.evidence import EvidenceCatalog
@@ -109,7 +109,7 @@ def _record_output(
         ExecutionResult.from_table(cast("ArrowTableLike", table)),
         spec=ExecutionArtifactSpec(
             source_task=spec.task_name,
-            schema_fingerprint=schema_fingerprint(schema),
+            schema_identity_hash=schema_identity_hash(schema),
             plan_fingerprint=spec.plan_fingerprint,
             plan_task_signature=spec.plan_task_signature,
             plan_signature=plan_signature,

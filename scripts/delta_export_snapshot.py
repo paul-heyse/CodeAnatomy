@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.abi import schema_identity_hash
 from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -28,7 +28,7 @@ class CloneReport:
     version: int | None
     timestamp: str | None
     rows: int
-    schema_fingerprint: str
+    schema_identity_hash: str
 
 
 @dataclass(frozen=True)
@@ -170,7 +170,7 @@ def clone_delta_snapshot(
         version=resolved.version,
         timestamp=resolved.timestamp,
         rows=int(arrow_table.num_rows),
-        schema_fingerprint=schema_fingerprint(arrow_table.schema),
+        schema_identity_hash=schema_identity_hash(arrow_table.schema),
     )
 
 

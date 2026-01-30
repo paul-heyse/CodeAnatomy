@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Code Query (cq) - High-signal code analysis for Claude Code
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT"
+
+PY="${CQ_PYTHON:-}"
+if [[ -z "${PY}" ]]; then
+    if [[ -x "${ROOT}/.venv/bin/python" ]]; then
+        PY="${ROOT}/.venv/bin/python"
+    else
+        PY="$(command -v python3 || command -v python)"
+    fi
+fi
+
+exec "${PY}" -m tools.cq.cli "$@"

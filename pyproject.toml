@@ -80,7 +80,7 @@ target-version = "py313"
 required-version = ">=0.14.8"
 output-format = "grouped"
 src = ["src","rust"]
-extend-exclude = ["docs/**"]
+extend-exclude = ["docs/**", "tools/**"]
 
 [tool.ruff.lint.per-file-ignores]
 

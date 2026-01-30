@@ -1,0 +1,37 @@
+{
+  "$id": "schemas/delta/feature_gate.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeltaFeatureGate",
+  "type": "object",
+  "properties": {
+    "min_reader_version": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32",
+      "minimum": 0
+    },
+    "min_writer_version": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32",
+      "minimum": 0
+    },
+    "required_reader_features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_writer_features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

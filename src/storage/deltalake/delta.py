@@ -12,7 +12,6 @@ from deltalake import CommitProperties, Transaction, WriterProperties
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
-from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
@@ -30,7 +29,6 @@ if TYPE_CHECKING:
         DeltaFeatureEnableRequest,
     )
     from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
-    from datafusion_engine.plugin_manager import DataFusionPluginManager
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
@@ -101,40 +99,6 @@ def _runtime_profile_for_delta(
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     return DataFusionRuntimeProfile()
-
-
-def _plugin_manager_for_profile(
-    runtime_profile: DataFusionRuntimeProfile,
-) -> DataFusionPluginManager:
-    manager = runtime_profile.plugin_manager
-    if manager is not None:
-        return manager
-    if not runtime_profile.plugin_specs:
-        msg = "Plugin-based Delta providers require plugin specs."
-        raise RuntimeError(msg)
-    from datafusion_engine.plugin_manager import DataFusionPluginManager
-
-    return DataFusionPluginManager(runtime_profile.plugin_specs)
-
-
-def _delta_provider_options(
-    *,
-    path: str,
-    storage_options: Mapping[str, str] | None,
-    version: int | None,
-    timestamp: str | None,
-    gate: DeltaFeatureGate | None,
-) -> dict[str, object]:
-    options: dict[str, object] = {
-        "table_uri": path,
-        "storage_options": dict(storage_options) if storage_options else None,
-        "version": version,
-        "timestamp": timestamp,
-    }
-    gate_payload = delta_feature_gate_payload(gate)
-    if gate_payload is not None:
-        options.update(gate_payload)
-    return options
 
 
 def query_delta_sql(
@@ -398,21 +362,34 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     storage = _log_storage_dict(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(None)
     ctx = profile.session_context()
+    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.dataset_resolution import (
+        DatasetResolutionRequest,
+        resolve_dataset_provider,
+    )
+
     try:
-        manager = _plugin_manager_for_profile(profile)
-        options = _delta_provider_options(
+        location = DatasetLocation(
             path=request.path,
-            storage_options=storage or None,
-            version=request.version,
-            timestamp=request.timestamp,
-            gate=request.gate,
+            format="delta",
+            storage_options=dict(storage or {}),
+            delta_log_storage_options=dict(request.log_storage_options or {}),
+            delta_version=request.version,
+            delta_timestamp=request.timestamp,
+            delta_feature_gate=request.gate,
         )
-        provider = manager.create_table_provider(provider_name="delta", options=options)
+        resolution = resolve_dataset_provider(
+            DatasetResolutionRequest(
+                ctx=ctx,
+                location=location,
+                runtime_profile=profile,
+            )
+        )
     except (RuntimeError, TypeError, ValueError):
         return None
     from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
-    df = ctx.read_table(TableProviderCapsule(provider))
+    df = ctx.read_table(TableProviderCapsule(resolution.provider))
     schema = df.schema()
     if isinstance(schema, pa.Schema):
         return schema
@@ -443,22 +420,35 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     storage = _log_storage_dict(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(request.runtime_profile)
     ctx = profile.session_context()
+    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.dataset_resolution import (
+        DatasetResolutionRequest,
+        resolve_dataset_provider,
+    )
+
     try:
-        manager = _plugin_manager_for_profile(profile)
-        options = _delta_provider_options(
+        location = DatasetLocation(
             path=request.path,
-            storage_options=storage or None,
-            version=request.version,
-            timestamp=request.timestamp,
-            gate=request.gate,
+            format="delta",
+            storage_options=dict(storage or {}),
+            delta_log_storage_options=dict(request.log_storage_options or {}),
+            delta_version=request.version,
+            delta_timestamp=request.timestamp,
+            delta_feature_gate=request.gate,
         )
-        provider = manager.create_table_provider(provider_name="delta", options=options)
+        resolution = resolve_dataset_provider(
+            DatasetResolutionRequest(
+                ctx=ctx,
+                location=location,
+                runtime_profile=profile,
+            )
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Delta read provider request failed: {exc}"
         raise ValueError(msg) from exc
     from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
-    df = ctx.read_table(TableProviderCapsule(provider))
+    df = ctx.read_table(TableProviderCapsule(resolution.provider))
     if request.predicate:
         try:
             predicate_expr = df.parse_sql_expr(request.predicate)

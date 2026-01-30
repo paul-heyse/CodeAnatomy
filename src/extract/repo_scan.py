@@ -639,7 +639,7 @@ def _with_repo_scan_cache_key(
         "repo_scan",
         {
             "repo_root": str(repo_root_path),
-            "schema_fingerprint": repo_files_fingerprint(),
+            "schema_identity_hash": repo_files_fingerprint(),
             "options": to_builtins(options),
             "scope_signature": scope_signature,
             "scope_hash": scope_hash,

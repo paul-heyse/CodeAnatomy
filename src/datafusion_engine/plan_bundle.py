@@ -27,6 +27,7 @@ from datafusion_engine.delta_store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
 )
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan_cache import PlanCacheEntry
 from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -1954,7 +1955,6 @@ def _schema_provenance(df: DataFrame) -> Mapping[str, object]:
     schema = _arrow_schema_from_df(df)
     if schema is None:
         return {}
-    from datafusion_engine.arrow_schema.abi import schema_fingerprint
 
     try:
         from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
@@ -1968,7 +1968,7 @@ def _schema_provenance(df: DataFrame) -> Mapping[str, object]:
     abi_value = metadata_payload.get(abi_key)
     return {
         "source": "arrow_schema",
-        "schema_fingerprint": schema_fingerprint(schema),
+        "schema_identity_hash": schema_identity_hash(schema),
         "schema_metadata": metadata_payload,
         "explicit_schema": abi_value is not None,
         "schema_abi_fingerprint": abi_value,

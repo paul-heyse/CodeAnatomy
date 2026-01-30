@@ -428,7 +428,7 @@ def _delta_commit_metadata(
         "dataset_name": dataset_name,
         "operation": "output_materialize",
         "mode": "overwrite",
-        "schema_fingerprint": payload_hash(
+        "schema_identity_hash": payload_hash(
             {"schema": list(getattr(table.schema, "names", []))},
             pa.schema([pa.field("schema", pa.list_(pa.string()))]),
         ),

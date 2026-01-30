@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.view_graph_registry import ViewNode as RegistryViewNode
+    from datafusion_engine.views.graph import ViewNode as RegistryViewNode
     from relspec.execution_plan import ExecutionPlan
     from relspec.schedule_events import TaskScheduleMetadata
     from schema_spec.system import DatasetSpec

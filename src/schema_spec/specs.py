@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 
-import datafusion_engine.arrow_interop as interop
 from arrow_utils.core.schema_constants import (
     KEY_FIELDS_META,
     PROVENANCE_COLS,
@@ -17,22 +16,23 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike
-from datafusion_engine.arrow_schema.build import list_view_type
-from datafusion_engine.arrow_schema.encoding_metadata import (
+from datafusion_engine.arrow import interop
+from datafusion_engine.arrow.build import list_view_type
+from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike
+from datafusion_engine.arrow.metadata import (
     ENCODING_DICTIONARY,
     ENCODING_META,
+    SchemaMetadataSpec,
     dict_field_metadata,
 )
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.arrow_schema.metadata_codec import encode_metadata_list
-from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaTransform
+from datafusion_engine.arrow.metadata_codec import encode_metadata_list
+from datafusion_engine.schema.policy import CastErrorPolicy, SchemaTransform
 from schema_spec.field_spec import FieldSpec
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
 if TYPE_CHECKING:
-    from datafusion_engine.expr_spec import ExprSpec
+    from datafusion_engine.expr.spec import ExprSpec
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
@@ -170,7 +170,7 @@ class TableSchemaSpec:
         TableSchemaSpec
             Table schema specification derived from the Arrow schema.
         """
-        from datafusion_engine.arrow_schema.metadata import (
+        from datafusion_engine.arrow.metadata import (
             schema_constraints_from_metadata,
             schema_identity_from_metadata,
         )

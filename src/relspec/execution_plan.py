@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
-from datafusion_engine.dataset_registry import dataset_catalog_from_profile
-from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
-from datafusion_engine.planning_pipeline import plan_with_delta_pins
+from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
+from datafusion_engine.plan.pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import (
     EvidenceCatalog,
@@ -61,13 +61,13 @@ from utils.hashing import hash_msgpack_canonical, hash_settings
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
-    from datafusion_engine.lineage_datafusion import LineageReport
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-    from datafusion_engine.scan_planner import ScanUnit
-    from datafusion_engine.schema_contracts import SchemaContract
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
+    from datafusion_engine.lineage.datafusion import LineageReport
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.schema.contracts import SchemaContract
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import ContractSpec, DatasetSpec
 
     OutputContract = ContractSpec | DatasetSpec | object
@@ -690,7 +690,7 @@ def _prepare_plan_context(
         if node.name in planned.lineage_by_view
     }
     if request.runtime_profile is not None:
-        from datafusion_engine.plan_artifact_store import (
+        from datafusion_engine.plan.artifact_store import (
             PlanArtifactsForViewsRequest,
             persist_plan_artifacts_for_views,
         )
@@ -707,7 +707,7 @@ def _prepare_plan_context(
                 ),
             )
         except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
-            from datafusion_engine.diagnostics import record_artifact
+            from datafusion_engine.lineage.diagnostics import record_artifact
 
             record_artifact(
                 runtime_profile,
@@ -770,7 +770,7 @@ def _scan_units_for_inferred(
     if not scans_by_task:
         return (), {}
     dataset_locations = _dataset_location_map(runtime_profile)
-    from datafusion_engine.scan_planner import plan_scan_units
+    from datafusion_engine.lineage.scan import plan_scan_units
 
     return plan_scan_units(
         session,
@@ -1199,7 +1199,7 @@ _SCAN_UNIT_SIGNATURE_VERSION = 1
 def _session_runtime_hash(runtime: SessionRuntime | None) -> str | None:
     if runtime is None:
         return None
-    from datafusion_engine.runtime import session_runtime_hash
+    from datafusion_engine.session.runtime import session_runtime_hash
 
     return session_runtime_hash(runtime)
 

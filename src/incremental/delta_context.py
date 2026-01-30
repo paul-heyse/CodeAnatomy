@@ -8,19 +8,19 @@ from pathlib import Path
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import (
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
 )
-from datafusion_engine.delta_maintenance import (
+from datafusion_engine.delta.maintenance import (
     DeltaMaintenancePlanInput,
     resolve_delta_maintenance_plan,
     run_delta_maintenance,
 )
-from datafusion_engine.delta_scan_config import resolve_delta_scan_options
-from datafusion_engine.delta_store_policy import resolve_delta_store_policy
+from datafusion_engine.delta.scan_config import resolve_delta_scan_options
+from datafusion_engine.delta.store_policy import resolve_delta_store_policy
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cache.diskcache_factory import DiskCacheProfile
-from datafusion_engine.plan_cache import PlanCacheEntry, PlanProtoCache
+from datafusion_engine.plan.cache import PlanCacheEntry, PlanProtoCache
 
 
 def test_plan_proto_cache_roundtrip(tmp_path: Path) -> None:

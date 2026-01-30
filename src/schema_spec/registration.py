@@ -6,12 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TypedDict, Unpack
 
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.delta_protocol import DeltaFeatureGate
-from datafusion_engine.expr_spec import ExprSpec
-from datafusion_engine.query_spec import QuerySpec
-from datafusion_engine.schema_alignment import SchemaEvolutionSpec
-from datafusion_engine.schema_validation import ArrowValidationOptions
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.delta.protocol import DeltaFeatureGate
+from datafusion_engine.expr.spec import ExprSpec, QuerySpec
+from datafusion_engine.schema.policy import SchemaEvolutionSpec
+from datafusion_engine.schema.validation import ArrowValidationOptions
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from schema_spec.system import (

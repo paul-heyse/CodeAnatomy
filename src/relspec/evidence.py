@@ -8,8 +8,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from datafusion_engine.introspection import introspection_cache_for_ctx
-from datafusion_engine.schema_contracts import (
+from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
+from datafusion_engine.schema.contracts import (
     SchemaContract,
     ValidationViolation,
     schema_contract_from_contract_spec,
@@ -19,9 +19,9 @@ from datafusion_engine.schema_contracts import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.arrow_interop import SchemaLike
-    from datafusion_engine.introspection import IntrospectionSnapshot
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.arrow.interop import SchemaLike
+    from datafusion_engine.catalog.introspection import IntrospectionSnapshot
+    from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -55,7 +55,7 @@ class EvidenceCatalog:
         if contract.schema_metadata:
             self.metadata_by_dataset.setdefault(name, {}).update(contract.schema_metadata)
         if ctx is not None:
-            from datafusion_engine.schema_registry import validate_nested_types
+            from datafusion_engine.schema.registry import validate_nested_types
 
             validate_nested_types(ctx, name)
         if snapshot is not None:
@@ -303,7 +303,7 @@ def _snapshot_from_ctx(ctx: SessionContext | None) -> IntrospectionSnapshot | No
 
 
 def _validate_udf_info_schema_parity(ctx: SessionContext) -> None:
-    from datafusion_engine.udf_parity import udf_info_schema_parity_report
+    from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
     report = udf_info_schema_parity_report(ctx)
     if report.error is not None:
@@ -578,7 +578,7 @@ def _merge_provider_metadata(
 
 def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
     try:
-        from datafusion_engine.table_provider_metadata import table_provider_metadata
+        from datafusion_engine.tables.metadata import table_provider_metadata
     except (ImportError, RuntimeError, TypeError, ValueError):
         return {}
     provider = table_provider_metadata(ctx_id, table_name=name)

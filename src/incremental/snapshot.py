@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.build import column_or_null, table_from_columns
+from datafusion_engine.arrow.build import column_or_null, table_from_columns
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.runtime import dataset_schema_from_context
-from datafusion_engine.schema_contracts import delta_constraints_for_location
-from datafusion_engine.write_pipeline import WriteMode
+from datafusion_engine.io.write import WriteMode
+from datafusion_engine.schema.contracts import delta_constraints_for_location
+from datafusion_engine.session.runtime import dataset_schema_from_context
 from incremental.delta_context import (
     DeltaAccessContext,
     DeltaStorageOptions,
@@ -32,7 +32,7 @@ from storage.deltalake import (
 from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow_interop import TableLike
+    from datafusion_engine.arrow.interop import TableLike
     from incremental.state_store import StateStore
 
 
@@ -226,7 +226,7 @@ def _merge_repo_snapshot(
             dataset_name="repo_snapshot",
         )
     )
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaFeatureStateArtifact,
         record_delta_feature_state,
     )

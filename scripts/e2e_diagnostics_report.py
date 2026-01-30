@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
-
-from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
+
+from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 

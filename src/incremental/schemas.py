@@ -6,9 +6,9 @@ from dataclasses import replace
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
-from datafusion_engine.schema_registry import registered_table_names
+from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.schema.registry import registered_table_names
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from schema_spec.system import DatasetSpec, DeltaMaintenancePolicy, dataset_spec_from_schema
 
 

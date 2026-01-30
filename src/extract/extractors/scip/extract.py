@@ -17,13 +17,13 @@ import pyarrow as pa
 
 from core_types import DeterminismTier
 from core_types import RowPermissive as Row
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.encoding import encode_table
-from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_alignment import align_table
-from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.encoding.policy import encode_table
+from datafusion_engine.expr.span import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from datafusion_engine.extract.registry import normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.schema.policy import align_table
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination import (
     ExtractMaterializeOptions,
@@ -39,7 +39,7 @@ from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
-    from datafusion_engine.schema_policy import SchemaPolicy
+    from datafusion_engine.schema.policy import SchemaPolicy
     from extract.coordination.evidence_plan import EvidencePlan
 
 from extract.extractors.scip.setup import load_scip_pb2_from_build
@@ -796,7 +796,7 @@ def _record_scip_index_stats(
         return
     payload = _index_stats_row(counts, index_id=index_id, index_path=index_path)
     payload["event_time_unix_ms"] = int(time.time() * 1000)
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "scip_index_stats_v1", payload)
 

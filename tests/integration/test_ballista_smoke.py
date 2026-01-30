@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from tests.test_helpers.optional_deps import require_datafusion
 
 ballista = pytest.importorskip("ballista")
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 @pytest.mark.integration

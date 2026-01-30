@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.abi import schema_abi_payload
+from datafusion_engine.arrow.abi import schema_abi_payload
+from datafusion_engine.arrow.interop import SchemaLike
 from utils.hashing import hash_msgpack_canonical
 
 

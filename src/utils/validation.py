@@ -133,7 +133,7 @@ def ensure_table(value: object, *, label: str = "input") -> pa.Table:
     TypeError
         Raised when conversion fails.
     """
-    from datafusion_engine.arrow_schema.coercion import to_arrow_table
+    from datafusion_engine.arrow.coercion import to_arrow_table
 
     try:
         return to_arrow_table(value)

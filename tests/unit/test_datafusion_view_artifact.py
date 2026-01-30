@@ -7,8 +7,8 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.plan_bundle import DataFusionPlanBundle, PlanArtifacts
-from datafusion_engine.view_artifacts import (
+from datafusion_engine.plan.bundle import DataFusionPlanBundle, PlanArtifacts
+from datafusion_engine.views.artifacts import (
     DataFusionViewArtifact,
     ViewArtifactLineage,
     ViewArtifactRequest,

@@ -19,10 +19,10 @@ from relspec.execution_plan import ExecutionPlan
 from relspec.graph_edge_validation import validate_graph_edges
 
 if TYPE_CHECKING:
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.scan_planner import ScanUnit
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.views.graph import ViewNode
     from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from relspec.rustworkx_graph import TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule
@@ -419,7 +419,7 @@ def _active_task_names_node() -> object:
 
 
 def _ensure_view_graph(profile: DataFusionRuntimeProfile) -> None:
-    from datafusion_engine.view_registry import ensure_view_graph
+    from datafusion_engine.views.registry import ensure_view_graph
 
     session = profile.session_context()
     ensure_view_graph(
@@ -435,7 +435,7 @@ def _record_evidence_contract_violations(
 ) -> None:
     if not evidence.contract_violations_by_dataset:
         return
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     payload = [
         {
@@ -452,9 +452,9 @@ def _record_evidence_contract_violations(
 
 
 def _record_udf_parity(profile: DataFusionRuntimeProfile) -> None:
-    from datafusion_engine.diagnostics import record_artifact
-    from datafusion_engine.udf_parity import udf_parity_report
-    from datafusion_engine.udf_runtime import rust_udf_snapshot
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from datafusion_engine.udf.parity import udf_parity_report
+    from datafusion_engine.udf.runtime import rust_udf_snapshot
 
     session = profile.session_context()
     registry_snapshot = rust_udf_snapshot(session)

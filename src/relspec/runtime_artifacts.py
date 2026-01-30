@@ -18,15 +18,15 @@ from cache.diskcache_factory import (
     evict_cache_tag,
 )
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultKind
+from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.session.facade import ExecutionResult, ExecutionResultKind
 
 if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Cache, FanoutCache
 
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 class TableLike(Protocol):

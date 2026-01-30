@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
-from datafusion_engine.arrow_schema.metadata_codec import (
+from datafusion_engine.arrow.metadata_codec import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,

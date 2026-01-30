@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from incremental.registry_rows import DatasetRow
 from schema_spec.contract_row import ContractRow
 from schema_spec.registration import DatasetRegistration, register_dataset

@@ -22,18 +22,91 @@ from arrow_utils.core.expr_types import ExplodeSpec
 from arrow_utils.core.ordering import Ordering, OrderingLevel
 from arrow_utils.core.schema_constants import PROVENANCE_COLS
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import SchemaLike, TableLike
-from datafusion_engine.arrow_schema.metadata import (
+from datafusion_engine.arrow.interop import SchemaLike, TableLike
+from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_from_schema,
 )
-from datafusion_engine.kernel_specs import DedupeSpec, IntervalAlignOptions, SortKey
-from datafusion_engine.kernel_specs import SortKey as PlanSortKey
+
+# =============================================================================
+# Kernel Specification Types (formerly kernel_specs.py)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class SortKey:
+    """Sort key specification for deterministic ordering."""
+
+    column: str
+    order: Literal["ascending", "descending"] = "ascending"
+
+
+type DedupeStrategy = Literal[
+    "KEEP_FIRST_AFTER_SORT",
+    "KEEP_BEST_BY_SCORE",
+    "COLLAPSE_LIST",
+    "KEEP_ARBITRARY",
+]
+
+
+@dataclass(frozen=True)
+class DedupeSpec:
+    """Dedupe semantics for a table."""
+
+    keys: tuple[str, ...]
+    tie_breakers: tuple[SortKey, ...] = ()
+    strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
+
+
+@dataclass(frozen=True)
+class IntervalAlignOptions:
+    """Interval alignment configuration."""
+
+    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
+    how: Literal["inner", "left"] = "inner"
+
+    left_path_col: str = "path"
+    left_start_col: str = "bstart"
+    left_end_col: str = "bend"
+
+    right_path_col: str = "path"
+    right_start_col: str = "bstart"
+    right_end_col: str = "bend"
+
+    select_left: tuple[str, ...] = ()
+    select_right: tuple[str, ...] = ()
+
+    tie_breakers: tuple[SortKey, ...] = ()
+
+    emit_match_meta: bool = True
+    match_kind_col: str = "match_kind"
+    match_score_col: str = "match_score"
+    right_suffix: str = "__r"
+
+
+@dataclass(frozen=True)
+class AsofJoinSpec:
+    """As-of join specification for nearest-match joins."""
+
+    on: str
+    by: tuple[str, ...] = ()
+    tolerance: object | None = None
+    right_on: str | None = None
+    right_by: tuple[str, ...] = ()
+
+
+# Alias for backward compatibility
+PlanSortKey = SortKey
+
+
+# =============================================================================
+# Kernel Implementation
+# =============================================================================
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type KernelFn = Callable[..., TableLike]
 
@@ -43,7 +116,7 @@ MIN_JOIN_PARTITIONS: int = 2
 
 def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
     if runtime_profile is None:
-        from datafusion_engine.runtime import DataFusionRuntimeProfile as RuntimeProfile
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile as RuntimeProfile
 
         profile = RuntimeProfile()
     else:
@@ -55,7 +128,7 @@ def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> Sessio
 def _ensure_required_udfs(ctx: SessionContext, *, required: Sequence[str]) -> None:
     if not required:
         return
-    from datafusion_engine.udf_runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
 
     snapshot = rust_udf_snapshot(ctx)
     validate_required_udfs(snapshot, required=required)
@@ -69,7 +142,7 @@ def _df_from_table(
     batch_size: int | None = None,
     ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
-    from datafusion_engine.ingest import datafusion_from_arrow
+    from datafusion_engine.io.ingest import datafusion_from_arrow
 
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name
@@ -91,7 +164,7 @@ def _batch_size_from_profile(runtime_profile: DataFusionRuntimeProfile | None) -
 def _arrow_ingest_hook(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
-    from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
+    from datafusion_engine.session.runtime import diagnostics_arrow_ingest_hook
 
     if runtime_profile is None:
         return None
@@ -736,7 +809,7 @@ def _interval_best_matches(
     cfg: IntervalAlignOptions,
     right_name_map: Mapping[str, str],
 ) -> DataFrame:
-    from datafusion_engine.expr_udf_shims import interval_align_score
+    from datafusion_engine.udf.shims import interval_align_score
 
     left_start = _normalize_span_expr(cfg.left_start_col)
     left_end = _normalize_span_expr(cfg.left_end_col)
@@ -910,6 +983,14 @@ def datafusion_kernel_registry() -> dict[str, KernelFn]:
 
 
 __all__ = [
+    # Kernel specification types (formerly kernel_specs.py)
+    "AsofJoinSpec",
+    "DedupeSpec",
+    "DedupeStrategy",
+    "IntervalAlignOptions",
+    "SortKey",
+    "PlanSortKey",
+    # Kernel functions
     "canonical_sort_if_canonical",
     "datafusion_kernel_registry",
     "dedupe_kernel",

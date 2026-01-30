@@ -11,14 +11,14 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 import rustworkx as rx
 
-from datafusion_engine.arrow_schema.schema_builders import version_field
+from datafusion_engine.arrow.schema import version_field
 from relspec.errors import RelspecValidationError
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
-    from datafusion_engine.scan_planner import ScanUnit
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import DatasetSpec
 
 NodeKind = Literal["evidence", "task"]

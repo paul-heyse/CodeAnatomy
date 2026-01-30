@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from arrow_utils.core.ordering import OrderingLevel
 from core_types import DeterminismTier
-from datafusion_engine.arrow_schema.metadata import EvidenceMetadataSpec, evidence_metadata
-from datafusion_engine.arrow_schema.metadata_codec import (
+from datafusion_engine.arrow.metadata import EvidenceMetadataSpec, evidence_metadata
+from datafusion_engine.arrow.metadata_codec import (
     encode_metadata_map,
     encode_metadata_scalar_map,
 )

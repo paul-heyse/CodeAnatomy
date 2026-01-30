@@ -9,10 +9,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from datafusion_engine.lineage_datafusion import ScanLineage
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.schema_contracts import SchemaContract
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.lineage.datafusion import ScanLineage
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.schema.contracts import SchemaContract
+    from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import DatasetSpec
 
 
@@ -103,7 +103,7 @@ def infer_deps_from_plan_bundle(
         Inferred dependencies extracted from DataFusion plan.
 
     """
-    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.lineage.datafusion import extract_lineage
 
     plan_bundle = inputs.plan_bundle
 
@@ -132,7 +132,7 @@ def infer_deps_from_plan_bundle(
         resolved_udfs = lineage.required_udfs
 
     if inputs.snapshot is not None and resolved_udfs:
-        from datafusion_engine.udf_runtime import validate_required_udfs
+        from datafusion_engine.udf.runtime import validate_required_udfs
 
         validate_required_udfs(inputs.snapshot, required=resolved_udfs)
 
@@ -316,7 +316,7 @@ def _schema_contract_for_table(name: str) -> SchemaContract | None:
     if spec is None:
         return None
     try:
-        from datafusion_engine.schema_contracts import schema_contract_from_dataset_spec
+        from datafusion_engine.schema.contracts import schema_contract_from_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
     return schema_contract_from_dataset_spec(name=spec.name, spec=spec)

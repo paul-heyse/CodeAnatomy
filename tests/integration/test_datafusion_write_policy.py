@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.execution_helpers import datafusion_write_options
+from datafusion_engine.plan.execution import datafusion_write_options
 from schema_spec.policies import DataFusionWritePolicy
+from tests.test_helpers.optional_deps import require_datafusion
 
-datafusion = pytest.importorskip("datafusion")
+datafusion = require_datafusion()
 
 
 @pytest.mark.integration

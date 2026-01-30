@@ -5,16 +5,16 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.param_binding import register_table_params, resolve_param_bindings
+from datafusion_engine.tables.param import register_table_params, resolve_param_bindings
+from tests.test_helpers.datafusion_runtime import df_ctx
+from tests.test_helpers.optional_deps import require_datafusion
 
-datafusion = pytest.importorskip("datafusion")
+datafusion = require_datafusion()
 
 
 def test_resolve_param_bindings_splits_scalar_and_table() -> None:
     """Split scalar params from table-like params."""
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     df = ctx.sql("SELECT 1 AS id")
     table = pa.table({"id": [1]})
     bindings = resolve_param_bindings(
@@ -30,9 +30,7 @@ def test_resolve_param_bindings_splits_scalar_and_table() -> None:
 
 def test_register_table_params_unregisters_tables() -> None:
     """Register and clean up table-like params via context manager."""
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     table = pa.table({"id": [1]})
     bindings = resolve_param_bindings({"temp_table": table})
     with register_table_params(ctx, bindings):

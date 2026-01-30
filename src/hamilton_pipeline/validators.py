@@ -7,8 +7,8 @@ from typing import Any
 
 from hamilton.data_quality import base as dq_base
 
-from datafusion_engine.arrow_schema.coercion import to_arrow_table
-from datafusion_engine.schema_contracts import SchemaContract
+from datafusion_engine.arrow.coercion import to_arrow_table
+from datafusion_engine.schema.contracts import SchemaContract
 from utils.validation import find_missing
 
 _SCHEMA_CONTRACTS: dict[str, SchemaContract] = {}

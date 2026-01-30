@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from arrow_utils.core.expr_types import ScalarValue
-from datafusion_engine.expr_spec import ExprIR, ExprSpec
+from datafusion_engine.expr.spec import ExprIR, ExprSpec
 from utils.hashing import hash128_from_text
 
 
@@ -120,6 +120,7 @@ def hash_spec(name: str) -> HashExprSpec:
         Hash specification for the key.
     """
     return _HASH_SPECS[name]
+
 
 _NULL_SEPARATOR = "\x1f"
 
@@ -409,11 +410,11 @@ def _require_expr_ir(spec: ExprSpec) -> ExprIR:
 __all__ = [
     "DEF_USE_EVENT_ID_SPEC",
     "DIAG_ID_SPEC",
-    "HashExprSpec",
-    "HashExprSpecOptions",
     "REACH_EDGE_ID_SPEC",
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
+    "HashExprSpec",
+    "HashExprSpecOptions",
     "hash_expr_ir",
     "hash_expr_ir_from_parts",
     "hash_expr_spec_factory",

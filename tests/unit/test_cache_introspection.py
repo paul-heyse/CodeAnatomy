@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from datafusion_engine.introspection import (
+from datafusion_engine.catalog.introspection import (
     CacheConfigSnapshot,
     CacheStateSnapshot,
     capture_cache_diagnostics,
@@ -12,10 +10,11 @@ from datafusion_engine.introspection import (
     metadata_cache_snapshot,
     predicate_cache_snapshot,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from obs.diagnostics import DiagnosticsCollector
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 EVENT_TIME_UNIX_MS = 1234567890000
 ENTRY_COUNT = 10
@@ -64,7 +63,7 @@ def test_cache_state_snapshot_construction() -> None:
 
 def test_list_files_cache_snapshot() -> None:
     """list_files_cache_snapshot returns cache state."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     snapshot = list_files_cache_snapshot(ctx)
     assert snapshot.cache_name == "list_files"
@@ -75,7 +74,7 @@ def test_list_files_cache_snapshot() -> None:
 
 def test_metadata_cache_snapshot() -> None:
     """metadata_cache_snapshot returns cache state."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     snapshot = metadata_cache_snapshot(ctx)
     assert snapshot.cache_name == "metadata"
@@ -85,7 +84,7 @@ def test_metadata_cache_snapshot() -> None:
 
 def test_predicate_cache_snapshot() -> None:
     """predicate_cache_snapshot returns cache state."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     snapshot = predicate_cache_snapshot(ctx)
     assert snapshot.cache_name == "predicate"
@@ -95,7 +94,7 @@ def test_predicate_cache_snapshot() -> None:
 
 def test_capture_cache_diagnostics() -> None:
     """capture_cache_diagnostics returns config and snapshots."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     diagnostics = capture_cache_diagnostics(ctx)
     assert "config" in diagnostics
@@ -113,8 +112,7 @@ def test_capture_cache_diagnostics() -> None:
 
 def test_cache_diagnostics_recorded_in_session_context() -> None:
     """Cache diagnostics are recorded when session context is created."""
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
+    profile, sink = diagnostic_profile()
     _ctx = profile.session_context()
     artifacts = sink.artifacts_snapshot()
     assert "datafusion_cache_config_v1" in artifacts

@@ -12,26 +12,26 @@ from datafusion import SessionContext
 
 import normalize.dataset_specs as static_dataset_specs
 from core_types import PathLike, ensure_path
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.dataset_registration import register_dataset_df
-from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.introspection import introspection_cache_for_ctx
-from datafusion_engine.query_spec import QuerySpec
-from datafusion_engine.schema_contracts import (
+from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.catalog.introspection import introspection_cache_for_ctx
+from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.schema.contracts import (
     SchemaContract,
     ValidationViolation,
     schema_contract_from_dataset_spec,
 )
-from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
+from datafusion_engine.schema.introspection import table_names_snapshot
+from datafusion_engine.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.sql.options import sql_options_for_profile
+from datafusion_engine.tables.metadata import TableProviderMetadata, table_provider_metadata
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 NORMALIZE_STAGE_META = "normalize_stage"
 NORMALIZE_ALIAS_META = "normalize_alias"

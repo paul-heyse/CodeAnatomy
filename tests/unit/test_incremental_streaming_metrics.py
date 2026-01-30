@@ -8,12 +8,11 @@ import pyarrow as pa
 import pytest
 
 import incremental.delta_updates
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
-from obs.diagnostics import DiagnosticsCollector
+from tests.test_helpers.diagnostics import diagnostic_profile
 
 EXPECTED_ROW_COUNT = 2
 
@@ -23,8 +22,7 @@ def test_streaming_write_records_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Record streaming diagnostics when overwrite outputs exceed the threshold."""
-    sink = DiagnosticsCollector()
-    profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
+    profile, sink = diagnostic_profile()
     runtime = IncrementalRuntime.build(profile=profile)
     monkeypatch.setattr(incremental.delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 

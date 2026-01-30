@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from hamilton import driver as hamilton_driver
     from hamilton import node as hamilton_node
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)
@@ -199,7 +199,7 @@ class SemanticRegistryHook(lifecycle_api.GraphExecutionHook):
             driver,
             plan_signature=self.plan_signature,
         )
-        from datafusion_engine.diagnostics import record_artifact
+        from datafusion_engine.lineage.diagnostics import record_artifact
 
         record_artifact(
             self.profile,

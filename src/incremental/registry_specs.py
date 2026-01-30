@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from datafusion_engine.runtime import dataset_schema_from_context, dataset_spec_from_context
+from datafusion_engine.session.runtime import dataset_schema_from_context, dataset_spec_from_context
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow_interop import SchemaLike
+    from datafusion_engine.arrow.interop import SchemaLike
     from schema_spec.system import ContractSpec, DatasetSpec
 
 

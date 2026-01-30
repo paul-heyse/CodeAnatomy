@@ -7,7 +7,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_interop import (
+from datafusion_engine.arrow.interop import (
     RecordBatchReader,
     RecordBatchReaderLike,
     TableLike,

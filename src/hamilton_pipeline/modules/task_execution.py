@@ -11,27 +11,27 @@ from hamilton.function_modifiers import inject, resolve_from_config, source
 from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
-from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.execution_facade import ExecutionResult
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.interop import TableLike as ArrowTableLike
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.plan_execution import (
+from datafusion_engine.lineage.scan import ScanUnit
+from datafusion_engine.plan.execution import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan_execution import (
+from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
-from datafusion_engine.scan_planner import ScanUnit
-from datafusion_engine.view_registry import ensure_view_graph
+from datafusion_engine.session.facade import ExecutionResult
+from datafusion_engine.views.registry import ensure_view_graph
 from hamilton_pipeline.modules.subdags import cpg_final_tables
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
 if TYPE_CHECKING:
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from engine.session import EngineSession
 
 
@@ -163,7 +163,7 @@ def plan_scan_inputs(
     )
     scan_hash: str | None = None
     if units:
-        from datafusion_engine.dataset_resolution import scan_units_hash
+        from datafusion_engine.dataset.resolution import scan_units_hash
 
         scan_hash = scan_units_hash(units)
     scan_task_name_by_key = {unit.key: name for name, unit in plan_scan_units_by_task_name.items()}

@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack
 
 from arrow_utils.core.array_iter import iter_table_rows
 from core_types import PathLike, ensure_path
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract.registry import normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,
@@ -27,7 +27,7 @@ from extract.session import ExtractSession
 from utils.value_coercion import coerce_bool, coerce_int
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from extract.coordination.evidence_plan import EvidencePlan
 
 
@@ -353,7 +353,7 @@ def _record_python_external_stats(
         "depth": options.depth,
         "repo_id": options.repo_id,
     }
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(profile, "python_external_stats_v1", payload)
 

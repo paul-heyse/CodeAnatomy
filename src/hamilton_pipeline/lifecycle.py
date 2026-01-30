@@ -12,7 +12,7 @@ from hamilton.lifecycle import api as lifecycle_api
 from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from hamilton_pipeline.plan_artifacts import PlanArtifactBundle
     from relspec.execution_plan import ExecutionPlan
 
@@ -121,7 +121,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
     ) -> None:
         """Record plan diagnostics before graph execution."""
         _ = kwargs
-        from datafusion_engine.diagnostics import record_artifact
+        from datafusion_engine.lineage.diagnostics import record_artifact
         from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
         from serde_msgspec import to_builtins
 
@@ -165,7 +165,7 @@ def _flush_plan_events(
 ) -> None:
     if collector is None:
         return
-    from datafusion_engine.diagnostics import record_artifact, record_events
+    from datafusion_engine.lineage.diagnostics import record_artifact, record_events
 
     plan_event_names = (
         "hamilton_task_submission_v1",
@@ -209,7 +209,7 @@ def _flush_plan_events(
     else:
         persisted_event_names = (*plan_event_names, "hamilton_plan_drift_v1")
     try:
-        from datafusion_engine.plan_artifact_store import (
+        from datafusion_engine.plan.artifact_store import (
             HamiltonEventsRequest,
             persist_hamilton_events,
         )

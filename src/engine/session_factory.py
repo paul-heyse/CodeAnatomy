@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from datafusion_engine.dataset_registration import dataset_input_plugin, input_plugin_prefixes
-from datafusion_engine.dataset_registry import DatasetCatalog, registry_snapshot
-from datafusion_engine.runtime import feature_state_snapshot
+from datafusion_engine.dataset.registration import dataset_input_plugin, input_plugin_prefixes
+from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
+from datafusion_engine.session.runtime import feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime import build_engine_runtime
 from engine.runtime_profile import (

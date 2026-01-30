@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-import datafusion_engine.arrow_interop as interop
-from datafusion_engine.arrow_interop import DataTypeLike, FieldLike
-from datafusion_engine.arrow_schema.encoding_metadata import ENCODING_META
+from datafusion_engine.arrow import interop
+from datafusion_engine.arrow.interop import DataTypeLike, FieldLike
+from datafusion_engine.arrow.metadata import ENCODING_META
 
 
 def _encode_metadata(metadata: Mapping[str, str]) -> dict[bytes, bytes]:

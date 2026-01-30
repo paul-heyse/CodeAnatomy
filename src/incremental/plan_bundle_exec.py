@@ -6,21 +6,21 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
-from datafusion_engine.lineage_datafusion import extract_lineage
-from datafusion_engine.plan_execution import (
+from datafusion_engine.lineage.datafusion import extract_lineage
+from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
+from datafusion_engine.plan.execution import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan_execution import (
+from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
-from datafusion_engine.scan_planner import ScanUnit, plan_scan_unit
+from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from incremental.runtime import IncrementalRuntime
 
 

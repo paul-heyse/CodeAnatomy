@@ -12,15 +12,15 @@ import msgspec
 import pyarrow as pa
 
 from core_types import DeterminismTier
-from datafusion_engine.arrow_schema.schema_builders import version_field
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.arrow.schema import version_field
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
 from utils.env_utils import env_bool, env_int, env_value
 
 if TYPE_CHECKING:
-    from datafusion_engine.udf_runtime import RustUdfSnapshot
+    from datafusion_engine.udf.runtime import RustUdfSnapshot
 
 
 PROFILE_HASH_VERSION: int = 3
@@ -316,12 +316,12 @@ def engine_runtime_artifact(
         except (RuntimeError, TypeError, ValueError):
             session = None
         if session is not None:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
+            from datafusion_engine.udf.runtime import rust_udf_snapshot
 
             registry_snapshot = rust_udf_snapshot(session)
     registry_hash = None
     if registry_snapshot is not None:
-        from datafusion_engine.udf_runtime import rust_udf_snapshot_hash
+        from datafusion_engine.udf.runtime import rust_udf_snapshot_hash
 
         registry_hash = rust_udf_snapshot_hash(registry_snapshot)
     datafusion_settings = profile.settings_payload()

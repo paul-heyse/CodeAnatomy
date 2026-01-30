@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.runtime import read_delta_as_reader
+from datafusion_engine.session.runtime import read_delta_as_reader
 from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
 from incremental.runtime import IncrementalRuntime

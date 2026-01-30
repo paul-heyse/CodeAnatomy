@@ -26,11 +26,11 @@ from tree_sitter import (
 )
 
 from core_types import RowPermissive as Row
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.hashing import span_id
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.extractors.tree_sitter.cache import TreeSitterCache, TreeSitterParseResult
 from extract.extractors.tree_sitter.queries import TreeSitterQueryPack, compile_query_pack

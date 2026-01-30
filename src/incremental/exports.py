@@ -9,10 +9,10 @@ import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
-from datafusion_engine.arrow_interop import TableLike, coerce_table_like
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.expr_udf_shims import prefixed_hash_parts64 as prefixed_hash64
-from datafusion_engine.schema_alignment import align_table
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.interop import TableLike, coerce_table_like
+from datafusion_engine.schema.policy import align_table
+from datafusion_engine.udf.shims import prefixed_hash_parts64 as prefixed_hash64
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry

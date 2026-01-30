@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import pyarrow.dataset as ds
 
 from core_types import JsonDict
-from datafusion_engine.arrow_interop import ComputeExpression, SchemaLike
-from datafusion_engine.arrow_schema.abi import schema_to_dict
+from datafusion_engine.arrow.abi import schema_to_dict
+from datafusion_engine.arrow.interop import ComputeExpression, SchemaLike
 from obs.metrics import fragment_file_hints, list_fragments, row_group_count, scan_task_count
 from obs.otel.metrics import set_scan_telemetry
 from serde_msgspec import StructBaseCompat

@@ -8,14 +8,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 import datafusion_ext as _datafusion_ext
-from datafusion_engine.diagnostics import (
+from datafusion_engine.lineage.diagnostics import (
     ensure_recorder_sink,
     rust_udf_snapshot_payload,
     view_fingerprint_payload,
     view_udf_parity_payload,
 )
-from datafusion_engine.schema_contracts import ValidationViolation
-from datafusion_engine.view_artifacts import DataFusionViewArtifact
+from datafusion_engine.schema.contracts import ValidationViolation
+from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
 from serde_msgspec import StructBaseCompat
@@ -27,7 +27,7 @@ _OBS_SESSION_ID: Final[str] = uuid7_str()
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.view_graph_registry import ViewNode
+    from datafusion_engine.views.graph import ViewNode
 
 
 @dataclass

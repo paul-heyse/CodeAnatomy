@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.schema_registry import is_extract_nested_dataset
+from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.schema.registry import is_extract_nested_dataset
 
 if TYPE_CHECKING:
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.runtime import SessionRuntime
     from schema_spec.system import DatasetSpec
     from schema_spec.view_specs import ViewSpec
 
@@ -96,7 +96,7 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.dataset_registration import register_dataset_df
+        from datafusion_engine.dataset.registration import register_dataset_df
 
         return register_dataset_df(
             session_runtime.ctx,
@@ -122,7 +122,7 @@ class DatasetHandle:
         """
         views = self.spec.resolved_view_specs()
         if not views:
-            from datafusion_engine.schema_registry import (
+            from datafusion_engine.schema.registry import (
                 is_extract_nested_dataset,
                 nested_view_spec,
             )

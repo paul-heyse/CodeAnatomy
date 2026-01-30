@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.compile_options import resolve_sql_policy
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.compile.options import resolve_sql_policy
+from tests.test_helpers.datafusion_runtime import df_ctx
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 def test_sql_policy_presets() -> None:
@@ -25,7 +26,7 @@ def test_sql_policy_presets() -> None:
 
 def test_dml_policy_enforces_read_only() -> None:
     """Reject DML statements when read-only policy is applied."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     policy = resolve_sql_policy("read_only")
     options = policy.to_sql_options()
     with pytest.raises(RuntimeError, match=r".*"):

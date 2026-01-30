@@ -10,9 +10,9 @@ import logging
 
 import pyarrow as pa
 
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from obs.datafusion_runs import create_run_context
 from storage.deltalake.delta import IdempotentWriteOptions
 

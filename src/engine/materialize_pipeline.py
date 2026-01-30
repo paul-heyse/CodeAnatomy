@@ -12,26 +12,29 @@ import pyarrow as pa
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import RecordBatchReader, RecordBatchReaderLike, TableLike
-from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
-from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.param_binding import resolve_param_bindings
-from datafusion_engine.param_tables import scalar_param_signature
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.plan_execution import (
+from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.lineage.diagnostics import (
+    record_artifact,
+    record_events,
+    recorder_for_profile,
+)
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.execution import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan_execution import (
+from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
-from datafusion_engine.runtime import (
+from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
+from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     record_schema_snapshots_for_profile,
 )
-from datafusion_engine.streaming_executor import StreamingExecutionResult
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.streaming import StreamingExecutionResult
+from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from obs.otel import OtelBootstrapOptions, configure_otel
@@ -40,9 +43,9 @@ from utils.uuid_factory import uuid7_hex
 from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.scan_planner import ScanUnit
-    from datafusion_engine.view_artifacts import DataFusionViewArtifact
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.views.artifacts import DataFusionViewArtifact
 
 
 def _resolve_prefer_reader(
@@ -224,8 +227,8 @@ def _plan_view_scan_units(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.scan_planner import plan_scan_unit
+    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.scan import plan_scan_unit
 
     session_runtime = runtime_profile.session_runtime()
     scan_units: dict[str, ScanUnit] = {}
@@ -286,7 +289,7 @@ def build_view_product(
     if not session.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
         raise ValueError(msg)
-    from datafusion_engine.schema_registry import validate_nested_types
+    from datafusion_engine.schema.registry import validate_nested_types
 
     validate_nested_types(session, view_name)
     bundle = _plan_view_bundle(
@@ -296,7 +299,7 @@ def build_view_product(
     )
     scan_units, scan_keys = _plan_view_scan_units(bundle, runtime_profile=profile)
     if scan_units:
-        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
+        from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(
             session,

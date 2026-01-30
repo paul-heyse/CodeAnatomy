@@ -6,8 +6,8 @@ from collections.abc import Callable, Mapping
 
 import pyarrow as pa
 
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from tests.test_helpers.datafusion_runtime import df_ctx
 
 TWO_ROWS = 2
 THREE_ROWS = 3
@@ -24,7 +24,7 @@ def _ingest_payloads() -> tuple[list[Mapping[str, object]], Callable[[Mapping[st
 
 def test_datafusion_from_arrow_table() -> None:
     """Ingest Arrow tables via the unified helper."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     table = pa.table({"id": [1, 2], "label": ["a", "b"]})
     payloads, hook = _ingest_payloads()
     df = datafusion_from_arrow(ctx, name="arrow_table", value=table, ingest_hook=hook)
@@ -36,7 +36,7 @@ def test_datafusion_from_arrow_table() -> None:
 
 def test_datafusion_from_arrow_pydict() -> None:
     """Ingest columnar dicts via the unified helper."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     payloads, hook = _ingest_payloads()
     df = datafusion_from_arrow(
         ctx,
@@ -55,7 +55,7 @@ def test_datafusion_from_arrow_pydict() -> None:
 
 def test_datafusion_from_arrow_row_mappings() -> None:
     """Ingest row-wise dicts via the unified helper."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     payloads, hook = _ingest_payloads()
     df = datafusion_from_arrow(
         ctx,
@@ -70,7 +70,7 @@ def test_datafusion_from_arrow_row_mappings() -> None:
 
 def test_datafusion_record_batch_partitioning_payload() -> None:
     """Record batch partitioning details for memtable ingestion."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = df_ctx()
     table = pa.table({"id": [1, 2, 3], "label": ["a", "b", "c"]})
     payloads, hook = _ingest_payloads()
     df = datafusion_from_arrow(

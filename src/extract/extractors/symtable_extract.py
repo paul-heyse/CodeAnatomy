@@ -9,10 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract.registry import normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,

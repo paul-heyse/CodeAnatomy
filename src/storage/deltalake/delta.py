@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from deltalake import CommitProperties, Transaction
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
-from datafusion_engine.arrow_schema.coercion import to_arrow_table
-from datafusion_engine.arrow_schema.encoding import EncodingPolicy
+from datafusion_engine.arrow.coercion import to_arrow_table
+from datafusion_engine.arrow.encoding import EncodingPolicy
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.encoding import apply_encoding
-from datafusion_engine.schema_alignment import align_table
-from datafusion_engine.session_helpers import deregister_table, register_temp_table
+from datafusion_engine.schema.alignment import align_table
+from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
 from utils.storage_options import merged_storage_options
 from utils.value_coercion import coerce_int, coerce_str_list
@@ -23,14 +23,14 @@ from utils.value_coercion import coerce_int, coerce_str_list
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.delta_control_plane import (
+    from datafusion_engine.delta.control_plane import (
         DeltaAppTransaction,
         DeltaCdfProviderBundle,
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
     )
-    from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.delta.protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
 
@@ -81,7 +81,7 @@ def _runtime_profile_for_delta(
 ) -> DataFusionRuntimeProfile:
     if runtime_profile is not None:
         return runtime_profile
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     return DataFusionRuntimeProfile()
 
@@ -122,7 +122,7 @@ class DeltaSnapshotLookup:
 def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
     storage = merged_storage_options(request.storage_options, request.log_storage_options)
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaSnapshotRequest,
             delta_snapshot_info,
         )
@@ -327,8 +327,8 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     storage = merged_storage_options(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(None)
     ctx = profile.session_context()
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.dataset_resolution import (
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.dataset.resolution import (
         DatasetResolutionRequest,
         resolve_dataset_provider,
     )
@@ -352,7 +352,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         )
     except (RuntimeError, TypeError, ValueError):
         return None
-    from datafusion_engine.table_provider_metadata import TableProviderCapsule
+    from datafusion_engine.tables.metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
     schema = df.schema()
@@ -385,8 +385,8 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     storage = merged_storage_options(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(request.runtime_profile)
     ctx = profile.session_context()
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.dataset_resolution import (
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.dataset.resolution import (
         DatasetResolutionRequest,
         resolve_dataset_provider,
     )
@@ -411,7 +411,7 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Delta read provider request failed: {exc}"
         raise ValueError(msg) from exc
-    from datafusion_engine.table_provider_metadata import TableProviderCapsule
+    from datafusion_engine.tables.metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
     if request.predicate:
@@ -596,7 +596,7 @@ def delta_protocol_snapshot(
     )
     if snapshot is None:
         return None
-    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
+    from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 
     payload = DeltaProtocolSnapshot(
         min_reader_version=coerce_int(snapshot.get("min_reader_version")),
@@ -648,7 +648,7 @@ def enable_delta_features(
     profile = _runtime_profile_for_delta(options.runtime_profile)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaCommitOptions,
             DeltaSetPropertiesRequest,
             delta_set_properties,
@@ -690,7 +690,7 @@ def _feature_enable_request(
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     profile = _runtime_profile_for_delta(options.runtime_profile)
     ctx = profile.delta_runtime_ctx()
-    from datafusion_engine.delta_control_plane import (
+    from datafusion_engine.delta.control_plane import (
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
     )
@@ -741,11 +741,11 @@ def delta_add_constraints(
     profile = _runtime_profile_for_delta(options.runtime_profile)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaAddConstraintsRequest,
             DeltaCommitOptions,
         )
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             delta_add_constraints as add_constraints,
         )
 
@@ -803,11 +803,11 @@ def delta_drop_constraints(
     profile = _runtime_profile_for_delta(options.runtime_profile)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaCommitOptions,
             DeltaDropConstraintsRequest,
         )
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             delta_drop_constraints as drop_constraints,
         )
 
@@ -862,7 +862,7 @@ def enable_delta_column_mapping(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_column_mapping
+        from datafusion_engine.delta.control_plane import delta_enable_column_mapping
 
         report = delta_enable_column_mapping(
             ctx,
@@ -907,7 +907,7 @@ def enable_delta_deletion_vectors(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_deletion_vectors
+        from datafusion_engine.delta.control_plane import delta_enable_deletion_vectors
 
         report = delta_enable_deletion_vectors(
             ctx,
@@ -951,7 +951,7 @@ def enable_delta_row_tracking(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_row_tracking
+        from datafusion_engine.delta.control_plane import delta_enable_row_tracking
 
         report = delta_enable_row_tracking(
             ctx,
@@ -995,7 +995,7 @@ def enable_delta_change_data_feed(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_change_data_feed
+        from datafusion_engine.delta.control_plane import delta_enable_change_data_feed
 
         report = delta_enable_change_data_feed(
             ctx,
@@ -1039,7 +1039,7 @@ def enable_delta_generated_columns(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_generated_columns
+        from datafusion_engine.delta.control_plane import delta_enable_generated_columns
 
         report = delta_enable_generated_columns(
             ctx,
@@ -1083,7 +1083,7 @@ def enable_delta_invariants(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_invariants
+        from datafusion_engine.delta.control_plane import delta_enable_invariants
 
         report = delta_enable_invariants(
             ctx,
@@ -1127,7 +1127,7 @@ def enable_delta_check_constraints(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_check_constraints
+        from datafusion_engine.delta.control_plane import delta_enable_check_constraints
 
         report = delta_enable_check_constraints(
             ctx,
@@ -1172,7 +1172,7 @@ def enable_delta_in_commit_timestamps(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_in_commit_timestamps
+        from datafusion_engine.delta.control_plane import delta_enable_in_commit_timestamps
 
         report = delta_enable_in_commit_timestamps(
             ctx,
@@ -1217,7 +1217,7 @@ def enable_delta_v2_checkpoints(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_v2_checkpoints
+        from datafusion_engine.delta.control_plane import delta_enable_v2_checkpoints
 
         report = delta_enable_v2_checkpoints(
             ctx,
@@ -1259,7 +1259,7 @@ def enable_delta_vacuum_protocol_check(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_vacuum_protocol_check
+        from datafusion_engine.delta.control_plane import delta_enable_vacuum_protocol_check
 
         report = delta_enable_vacuum_protocol_check(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1297,7 +1297,7 @@ def enable_delta_checkpoint_protection(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_enable_checkpoint_protection
+        from datafusion_engine.delta.control_plane import delta_enable_checkpoint_protection
 
         report = delta_enable_checkpoint_protection(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1335,7 +1335,7 @@ def disable_delta_change_data_feed(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_change_data_feed
+        from datafusion_engine.delta.control_plane import delta_disable_change_data_feed
 
         report = delta_disable_change_data_feed(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1373,7 +1373,7 @@ def disable_delta_deletion_vectors(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_deletion_vectors
+        from datafusion_engine.delta.control_plane import delta_disable_deletion_vectors
 
         report = delta_disable_deletion_vectors(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1411,7 +1411,7 @@ def disable_delta_row_tracking(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_row_tracking
+        from datafusion_engine.delta.control_plane import delta_disable_row_tracking
 
         report = delta_disable_row_tracking(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1449,7 +1449,7 @@ def disable_delta_in_commit_timestamps(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_in_commit_timestamps
+        from datafusion_engine.delta.control_plane import delta_disable_in_commit_timestamps
 
         report = delta_disable_in_commit_timestamps(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1487,7 +1487,7 @@ def disable_delta_vacuum_protocol_check(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_vacuum_protocol_check
+        from datafusion_engine.delta.control_plane import delta_disable_vacuum_protocol_check
 
         report = delta_disable_vacuum_protocol_check(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1525,7 +1525,7 @@ def disable_delta_column_mapping(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_column_mapping
+        from datafusion_engine.delta.control_plane import delta_disable_column_mapping
 
         report = _require_feature_report(
             delta_disable_column_mapping(ctx, request=request),
@@ -1566,7 +1566,7 @@ def disable_delta_generated_columns(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_generated_columns
+        from datafusion_engine.delta.control_plane import delta_disable_generated_columns
 
         report = _require_feature_report(
             delta_disable_generated_columns(ctx, request=request),
@@ -1607,7 +1607,7 @@ def disable_delta_invariants(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_invariants
+        from datafusion_engine.delta.control_plane import delta_disable_invariants
 
         report = _require_feature_report(
             delta_disable_invariants(ctx, request=request),
@@ -1648,7 +1648,7 @@ def disable_delta_check_constraints(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_check_constraints
+        from datafusion_engine.delta.control_plane import delta_disable_check_constraints
 
         report = _require_feature_report(
             delta_disable_check_constraints(ctx, request=request),
@@ -1689,7 +1689,7 @@ def disable_delta_v2_checkpoints(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_v2_checkpoints
+        from datafusion_engine.delta.control_plane import delta_disable_v2_checkpoints
 
         report = _require_feature_report(
             delta_disable_v2_checkpoints(ctx, request=request),
@@ -1730,7 +1730,7 @@ def disable_delta_checkpoint_protection(
     """
     ctx, request = _feature_enable_request(options)
     try:
-        from datafusion_engine.delta_control_plane import delta_disable_checkpoint_protection
+        from datafusion_engine.delta.control_plane import delta_disable_checkpoint_protection
 
         report = delta_disable_checkpoint_protection(ctx, request=request)
     except (ImportError, RuntimeError, TypeError, ValueError) as exc:
@@ -1775,7 +1775,7 @@ def vacuum_delta(
     profile = _runtime_profile_for_delta(None)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaCommitOptions,
             DeltaVacuumRequest,
             delta_vacuum,
@@ -1831,7 +1831,7 @@ def create_delta_checkpoint(
     profile = _runtime_profile_for_delta(runtime_profile)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaCheckpointRequest,
             delta_create_checkpoint,
         )
@@ -1889,7 +1889,7 @@ def cleanup_delta_log(
     profile = _runtime_profile_for_delta(runtime_profile)
     ctx = profile.delta_runtime_ctx()
     try:
-        from datafusion_engine.delta_control_plane import (
+        from datafusion_engine.delta.control_plane import (
             DeltaCheckpointRequest,
             delta_cleanup_metadata,
         )
@@ -1990,7 +1990,7 @@ def read_delta_cdf(
         msg = "Delta CDF provider requires Rust control-plane support."
         raise ValueError(msg)
     provider = bundle.provider
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().session_context()
     df = ctx.read_table(provider)
@@ -2034,7 +2034,7 @@ def delta_delete_where(
         app_id=None,
         app_version=None,
     )
-    from datafusion_engine.delta_control_plane import DeltaDeleteRequest, delta_delete
+    from datafusion_engine.delta.control_plane import DeltaDeleteRequest, delta_delete
 
     report = delta_delete(
         ctx,
@@ -2102,7 +2102,7 @@ def delta_merge_arrow(
         app_id=None,
         app_version=None,
     )
-    from datafusion_engine.delta_control_plane import DeltaMergeRequest, delta_merge
+    from datafusion_engine.delta.control_plane import DeltaMergeRequest, delta_merge
 
     try:
         report = delta_merge(
@@ -2202,7 +2202,7 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
     if request.runtime_profile is None:
         return
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaMutationArtifact,
         record_delta_mutation,
     )
@@ -2229,7 +2229,7 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
     snapshot = request.report.get("snapshot")
     if isinstance(snapshot, Mapping):
         metrics_payload.setdefault("snapshot", dict(snapshot))
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaMaintenanceArtifact,
         record_delta_maintenance,
     )
@@ -2284,7 +2284,7 @@ def _commit_metadata_from_properties(commit_properties: CommitProperties) -> dic
 def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
     if request.profile is None:
         return
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaMutationArtifact,
         record_delta_mutation,
     )
@@ -2417,7 +2417,7 @@ def _delta_commit_options(
                 txn_version = getattr(first, "version", None)
                 txn_last_updated = getattr(first, "last_updated", None)
                 if isinstance(txn_app_id, str) and isinstance(txn_version, int):
-                    from datafusion_engine.delta_control_plane import DeltaAppTransaction
+                    from datafusion_engine.delta.control_plane import DeltaAppTransaction
 
                     app_transaction = DeltaAppTransaction(
                         app_id=txn_app_id,
@@ -2429,10 +2429,10 @@ def _delta_commit_options(
     if commit_metadata:
         metadata.update({str(key): str(value) for key, value in commit_metadata.items()})
     if app_transaction is None and app_id is not None and app_version is not None:
-        from datafusion_engine.delta_control_plane import DeltaAppTransaction
+        from datafusion_engine.delta.control_plane import DeltaAppTransaction
 
         app_transaction = DeltaAppTransaction(app_id=app_id, version=app_version)
-    from datafusion_engine.delta_control_plane import DeltaCommitOptions
+    from datafusion_engine.delta.control_plane import DeltaCommitOptions
 
     return DeltaCommitOptions(metadata=metadata, app_transaction=app_transaction)
 
@@ -2477,7 +2477,7 @@ def _delta_cdf_table_provider(
 ) -> DeltaCdfProviderBundle | None:
     storage = merged_storage_options(storage_options, log_storage_options)
     try:
-        from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
+        from datafusion_engine.delta.control_plane import DeltaCdfRequest, delta_cdf_provider
 
         return delta_cdf_provider(
             request=DeltaCdfRequest(

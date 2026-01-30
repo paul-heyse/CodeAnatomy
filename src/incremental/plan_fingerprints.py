@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
-from datafusion_engine.arrow_schema.schema_builders import (
+from datafusion_engine.arrow.build import empty_table, table_from_columns
+from datafusion_engine.arrow.schema import (
     plan_fingerprint_field,
     task_name_field,
     version_field,
 )
-from datafusion_engine.write_pipeline import WriteMode
+from datafusion_engine.io.write import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.write_helpers import (
     IncrementalDeltaWriteRequest,

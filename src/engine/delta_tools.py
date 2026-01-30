@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike
 from storage.deltalake import (
     DeltaVacuumOptions,
     StorageOptions,
@@ -20,8 +20,8 @@ from storage.deltalake import (
 _DELTA_MIN_RETENTION_HOURS = 168
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)
@@ -198,7 +198,7 @@ def _record_maintenance(
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "delta_maintenance_v1", payload)
 
@@ -213,7 +213,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     """
     profile = request.runtime_profile
     if profile is None:
-        from datafusion_engine.runtime import DataFusionRuntimeProfile
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
         profile = DataFusionRuntimeProfile()
     storage = dict(request.storage_options or {})
@@ -238,8 +238,8 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
             },
         )
         return reader
-    from datafusion_engine.dataset_registration import register_dataset_df
-    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registry import DatasetLocation
 
     ctx = profile.session_context()
     location = DatasetLocation(
@@ -280,7 +280,7 @@ def _record_delta_query(
 ) -> None:
     if runtime_profile.diagnostics_sink is None:
         return
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "delta_query_v1", payload)
 
@@ -294,7 +294,7 @@ def _record_delta_snapshot_table(
 ) -> None:
     if profile is None or not snapshot:
         return
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaSnapshotArtifact,
         record_delta_snapshot,
     )
@@ -325,7 +325,7 @@ class _DeltaMaintenanceRecordRequest:
 def _record_delta_maintenance_table(request: _DeltaMaintenanceRecordRequest) -> None:
     if request.profile is None:
         return
-    from datafusion_engine.delta_observability import (
+    from datafusion_engine.delta.observability import (
         DeltaMaintenanceArtifact,
         record_delta_maintenance,
     )

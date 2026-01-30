@@ -10,7 +10,7 @@ from typing import Literal, TypedDict, Unpack
 from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
-from datafusion_engine.runtime import AdapterExecutionPolicy
+from datafusion_engine.session.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession

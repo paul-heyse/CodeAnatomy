@@ -14,7 +14,7 @@ from hamilton.lifecycle import api as lifecycle_api
 from core_types import JsonValue
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
 @dataclass
@@ -78,7 +78,7 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
             },
         )
         self._event_count += 1
-        from datafusion_engine.diagnostics import record_artifact
+        from datafusion_engine.lineage.diagnostics import record_artifact
 
         record_artifact(
             self.profile,

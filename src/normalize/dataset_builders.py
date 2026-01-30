@@ -8,21 +8,21 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrow_utils.core.ordering import OrderingLevel
-from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.metadata import (
+from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.arrow_schema.semantic_types import (
+from datafusion_engine.arrow.semantic import (
     SPAN_STORAGE,
     edge_id_metadata,
     edge_id_type,
     span_id_metadata,
     span_id_type,
 )
-from datafusion_engine.delta_protocol import DeltaFeatureGate
-from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.delta.protocol import DeltaFeatureGate
+from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import DatasetRow
 from normalize.dataset_templates import template

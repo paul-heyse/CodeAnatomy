@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING
 import msgspec
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.schema_builders import (
+from datafusion_engine.arrow.schema import (
     plan_fingerprint_entry_type,
     version_field,
 )
-from datafusion_engine.write_pipeline import WriteMode
+from datafusion_engine.io.write import WriteMode
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.write_helpers import (

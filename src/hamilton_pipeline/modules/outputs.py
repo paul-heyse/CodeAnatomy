@@ -19,7 +19,7 @@ from utils.uuid_factory import uuid7_str
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from engine.runtime_profile import RuntimeProfileSpec
     from hamilton_pipeline.io_contracts import DataSaverDict
 

@@ -18,11 +18,11 @@ from hamilton.function_modifiers import (
     value,
 )
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike
-from datafusion_engine.delta_protocol import DeltaFeatureGate
-from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.arrow.interop import RecordBatchReaderLike
+from datafusion_engine.delta.protocol import DeltaFeatureGate
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.lineage.diagnostics import record_artifact, recorder_for_profile
 from engine.runtime_profile import RuntimeProfileSpec
 from extract.extractors.scip.extract import ScipExtractContext, extract_scip_tables
 from extract.helpers import ExtractExecutionContext
@@ -52,10 +52,10 @@ if TYPE_CHECKING:
     from hamilton.function_modifiers.dependencies import ParametrizedDependency
 
     from core_types import JsonDict, JsonValue
-    from datafusion_engine.arrow_interop import TableLike
-    from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.write_pipeline import WriteResult
+    from datafusion_engine.arrow.interop import TableLike
+    from datafusion_engine.io.write import WriteResult
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.session.runtime import SessionRuntime
     from extract.extractors.scip.extract import ScipExtractOptions
     from hamilton_pipeline.types import CacheRuntimeContext, OutputConfig, RepoScanConfig
 

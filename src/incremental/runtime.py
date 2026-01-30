@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Self
 import pyarrow as pa
 
 from core_types import DeterminismTier
-from datafusion_engine.introspection import invalidate_introspection_cache
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.catalog.introspection import invalidate_introspection_cache
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from arrow_utils.core.array_iter import iter_table_rows
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination.evidence_plan import EvidencePlan
 from extract.session import ExtractSession, build_extract_session

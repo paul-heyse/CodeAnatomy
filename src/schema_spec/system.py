@@ -23,25 +23,25 @@ import pyarrow.dataset as ds
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
 from core.config_base import FingerprintableConfig, config_fingerprint
-from datafusion_engine.arrow_interop import SchemaLike, TableLike
-from datafusion_engine.arrow_schema.build import register_schema_extensions
-from datafusion_engine.arrow_schema.encoding import EncodingPolicy
-from datafusion_engine.arrow_schema.metadata import (
+from datafusion_engine.arrow.build import register_schema_extensions
+from datafusion_engine.arrow.encoding import EncodingPolicy
+from datafusion_engine.arrow.interop import SchemaLike, TableLike
+from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
     encoding_policy_from_spec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
-from datafusion_engine.delta_protocol import DeltaFeatureGate
-from datafusion_engine.finalize import Contract, FinalizeContext
-from datafusion_engine.kernel_specs import DedupeSpec, SortKey
-from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
-from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaEvolutionSpec
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
-from datafusion_engine.schema_registry import extract_nested_dataset_names
-from datafusion_engine.schema_validation import ArrowValidationOptions, validate_table
+from datafusion_engine.delta.protocol import DeltaFeatureGate
+from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.kernels import DedupeSpec, SortKey
+from datafusion_engine.schema.alignment import CastErrorPolicy, SchemaEvolutionSpec
+from datafusion_engine.schema.finalize import Contract, FinalizeContext
+from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.schema.registry import extract_nested_dataset_names
+from datafusion_engine.schema.validation import ArrowValidationOptions, validate_table
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
@@ -57,8 +57,8 @@ from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
-    from datafusion_engine.expr_spec import ExprSpec
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.expr.spec import ExprSpec
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.view_specs import ViewSpec
 
 

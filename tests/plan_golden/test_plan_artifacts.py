@@ -14,6 +14,8 @@ import pyarrow as pa
 import pytest
 
 from test_support import datafusion_ext_stub
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.optional_deps import require_datafusion
 
 
 def _stub_enabled() -> bool:
@@ -23,12 +25,12 @@ def _stub_enabled() -> bool:
 if _stub_enabled():
     sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
-datafusion = pytest.importorskip("datafusion")
+require_datafusion()
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -110,7 +112,7 @@ def _information_schema_rows(ctx: SessionContext, *, table: str) -> list[dict[st
     list[dict[str, object]]
         Rows from the selected information_schema table.
     """
-    from datafusion_engine.sql_options import planning_sql_options
+    from datafusion_engine.sql.options import planning_sql_options
 
     df = ctx.sql_with_options(
         f"SELECT * FROM information_schema.{table}",
@@ -185,7 +187,7 @@ def _fixture_payload(
     info_snapshot = _information_schema_snapshot(ctx)
     info_hash = _info_schema_hash(info_snapshot)
     df = ctx.sql(_SQL)
-    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 
     bundle = build_plan_bundle(
         ctx,
@@ -242,7 +244,7 @@ def _write_golden(path: Path, payload: Mapping[str, object]) -> None:
 
 def test_plan_artifact_golden_fixture() -> None:
     """Compare plan artifacts to the golden fixture for regressions."""
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     profile = DataFusionRuntimeProfile(
         enable_schema_registry=False,
@@ -250,9 +252,8 @@ def test_plan_artifact_golden_fixture() -> None:
     )
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    from datafusion_engine.ingest import datafusion_from_arrow
 
-    datafusion_from_arrow(
+    register_arrow_table(
         ctx,
         name="events",
         value=pa.table({"id": [1, 2], "label": ["a", "b"]}),

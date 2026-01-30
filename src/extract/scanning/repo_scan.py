@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Literal, overload
 from diskcache import memoize_stampede, throttle
 
 from core_types import PathLike, ensure_path
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import dataset_query, normalize_options
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
-from datafusion_engine.query_spec import QuerySpec
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.expr.spec import QuerySpec
+from datafusion_engine.extract.registry import dataset_query, normalize_options
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.git.history import blame_hunks, diff_paths
 from extract.git.pygit2_scan import repo_status_paths
@@ -955,7 +955,7 @@ def _record_repo_scope_stats(
         "repo_id": options.repo_id,
         "pathspec_stats": pathspec_stats,
     }
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "repo_scope_stats_v1", payload)
 
@@ -1045,7 +1045,7 @@ def _record_repo_scope_trace(
         "trace_limit": trace_limit,
         "traces": traces,
     }
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "repo_scope_trace_v1", payload)
 
@@ -1107,7 +1107,7 @@ def _record_repo_blame(
             for stat in sorted(author_stats.values(), key=lambda item: (-item.lines, item.email))
         ],
     }
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "repo_scan_blame_v1", payload)
 

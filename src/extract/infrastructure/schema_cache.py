@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import cache
 
-from datafusion_engine.extract_registry import dataset_schema
+from datafusion_engine.extract.registry import dataset_schema
 from datafusion_engine.identity import schema_identity_hash
 
 

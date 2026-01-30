@@ -8,18 +8,18 @@ from dataclasses import dataclass, replace
 import pyarrow as pa
 
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
-from datafusion_engine.extract_registry import (
+from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.extract.registry import (
     dataset_metadata_with_options,
     dataset_schema,
     dataset_schema_policy,
     dataset_spec,
 )
-from datafusion_engine.finalize import FinalizeContext, FinalizeResult, FinalizeRunRequest
-from datafusion_engine.runtime import DataFusionRuntimeProfile, sql_options_for_profile
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.schema_policy import SchemaPolicy
+from datafusion_engine.schema.finalize import FinalizeContext, FinalizeResult, FinalizeRunRequest
+from datafusion_engine.schema.introspection import SchemaIntrospector
+from datafusion_engine.schema.policy import SchemaPolicy
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, sql_options_for_profile
 
 
 def schema_policy_for_dataset(

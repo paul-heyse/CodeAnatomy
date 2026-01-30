@@ -7,21 +7,22 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.lineage_datafusion import LineageReport, extract_lineage
-from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.lineage.datafusion import LineageReport, extract_lineage
+from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 def _runtime_context() -> tuple[SessionContext, SessionRuntime]:
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     return ctx, profile.session_runtime()
 
@@ -29,8 +30,8 @@ def _runtime_context() -> tuple[SessionContext, SessionRuntime]:
 def _register_base_tables(ctx: SessionContext) -> None:
     events = pa.table({"id": [1, 2], "label": ["a", "b"]})
     users = pa.table({"id": [1, 3], "name": ["alpha", "beta"]})
-    datafusion_from_arrow(ctx, name="events", value=events)
-    datafusion_from_arrow(ctx, name="users", value=users)
+    register_arrow_table(ctx, name="events", value=events)
+    register_arrow_table(ctx, name="users", value=users)
 
 
 def _lineage_for_sql(

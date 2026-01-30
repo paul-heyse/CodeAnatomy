@@ -7,15 +7,15 @@ from typing import cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
-from datafusion_engine.arrow_schema.build import empty_table
-from datafusion_engine.arrow_schema.semantic_types import (
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.interop import TableLike as ArrowTableLike
+from datafusion_engine.arrow.semantic import (
     apply_semantic_types,
     edge_id_metadata,
     node_id_metadata,
     span_id_metadata,
 )
-from datafusion_engine.finalize import Contract, FinalizeOptions, normalize_only
+from datafusion_engine.schema.finalize import Contract, FinalizeOptions, normalize_only
 from engine.runtime_profile import RuntimeProfileSpec
 from relspec.runtime_artifacts import TableLike
 

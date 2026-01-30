@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from datafusion_engine.extract_metadata import extract_metadata_by_name, extract_metadata_specs
+from datafusion_engine.extract.metadata import extract_metadata_by_name, extract_metadata_specs
 from obs.scan_telemetry import ScanTelemetry
 
 

@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 

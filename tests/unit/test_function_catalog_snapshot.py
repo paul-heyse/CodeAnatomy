@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
-
-from datafusion_engine.runtime import (
-    DataFusionRuntimeProfile,
+from datafusion_engine.session.runtime import (
     function_catalog_snapshot_for_profile,
 )
+from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 
 def test_function_catalog_snapshot_sorted() -> None:
     """Sort function catalog snapshots deterministically."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     snapshot = function_catalog_snapshot_for_profile(profile, ctx)
     assert snapshot
@@ -26,7 +25,7 @@ def test_function_catalog_snapshot_sorted() -> None:
 
 def test_function_catalog_snapshot_routines_optional() -> None:
     """Include information_schema routines when enabled."""
-    profile = DataFusionRuntimeProfile()
+    profile = df_profile()
     ctx = profile.session_context()
     snapshot = function_catalog_snapshot_for_profile(
         profile,

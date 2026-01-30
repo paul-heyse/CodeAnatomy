@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
+from tests.test_helpers.optional_deps import require_datafusion
 
-pytest.importorskip("datafusion")
+require_datafusion()
 
 import pyarrow as pa
 
-from datafusion_engine.dataset_registry import DatasetCatalog, DatasetLocation
-from datafusion_engine.runtime import DataFusionViewRegistry
-from datafusion_engine.schema_contracts import ContractRegistry, SchemaContract
-from datafusion_engine.view_artifacts import DataFusionViewArtifact
+from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
+from datafusion_engine.schema.contracts import ContractRegistry, SchemaContract
+from datafusion_engine.session.runtime import DataFusionViewRegistry
+from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from schema_spec.field_spec import FieldSpec
 from utils.registry_protocol import Registry
 

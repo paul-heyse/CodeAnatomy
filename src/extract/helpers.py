@@ -17,40 +17,40 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
 from core_types import DeterminismTier
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, ScalarLike, TableLike
-from datafusion_engine.arrow_schema.build import (
+from datafusion_engine.arrow.build import (
     record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
 )
-from datafusion_engine.arrow_schema.build import (
+from datafusion_engine.arrow.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
-from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
-from datafusion_engine.extract_extractors import (
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, ScalarLike, TableLike
+from datafusion_engine.expr.spec import apply_query_spec
+from datafusion_engine.extract.extractors import (
     ExtractorSpec,
     extractor_specs,
     outputs_for_template,
     select_extractors_for_outputs,
 )
-from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
-from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
-from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.plan_bundle import (
+from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
+from datafusion_engine.io.ingest import datafusion_from_arrow
+from datafusion_engine.plan.bundle import (
     DataFusionPlanBundle,
     PlanBundleOptions,
     build_plan_bundle,
 )
-from datafusion_engine.plan_execution import (
+from datafusion_engine.plan.execution import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan_execution import (
+from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
-from datafusion_engine.query_spec import apply_query_spec
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_contracts import SchemaContract
-from datafusion_engine.schema_policy import SchemaPolicy
-from datafusion_engine.view_graph_registry import _validate_schema_contract
+from datafusion_engine.schema.contracts import SchemaContract
+from datafusion_engine.schema.finalize import FinalizeContext, FinalizeOptions, normalize_only
+from datafusion_engine.schema.policy import SchemaPolicy
+from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.views.graph import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
 from extract.coordination.context import (
     ExtractExecutionContext,
@@ -82,9 +82,9 @@ from extract.session import ExtractSession
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
-    from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import SessionRuntime
-    from datafusion_engine.scan_planner import ScanUnit
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.session.runtime import SessionRuntime
 
 
 def _build_plan_bundle_from_df(
@@ -466,8 +466,8 @@ def _plan_scan_units_for_extract(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.scan_planner import plan_scan_unit
+    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.scan import plan_scan_unit
 
     session_runtime = runtime_profile.session_runtime()
     scan_units: dict[str, ScanUnit] = {}
@@ -495,7 +495,7 @@ def _execute_extract_plan_bundle(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[ExecutionResult, tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
+    from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 
     session_runtime = runtime_profile.session_runtime()
     scan_units, scan_keys = _plan_scan_units_for_extract(plan, runtime_profile=runtime_profile)
@@ -702,7 +702,7 @@ def _record_extract_execution(
     table = result.table
     if table is not None:
         row_count = table.num_rows
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     payload = {
         "dataset": name,
@@ -719,7 +719,7 @@ def _record_extract_compile(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     """Record a compile fingerprint artifact for extract plans."""
-    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     payload = {
         "dataset": name,
@@ -750,9 +750,9 @@ def _record_extract_view_artifact(
 ) -> None:
     """Record a deterministic view artifact for extract outputs."""
     profile = runtime_profile
-    from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.runtime import record_view_definition, session_runtime_hash
-    from datafusion_engine.view_artifacts import (
+    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.session.runtime import record_view_definition, session_runtime_hash
+    from datafusion_engine.views.artifacts import (
         ViewArtifactLineage,
         ViewArtifactRequest,
         build_view_artifact_from_bundle,
@@ -830,8 +830,8 @@ def _record_extract_udf_parity(
 ) -> None:
     """Record extract-scoped UDF parity diagnostics."""
     profile = runtime_profile
-    from datafusion_engine.diagnostics import record_artifact
-    from datafusion_engine.udf_parity import udf_parity_report
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from datafusion_engine.udf.parity import udf_parity_report
 
     session_runtime = profile.session_runtime()
     report = udf_parity_report(session_runtime.ctx, snapshot=session_runtime.udf_snapshot)

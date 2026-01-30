@@ -68,6 +68,7 @@ dependencies = [
     "opentelemetry-instrumentation-threading>=0.60b1",
     "opentelemetry-instrumentation-system-metrics>=0.60b1",
     "uuid6>=2025.0.1",
+    "tree-sitter-rust>=0.24.0",
 ]
 
 [tool.uv.sources]

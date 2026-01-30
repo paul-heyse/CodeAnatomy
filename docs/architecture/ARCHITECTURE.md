@@ -209,7 +209,7 @@ if result.run_bundle_dir:
 
 ```python
 from graph.product_build import GraphProductBuildRequest, build_graph_product
-from hamilton_pipeline.pipeline_types import ExecutionMode, ExecutorConfig, ScipIndexConfig
+from hamilton_pipeline.types import ExecutionMode, ExecutorConfig, ScipIndexConfig
 from incremental.types import IncrementalConfig
 from core_types import DeterminismTier
 

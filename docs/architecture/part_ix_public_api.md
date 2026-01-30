@@ -655,7 +655,7 @@ print(f"Row count: {report.rows}")
 
 ### ExecutionMode
 
-**Definition:** `src/hamilton_pipeline/pipeline_types.py` (lines 184-189)
+**Definition:** `src/hamilton_pipeline/types/` (lines 184-189)
 
 Enum controlling Hamilton orchestration strategy.
 
@@ -689,7 +689,7 @@ Enum controlling Hamilton orchestration strategy.
 
 **Example:**
 ```python
-from hamilton_pipeline.pipeline_types import ExecutionMode
+from hamilton_pipeline.types import ExecutionMode
 
 # Serial execution (debugging)
 GraphProductBuildRequest(
@@ -714,7 +714,7 @@ GraphProductBuildRequest(
 
 ### ExecutorConfig
 
-**Definition:** `src/hamilton_pipeline/pipeline_types.py` (lines 193-204)
+**Definition:** `src/hamilton_pipeline/types/` (lines 193-204)
 
 Configuration for plan-aware parallel execution.
 
@@ -742,7 +742,7 @@ Configuration for plan-aware parallel execution.
 
 **Example:**
 ```python
-from hamilton_pipeline.pipeline_types import ExecutorConfig
+from hamilton_pipeline.types import ExecutorConfig
 
 # Default multiprocessing
 ExecutorConfig(kind="multiprocessing", max_tasks=8)
@@ -767,7 +767,7 @@ ExecutorConfig(
 
 ### GraphAdapterConfig
 
-**Definition:** `src/hamilton_pipeline/pipeline_types.py` (lines 207-212)
+**Definition:** `src/hamilton_pipeline/types/` (lines 207-212)
 
 Configuration for non-dynamic graph execution backends (Dask, Ray).
 
@@ -788,7 +788,7 @@ Configuration for non-dynamic graph execution backends (Dask, Ray).
 
 **Example:**
 ```python
-from hamilton_pipeline.pipeline_types import GraphAdapterConfig
+from hamilton_pipeline.types import GraphAdapterConfig
 
 # Dask adapter
 GraphAdapterConfig(
@@ -921,7 +921,7 @@ IncrementalConfig(
 
 ### ScipIndexConfig
 
-**Definition:** `src/hamilton_pipeline/pipeline_types.py` (lines 20-44)
+**Definition:** `src/hamilton_pipeline/types/` (lines 20-44)
 
 Configuration for SCIP (SCIP Code Intelligence Protocol) indexing.
 
@@ -953,7 +953,7 @@ Configuration for SCIP (SCIP Code Intelligence Protocol) indexing.
 
 **Example:**
 ```python
-from hamilton_pipeline.pipeline_types import ScipIndexConfig
+from hamilton_pipeline.types import ScipIndexConfig
 
 # Basic SCIP indexing
 ScipIndexConfig(
@@ -987,7 +987,7 @@ ScipIndexConfig(
 
 ### ScipIdentityOverrides
 
-**Definition:** `src/hamilton_pipeline/pipeline_types.py` (lines 249-255)
+**Definition:** `src/hamilton_pipeline/types/` (lines 249-255)
 
 Override SCIP project identity fields.
 
@@ -1001,7 +1001,7 @@ Override SCIP project identity fields.
 
 **Example:**
 ```python
-from hamilton_pipeline.pipeline_types import ScipIdentityOverrides
+from hamilton_pipeline.types import ScipIdentityOverrides
 
 ScipIdentityOverrides(
     project_name_override="my-custom-project",
@@ -1041,7 +1041,7 @@ Comprehensive production configuration with custom settings:
 ```python
 from pathlib import Path
 from graph.product_build import build_graph_product, GraphProductBuildRequest
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
     ScipIndexConfig,
@@ -1167,7 +1167,7 @@ Large-scale distributed execution with Dask:
 
 ```python
 from graph.product_build import build_graph_product, GraphProductBuildRequest
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
     GraphAdapterConfig,
@@ -1251,7 +1251,7 @@ Serial execution with full diagnostics:
 
 ```python
 from graph.product_build import build_graph_product, GraphProductBuildRequest
-from hamilton_pipeline.pipeline_types import ExecutionMode
+from hamilton_pipeline.types import ExecutionMode
 from core_types import DeterminismTier
 
 result = build_graph_product(
@@ -1378,6 +1378,6 @@ except Exception as exc:
 **Source Files:**
 - `src/graph/product_build.py` - Public API entry point
 - `src/hamilton_pipeline/execution.py` - Pipeline execution
-- `src/hamilton_pipeline/pipeline_types.py` - Configuration types
+- `src/hamilton_pipeline/types/` - Configuration types
 - `src/core_types.py` - Base type definitions
 - `src/incremental/types.py` - Incremental processing types

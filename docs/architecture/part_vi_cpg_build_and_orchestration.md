@@ -14,12 +14,12 @@ The public API (`src/graph/product_build.py`) provides the sole entry point for 
 
 Hamilton orchestration is explicitly configured via the public execution surface rather than hidden config flags. Callers select an `ExecutionMode` and optional `ExecutorConfig` in `GraphProductBuildRequest`, which are threaded into `hamilton_pipeline` driver construction. Parallel plan execution is the default for production builds, with deterministic serial execution reserved for reproducibility audits and debugging.
 
-**Execution Modes (File: `src/hamilton_pipeline/pipeline_types.py`)**
+**Execution Modes (File: `src/hamilton_pipeline/types/execution.py`)**
 - `deterministic_serial`: no dynamic execution; single executor for fully deterministic runs.
 - `plan_parallel`: dynamic execution enabled; scan-unit parallelism via Hamilton `Parallelizable/Collect`.
 - `plan_parallel_remote`: dynamic execution plus remote executor routing for scan/high-cost tasks.
 
-**Executor Configuration (File: `src/hamilton_pipeline/pipeline_types.py`)**
+**Executor Configuration (File: `src/hamilton_pipeline/types/execution.py`)**
 ```python
 @dataclass(frozen=True)
 class ExecutorConfig:
@@ -965,7 +965,7 @@ def build_view_product(
     )
     scan_units, scan_keys = _plan_view_scan_units(bundle, runtime_profile=profile)
     if scan_units:
-        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(
             session,

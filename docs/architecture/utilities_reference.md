@@ -19,23 +19,6 @@ The `src/utils/` module provides foundational utilities used throughout CodeAnat
 
 ---
 
-## Plugin Discovery
-
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/plugin_discovery.py`
-
-### Purpose
-
-Provide the canonical, fail-fast discovery surface for the DataFusion plugin library and
-its compatibility manifest. This is the single source of truth for plugin path resolution,
-manifest validation, and diagnostics payloads.
-
-### Key Behaviors
-
-- **Resolution order**: explicit env override, extension-provided path, build manifest, workspace fallback.
-- **Compatibility**: manifest validation uses the Rust host loader (ABI/DataFusion/Arrow checks).
-- **Diagnostics**: `plugin_diagnostics()` returns a JSON-ready payload for runtime artifacts.
-- **Stub opt-in**: `CODEANATOMY_PLUGIN_STUB=1` bypasses plugin enforcement for explicit test-only runs.
-
 ## Hashing Utilities
 
 **File**: `/home/paul/CodeAnatomy/src/utils/hashing.py` (lines 1-289)

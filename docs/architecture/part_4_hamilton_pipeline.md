@@ -1423,6 +1423,7 @@ sequenceDiagram
 src/hamilton_pipeline/
 ├── __init__.py                    # Package exports: DriverFactory, build_driver, execute_pipeline
 ├── driver_factory.py              # Driver construction, caching, plan compilation
+├── driver_builder.py              # Driver construction helpers
 ├── task_module_builder.py         # Dynamic DAG generation from ExecutionPlan
 ├── execution.py                   # execute_pipeline() / execute_pipeline_async()
 ├── execution_manager.py           # Task routing (local vs. remote executors)
@@ -1431,7 +1432,8 @@ src/hamilton_pipeline/
 ├── cache_lineage.py               # CacheLineageHook, lineage export
 ├── materializers.py               # Delta materializer factories
 ├── validators.py                  # TableSchemaValidator, NonEmptyTableValidator
-├── pipeline_types.py              # ExecutionMode, ExecutorConfig, OutputConfig
+├── cpg_finalize_utils.py          # CPG finalization utilities
+├── types/                         # ExecutionMode, ExecutorConfig, OutputConfig (types package)
 ├── semantic_registry.py           # SemanticRegistryHook for view registration
 ├── scheduling_hooks.py            # plan_task_submission_hook, plan_grouping_strategy
 ├── plan_artifacts.py              # build_plan_artifact_bundle
@@ -1443,6 +1445,7 @@ src/hamilton_pipeline/
     ├── execution_plan.py          # ExecutionPlan node, plan artifacts
     ├── task_execution.py          # execute_task_from_catalog()
     ├── column_features.py         # Column-level feature extraction
+    ├── cpg_finalize.py            # CPG finalization module
     └── outputs.py                 # CPG materialization, run manifests
 ```
 

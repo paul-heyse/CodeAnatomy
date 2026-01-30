@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from hamilton.data_quality import base as dq_base
 
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
+from datafusion_engine.schema_contracts import SchemaContract
 from utils.validation import find_missing
+
+_SCHEMA_CONTRACTS: dict[str, SchemaContract] = {}
+
+
+def set_schema_contracts(contracts: Mapping[str, object]) -> None:
+    """Replace the global schema contract registry.
+
+    Parameters
+    ----------
+    contracts
+        Mapping of dataset names to schema contracts (or other values).
+    """
+    _SCHEMA_CONTRACTS.clear()
+    for name, contract in contracts.items():
+        if isinstance(contract, SchemaContract):
+            _SCHEMA_CONTRACTS[str(name)] = contract
+
+
+def _schema_contract_for(name: str) -> SchemaContract | None:
+    return _SCHEMA_CONTRACTS.get(name)
 
 
 class TableSchemaValidator(dq_base.DataValidator):
@@ -87,6 +109,84 @@ class TableSchemaValidator(dq_base.DataValidator):
         )
 
 
+class SchemaContractValidator(dq_base.DataValidator):
+    """Validate a table-like output against a registered schema contract."""
+
+    def __init__(self, *, dataset_name: str, importance: str = "warn") -> None:
+        super().__init__(importance)
+        self._dataset_name = dataset_name
+
+    def applies_to(self, datatype: type[type]) -> bool:
+        """Return whether the validator applies to the datatype.
+
+        Returns
+        -------
+        bool
+            ``True`` for any datatype.
+        """
+        return bool(self._dataset_name) and isinstance(datatype, type)
+
+    def description(self) -> str:
+        """Return a human-readable validator description.
+
+        Returns
+        -------
+        str
+            Validator description.
+        """
+        return f"Validates schema contract for {self._dataset_name}."
+
+    @classmethod
+    def name(cls) -> str:
+        """Return the validator name.
+
+        Returns
+        -------
+        str
+            Validator name.
+        """
+        return "schema_contract_validator"
+
+    def validate(self, dataset: Any) -> dq_base.ValidationResult:
+        """Validate the dataset against its schema contract.
+
+        Returns
+        -------
+        ValidationResult
+            Validation result payload.
+        """
+        contract = _schema_contract_for(self._dataset_name)
+        if contract is None:
+            return dq_base.ValidationResult(
+                passes=True,
+                message="Schema contract not registered; skipping validation.",
+                diagnostics={"dataset_name": self._dataset_name},
+            )
+        try:
+            table = to_arrow_table(dataset)
+        except (TypeError, ValueError) as exc:
+            return dq_base.ValidationResult(
+                passes=False,
+                message="Failed to coerce dataset to Arrow table.",
+                diagnostics={"dataset_name": self._dataset_name, "error": str(exc)},
+            )
+        violations = contract.validate_against_schema(table.schema)
+        if violations:
+            return dq_base.ValidationResult(
+                passes=False,
+                message="Schema contract validation failed.",
+                diagnostics={
+                    "dataset_name": self._dataset_name,
+                    "violations": [str(item) for item in violations],
+                },
+            )
+        return dq_base.ValidationResult(
+            passes=True,
+            message="Schema contract validation passed.",
+            diagnostics={"dataset_name": self._dataset_name},
+        )
+
+
 class NonEmptyTableValidator(dq_base.DataValidator):
     """Warn when a table-like output is empty."""
 
@@ -155,4 +255,9 @@ class NonEmptyTableValidator(dq_base.DataValidator):
         )
 
 
-__all__ = ["NonEmptyTableValidator", "TableSchemaValidator"]
+__all__ = [
+    "NonEmptyTableValidator",
+    "SchemaContractValidator",
+    "TableSchemaValidator",
+    "set_schema_contracts",
+]

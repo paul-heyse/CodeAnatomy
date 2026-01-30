@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -11,6 +11,7 @@ import pyarrow.types as patypes
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_interop import (
     DataTypeLike,
     TableLike,
@@ -27,11 +28,34 @@ DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
 
 
 @dataclass(frozen=True)
-class NormalizePolicy:
+class NormalizePolicy(FingerprintableConfig):
     """Encoding policy plus chunk normalization."""
 
     encoding: EncodingPolicy
     chunk: ChunkPolicy = field(default_factory=ChunkPolicy)
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for normalization policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing normalization policy settings.
+        """
+        return {
+            "encoding": self.encoding.fingerprint(),
+            "chunk": self.chunk.fingerprint(),
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for normalization policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def apply(self, table: TableLike) -> TableLike:
         """Apply encoding and chunk normalization to a table.

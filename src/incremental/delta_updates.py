@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow_interop import TableLike
 from datafusion_engine.arrow_schema.metadata import encoding_policy_from_schema
-from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.extract_bundles import dataset_name_for_output
+from datafusion_engine.schema_contracts import delta_constraints_for_location
 from datafusion_engine.write_pipeline import WriteMode
-from incremental.delta_context import DeltaAccessContext
+from incremental.delta_context import DeltaAccessContext, run_delta_maintenance_if_configured
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
@@ -93,7 +93,7 @@ def upsert_partitioned_dataset(
         dataset_name=spec.name,
     )
     dataset_location = context.runtime.profile.dataset_location(spec.name)
-    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     write_result = write_delta_table_via_pipeline(
         runtime=context.runtime,
@@ -143,7 +143,7 @@ def write_overwrite_dataset(
     )
     target = str(state_store.dataset_dir(spec.name))
     dataset_location = context.runtime.profile.dataset_location(spec.name)
-    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=target)
     write_result = write_delta_table_via_pipeline(
         runtime=context.runtime,
@@ -405,7 +405,7 @@ def _delete_delta_partitions(
     dataset_location = (
         context.runtime.profile.dataset_location(dataset_name) if dataset_name else None
     )
-    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     delta_delete_where(
         ctx,
@@ -425,6 +425,13 @@ def _delete_delta_partitions(
         key=base_dir,
         run=commit_run,
         metadata={"operation": "delete", "partition_count": len(delete_partitions)},
+    )
+    run_delta_maintenance_if_configured(
+        context,
+        table_uri=base_dir,
+        dataset_name=dataset_name,
+        storage_options=resolved_storage.storage_options,
+        log_storage_options=resolved_storage.log_storage_options,
     )
 
 

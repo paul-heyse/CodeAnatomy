@@ -25,9 +25,10 @@ use datafusion_ext::delta_control_plane::{
     add_actions_for_paths, delta_cdf_provider, load_delta_table, DeltaCdfScanOptions,
 };
 use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate};
-use datafusion_ext::udf_registry::{self, UdfHandle, UdfKind};
+use datafusion_ext::udf_registry;
 #[cfg(feature = "async-udf")]
 use datafusion_ext::udf_async;
+use datafusion::execution::context::SessionContext;
 
 
 #[derive(Debug, Deserialize)]
@@ -138,48 +139,25 @@ fn resolve_udf_policy(options: &PluginUdfOptions) -> Result<(bool, Option<u64>, 
     Ok((false, None, None))
 }
 
-fn build_udf_bundle_from_specs(specs: Vec<udf_registry::UdfSpec>) -> DfUdfBundleV1 {
+fn build_udf_bundle_from_specs(
+    specs: Vec<udf_registry::ScalarUdfSpec>,
+) -> DfUdfBundleV1 {
     let mut scalar = Vec::new();
-    let mut aggregate = Vec::new();
-    let mut window = Vec::new();
-
     for spec in specs {
-        match (spec.kind, (spec.builder)()) {
-            (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
-                let udf = if spec.aliases.is_empty() {
-                    udf
-                } else {
-                    udf.with_aliases(spec.aliases.iter().copied())
-                };
-                scalar.push(FFI_ScalarUDF::from(Arc::new(udf)));
-            }
-            (UdfKind::Aggregate, UdfHandle::Aggregate(udaf)) => {
-                let udaf = if spec.aliases.is_empty() {
-                    udaf
-                } else {
-                    udaf.with_aliases(spec.aliases.iter().copied())
-                };
-                aggregate.push(FFI_AggregateUDF::from(Arc::new(udaf)));
-            }
-            (UdfKind::Window, UdfHandle::Window(udwf)) => {
-                let udwf = if spec.aliases.is_empty() {
-                    udwf
-                } else {
-                    udwf.with_aliases(spec.aliases.iter().copied())
-                };
-                window.push(FFI_WindowUDF::from(Arc::new(udwf)));
-            }
-            _ => {}
+        let mut udf = (spec.builder)();
+        if !spec.aliases.is_empty() {
+            udf = udf.with_aliases(spec.aliases.iter().copied());
         }
+        scalar.push(FFI_ScalarUDF::from(Arc::new(udf)));
     }
-
-    for udaf in udf_registry::builtin_udafs() {
-        aggregate.push(FFI_AggregateUDF::from(Arc::new(udaf)));
-    }
-    for udwf in udf_registry::builtin_udwfs() {
-        window.push(FFI_WindowUDF::from(Arc::new(udwf)));
-    }
-
+    let aggregate = udf_registry::builtin_udafs()
+        .into_iter()
+        .map(|udaf| FFI_AggregateUDF::from(Arc::new(udaf)))
+        .collect::<Vec<_>>();
+    let window = udf_registry::builtin_udwfs()
+        .into_iter()
+        .map(|udwf| FFI_WindowUDF::from(Arc::new(udwf)))
+        .collect::<Vec<_>>();
     DfUdfBundleV1 {
         scalar: RVec::from(scalar),
         aggregate: RVec::from(aggregate),
@@ -202,7 +180,7 @@ fn build_udf_bundle_with_options(options: PluginUdfOptions) -> Result<DfUdfBundl
             return Err("Async UDFs require the async-udf feature.".to_string());
         }
     }
-    let specs = udf_registry::all_udfs_with_async(enable_async)
+    let specs = udf_registry::scalar_udf_specs_with_async(enable_async)
         .map_err(|err| format!("Failed to build UDF bundle: {err}"))?;
     Ok(build_udf_bundle_from_specs(specs))
 }
@@ -214,22 +192,21 @@ fn build_udf_bundle() -> DfUdfBundleV1 {
 
 fn build_table_functions() -> Vec<DfTableFunctionV1> {
     let mut functions = Vec::new();
-    for spec in udf_registry::all_udfs() {
-        if spec.kind != UdfKind::Table {
-            continue;
-        }
-        if let UdfHandle::Table(table_fn) = (spec.builder)() {
-            let ffi_fn = FFI_TableFunction::from(Arc::clone(&table_fn));
+    let ctx = SessionContext::new();
+    for spec in udf_registry::table_udf_specs() {
+        let table_fn = (spec.builder)(&ctx).unwrap_or_else(|err| {
+            panic!("Failed to build table UDF {}: {err}", spec.name)
+        });
+        let ffi_fn = FFI_TableFunction::from(Arc::clone(&table_fn));
+        functions.push(DfTableFunctionV1 {
+            name: RString::from(spec.name),
+            function: ffi_fn.clone(),
+        });
+        for alias in spec.aliases {
             functions.push(DfTableFunctionV1 {
-                name: RString::from(spec.name),
+                name: RString::from(*alias),
                 function: ffi_fn.clone(),
             });
-            for alias in spec.aliases {
-                functions.push(DfTableFunctionV1 {
-                    name: RString::from(*alias),
-                    function: ffi_fn.clone(),
-                });
-            }
         }
     }
     functions

@@ -21,6 +21,7 @@ from datafusion_engine.delta_protocol import (
     DeltaProtocolSnapshot,
     delta_protocol_compatibility,
 )
+from datafusion_engine.delta_provider_contracts import build_delta_provider_contract
 from datafusion_engine.delta_scan_config import (
     delta_scan_config_snapshot,
     delta_scan_identity_hash,
@@ -38,6 +39,8 @@ from storage.deltalake.file_pruning import (
     evaluate_and_select_files,
 )
 from utils.hashing import hash_msgpack_canonical
+from utils.storage_options import merged_storage_options
+from utils.value_coercion import coerce_int, coerce_mapping_list, coerce_str_list
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -169,7 +172,10 @@ def plan_scan_unit(
             "codeanatomy.has_location": location is not None,
         },
     ):
-        delta_scan_config = delta_scan_config_snapshot(location)
+        delta_scan_config = _scan_config_snapshot(
+            location,
+            runtime_profile=runtime_profile,
+        )
         scan_config_hash = delta_scan_identity_hash(delta_scan_config)
         datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
         delta_resolution = _resolve_delta_scan_resolution(
@@ -397,7 +403,10 @@ def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
     pinned_timestamp = location.delta_timestamp if pinned_version is None else None
     return DeltaSnapshotRequest(
         table_uri=str(location.path),
-        storage_options=_delta_storage_options(location),
+        storage_options=merged_storage_options(
+            location.storage_options,
+            location.delta_log_storage_options,
+        ),
         version=pinned_version,
         timestamp=pinned_timestamp,
         gate=resolve_delta_feature_gate(location),
@@ -428,7 +437,7 @@ def _delta_add_actions_payload(
     delta_version = _resolve_delta_version(snapshot, pinned_version=request.version)
     snapshot_timestamp = _resolve_snapshot_timestamp(snapshot)
     delta_protocol = _delta_protocol_payload(snapshot)
-    add_actions = _coerce_add_actions(response.get("add_actions"))
+    add_actions = tuple(coerce_mapping_list(response.get("add_actions")) or ())
     return _DeltaAddActionsPayload(
         delta_version=delta_version,
         snapshot_timestamp=snapshot_timestamp,
@@ -484,10 +493,10 @@ def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
 
 
 def _delta_protocol_payload(snapshot: Mapping[str, object]) -> DeltaProtocolSnapshot | None:
-    min_reader_version = _coerce_int(snapshot.get("min_reader_version"))
-    min_writer_version = _coerce_int(snapshot.get("min_writer_version"))
-    reader_features = tuple(_coerce_str_list(snapshot.get("reader_features")))
-    writer_features = tuple(_coerce_str_list(snapshot.get("writer_features")))
+    min_reader_version = coerce_int(snapshot.get("min_reader_version"))
+    min_writer_version = coerce_int(snapshot.get("min_writer_version"))
+    reader_features = tuple(coerce_str_list(snapshot.get("reader_features")))
+    writer_features = tuple(coerce_str_list(snapshot.get("writer_features")))
     if (
         min_reader_version is None
         and min_writer_version is None
@@ -518,6 +527,21 @@ def _provider_marker(
     if format_name == "delta":
         return "delta_table_provider"
     return format_name or None
+
+
+def _scan_config_snapshot(
+    location: DatasetLocation | None,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DeltaScanConfigSnapshot | None:
+    if location is None or location.format != "delta":
+        return None
+    if runtime_profile is None:
+        return delta_scan_config_snapshot(location)
+    contract = build_delta_provider_contract(location, runtime_profile=runtime_profile)
+    if isinstance(contract.scan_snapshot, DeltaScanConfigSnapshot):
+        return contract.scan_snapshot
+    return None
 
 
 def _delta_protocol_compatibility(
@@ -563,58 +587,6 @@ def _enforce_protocol_compatibility(
         return
     msg = f"Delta protocol compatibility failed for dataset {dataset_name!r}."
     raise ValueError(msg)
-
-
-def _coerce_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _coerce_str_list(value: object) -> list[str]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [str(item) for item in value if str(item)]
-    return []
-
-
-def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], ...]:
-    """Coerce add actions into a tuple of mapping payloads.
-
-    Returns
-    -------
-    tuple[Mapping[str, object], ...]
-        Normalized add-action mappings.
-    """
-    if isinstance(add_actions_raw, Sequence) and not isinstance(
-        add_actions_raw, (str, bytes, bytearray)
-    ):
-        return tuple(action for action in add_actions_raw if isinstance(action, Mapping))
-    return ()
-
-
-def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
-    """Return merged Delta storage and log-store options.
-
-    Returns
-    -------
-    Mapping[str, str] | None
-        Combined storage options, or ``None`` when no options are provided.
-    """
-    merged: dict[str, str] = {}
-    if location.storage_options:
-        merged.update(location.storage_options)
-    if location.delta_log_storage_options:
-        merged.update(location.delta_log_storage_options)
-    return merged or None
 
 
 def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:

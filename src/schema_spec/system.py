@@ -22,6 +22,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_interop import SchemaLike, TableLike
 from datafusion_engine.arrow_schema.build import register_schema_extensions
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
@@ -311,15 +312,38 @@ class DeltaScanOptions:
 
 
 @dataclass(frozen=True)
-class DeltaCdfPolicy:
+class DeltaCdfPolicy(FingerprintableConfig):
     """Policy describing Delta CDF requirements."""
 
     required: bool = False
     allow_out_of_range: bool = False
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the Delta CDF policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing Delta CDF policy settings.
+        """
+        return {
+            "required": self.required,
+            "allow_out_of_range": self.allow_out_of_range,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the Delta CDF policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
 
 @dataclass(frozen=True)
-class DeltaMaintenancePolicy:
+class DeltaMaintenancePolicy(FingerprintableConfig):
     """Policy describing Delta maintenance expectations."""
 
     optimize_on_write: bool = False
@@ -330,6 +354,43 @@ class DeltaMaintenancePolicy:
     vacuum_retention_hours: int | None = None
     vacuum_dry_run: bool = False
     enforce_retention_duration: bool = True
+    checkpoint_on_write: bool = False
+    enable_deletion_vectors: bool = False
+    enable_v2_checkpoints: bool = False
+    enable_log_compaction: bool = False
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the Delta maintenance policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing Delta maintenance policy settings.
+        """
+        return {
+            "optimize_on_write": self.optimize_on_write,
+            "optimize_target_size": self.optimize_target_size,
+            "z_order_cols": self.z_order_cols,
+            "z_order_when": self.z_order_when,
+            "vacuum_on_write": self.vacuum_on_write,
+            "vacuum_retention_hours": self.vacuum_retention_hours,
+            "vacuum_dry_run": self.vacuum_dry_run,
+            "enforce_retention_duration": self.enforce_retention_duration,
+            "checkpoint_on_write": self.checkpoint_on_write,
+            "enable_deletion_vectors": self.enable_deletion_vectors,
+            "enable_v2_checkpoints": self.enable_v2_checkpoints,
+            "enable_log_compaction": self.enable_log_compaction,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the Delta maintenance policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 type DatasetKind = Literal["primary", "delta_cdf"]

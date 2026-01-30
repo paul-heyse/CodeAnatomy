@@ -10,6 +10,7 @@ import msgspec
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.generated.delta_types import DeltaFeatureGate
 from serde_msgspec import StructBaseCompat, StructBaseStrict
+from utils.value_coercion import coerce_int
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
@@ -209,8 +210,8 @@ def _protocol_snapshot(
         return snapshot
     if not isinstance(snapshot, Mapping):
         return None
-    min_reader_version = _coerce_int(snapshot.get("min_reader_version"))
-    min_writer_version = _coerce_int(snapshot.get("min_writer_version"))
+    min_reader_version = coerce_int(snapshot.get("min_reader_version"))
+    min_writer_version = coerce_int(snapshot.get("min_writer_version"))
     reader_features = tuple(_feature_set(snapshot.get("reader_features")))
     writer_features = tuple(_feature_set(snapshot.get("writer_features")))
     if (
@@ -226,24 +227,6 @@ def _protocol_snapshot(
         reader_features=reader_features,
         writer_features=writer_features,
     )
-
-
-def _coerce_int(value: object) -> int | None:
-    result: int | None = None
-    if value is None:
-        return result
-    if isinstance(value, int):
-        result = value
-    elif isinstance(value, float):
-        result = int(value)
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            try:
-                result = int(stripped)
-            except ValueError:
-                result = None
-    return result
 
 
 def _feature_set(value: object) -> set[str]:
@@ -264,8 +247,8 @@ def _delta_gate_values(
     if gate is None:
         return None
     if isinstance(gate, Mapping):
-        min_reader_version = _coerce_int(gate.get("min_reader_version"))
-        min_writer_version = _coerce_int(gate.get("min_writer_version"))
+        min_reader_version = coerce_int(gate.get("min_reader_version"))
+        min_writer_version = coerce_int(gate.get("min_writer_version"))
         required_reader_features = _feature_tuple(gate.get("required_reader_features"))
         required_writer_features = _feature_tuple(gate.get("required_writer_features"))
         return (
@@ -274,8 +257,8 @@ def _delta_gate_values(
             required_reader_features,
             required_writer_features,
         )
-    min_reader_version = _coerce_int(getattr(gate, "min_reader_version", None))
-    min_writer_version = _coerce_int(getattr(gate, "min_writer_version", None))
+    min_reader_version = coerce_int(getattr(gate, "min_reader_version", None))
+    min_writer_version = coerce_int(getattr(gate, "min_writer_version", None))
     required_reader_features = _feature_tuple(getattr(gate, "required_reader_features", ()))
     required_writer_features = _feature_tuple(getattr(gate, "required_writer_features", ()))
     return (

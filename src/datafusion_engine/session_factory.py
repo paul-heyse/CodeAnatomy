@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 
 if TYPE_CHECKING:
+    from datafusion_engine.compile_options import DataFusionSqlPolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
@@ -103,6 +104,29 @@ def _apply_join_settings(
     return config
 
 
+def _apply_sql_policy_settings(
+    config: SessionConfig,
+    *,
+    policy: DataFusionSqlPolicy,
+) -> SessionConfig:
+    allow_ddl = str(policy.allow_ddl).lower()
+    allow_dml = str(policy.allow_dml).lower()
+    allow_statements = str(policy.allow_statements).lower()
+    return (
+        config.set("codeanatomy_policy.allow_ddl", allow_ddl)
+        .set("codeanatomy_policy.allow_dml", allow_dml)
+        .set("codeanatomy_policy.allow_statements", allow_statements)
+    )
+
+
+def _apply_physical_rulepack_settings(
+    config: SessionConfig,
+    *,
+    enabled: bool,
+) -> SessionConfig:
+    return config.set("codeanatomy_physical.enabled", str(enabled).lower())
+
+
 def _apply_explain_analyze_level(
     config: SessionConfig,
     *,
@@ -128,6 +152,7 @@ class SessionFactory:
         SessionConfig
             Configured SessionConfig instance.
         """
+        from datafusion_engine.compile_options import resolve_sql_policy
         from datafusion_engine.runtime import (
             effective_catalog_autoload,
             effective_ident_normalization,
@@ -217,6 +242,12 @@ class SessionFactory:
         config_policy = resolved_config_policy(profile)
         if config_policy is not None:
             config = config_policy.apply(config)
+        resolved_policy = profile.sql_policy or resolve_sql_policy(profile.sql_policy_name)
+        config = _apply_sql_policy_settings(config, policy=resolved_policy)
+        config = _apply_physical_rulepack_settings(
+            config,
+            enabled=profile.physical_rulepack_enabled,
+        )
         schema_hardening = resolved_schema_hardening(profile)
         if schema_hardening is not None:
             config = schema_hardening.apply(config)

@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
 
-from hamilton.function_modifiers import cache, tag
+from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
 from datafusion_engine.runtime import AdapterExecutionPolicy
@@ -15,9 +15,10 @@ from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
-from extract.repo_scan import default_repo_scan_options
-from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
+from extract.extractors.scip.extract import ScipExtractOptions, SCIPParseOptions
+from extract.scanning.repo_scan import default_repo_scan_options
 from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from hamilton_pipeline.types import (
     CacheRuntimeContext,
     OutputConfig,
@@ -64,7 +65,7 @@ def _cache_policy_profile_from_inputs(cache_policy_profile: str | None) -> str |
     return None
 
 
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def runtime_profile_name(runtime_profile_name_override: str | None = None) -> str:
     """Return the runtime profile name for execution.
 
@@ -78,7 +79,7 @@ def runtime_profile_name(runtime_profile_name_override: str | None = None) -> st
     return env_value("CODEANATOMY_RUNTIME_PROFILE") or "default"
 
 
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def determinism_override(
     determinism_override_override: DeterminismTier | str | None = None,
 ) -> DeterminismTier | None:
@@ -100,7 +101,7 @@ def determinism_override(
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def runtime_profile_spec(
     runtime_profile_name: str,
     determinism_override: DeterminismTier | None,
@@ -129,7 +130,7 @@ def _normalize_output_root(output_config: OutputConfig) -> str | None:
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def diagnostics_collector() -> DiagnosticsCollector:
     """Return a diagnostics collector for the run.
 
@@ -143,7 +144,7 @@ def diagnostics_collector() -> DiagnosticsCollector:
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def engine_session(
     runtime_profile_spec: RuntimeProfileSpec,
     diagnostics_collector: DiagnosticsCollector,
@@ -166,7 +167,7 @@ def engine_session(
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def streaming_table_provider(incremental_config: IncrementalConfig) -> object | None:
     """Return an optional streaming table provider (placeholder).
 
@@ -186,7 +187,7 @@ def streaming_table_provider(incremental_config: IncrementalConfig) -> object | 
     return None
 
 
-@tag(layer="inputs", kind="runtime")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def adapter_execution_policy() -> AdapterExecutionPolicy:
     """Return the execution policy for adapter execution behavior.
 
@@ -198,7 +199,7 @@ def adapter_execution_policy() -> AdapterExecutionPolicy:
     return AdapterExecutionPolicy()
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def relspec_param_values() -> JsonDict:
     """Return parameter values for relspec execution.
 
@@ -212,7 +213,7 @@ def relspec_param_values() -> JsonDict:
     return {}
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def pipeline_policy() -> PipelinePolicy:
     """Return the pipeline policy for rule execution.
 
@@ -224,7 +225,7 @@ def pipeline_policy() -> PipelinePolicy:
     return PipelinePolicy()
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def param_table_delta_paths() -> Mapping[str, str] | None:
     """Return optional Delta table paths for param table replay.
 
@@ -236,7 +237,7 @@ def param_table_delta_paths() -> Mapping[str, str] | None:
     return {}
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def python_extensions() -> list[str]:
     """Return explicit Python extensions for repo scope rules.
 
@@ -250,7 +251,7 @@ def python_extensions() -> list[str]:
     return []
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def include_untracked() -> bool:
     """Return whether to include untracked files in repo scope.
 
@@ -262,7 +263,7 @@ def include_untracked() -> bool:
     return True
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def include_submodules() -> bool:
     """Return whether to include submodules in repo scope.
 
@@ -274,7 +275,7 @@ def include_submodules() -> bool:
     return False
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def include_worktrees() -> bool:
     """Return whether to include worktrees in repo scope.
 
@@ -286,7 +287,7 @@ def include_worktrees() -> bool:
     return False
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def follow_symlinks() -> bool:
     """Return whether to follow symlinks in repo scope.
 
@@ -298,7 +299,7 @@ def follow_symlinks() -> bool:
     return False
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def external_interface_depth() -> Literal["metadata", "full"]:
     """Return the external interface extraction depth.
 
@@ -310,7 +311,7 @@ def external_interface_depth() -> Literal["metadata", "full"]:
     return "metadata"
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def max_files() -> int:
     """Return the default maximum number of files to scan.
 
@@ -325,7 +326,7 @@ def max_files() -> int:
     return int(max_files_opt)
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def cache_salt() -> str:
     """Return a manual cache-busting salt for repo-dependent nodes.
 
@@ -337,7 +338,7 @@ def cache_salt() -> str:
     return ""
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def output_dir() -> str | None:
     """Return the default output directory for artifacts.
 
@@ -351,7 +352,7 @@ def output_dir() -> str | None:
     return None
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def work_dir() -> str | None:
     """Return the default working directory for intermediates.
 
@@ -365,7 +366,7 @@ def work_dir() -> str | None:
     return None
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def scip_identity_overrides() -> ScipIdentityOverrides:
     """Return default overrides for SCIP identity.
 
@@ -383,7 +384,7 @@ def scip_identity_overrides() -> ScipIdentityOverrides:
     )
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def scip_index_config() -> ScipIndexConfig:
     """Return default config for scip-python indexing.
 
@@ -397,7 +398,7 @@ def scip_index_config() -> ScipIndexConfig:
     return ScipIndexConfig()
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def scip_parse_options() -> SCIPParseOptions:
     """Return default parse options for SCIP extraction.
 
@@ -411,7 +412,7 @@ def scip_parse_options() -> SCIPParseOptions:
     return SCIPParseOptions()
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def scip_extract_options() -> ScipExtractOptions:
     """Return default extraction options for SCIP tables.
 
@@ -425,7 +426,7 @@ def scip_extract_options() -> ScipExtractOptions:
     return ScipExtractOptions()
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def enable_tree_sitter() -> bool:
     """Return whether tree-sitter extraction is enabled.
 
@@ -437,7 +438,7 @@ def enable_tree_sitter() -> bool:
     return False
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def relspec_mode() -> Literal["memory", "filesystem"]:
     """Return the relationship spec mode.
 
@@ -451,7 +452,7 @@ def relspec_mode() -> Literal["memory", "filesystem"]:
     return "memory"
 
 
-@tag(layer="inputs", kind="scalar")
+@apply_tag(TagPolicy(layer="inputs", kind="scalar"))
 def overwrite_intermediate_datasets() -> bool:
     """Return whether to overwrite intermediate datasets on disk.
 
@@ -481,7 +482,7 @@ class RepoScopeFlags:
     follow_symlinks: bool
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def repo_scope_globs() -> RepoScopeGlobs:
     """Bundle repository scope globs.
 
@@ -493,7 +494,7 @@ def repo_scope_globs() -> RepoScopeGlobs:
     return RepoScopeGlobs(include_globs=(), exclude_globs=())
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def repo_scope_flags(
     *,
     include_untracked: bool,
@@ -516,7 +517,7 @@ def repo_scope_flags(
     )
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def repo_scope_config(
     python_extensions: list[str],
     repo_scope_globs: RepoScopeGlobs,
@@ -542,7 +543,7 @@ def repo_scope_config(
     )
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def repo_scan_config(
     repo_root: str,
     repo_scope_config: RepoScopeConfig,
@@ -577,7 +578,7 @@ def repo_scan_config(
     )
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def relspec_config(
     relspec_mode: Literal["memory", "filesystem"],
     scip_index_path: str | None,
@@ -592,7 +593,7 @@ def relspec_config(
     return RelspecConfig(relspec_mode=relspec_mode, scip_index_path=scip_index_path)
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def output_config_overrides(
     *,
     overwrite_intermediate_datasets: bool,
@@ -657,7 +658,7 @@ class OutputConfigOverrides:
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def output_config(
     work_dir: str | None,
     output_dir: str | None,
@@ -697,7 +698,7 @@ def output_config(
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def cache_context(
     *,
     cache_path: str | None = None,
@@ -726,7 +727,7 @@ def cache_context(
 
 
 @cache(behavior="ignore")
-@tag(layer="inputs", kind="list")
+@apply_tag(TagPolicy(layer="inputs", kind="list"))
 def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> tuple[str, ...]:
     """Return the ordered list of materialized output nodes.
 
@@ -738,7 +739,7 @@ def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> t
     return tuple(str(name) for name in materialized_outputs or ())
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def execution_surface_policy(
     runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
@@ -769,7 +770,7 @@ class IncrementalConfigKwargs(TypedDict, total=False):
     incremental_git_changed_only: bool
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def incremental_config(
     repo_root: str,
     **kwargs: Unpack[IncrementalConfigKwargs],
@@ -830,7 +831,7 @@ def incremental_config(
     )
 
 
-@tag(layer="inputs", kind="object")
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
 def tree_sitter_config(*, enable_tree_sitter: bool) -> TreeSitterConfig:
     """Bundle tree-sitter configuration values.
 

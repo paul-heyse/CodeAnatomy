@@ -40,11 +40,16 @@ from cache.diskcache_factory import (
     evict_cache_tag,
     run_profile_maintenance,
 )
+from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.arrow_schema.metadata import schema_constraints_from_metadata
-from datafusion_engine.arrow_schema.schema_builders import map_entry_type, versioned_entries_schema
+from datafusion_engine.arrow_schema.schema_builders import (
+    map_entry_type,
+    version_field,
+    versioned_entries_schema,
+)
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -90,6 +95,10 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.session_factory import SessionFactory
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
+from datafusion_engine.sql_options import (
+    sql_options_for_profile,
+    statement_sql_options_for_profile,
+)
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
@@ -163,7 +172,7 @@ _MAP_ENTRY_SCHEMA = map_entry_type(with_kind=True)
 _SETTINGS_HASH_SCHEMA = versioned_entries_schema(_MAP_ENTRY_SCHEMA)
 _SESSION_RUNTIME_HASH_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field("profile_context_key", pa.string(), nullable=False),
         pa.field("profile_settings_hash", pa.string(), nullable=False),
         pa.field("udf_snapshot_hash", pa.string(), nullable=False),
@@ -258,7 +267,7 @@ _DELTA_STORE_POLICY_SCHEMA = pa.struct(
 )
 _TELEMETRY_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32()),
+        version_field(nullable=True),
         pa.field("profile_name", pa.string()),
         pa.field("datafusion_version", pa.string()),
         pa.field("architecture_version", pa.string()),
@@ -434,6 +443,72 @@ def record_delta_session_defaults(
     )
 
 
+def record_schema_snapshots_for_profile(profile: DataFusionRuntimeProfile) -> None:
+    """Record information_schema snapshots to diagnostics when enabled."""
+    if profile.diagnostics_sink is None:
+        return
+    if not profile.enable_information_schema:
+        return
+    ctx = profile.session_context()
+    introspector = schema_introspector_for_profile(profile, ctx)
+    payload: dict[str, object] = {
+        "event_time_unix_ms": int(time.time() * 1000),
+    }
+    try:
+        payload.update(
+            {
+                "catalogs": catalogs_snapshot(introspector),
+                "schemata": introspector.schemata_snapshot(),
+                "tables": introspector.tables_snapshot(),
+                "columns": introspector.columns_snapshot(),
+                "constraints": constraint_rows(
+                    ctx,
+                    sql_options=sql_options_for_profile(profile),
+                ),
+                "routines": introspector.routines_snapshot(),
+                "parameters": introspector.parameters_snapshot(),
+                "settings": introspector.settings_snapshot(),
+                "functions": function_catalog_snapshot_for_profile(
+                    profile,
+                    ctx,
+                    include_routines=profile.enable_information_schema,
+                ),
+            }
+        )
+        version = _datafusion_version(ctx)
+        if version is not None:
+            payload["datafusion_version"] = version
+    except (RuntimeError, TypeError, ValueError) as exc:
+        payload["error"] = str(exc)
+    profile.record_artifact("datafusion_schema_introspection_v1", payload)
+
+
+def normalize_dataset_locations_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, DatasetLocation]:
+    """Return normalize dataset locations derived from the output root.
+
+    Returns
+    -------
+    Mapping[str, DatasetLocation]
+        Mapping of normalize dataset names to locations, or empty mapping
+        when normalize output root is not configured.
+    """
+    if profile.normalize_output_root is None:
+        return {}
+    root = Path(profile.normalize_output_root)
+    from normalize.dataset_specs import dataset_specs
+
+    locations: dict[str, DatasetLocation] = {}
+    for spec in dataset_specs():
+        locations[spec.name] = DatasetLocation(
+            path=str(root / spec.name),
+            format="delta",
+            dataset_spec=spec,
+        )
+    return locations
+
+
 def _introspection_cache_for_ctx(
     ctx: SessionContext,
     *,
@@ -485,10 +560,32 @@ _AST_OPTIONAL_VIEW_FUNCTIONS: dict[str, tuple[str, ...]] = {
 
 
 @dataclass(frozen=True)
-class DataFusionConfigPolicy:
+class DataFusionConfigPolicy(FingerprintableConfig):
     """Configuration policy for DataFusion SessionConfig."""
 
     settings: Mapping[str, str]
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return the fingerprint payload for config settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing the DataFusion settings.
+        """
+        return {
+            "settings": dict(self.settings),
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the config settings.
+
+        Returns
+        -------
+        str
+            Stable fingerprint hash.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def apply(self, config: SessionConfig) -> SessionConfig:
         """Return a SessionConfig with policy settings applied.
@@ -549,7 +646,7 @@ class DataFusionFeatureGates:
 
 
 @dataclass(frozen=True)
-class DataFusionJoinPolicy:
+class DataFusionJoinPolicy(FingerprintableConfig):
     """Join algorithm preferences for DataFusion."""
 
     enable_hash_join: bool = True
@@ -559,6 +656,34 @@ class DataFusionJoinPolicy:
     enable_round_robin_repartition: bool = True
     perfect_hash_join_small_build_threshold: int | None = None
     perfect_hash_join_min_key_density: float | None = None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return the fingerprint payload for join policy settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing join policy settings.
+        """
+        return {
+            "enable_hash_join": self.enable_hash_join,
+            "enable_sort_merge_join": self.enable_sort_merge_join,
+            "enable_nested_loop_join": self.enable_nested_loop_join,
+            "repartition_joins": self.repartition_joins,
+            "enable_round_robin_repartition": self.enable_round_robin_repartition,
+            "perfect_hash_join_small_build_threshold": self.perfect_hash_join_small_build_threshold,
+            "perfect_hash_join_min_key_density": self.perfect_hash_join_min_key_density,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for join policy settings.
+
+        Returns
+        -------
+        str
+            Stable fingerprint hash.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def settings(self) -> dict[str, str]:
         """Return DataFusion config settings for join preferences.
@@ -756,7 +881,7 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
 
 
 @dataclass
-class DataFusionExplainCollector:
+class _DataFusionExplainCollector:
     """Collect EXPLAIN artifacts for diagnostics."""
 
     entries: list[dict[str, object]] = field(default_factory=list)
@@ -778,7 +903,7 @@ class DataFusionExplainCollector:
 
 
 @dataclass
-class DataFusionPlanCollector:
+class _DataFusionPlanCollector:
     """Collect DataFusion plan artifacts."""
 
     entries: list[dict[str, object]] = field(default_factory=list)
@@ -920,8 +1045,28 @@ class PreparedStatementSpec:
 
 
 @dataclass(frozen=True)
-class AdapterExecutionPolicy:
+class AdapterExecutionPolicy(FingerprintableConfig):
     """Execution policy for adapterized execution handling."""
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return the fingerprint payload for adapter execution policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing adapter execution policy.
+        """
+        return {"policy": self.__class__.__name__}
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for adapter execution policy.
+
+        Returns
+        -------
+        str
+            Stable fingerprint hash.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)
@@ -1068,21 +1213,6 @@ INFO_SCHEMA_STATEMENT_NAMES: frozenset[str] = frozenset(
 )
 
 _SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
-
-
-def snapshot_plans(df: DataFrame) -> dict[str, object]:
-    """Return logical/optimized/physical plan snapshots for diagnostics.
-
-    Returns
-    -------
-    dict[str, object]
-        Plan snapshots keyed by logical/optimized/physical.
-    """
-    return {
-        "logical": df.logical_plan(),
-        "optimized": df.optimized_logical_plan(),
-        "physical": df.execution_plan(),
-    }
 
 
 def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
@@ -1576,11 +1706,12 @@ def _stable_repr(value: object) -> str:
 
 
 def _read_only_sql_options() -> SQLOptions:
-    return DataFusionSqlPolicy(
-        allow_ddl=True,
-        allow_dml=True,
-        allow_statements=True,
-    ).to_sql_options()
+    return (
+        SQLOptions()
+        .with_allow_ddl(allow=True)
+        .with_allow_dml(allow=True)
+        .with_allow_statements(allow=True)
+    )
 
 
 def _sql_with_options(
@@ -1603,32 +1734,6 @@ def _sql_with_options(
         msg = "Runtime SQL execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
     return df
-
-
-def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
-    """Return SQL options derived from a runtime profile.
-
-    Returns
-    -------
-    datafusion.SQLOptions
-        SQL options based on the runtime policy or read-only defaults.
-    """
-    if profile is None:
-        return _read_only_sql_options()
-    return profile.sql_options()
-
-
-def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
-    """Return SQL options that allow statement execution.
-
-    Returns
-    -------
-    datafusion.SQLOptions
-        SQL options that allow statements, with fallback defaults.
-    """
-    if profile is None:
-        return _read_only_sql_options().with_allow_statements(allow=True)
-    return profile.sql_options().with_allow_statements(allow=True)
 
 
 def settings_snapshot_for_profile(
@@ -2954,12 +3059,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     explain_verbose: bool = False
     explain_analyze: bool = True
     explain_analyze_level: str | None = None
-    explain_collector: DataFusionExplainCollector | None = field(
-        default_factory=DataFusionExplainCollector
+    explain_collector: _DataFusionExplainCollector | None = field(
+        default_factory=_DataFusionExplainCollector
     )
     capture_plan_artifacts: bool = True
     capture_semantic_diff: bool = False
-    plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
+    plan_collector: _DataFusionPlanCollector | None = field(
+        default_factory=_DataFusionPlanCollector
+    )
     view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
     substrait_validation: bool = False
     validate_plan_determinism: bool = False
@@ -2986,6 +3093,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     write_policy: DataFusionWritePolicy | None = None
     settings_overrides: Mapping[str, str] = field(default_factory=dict)
     feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
+    physical_rulepack_enabled: bool = True
     join_policy: DataFusionJoinPolicy | None = None
     share_context: bool = True
     session_context_key: str | None = None
@@ -3188,6 +3296,37 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._cache_context(ctx)
         return ctx
 
+    def delta_runtime_ctx(self) -> SessionContext:
+        """Return a SessionContext configured for Delta operations.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Session context configured for Delta access paths.
+        """
+        return self.session_context()
+
+    def delta_runtime_profile_ctx(
+        self,
+        *,
+        storage_options: Mapping[str, str] | None = None,
+    ) -> SessionContext:
+        """Return a SessionContext for Delta operations with storage overrides.
+
+        Parameters
+        ----------
+        storage_options
+            Optional storage options used to disable shared context reuse.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Session context configured for Delta operations.
+        """
+        if storage_options:
+            return replace(self, share_context=False).delta_runtime_ctx()
+        return self.delta_runtime_ctx()
+
     def _session_runtime_from_context(self, ctx: SessionContext) -> SessionRuntime:
         """Build a SessionRuntime from an existing SessionContext.
 
@@ -3359,10 +3498,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise ValueError(msg)
         return report.payload()
 
-    def record_schema_snapshots(self) -> None:
-        """Record information_schema snapshots to diagnostics when enabled."""
-        self._record_schema_snapshots(self.session_context())
-
     def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
         for plugin in self.input_plugins:
@@ -3442,6 +3577,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 error=platform.expr_planners.error,
                 policy=platform.expr_planner_policy,
             )
+        if (
+            self.enable_information_schema
+            and platform.snapshot is not None
+            and platform.function_factory is not None
+            and platform.function_factory.installed
+        ):
+            from datafusion_engine.udf_runtime import register_udfs_via_ddl
+
+            register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
         self._refresh_udf_catalog(ctx)
 
     def _install_planner_rules(self, ctx: SessionContext) -> None:
@@ -3464,9 +3608,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not callable(config_installer):
             msg = "Planner policy config installer is unavailable in datafusion._internal."
             raise TypeError(msg)
+        physical_config_installer = getattr(module, "install_codeanatomy_physical_config", None)
+        if not callable(physical_config_installer):
+            msg = "Physical policy config installer is unavailable in datafusion._internal."
+            raise TypeError(msg)
         rule_installer = getattr(module, "install_planner_rules", None)
         if not callable(rule_installer):
             msg = "Planner policy rule installer is unavailable in datafusion._internal."
+            raise TypeError(msg)
+        physical_installer = getattr(module, "install_physical_rules", None)
+        if not callable(physical_installer):
+            msg = "Physical rule installer is unavailable in datafusion._internal."
             raise TypeError(msg)
         config_installer(
             ctx,
@@ -3474,7 +3626,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             policy.allow_dml,
             policy.allow_statements,
         )
+        physical_config_installer(ctx, self.physical_rulepack_enabled)
         rule_installer(ctx)
+        physical_installer(ctx)
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.enable_information_schema:
@@ -4038,29 +4192,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return replace(location, dataset_spec=spec)
         return location
 
-    def normalize_dataset_locations(self) -> Mapping[str, DatasetLocation]:
-        """Return normalize dataset locations derived from the output root.
-
-        Returns
-        -------
-        Mapping[str, DatasetLocation]
-            Mapping of normalize dataset names to locations, or empty mapping
-            when normalize output root is not configured.
-        """
-        if self.normalize_output_root is None:
-            return {}
-        root = Path(self.normalize_output_root)
-        from normalize.dataset_specs import dataset_specs
-
-        locations: dict[str, DatasetLocation] = {}
-        for spec in dataset_specs():
-            locations[spec.name] = DatasetLocation(
-                path=str(root / spec.name),
-                format="delta",
-                dataset_spec=spec,
-            )
-        return locations
-
     def dataset_location(self, name: str) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
 
@@ -4072,7 +4203,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self.extract_dataset_location(name)
         if location is not None:
             return apply_delta_store_policy(location, policy=self.delta_store_policy)
-        normalize_location = self.normalize_dataset_locations().get(name)
+        normalize_location = normalize_dataset_locations_for_profile(self).get(name)
         if normalize_location is not None:
             return apply_delta_store_policy(normalize_location, policy=self.delta_store_policy)
         mapped = self.scip_dataset_locations.get(name)
@@ -5308,17 +5439,18 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return DataFusionSqlPolicy()
         return resolve_sql_policy(self.sql_policy_name)
 
-    def _sql_options(self) -> SQLOptions:
-        """Return SQLOptions derived from the resolved SQL policy.
+    @staticmethod
+    def _sql_options() -> SQLOptions:
+        """Return SQLOptions for SQL execution.
 
         Returns
         -------
         datafusion.SQLOptions
-            SQL options derived from the profile policy.
+            SQL options for use with DataFusion contexts.
         """
-        options = self._resolved_sql_policy().to_sql_options()
         return (
-            options.with_allow_ddl(allow=True)
+            SQLOptions()
+            .with_allow_ddl(allow=True)
             .with_allow_dml(allow=True)
             .with_allow_statements(allow=True)
         )
@@ -6127,10 +6259,8 @@ __all__ = [
     "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
     "DataFusionConfigPolicy",
-    "DataFusionExplainCollector",
     "DataFusionFeatureGates",
     "DataFusionJoinPolicy",
-    "DataFusionPlanCollector",
     "DataFusionRuntimeProfile",
     "DataFusionSettingsContract",
     "ExecutionLabel",
@@ -6152,11 +6282,12 @@ __all__ = [
     "diagnostics_dml_hook",
     "evict_diskcache_entries",
     "feature_state_snapshot",
+    "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
+    "record_schema_snapshots_for_profile",
     "register_view_specs",
     "run_diskcache_maintenance",
     "session_runtime_hash",
-    "snapshot_plans",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]

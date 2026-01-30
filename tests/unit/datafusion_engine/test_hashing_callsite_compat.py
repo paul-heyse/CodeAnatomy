@@ -23,8 +23,8 @@ from datafusion_engine.plan_bundle import (
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.scan_planner import ScanUnit
 from datafusion_engine.view_artifacts import _delta_inputs_payload, _plan_task_signature
-from extract.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
-from extract.repo_scan import _sha256_path
+from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
+from extract.scanning.repo_scan import _sha256_path
 from incremental.scip_fingerprint import scip_index_fingerprint
 from relspec.execution_plan import _protocol_payload as exec_protocol_payload
 from relspec.execution_plan import _scan_unit_signature

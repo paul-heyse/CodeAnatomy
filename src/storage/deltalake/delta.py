@@ -11,11 +11,14 @@ import pyarrow as pa
 from deltalake import CommitProperties, Transaction
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
+from datafusion_engine.arrow_schema.coercion import to_arrow_table
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
+from utils.storage_options import merged_storage_options
+from utils.value_coercion import coerce_int, coerce_str_list
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -73,22 +76,6 @@ class _DeltaMaintenanceRecord:
     dry_run: bool | None
 
 
-def _runtime_ctx(ctx: SessionContext | None) -> SessionContext:
-    if ctx is not None:
-        return ctx
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-    return DataFusionRuntimeProfile().session_context()
-
-
-def _runtime_profile_ctx(
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> SessionContext:
-    if runtime_profile is not None:
-        return runtime_profile.session_context()
-    return _runtime_ctx(None)
-
-
 def _runtime_profile_for_delta(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRuntimeProfile:
@@ -133,7 +120,7 @@ class DeltaSnapshotLookup:
 
 
 def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaSnapshotRequest,
@@ -337,7 +324,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     pyarrow.Schema | None
         Arrow schema for the Delta table or ``None`` when the table does not exist.
     """
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(None)
     ctx = profile.session_context()
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -395,7 +382,7 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     if request.version is not None and request.timestamp is not None:
         msg = "Delta read request must set either version or timestamp, not both."
         raise ValueError(msg)
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     profile = _runtime_profile_for_delta(request.runtime_profile)
     ctx = profile.session_context()
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -612,10 +599,10 @@ def delta_protocol_snapshot(
     from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
 
     payload = DeltaProtocolSnapshot(
-        min_reader_version=_coerce_int(snapshot.get("min_reader_version")),
-        min_writer_version=_coerce_int(snapshot.get("min_writer_version")),
-        reader_features=tuple(_coerce_str_list(snapshot.get("reader_features"))),
-        writer_features=tuple(_coerce_str_list(snapshot.get("writer_features"))),
+        min_reader_version=coerce_int(snapshot.get("min_reader_version")),
+        min_writer_version=coerce_int(snapshot.get("min_writer_version")),
+        reader_features=tuple(coerce_str_list(snapshot.get("reader_features"))),
+        writer_features=tuple(coerce_str_list(snapshot.get("writer_features"))),
     )
     if (
         payload.min_reader_version is None
@@ -625,27 +612,6 @@ def delta_protocol_snapshot(
     ):
         return None
     return payload
-
-
-def _coerce_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _coerce_str_list(value: object) -> list[str]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [str(item) for item in value if str(item)]
-    return []
 
 
 def enable_delta_features(
@@ -665,7 +631,7 @@ def enable_delta_features(
     RuntimeError
         Raised when the Rust control-plane property update fails.
     """
-    storage = _log_storage_dict(options.storage_options, options.log_storage_options)
+    storage = merged_storage_options(options.storage_options, options.log_storage_options)
     if (
         delta_table_version(
             options.path,
@@ -679,7 +645,8 @@ def enable_delta_features(
     properties = {key: str(value) for key, value in resolved.items() if value is not None}
     if not properties:
         return {}
-    ctx = _runtime_ctx(None)
+    profile = _runtime_profile_for_delta(options.runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaCommitOptions,
@@ -720,8 +687,9 @@ def enable_delta_features(
 def _feature_enable_request(
     options: DeltaFeatureMutationOptions,
 ) -> tuple[SessionContext, DeltaFeatureEnableRequest]:
-    storage = _log_storage_dict(options.storage_options, options.log_storage_options)
-    ctx = _runtime_profile_ctx(options.runtime_profile)
+    storage = merged_storage_options(options.storage_options, options.log_storage_options)
+    profile = _runtime_profile_for_delta(options.runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     from datafusion_engine.delta_control_plane import (
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
@@ -769,8 +737,9 @@ def delta_add_constraints(
     """
     if not constraints:
         return {}
-    storage = _log_storage_dict(options.storage_options, options.log_storage_options)
-    ctx = _runtime_profile_ctx(options.runtime_profile)
+    storage = merged_storage_options(options.storage_options, options.log_storage_options)
+    profile = _runtime_profile_for_delta(options.runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaAddConstraintsRequest,
@@ -830,8 +799,9 @@ def delta_drop_constraints(
     """
     if not constraints:
         return {}
-    storage = _log_storage_dict(options.storage_options, options.log_storage_options)
-    ctx = _runtime_profile_ctx(options.runtime_profile)
+    storage = merged_storage_options(options.storage_options, options.log_storage_options)
+    profile = _runtime_profile_for_delta(options.runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaCommitOptions,
@@ -1801,8 +1771,9 @@ def vacuum_delta(
         Raised when the Rust control-plane vacuum call fails.
     """
     options = options or DeltaVacuumOptions()
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    ctx = _runtime_ctx(None)
+    storage = merged_storage_options(storage_options, log_storage_options)
+    profile = _runtime_profile_for_delta(None)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaCommitOptions,
@@ -1856,8 +1827,9 @@ def create_delta_checkpoint(
     RuntimeError
         Raised when the Rust control-plane checkpoint call fails.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    ctx = _runtime_profile_ctx(runtime_profile)
+    storage = merged_storage_options(storage_options, log_storage_options)
+    profile = _runtime_profile_for_delta(runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaCheckpointRequest,
@@ -1913,8 +1885,9 @@ def cleanup_delta_log(
     RuntimeError
         Raised when the Rust control-plane cleanup call fails.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    ctx = _runtime_profile_ctx(runtime_profile)
+    storage = merged_storage_options(storage_options, log_storage_options)
+    profile = _runtime_profile_for_delta(runtime_profile)
+    ctx = profile.delta_runtime_ctx()
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaCheckpointRequest,
@@ -1963,7 +1936,7 @@ def coerce_delta_table(
     TableLike
         Transformed Arrow table ready for Delta writes.
     """
-    table = _coerce_table(value)
+    table = to_arrow_table(value)
     if schema is not None:
         table = align_table(
             table,
@@ -2054,7 +2027,7 @@ def delta_delete_where(
     Mapping[str, object]
         Control-plane mutation report payload.
     """
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     commit_options = _delta_commit_options(
         commit_properties=request.commit_properties,
         commit_metadata=request.commit_metadata,
@@ -2111,7 +2084,7 @@ def delta_merge_arrow(
     Mapping[str, object]
         Control-plane mutation report payload.
     """
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     resolved_source_alias = request.source_alias or "source"
     resolved_target_alias = request.target_alias or "target"
     resolved_updates = dict(request.matched_updates or {})
@@ -2196,19 +2169,9 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     if not callable(checker):
         msg = "datafusion._internal.delta_data_checker is unavailable."
         raise TypeError(msg)
-    table = _coerce_table(request.data)
-    if not isinstance(table, pa.Table):
-        to_pyarrow = getattr(table, "to_pyarrow", None)
-        if callable(to_pyarrow):
-            resolved = to_pyarrow()
-            if isinstance(resolved, pa.Table):
-                table = resolved
-            else:
-                table = pa.Table.from_batches(table.to_batches())
-        else:
-            table = pa.Table.from_batches(table.to_batches())
+    table = to_arrow_table(request.data)
     payload = ipc_bytes(cast("pa.Table", table))
-    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
     storage_payload = list(storage.items()) if storage else None
     constraints_payload = (
         [str(item) for item in request.extra_constraints if str(item).strip()]
@@ -2234,24 +2197,6 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     if isinstance(result, Sequence) and not isinstance(result, (str, bytes, bytearray)):
         return [str(item) for item in result]
     return [str(result)]
-
-
-def _coerce_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
-    if isinstance(value, RecordBatchReaderLike):
-        return value.read_all()
-    return value
-
-
-def _log_storage_dict(
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
-) -> dict[str, str] | None:
-    merged: dict[str, str] = {}
-    if storage_options:
-        merged.update({str(key): str(value) for key, value in storage_options.items()})
-    if log_storage_options:
-        merged.update({str(key): str(value) for key, value in log_storage_options.items()})
-    return merged or None
 
 
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
@@ -2530,7 +2475,7 @@ def _delta_cdf_table_provider(
     log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
 ) -> DeltaCdfProviderBundle | None:
-    storage = _log_storage_dict(storage_options, log_storage_options)
+    storage = merged_storage_options(storage_options, log_storage_options)
     try:
         from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
 

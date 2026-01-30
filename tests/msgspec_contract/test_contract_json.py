@@ -94,7 +94,7 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         rulepack_hash=None,
         information_schema_msgpack=dumps_msgpack({"tables": []}),
         information_schema_hash="info-hash",
-        substrait_msgpack=None,
+        substrait_msgpack=dumps_msgpack(b"substrait"),
         logical_plan_proto_msgpack=None,
         optimized_plan_proto_msgpack=None,
         execution_plan_proto_msgpack=None,

@@ -10,17 +10,25 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
+from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow_interop import RecordBatchReader, RecordBatchReaderLike, TableLike
-from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.param_tables import scalar_param_signature
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.plan_execution import (
+    PlanExecutionOptions,
+    PlanScanOverrides,
+)
+from datafusion_engine.plan_execution import (
+    execute_plan_bundle as execute_plan_bundle_helper,
+)
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
+    record_schema_snapshots_for_profile,
 )
 from datafusion_engine.streaming_executor import StreamingExecutionResult
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
@@ -29,6 +37,7 @@ from engine.plan_product import PlanProduct
 from obs.otel import OtelBootstrapOptions, configure_otel
 from storage.deltalake import DeltaWriteResult
 from utils.uuid_factory import uuid7_hex
+from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import SessionRuntime
@@ -62,7 +71,7 @@ def _cache_event_reporter(
 
 
 @dataclass(frozen=True)
-class CachePolicy:
+class CachePolicy(FingerprintableConfig):
     """Cache policy for DataFusion materialization surfaces."""
 
     enabled: bool
@@ -70,6 +79,18 @@ class CachePolicy:
     writer_strategy: str
     param_mode: str
     param_signature: str | None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        return {
+            "enabled": self.enabled,
+            "reason": self.reason,
+            "writer_strategy": self.writer_strategy,
+            "param_mode": self.param_mode,
+            "param_signature": self.param_signature,
+        }
+
+    def fingerprint(self) -> str:
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def _param_binding_state(params: Mapping[str, object] | None) -> tuple[str, str | None]:
@@ -288,13 +309,20 @@ def build_view_product(
     view_artifact = (
         profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
     )
-    facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
-    df = facade.execute_plan_bundle(
+    execution = execute_plan_bundle_helper(
+        session,
         bundle,
-        view_name=view_name,
-        scan_units=scan_units,
-        scan_keys=scan_keys,
-    ).require_dataframe()
+        options=PlanExecutionOptions(
+            runtime_profile=profile,
+            view_name=view_name,
+            scan=PlanScanOverrides(
+                scan_units=scan_units,
+                scan_keys=scan_keys,
+                apply_scan_overrides=False,
+            ),
+        ),
+    )
+    df = execution.execution_result.require_dataframe()
     if prefer_reader:
         stream = cast("RecordBatchReaderLike", StreamingExecutionResult(df).to_arrow_stream())
         schema = stream.schema
@@ -402,36 +430,41 @@ def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
         record_events(runtime_profile, "diskcache_stats_v1", events)
 
 
-def _coerce_reader(
+def _resolve_reader(
     data: TableLike | RecordBatchReaderLike | Iterable[pa.RecordBatch],
 ) -> tuple[RecordBatchReaderLike | None, int | None]:
-    if isinstance(data, pa.Table):
-        table = cast("pa.Table", data)
-        return (
-            pa.RecordBatchReader.from_batches(table.schema, table.to_batches()),
-            int(table.num_rows),
-        )
-    if isinstance(data, RecordBatchReader):
-        return cast("RecordBatchReaderLike", data), None
-    if isinstance(data, Sequence):
-        batches = list(cast("Sequence[pa.RecordBatch]", data))
-        if not batches:
-            return None, 0
-        rows = sum(batch.num_rows for batch in batches)
-        reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
-        return reader, rows
-    iterator = iter(cast("Iterable[pa.RecordBatch]", data))
-    try:
-        first = next(iterator)
-    except StopIteration:
-        return None, 0
+    reader: RecordBatchReaderLike | None = None
+    rows: int | None = None
+    if isinstance(data, TableLike):
+        reader = coerce_to_recordbatch_reader(data)
+        rows = int(data.num_rows)
+    elif isinstance(data, pa.RecordBatch):
+        record_batch = cast("pa.RecordBatch", data)
+        reader = coerce_to_recordbatch_reader(record_batch)
+        rows = int(record_batch.num_rows)
+    elif isinstance(data, RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", data)
+    elif isinstance(data, Sequence):
+        batches = [batch for batch in data if isinstance(batch, pa.RecordBatch)]
+        if batches:
+            reader = coerce_to_recordbatch_reader(batches)
+            rows = sum(batch.num_rows for batch in batches)
+        else:
+            rows = 0
+    else:
+        iterator = iter(cast("Iterable[pa.RecordBatch]", data))
+        try:
+            first = next(iterator)
+        except StopIteration:
+            rows = 0
+        else:
 
-    def _iter_batches() -> Iterable[pa.RecordBatch]:
-        yield first
-        yield from iterator
+            def _iter_batches() -> Iterable[pa.RecordBatch]:
+                yield first
+                yield from iterator
 
-    reader = pa.RecordBatchReader.from_batches(first.schema, _iter_batches())
-    return reader, None
+            reader = pa.RecordBatchReader.from_batches(first.schema, _iter_batches())
+    return reader, rows
 
 
 def write_extract_outputs(
@@ -448,11 +481,11 @@ def write_extract_outputs(
         Raised when the DataFusion runtime profile is missing, the output yields no
         rows, or the location format is unsupported.
     """
-    runtime_profile.record_schema_snapshots()
-    location = resolve_dataset_location(name, runtime_profile=runtime_profile)
+    record_schema_snapshots_for_profile(runtime_profile)
+    location = runtime_profile.dataset_location(name)
     if location is None:
         return
-    reader, rows = _coerce_reader(data)
+    reader, rows = _resolve_reader(data)
     if reader is None:
         msg = f"Extract output {name!r} yielded no rows."
         raise ValueError(msg)

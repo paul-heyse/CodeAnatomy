@@ -2,18 +2,43 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_interop import TableLike
 from datafusion_engine.arrow_schema.dictionary import normalize_dictionaries
 
 
 @dataclass(frozen=True)
-class ChunkPolicy:
+class ChunkPolicy(FingerprintableConfig):
     """Normalization policy for dictionary encoding and chunking."""
 
     unify_dictionaries: bool = True
     combine_chunks: bool = True
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the chunk policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing chunk policy settings.
+        """
+        return {
+            "unify_dictionaries": self.unify_dictionaries,
+            "combine_chunks": self.combine_chunks,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the chunk policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def apply(self, table: TableLike) -> TableLike:
         """Apply dictionary unification and chunk combination.

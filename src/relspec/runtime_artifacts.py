@@ -414,7 +414,7 @@ class RuntimeArtifacts:
         if cache is None:
             return None
         cached = cache.get(self._schema_cache_key(name), default=None, retry=True)
-        schema = _coerce_schema_like(cached)
+        schema = _resolve_schema_like(cached)
         if schema is None:
             return None
         self.schema_cache[name] = schema
@@ -524,7 +524,7 @@ class RuntimeArtifactsSummary:
     materialized_names: tuple[str, ...] = ()
 
 
-def _coerce_schema_like(value: object) -> SchemaLike | None:
+def _resolve_schema_like(value: object) -> SchemaLike | None:
     if value is None:
         return None
     if not _looks_like_schema(value):

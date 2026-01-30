@@ -136,6 +136,8 @@ class WriteRecord:
     rows_written: int | None = None
     bytes_written: int | None = None
     partitions: int | None = None
+    sql: str | None = None
+    delta_features: Mapping[str, str] | None = None
 
 
 @dataclass
@@ -430,6 +432,10 @@ class DiagnosticsRecorder:
                 "bytes_written": record.bytes_written,
                 "partitions": record.partitions,
                 "duration_ms": record.duration_ms,
+                "sql": record.sql,
+                "delta_features": (
+                    dict(record.delta_features) if record.delta_features is not None else None
+                ),
                 "tags": self._context.tags,
             },
         )

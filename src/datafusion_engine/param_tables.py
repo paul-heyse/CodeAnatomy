@@ -14,6 +14,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_array_values
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from storage.ipc_utils import payload_hash
@@ -50,11 +51,34 @@ class ParamTableScope(Enum):
 
 
 @dataclass(frozen=True)
-class ParamTablePolicy:
+class ParamTablePolicy(FingerprintableConfig):
     """Policy controlling param table naming and registration."""
 
     scope: ParamTableScope = ParamTableScope.PER_RUN
     prefix: str = "p_"
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the param table policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing param table policy settings.
+        """
+        return {
+            "scope": self.scope.value,
+            "prefix": self.prefix,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the param table policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)

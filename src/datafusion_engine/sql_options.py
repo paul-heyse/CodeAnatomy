@@ -2,33 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
-
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-
-def _resolve_runtime_helper(
-    name: str,
-    *,
-    profile: DataFusionRuntimeProfile | None,
-    fallback: SQLOptions,
-) -> SQLOptions:
-    try:
-        module = importlib.import_module("datafusion_engine.runtime")
-    except ImportError:
-        return fallback
-    helper = getattr(module, name, None)
-    if callable(helper):
-        resolved = helper(profile)
-        if isinstance(resolved, SQLOptions):
-            return resolved
-    return fallback
 
 
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -44,14 +23,12 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
     SQLOptions
         SQL options for use with DataFusion contexts.
     """
-    return _resolve_runtime_helper(
-        "sql_options_for_profile",
-        profile=profile,
-        fallback=DataFusionSqlPolicy(
-            allow_ddl=True,
-            allow_dml=True,
-            allow_statements=True,
-        ).to_sql_options(),
+    _ = profile
+    return (
+        SQLOptions()
+        .with_allow_ddl(allow=True)
+        .with_allow_dml(allow=True)
+        .with_allow_statements(allow=True)
     )
 
 
@@ -68,14 +45,12 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     SQLOptions
         SQL options for statement execution.
     """
-    return _resolve_runtime_helper(
-        "statement_sql_options_for_profile",
-        profile=profile,
-        fallback=DataFusionSqlPolicy(
-            allow_ddl=True,
-            allow_dml=True,
-            allow_statements=True,
-        ).to_sql_options(),
+    _ = profile
+    return (
+        SQLOptions()
+        .with_allow_ddl(allow=True)
+        .with_allow_dml(allow=True)
+        .with_allow_statements(allow=True)
     )
 
 
@@ -90,7 +65,7 @@ def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions
     Returns
     -------
     SQLOptions
-        SQL options with mutating statements disabled.
+        SQL options for planning contexts.
     """
     return sql_options_for_profile(profile)
 

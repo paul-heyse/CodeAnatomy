@@ -24,7 +24,7 @@ def _value_type_for_key(key: str, prop_specs: Mapping[str, PropSpec]) -> PropVal
     return spec.type
 
 
-def _coerce_prop_field(
+def _resolve_prop_field(
     key: str,
     source: PropFieldInput,
     *,
@@ -60,7 +60,7 @@ def _fields_from_source_map(
 ) -> tuple[PropFieldSpec, ...]:
     fields: list[PropFieldSpec] = []
     for key, source in source_map.items():
-        field = _coerce_prop_field(key, source, prop_specs=prop_specs)
+        field = _resolve_prop_field(key, source, prop_specs=prop_specs)
         _validate_source_column(field, source_columns=source_columns)
         fields.append(field)
     return tuple(fields)

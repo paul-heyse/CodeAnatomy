@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
@@ -30,6 +30,11 @@ from datafusion_engine.arrow_interop import (
     SchemaLike,
     TableLike,
 )
+from datafusion_engine.arrow_schema._type_protocols import (
+    ListTypeProtocol,
+    MapTypeProtocol,
+    StructTypeProtocol,
+)
 from datafusion_engine.arrow_schema.dictionary import normalize_dictionaries
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy, EncodingSpec
 from datafusion_engine.arrow_schema.encoding_metadata import (
@@ -47,6 +52,8 @@ from datafusion_engine.arrow_schema.metadata_codec import (
 from datafusion_engine.arrow_schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
+from datafusion_engine.schema_spec_protocol import ArrowFieldSpec
+from datafusion_engine.schema_spec_protocol import TableSchemaSpec as TableSchemaProtocol
 from serde_msgspec import dumps_msgpack, loads_msgpack
 from utils.hashing import hash_msgpack_canonical
 
@@ -89,16 +96,6 @@ _INDEX_TYPES: Mapping[str, pa.DataType] = {
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
 
 
-class _ListType(Protocol):
-    value_field: FieldLike
-
-
-class _MapType(Protocol):
-    key_field: FieldLike
-    item_field: FieldLike
-    keys_sorted: bool
-
-
 @dataclass(frozen=True)
 class SchemaMetadataSpec:
     """Schema metadata mutation policy."""
@@ -126,7 +123,7 @@ class SchemaMetadataSpec:
         prefix: str,
     ) -> FieldLike:
         children: list[FieldLike] = []
-        struct_type = cast("_StructType", field.type)
+        struct_type = cast("StructTypeProtocol", field.type)
         for child in struct_type:
             child_prefix = f"{prefix}.{child.name}"
             updated_child = SchemaMetadataSpec._apply_nested_metadata(
@@ -154,7 +151,7 @@ class SchemaMetadataSpec:
         prefix: str,
         list_factory: Callable[[FieldLike], DataTypeLike],
     ) -> FieldLike:
-        list_type = cast("_ListType", field.type)
+        list_type = cast("ListTypeProtocol", field.type)
         value_field = list_type.value_field
         child_prefix = f"{prefix}.{value_field.name}"
         updated_child = SchemaMetadataSpec._apply_nested_metadata(
@@ -176,7 +173,7 @@ class SchemaMetadataSpec:
         nested: dict[str, dict[bytes, bytes]],
         prefix: str,
     ) -> FieldLike:
-        map_type = cast("_MapType", field.type)
+        map_type = cast("MapTypeProtocol", field.type)
         key_field = map_type.key_field
         item_field = map_type.item_field
 
@@ -272,43 +269,6 @@ class SchemaMetadataSpec:
         if schema.metadata is None:
             return updated
         return updated.with_metadata(schema.metadata)
-
-
-class _StructType(Protocol):
-    def __iter__(self) -> Iterator[FieldLike]: ...
-
-
-class _ArrowFieldSpec(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def dtype(self) -> DataTypeLike: ...
-
-    @property
-    def nullable(self) -> bool: ...
-
-    @property
-    def metadata(self) -> Mapping[str, str]: ...
-
-    @property
-    def encoding(self) -> str | None: ...
-
-
-class _TableSchemaSpec(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def fields(self) -> Sequence[_ArrowFieldSpec]: ...
-
-    @property
-    def key_fields(self) -> Sequence[str]: ...
-
-    @property
-    def required_non_null(self) -> Sequence[str]: ...
-
-    def to_arrow_schema(self) -> SchemaLike: ...
 
 
 def options_hash(options: object) -> str:
@@ -589,7 +549,7 @@ def _add_nested_metadata(field: FieldLike, field_meta: dict[str, dict[bytes, byt
         return
 
     if patypes.is_map(field.type):
-        map_type = cast("_MapType", field.type)
+        map_type = cast("MapTypeProtocol", field.type)
         key_field = map_type.key_field
         item_field = map_type.item_field
         if key_field.metadata is not None:
@@ -604,7 +564,7 @@ def _add_nested_metadata(field: FieldLike, field_meta: dict[str, dict[bytes, byt
         or patypes.is_list_view(field.type)
         or patypes.is_large_list_view(field.type)
     ):
-        list_type = cast("_ListType", field.type)
+        list_type = cast("ListTypeProtocol", field.type)
         value_field = list_type.value_field
         if value_field.metadata is not None:
             field_meta[f"{field.name}.{value_field.name}"] = dict(value_field.metadata)
@@ -869,14 +829,14 @@ def _ordered_from_meta(meta: Mapping[bytes, bytes] | None) -> bool:
     return raw.strip().lower() in _ORDERED_TRUE
 
 
-def _encoding_hint(field: _ArrowFieldSpec) -> str | None:
+def _encoding_hint(field: ArrowFieldSpec) -> str | None:
     if field.encoding is not None:
         return field.encoding
     return field.metadata.get(ENCODING_META)
 
 
 def _encoding_info_from_field(
-    field: _ArrowFieldSpec,
+    field: ArrowFieldSpec,
 ) -> tuple[str, DataTypeLike | None, bool | None] | None:
     hint = _encoding_hint(field)
     if hint != ENCODING_DICTIONARY:
@@ -926,7 +886,7 @@ def _build_encoding_policy(
     )
 
 
-def encoding_policy_from_spec(table_spec: _TableSchemaSpec) -> EncodingPolicy:
+def encoding_policy_from_spec(table_spec: TableSchemaProtocol) -> EncodingPolicy:
     """Return an encoding policy derived from a TableSchemaSpec.
 
     Returns
@@ -942,7 +902,7 @@ def encoding_policy_from_spec(table_spec: _TableSchemaSpec) -> EncodingPolicy:
     return _build_encoding_policy(entries)
 
 
-def encoding_policy_from_fields(fields: Sequence[_ArrowFieldSpec]) -> EncodingPolicy:
+def encoding_policy_from_fields(fields: Sequence[ArrowFieldSpec]) -> EncodingPolicy:
     """Return an encoding policy derived from ArrowFieldSpec values.
 
     Returns

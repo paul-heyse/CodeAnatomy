@@ -377,6 +377,9 @@ def _normalize_maintenance_policy(row: DatasetRow) -> DeltaMaintenancePolicy:
         z_order_cols=z_order_cols,
         z_order_when=z_order_when,
         vacuum_on_write=False,
+        enable_deletion_vectors=True,
+        enable_v2_checkpoints=True,
+        enable_log_compaction=True,
     )
 
 

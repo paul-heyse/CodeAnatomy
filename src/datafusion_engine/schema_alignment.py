@@ -105,6 +105,40 @@ def align_table(
     return aligned
 
 
+def align_table_to_contract(
+    table: TableLike,
+    *,
+    contract: object,
+    safe_cast: bool = True,
+    on_error: CastErrorPolicy = "unsafe",
+) -> TableLike:
+    """Align a table to a SchemaContract.
+
+    Returns
+    -------
+    TableLike
+        Table aligned to the contract schema.
+
+    Raises
+    ------
+    TypeError
+        Raised when the contract is not a SchemaContract.
+    """
+    from datafusion_engine.schema_contracts import EvolutionPolicy, SchemaContract
+
+    if not isinstance(contract, SchemaContract):
+        msg = "align_table_to_contract requires a SchemaContract."
+        raise TypeError(msg)
+    keep_extra = contract.evolution_policy != EvolutionPolicy.STRICT
+    return align_table(
+        table,
+        schema=contract.to_arrow_schema(),
+        safe_cast=safe_cast,
+        keep_extra_columns=keep_extra,
+        on_error=on_error,
+    )
+
+
 @dataclass(frozen=True)
 class SchemaTransform:
     """Schema alignment transform using DataFusion alignment."""
@@ -247,6 +281,7 @@ __all__ = [
     "SchemaEvolutionSpec",
     "SchemaTransform",
     "align_table",
+    "align_table_to_contract",
     "align_to_schema",
     "unify_schemas_core",
 ]

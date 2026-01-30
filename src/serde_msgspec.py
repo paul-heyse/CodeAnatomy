@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -197,6 +197,52 @@ def json_default(obj: object) -> object:
     if isinstance(obj, msgspec.Struct):
         return msgspec.to_builtins(obj)
     return _json_enc_hook(obj)
+
+
+def json_schema(struct: type[msgspec.Struct]) -> Mapping[str, object]:
+    """Return a JSON Schema 2020-12 payload for a msgspec struct.
+
+    Parameters
+    ----------
+    struct
+        msgspec struct type.
+
+    Returns
+    -------
+    Mapping[str, object]
+        JSON Schema payload.
+    """
+    return cast("Mapping[str, object]", msgspec.json.schema(struct))
+
+
+def export_json_schemas(
+    structs: Sequence[type[msgspec.Struct]],
+    *,
+    output_dir: Path,
+) -> tuple[Path, ...]:
+    """Export JSON Schema payloads for msgspec structs.
+
+    Parameters
+    ----------
+    structs
+        Sequence of msgspec struct types to export.
+    output_dir
+        Directory to write schema files into.
+
+    Returns
+    -------
+    tuple[Path, ...]
+        Paths to the generated schema files.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for struct in structs:
+        schema_payload = json_schema(struct)
+        payload_bytes = msgspec.json.encode(schema_payload)
+        target = output_dir / f"{struct.__name__}.schema.json"
+        target.write_text(payload_bytes.decode("utf-8"))
+        paths.append(target)
+    return tuple(paths)
 
 
 def validation_error_payload(exc: msgspec.ValidationError) -> dict[str, str]:

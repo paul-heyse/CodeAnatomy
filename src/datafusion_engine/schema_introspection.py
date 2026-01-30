@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -32,12 +33,13 @@ from datafusion_engine.sql_options import (
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from serde_msgspec import to_builtins
-from utils.hashing import CacheKeyBuilder, hash_msgpack_canonical
+from utils.hashing import CacheKeyBuilder, hash_msgpack_canonical, hash_sha256_hex
 
 SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
 
 if TYPE_CHECKING:
     from datafusion_engine.introspection import IntrospectionCache, IntrospectionSnapshot
+    from datafusion_engine.schema_contracts import SchemaContract
 
 
 def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
@@ -72,6 +74,24 @@ def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
     mapping = introspector.schema_map()
     wrapped: SchemaMapping = {"default": {"default": mapping}}
     return schema_map_fingerprint_from_mapping(wrapped)
+
+
+def schema_contract_from_table(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+) -> SchemaContract:
+    """Return a SchemaContract derived from a DataFusion table schema.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the catalog schema.
+    """
+    from datafusion_engine.schema_contracts import SchemaContract
+
+    schema = schema_from_table(ctx, table_name)
+    return SchemaContract.from_arrow_schema(table_name, schema)
 
 
 if TYPE_CHECKING:
@@ -186,6 +206,78 @@ def _constraint_rows_from_snapshot(
                 for entry in usage
             ]
         )
+    return rows
+
+
+def _constraint_name(
+    table_name: str,
+    *,
+    constraint: str,
+    index: int,
+) -> str:
+    digest = hash_sha256_hex(constraint.encode("utf-8"))[:8]
+    return f"{table_name}_constraint_{index}_{digest}"
+
+
+def _parse_constraint_columns(constraint: str) -> tuple[str, ...]:
+    match = re.search(r"\((.*?)\)", constraint)
+    if match is None:
+        return ()
+    raw = match.group(1)
+    return tuple(token.strip().strip('"') for token in raw.split(",") if token.strip().strip('"'))
+
+
+def _constraint_type_and_columns(constraint: str) -> tuple[str, tuple[str, ...]]:
+    normalized = constraint.strip()
+    if not normalized:
+        return "CHECK", ()
+    upper = normalized.upper()
+    if upper.startswith("PRIMARY KEY"):
+        return "PRIMARY KEY", _parse_constraint_columns(normalized)
+    if upper.startswith("UNIQUE"):
+        return "UNIQUE", _parse_constraint_columns(normalized)
+    if upper.startswith("CHECK"):
+        return "CHECK", ()
+    return "CHECK", ()
+
+
+def _constraint_rows_from_metadata(
+    *,
+    table_name: str,
+    metadata_constraints: Sequence[str],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, constraint in enumerate(metadata_constraints):
+        normalized = constraint.strip()
+        if not normalized:
+            continue
+        constraint_type, columns = _constraint_type_and_columns(normalized)
+        constraint_name = _constraint_name(table_name, constraint=normalized, index=index)
+        if columns:
+            for position, column in enumerate(columns, start=1):
+                rows.append(
+                    {
+                        "table_catalog": None,
+                        "table_schema": None,
+                        "table_name": table_name,
+                        "constraint_name": constraint_name,
+                        "constraint_type": constraint_type,
+                        "column_name": column,
+                        "ordinal_position": position,
+                    }
+                )
+        else:
+            rows.append(
+                {
+                    "table_catalog": None,
+                    "table_schema": None,
+                    "table_name": table_name,
+                    "constraint_name": constraint_name,
+                    "constraint_type": constraint_type,
+                    "column_name": None,
+                    "ordinal_position": None,
+                }
+            )
     return rows
 
 
@@ -514,7 +606,33 @@ def table_constraint_rows(
         Rows including constraint type and column names where available.
     """
     snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    return _constraint_rows_from_snapshot(snapshot, table_name=table_name)
+    rows = _constraint_rows_from_snapshot(snapshot, table_name=table_name)
+    metadata = table_provider_metadata(id(ctx), table_name=table_name)
+    if metadata is None or not metadata.constraints:
+        return rows
+    extra_rows = _constraint_rows_from_metadata(
+        table_name=table_name,
+        metadata_constraints=metadata.constraints,
+    )
+    if not rows:
+        return extra_rows
+    existing = {
+        (
+            row.get("constraint_type"),
+            row.get("constraint_name"),
+            row.get("column_name"),
+        )
+        for row in rows
+    }
+    for row in extra_rows:
+        key = (
+            row.get("constraint_type"),
+            row.get("constraint_name"),
+            row.get("column_name"),
+        )
+        if key not in existing:
+            rows.append(row)
+    return rows
 
 
 def constraint_rows(
@@ -933,6 +1051,10 @@ class SchemaIntrospector:
             if name is None or default is None:
                 continue
             defaults[str(name)] = default
+        metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+        if metadata is not None and metadata.default_values:
+            for name, value in metadata.default_values.items():
+                defaults.setdefault(name, value)
         return defaults
 
     def table_column_names(self, table_name: str) -> set[str]:
@@ -1128,6 +1250,7 @@ __all__ = [
     "find_struct_field_keys",
     "parameters_snapshot_table",
     "routines_snapshot_table",
+    "schema_contract_from_table",
     "schema_from_table",
     "tables_snapshot_table",
 ]

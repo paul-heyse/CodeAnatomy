@@ -34,7 +34,7 @@ _SAMPLING_PARAM_NAMES = (
 )
 
 
-def _coerce_sampling_args(
+def _parse_sampling_args(
     args: tuple[object, ...],
     kwargs: Mapping[str, object],
 ) -> _SamplingArgs:
@@ -89,7 +89,7 @@ class SamplingRuleSampler(Sampler):
         SamplingResult
             Sampling decision with a stamped sampling rule attribute.
         """
-        sampling_args = _coerce_sampling_args(args, kwargs)
+        sampling_args = _parse_sampling_args(args, kwargs)
         result = self._delegate.should_sample(
             parent_context=sampling_args.parent_context,
             trace_id=sampling_args.trace_id,

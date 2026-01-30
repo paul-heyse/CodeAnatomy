@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING
 _MODULE_NAMES: tuple[str, ...] = (
     "inputs",
     "dataloaders",
+    "io_contracts",
     "params",
     "execution_plan",
+    "subdags",
     "task_execution",
     "column_features",
     "outputs",
@@ -23,8 +25,10 @@ if TYPE_CHECKING:
         dataloaders,
         execution_plan,
         inputs,
+        io_contracts,
         outputs,
         params,
+        subdags,
         task_execution,
     )
 
@@ -80,8 +84,10 @@ __all__ = [
     "dataloaders",
     "execution_plan",
     "inputs",
+    "io_contracts",
     "load_all_modules",
     "outputs",
     "params",
+    "subdags",
     "task_execution",
 ]

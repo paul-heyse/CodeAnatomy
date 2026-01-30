@@ -8,17 +8,14 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-from hamilton.function_modifiers import cache, check_output, extract_fields, tag
+from hamilton.function_modifiers import cache, check_output, extract_fields
 
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.modules import task_execution
 from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
-from relspec.execution_plan import (
-    ExecutionPlan,
-    downstream_task_closure,
-    upstream_task_closure,
-)
+from relspec.execution_plan import ExecutionPlan
 from relspec.graph_edge_validation import validate_graph_edges
 
 if TYPE_CHECKING:
@@ -27,8 +24,6 @@ if TYPE_CHECKING:
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
     from incremental.plan_fingerprints import PlanFingerprintSnapshot
-    from incremental.types import IncrementalConfig
-    from relspec.incremental import IncrementalDiff
     from relspec.rustworkx_graph import TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule
     from relspec.schedule_events import TaskScheduleMetadata
@@ -39,8 +34,6 @@ else:
     ScanUnit = object
     ViewNode = object
     PlanFingerprintSnapshot = object
-    IncrementalConfig = object
-    IncrementalDiff = object
     TaskGraph = object
     TaskSchedule = object
     TaskScheduleMetadata = object
@@ -53,7 +46,6 @@ class PlanModuleOptions:
 
     module_name: str = "hamilton_pipeline.generated_plan"
     record_evidence_artifacts: bool = True
-    record_incremental_artifacts: bool = True
 
 
 def build_execution_plan_module(
@@ -123,13 +115,12 @@ def _plan_node_functions(
         ("bottom_level_costs", _bottom_level_costs_node()),
         ("dependency_map", _dependency_map_node()),
         ("plan_active_task_names", _plan_active_task_names_node()),
-        ("incremental_plan_diff", _incremental_plan_diff_node(options)),
         ("active_task_names", _active_task_names_node()),
     )
 
 
 def _execution_plan_node(plan: ExecutionPlan) -> object:
-    @tag(layer="plan", artifact="execution_plan", kind="object")
+    @apply_tag(TagPolicy(layer="plan", kind="object", artifact="execution_plan"))
     def execution_plan() -> ExecutionPlan:
         return plan
 
@@ -137,7 +128,7 @@ def _execution_plan_node(plan: ExecutionPlan) -> object:
 
 
 def _view_nodes_node() -> object:
-    @tag(layer="plan", artifact="view_nodes", kind="catalog")
+    @apply_tag(TagPolicy(layer="plan", kind="catalog", artifact="view_nodes"))
     def view_nodes(execution_plan: ExecutionPlan) -> tuple[ViewNode, ...]:
         return execution_plan.view_nodes
 
@@ -145,7 +136,7 @@ def _view_nodes_node() -> object:
 
 
 def _plan_bundles_by_task_node() -> object:
-    @tag(layer="plan", artifact="plan_bundles_by_task", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_bundles_by_task"))
     def plan_bundles_by_task(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, DataFusionPlanBundle]:
@@ -160,7 +151,7 @@ def _plan_bundles_by_task_node() -> object:
 
 
 def _dataset_specs_node() -> object:
-    @tag(layer="plan", artifact="dataset_specs", kind="catalog")
+    @apply_tag(TagPolicy(layer="plan", kind="catalog", artifact="dataset_specs"))
     def dataset_specs(execution_plan: ExecutionPlan) -> tuple[DatasetSpec, ...]:
         mapping = execution_plan.dataset_specs
         return tuple(mapping[name] for name in sorted(mapping))
@@ -169,7 +160,7 @@ def _dataset_specs_node() -> object:
 
 
 def _plan_scan_units_node() -> object:
-    @tag(layer="plan", artifact="plan_scan_units", kind="catalog")
+    @apply_tag(TagPolicy(layer="plan", kind="catalog", artifact="plan_scan_units"))
     def plan_scan_units(execution_plan: ExecutionPlan) -> tuple[ScanUnit, ...]:
         return execution_plan.scan_units
 
@@ -177,7 +168,7 @@ def _plan_scan_units_node() -> object:
 
 
 def _plan_scan_keys_by_task_node() -> object:
-    @tag(layer="plan", artifact="plan_scan_keys_by_task", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_scan_keys_by_task"))
     def plan_scan_keys_by_task(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, tuple[str, ...]]:
@@ -187,7 +178,7 @@ def _plan_scan_keys_by_task_node() -> object:
 
 
 def _plan_scan_units_by_task_name_node() -> object:
-    @tag(layer="plan", artifact="plan_scan_units_by_task_name", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_scan_units_by_task_name"))
     def plan_scan_units_by_task_name(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, ScanUnit]:
@@ -197,7 +188,7 @@ def _plan_scan_units_by_task_name_node() -> object:
 
 
 def _plan_context_node() -> object:
-    @tag(layer="plan", artifact="plan_context", kind="context")
+    @apply_tag(TagPolicy(layer="plan", kind="context", artifact="plan_context"))
     def plan_context(
         plan_signature: str,
         active_task_names: frozenset[str],
@@ -215,7 +206,7 @@ def _plan_context_node() -> object:
 
 
 def _task_graph_node() -> object:
-    @tag(layer="plan", artifact="task_graph", kind="graph")
+    @apply_tag(TagPolicy(layer="plan", kind="graph", artifact="task_graph"))
     def task_graph(execution_plan: ExecutionPlan) -> TaskGraph:
         return execution_plan.task_graph
 
@@ -223,7 +214,7 @@ def _task_graph_node() -> object:
 
 
 def _evidence_catalog_node(options: PlanModuleOptions) -> object:
-    @tag(layer="plan", artifact="evidence_catalog", kind="catalog")
+    @apply_tag(TagPolicy(layer="plan", kind="catalog", artifact="evidence_catalog"))
     def evidence_catalog(
         execution_plan: ExecutionPlan,
         runtime_profile_spec: RuntimeProfileSpec,
@@ -241,7 +232,7 @@ def _evidence_catalog_node(options: PlanModuleOptions) -> object:
 
 def _plan_signature_node() -> object:
     @cache(format="pickle", behavior="recompute")
-    @tag(layer="plan", artifact="plan_signature", kind="scalar")
+    @apply_tag(TagPolicy(layer="plan", kind="scalar", artifact="plan_signature"))
     def plan_signature(plan_signature_value: str) -> str:
         return plan_signature_value
 
@@ -250,7 +241,7 @@ def _plan_signature_node() -> object:
 
 def _plan_signature_value_node(plan_signature: str) -> object:
     @cache(format="pickle", behavior="recompute")
-    @tag(layer="plan", artifact="plan_signature_value", kind="scalar")
+    @apply_tag(TagPolicy(layer="plan", kind="scalar", artifact="plan_signature_value"))
     def plan_signature_value() -> str:
         return plan_signature
 
@@ -258,7 +249,7 @@ def _plan_signature_value_node(plan_signature: str) -> object:
 
 
 def _plan_artifacts_node() -> object:
-    @tag(layer="plan", artifact="plan_artifacts", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_artifacts"))
     @check_output(data_type=dict, importance="fail")
     @extract_fields(
         {
@@ -327,7 +318,7 @@ def _plan_artifacts_node() -> object:
 
 
 def _plan_artifact_ids_node() -> object:
-    @tag(layer="plan", artifact="plan_artifact_ids", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_artifact_ids"))
     @check_output(data_type=Mapping, importance="fail")
     def plan_artifact_ids(
         execution_plan: ExecutionPlan,
@@ -342,7 +333,7 @@ def _plan_artifact_ids_node() -> object:
 
 
 def _task_schedule_node() -> object:
-    @tag(layer="plan", artifact="task_schedule", kind="schedule")
+    @apply_tag(TagPolicy(layer="plan", kind="schedule", artifact="task_schedule"))
     def task_schedule(execution_plan: ExecutionPlan) -> TaskSchedule:
         return execution_plan.task_schedule
 
@@ -350,7 +341,7 @@ def _task_schedule_node() -> object:
 
 
 def _task_generations_node() -> object:
-    @tag(layer="plan", artifact="task_generations", kind="schedule")
+    @apply_tag(TagPolicy(layer="plan", kind="schedule", artifact="task_generations"))
     def task_generations(execution_plan: ExecutionPlan) -> tuple[tuple[str, ...], ...]:
         return execution_plan.task_schedule.generations
 
@@ -358,7 +349,7 @@ def _task_generations_node() -> object:
 
 
 def _schedule_metadata_node() -> object:
-    @tag(layer="plan", artifact="schedule_metadata", kind="schedule")
+    @apply_tag(TagPolicy(layer="plan", kind="schedule", artifact="schedule_metadata"))
     def schedule_metadata(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, TaskScheduleMetadata]:
@@ -368,7 +359,7 @@ def _schedule_metadata_node() -> object:
 
 
 def _plan_fingerprints_node() -> object:
-    @tag(layer="plan", artifact="plan_fingerprints", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_fingerprints"))
     def plan_fingerprints(execution_plan: ExecutionPlan) -> Mapping[str, str]:
         return execution_plan.plan_fingerprints
 
@@ -376,7 +367,7 @@ def _plan_fingerprints_node() -> object:
 
 
 def _plan_task_signatures_node() -> object:
-    @tag(layer="plan", artifact="plan_task_signatures", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_task_signatures"))
     def plan_task_signatures(execution_plan: ExecutionPlan) -> Mapping[str, str]:
         return execution_plan.plan_task_signatures
 
@@ -384,7 +375,7 @@ def _plan_task_signatures_node() -> object:
 
 
 def _plan_snapshots_node() -> object:
-    @tag(layer="plan", artifact="plan_snapshots", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_snapshots"))
     def plan_snapshots(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, PlanFingerprintSnapshot]:
@@ -394,7 +385,7 @@ def _plan_snapshots_node() -> object:
 
 
 def _bottom_level_costs_node() -> object:
-    @tag(layer="plan", artifact="bottom_level_costs", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="bottom_level_costs"))
     def bottom_level_costs(execution_plan: ExecutionPlan) -> Mapping[str, float]:
         return execution_plan.bottom_level_costs
 
@@ -402,7 +393,7 @@ def _bottom_level_costs_node() -> object:
 
 
 def _dependency_map_node() -> object:
-    @tag(layer="plan", artifact="dependency_map", kind="mapping")
+    @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="dependency_map"))
     def dependency_map(
         execution_plan: ExecutionPlan,
     ) -> Mapping[str, tuple[str, ...]]:
@@ -412,92 +403,17 @@ def _dependency_map_node() -> object:
 
 
 def _plan_active_task_names_node() -> object:
-    @tag(layer="plan", artifact="plan_active_task_names", kind="set")
+    @apply_tag(TagPolicy(layer="plan", kind="set", artifact="plan_active_task_names"))
     def plan_active_task_names(execution_plan: ExecutionPlan) -> frozenset[str]:
         return execution_plan.active_tasks
 
     return plan_active_task_names
 
 
-def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
-    @tag(layer="incremental", artifact="incremental_plan_diff", kind="mapping")
-    def incremental_plan_diff(
-        execution_plan: ExecutionPlan,
-        incremental_config: IncrementalConfig,
-        runtime_profile_spec: RuntimeProfileSpec,
-    ) -> IncrementalDiff | None:
-        if not incremental_config.enabled or incremental_config.state_dir is None:
-            return None
-        from incremental.delta_context import DeltaAccessContext
-        from incremental.plan_fingerprints import (
-            read_plan_snapshots,
-            write_plan_snapshots,
-        )
-        from incremental.runtime import IncrementalRuntime
-        from incremental.state_store import StateStore
-        from relspec.incremental import diff_plan_snapshots
-
-        runtime_profile = runtime_profile_spec.datafusion
-        runtime = IncrementalRuntime.build(
-            profile=runtime_profile,
-            determinism_tier=runtime_profile_spec.determinism_tier,
-        )
-        state_store = StateStore(root=incremental_config.state_dir)
-        context = DeltaAccessContext(runtime=runtime)
-        current = execution_plan.plan_snapshots
-        plan_state_dir = execution_plan.incremental_state_dir
-        config_state_dir = str(incremental_config.state_dir)
-        precomputed = execution_plan.incremental_diff
-        if precomputed is not None and plan_state_dir == config_state_dir:
-            diff = precomputed
-        else:
-            previous = read_plan_snapshots(state_store, context=context)
-            diff = diff_plan_snapshots(previous, current)
-        if options.record_incremental_artifacts:
-            _record_plan_diff(
-                diff,
-                runtime_profile=runtime_profile,
-                plan_signature=execution_plan.plan_signature,
-                total_tasks=len(current),
-            )
-        write_plan_snapshots(state_store, current, context=context)
-        return diff
-
-    return incremental_plan_diff
-
-
 def _active_task_names_node() -> object:
-    @tag(layer="plan", artifact="active_task_names", kind="set")
-    def active_task_names(
-        execution_plan: ExecutionPlan,
-        incremental_plan_diff: IncrementalDiff | None,
-    ) -> frozenset[str]:
-        active = set(execution_plan.active_tasks)
-        requested_anchor: set[str] = set()
-        if execution_plan.requested_task_names:
-            requested_anchor = upstream_task_closure(
-                execution_plan.task_graph,
-                execution_plan.requested_task_names,
-            )
-            requested_anchor &= active
-        diff = incremental_plan_diff
-        if diff is None:
-            return frozenset(active)
-        rebuild = set(diff.tasks_requiring_rebuild())
-        if not rebuild:
-            return frozenset(active | requested_anchor)
-        rebuild &= active
-        if not rebuild:
-            return frozenset(active | requested_anchor)
-        impacted = downstream_task_closure(execution_plan.task_graph, rebuild)
-        impacted &= active
-        if not impacted:
-            return frozenset(active | requested_anchor)
-        impacted_with_deps = upstream_task_closure(execution_plan.task_graph, impacted)
-        impacted_with_deps &= active
-        if requested_anchor:
-            impacted_with_deps |= requested_anchor
-        return frozenset(impacted_with_deps)
+    @apply_tag(TagPolicy(layer="plan", kind="set", artifact="active_task_names"))
+    def active_task_names(execution_plan: ExecutionPlan) -> frozenset[str]:
+        return execution_plan.active_tasks
 
     return active_task_names
 
@@ -544,48 +460,6 @@ def _record_udf_parity(profile: DataFusionRuntimeProfile) -> None:
     registry_snapshot = rust_udf_snapshot(session)
     report = udf_parity_report(session, snapshot=registry_snapshot)
     record_artifact(profile, "udf_parity_v1", report.payload())
-
-
-def _record_plan_diff(
-    diff: IncrementalDiff,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    plan_signature: str,
-    total_tasks: int,
-) -> None:
-    profile = runtime_profile
-    from datafusion_engine.diagnostics import record_artifact
-    from datafusion_engine.semantic_diff import ChangeCategory, RebuildPolicy
-
-    payload: dict[str, object] = {
-        "plan_signature": plan_signature,
-        "total_tasks": total_tasks,
-        "changed_tasks": list(diff.changed_tasks),
-        "added_tasks": list(diff.added_tasks),
-        "removed_tasks": list(diff.removed_tasks),
-        "unchanged_tasks": list(diff.unchanged_tasks),
-        "changed_count": len(diff.changed_tasks),
-        "added_count": len(diff.added_tasks),
-        "removed_count": len(diff.removed_tasks),
-        "unchanged_count": len(diff.unchanged_tasks),
-    }
-    if diff.semantic_changes:
-        payload["semantic_changes"] = [
-            {
-                "task_name": name,
-                "overall_category": change.overall_category.name,
-                "breaking": change.is_breaking(),
-                "rebuild_needed": change.requires_rebuild(RebuildPolicy.CONSERVATIVE),
-                "summary": change.summary(),
-                "change_categories": [
-                    item.category.name
-                    for item in change.changes
-                    if item.category != ChangeCategory.NONE
-                ],
-            }
-            for name, change in diff.semantic_changes.items()
-        ]
-    record_artifact(profile, "incremental_plan_diff_v2", payload)
 
 
 __all__ = ["PlanModuleOptions", "build_execution_plan_module"]

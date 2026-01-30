@@ -14,7 +14,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "GraphEdge": ("relspec.rustworkx_graph", "GraphEdge"),
     "GraphNode": ("relspec.rustworkx_graph", "GraphNode"),
     "GraphValidationSummary": ("relspec.graph_edge_validation", "GraphValidationSummary"),
-    "IncrementalDiff": ("relspec.incremental", "IncrementalDiff"),
     "TaskGraphSnapshot": ("relspec.rustworkx_graph", "TaskGraphSnapshot"),
     "TaskNode": ("relspec.rustworkx_graph", "TaskNode"),
     "TaskSchedule": ("relspec.rustworkx_schedule", "TaskSchedule"),
@@ -61,7 +60,6 @@ if TYPE_CHECKING:
     GraphEdge: Any
     GraphNode: Any
     GraphValidationSummary: Any
-    IncrementalDiff: Any
     TaskGraphSnapshot: Any
     TaskNode: Any
     TaskSchedule: Any
@@ -116,7 +114,6 @@ __all__ = (
     "GraphEdge",
     "GraphNode",
     "GraphValidationSummary",
-    "IncrementalDiff",
     "TaskGraph",
     "TaskGraphSnapshot",
     "TaskNode",

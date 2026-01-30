@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 
-from datafusion_engine.extract_template_specs import dataset_template_specs
-from datafusion_engine.extract_templates import expand_dataset_templates
+from datafusion_engine.extract_templates import dataset_template_specs, expand_dataset_templates
+from utils.value_coercion import raise_for_int
 
 
 @dataclass(frozen=True)
@@ -73,13 +73,6 @@ def _string_tuple(value: object | None, *, label: str) -> tuple[str, ...]:
     raise TypeError(msg)
 
 
-def _coerce_int(value: object | None, *, label: str) -> int:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    msg = f"{label} must be an int."
-    raise TypeError(msg)
-
-
 def _derived_specs(value: object | None) -> tuple[ExtractDerivedIdSpec, ...]:
     if not value:
         return ()
@@ -140,7 +133,7 @@ def _metadata_extra(value: object | None) -> dict[bytes, bytes]:
 def _metadata_from_record(record: Mapping[str, object]) -> ExtractMetadata:
     return ExtractMetadata(
         name=str(record.get("name")),
-        version=_coerce_int(record.get("version"), label="version"),
+        version=raise_for_int(record.get("version"), context="version"),
         bundles=_string_tuple(record.get("bundles"), label="bundles"),
         fields=_string_tuple(record.get("fields"), label="fields"),
         derived=_derived_specs(record.get("derived")),

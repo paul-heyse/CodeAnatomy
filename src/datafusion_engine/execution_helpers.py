@@ -41,15 +41,15 @@ if TYPE_CHECKING:
 
 def plan_fingerprint_from_bundle(
     *,
-    substrait_bytes: bytes | None,
+    substrait_bytes: bytes,
     optimized: object,
 ) -> str:
     """Compute plan fingerprint from DataFusion plan bundle data.
 
     Parameters
     ----------
-    substrait_bytes : bytes | None
-        Substrait serialization bytes (required).
+    substrait_bytes : bytes
+        Substrait serialization bytes.
     optimized : object
         Optimized logical plan (unused when Substrait is required).
 
@@ -57,15 +57,7 @@ def plan_fingerprint_from_bundle(
     -------
     str
         SHA256 fingerprint of the plan.
-
-    Raises
-    ------
-    ValueError
-        Raised when Substrait bytes are unavailable.
     """
-    if substrait_bytes is None:
-        msg = "Substrait bytes are required for plan fingerprinting."
-        raise ValueError(msg)
     _ = optimized
     return hash_sha256_hex(substrait_bytes)
 
@@ -122,7 +114,7 @@ def plan_bundle_cache_key(
     *,
     bundle: DataFusionPlanBundle,
     profile_hash: str,
-) -> PlanCacheKey | None:
+) -> PlanCacheKey:
     """Build plan cache key from DataFusion plan bundle.
 
     Parameters
@@ -134,11 +126,9 @@ def plan_bundle_cache_key(
 
     Returns
     -------
-    PlanCacheKey | None
-        Cache key based on plan bundle, or None if unavailable.
+    PlanCacheKey
+        Cache key based on plan bundle.
     """
-    if bundle.substrait_bytes is None:
-        return None
     substrait_hash = hash_sha256_hex(bundle.substrait_bytes)
     required_udfs_hash = hash_msgpack_canonical(tuple(sorted(bundle.required_udfs)))
     required_tags_hash = hash_msgpack_canonical(tuple(sorted(bundle.required_rewrite_tags)))
@@ -316,15 +306,13 @@ def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
     return ctx.create_dataframe_from_logical_plan(logical_plan)
 
 
-def rehydrate_plan_artifacts(
-    ctx: SessionContext, *, payload: Mapping[str, object]
-) -> DataFrame | None:
+def rehydrate_plan_artifacts(ctx: SessionContext, *, payload: Mapping[str, object]) -> DataFrame:
     """Rehydrate a DataFusion DataFrame from plan artifact payloads.
 
     Returns
     -------
-    datafusion.dataframe.DataFrame | None
-        DataFrame reconstructed from Substrait artifacts, or ``None`` when missing.
+    datafusion.dataframe.DataFrame
+        DataFrame reconstructed from Substrait artifacts.
 
     Raises
     ------
@@ -335,7 +323,8 @@ def rehydrate_plan_artifacts(
     """
     substrait_msgpack = payload.get("substrait_msgpack")
     if not substrait_msgpack:
-        return None
+        msg = "Substrait payload missing from plan artifacts."
+        raise ValueError(msg)
     if not isinstance(substrait_msgpack, (bytes, bytearray, memoryview)):
         msg = "Substrait payload must be msgpack bytes."
         raise TypeError(msg)

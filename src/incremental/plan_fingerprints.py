@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow_schema.schema_builders import (
+    plan_fingerprint_field,
+    task_name_field,
+    version_field,
+)
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.write_helpers import (
@@ -28,9 +33,9 @@ if TYPE_CHECKING:
 PLAN_FINGERPRINTS_VERSION = 5  # Incremented for runtime-aware task signatures
 _PLAN_FINGERPRINTS_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("task_name", pa.string(), nullable=False),
-        pa.field("plan_fingerprint", pa.string(), nullable=False),
+        version_field(),
+        task_name_field(),
+        plan_fingerprint_field(),
         pa.field("plan_task_signature", pa.string(), nullable=False),
     ]
 )
@@ -50,13 +55,10 @@ class PlanFingerprintSnapshot:
         SHA256 hash of Substrait bytes or optimized plan display.
     plan_task_signature : str
         Runtime-aware task signature used for incremental diffs.
-    substrait_bytes : bytes | None
-        Optional Substrait serialization for portable plan storage.
     """
 
     plan_fingerprint: str
     plan_task_signature: str = ""
-    substrait_bytes: bytes | None = None
 
 
 def _plan_fingerprints_path(state_store: StateStore) -> Path:

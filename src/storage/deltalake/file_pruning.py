@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -11,6 +11,7 @@ import pyarrow as pa
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.expr_udf_shims import list_extract, map_extract
 from datafusion_engine.session_helpers import temp_table
 
@@ -38,7 +39,7 @@ class StatsFilter:
 
 
 @dataclass(frozen=True)
-class FilePruningPolicy:
+class FilePruningPolicy(FingerprintableConfig):
     """File pruning policy with partition and statistics filters.
 
     Attributes
@@ -76,6 +77,49 @@ class FilePruningPolicy:
             True if partition or stats filters are present.
         """
         return bool(self.partition_filters) or bool(self.stats_filters)
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the file pruning policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing file pruning policy settings.
+        """
+        return {
+            "partition_filters": [
+                {
+                    "column": filter_spec.column,
+                    "op": filter_spec.op,
+                    "value": (
+                        tuple(filter_spec.value)
+                        if isinstance(filter_spec.value, Sequence)
+                        and not isinstance(filter_spec.value, str)
+                        else filter_spec.value
+                    ),
+                }
+                for filter_spec in self.partition_filters
+            ],
+            "stats_filters": [
+                {
+                    "column": filter_spec.column,
+                    "op": filter_spec.op,
+                    "value": filter_spec.value,
+                    "cast_type": filter_spec.cast_type,
+                }
+                for filter_spec in self.stats_filters
+            ],
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the file pruning policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def to_predicate(self) -> Expr | None:
         """Convert policy filters to a DataFusion predicate expression.
@@ -328,7 +372,7 @@ def _stats_filter_expr(filter_spec: StatsFilter) -> Expr:
     raise ValueError(msg)
 
 
-def _coerce_value(value: Any, cast_type: str | None) -> Any:
+def _resolve_filter_value(value: Any, cast_type: str | None) -> Any:
     if value is None or cast_type is None:
         return value
     if cast_type in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}:
@@ -379,9 +423,9 @@ def _matches_stats_filters(
 ) -> bool:
     matched = True
     for filter_spec in filters:
-        min_value = _coerce_value(stats_min.get(filter_spec.column), filter_spec.cast_type)
-        max_value = _coerce_value(stats_max.get(filter_spec.column), filter_spec.cast_type)
-        target = _coerce_value(filter_spec.value, filter_spec.cast_type)
+        min_value = _resolve_filter_value(stats_min.get(filter_spec.column), filter_spec.cast_type)
+        max_value = _resolve_filter_value(stats_max.get(filter_spec.column), filter_spec.cast_type)
+        target = _resolve_filter_value(filter_spec.value, filter_spec.cast_type)
         if min_value is None or max_value is None or target is None:
             continue
         if filter_spec.op == ">" and not (max_value > target):

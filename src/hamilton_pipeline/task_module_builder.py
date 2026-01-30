@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal
 
-from hamilton.function_modifiers import cache, group, inject, source, tag, value
+from hamilton.function_modifiers import cache, group, inject, source, value
 from hamilton.function_modifiers.dependencies import ParametrizedDependency
 
 from hamilton_pipeline.modules import task_execution
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.execution_plan import ExecutionPlan, priority_for_task
 from relspec.runtime_artifacts import TableLike
 
@@ -263,54 +264,34 @@ def _decorate_task_node(
             "generation_order": str(schedule_metadata.generation_order),
             "generation_size": str(schedule_metadata.generation_size),
         }
+    tag_payload: dict[str, str] = {
+        "task_name": task.name,
+        "output": context.output_name,
+        "task_kind": task.kind,
+        "cache_policy": task.cache_policy,
+        "priority": str(task.priority),
+        "task_cost": str(context.task_cost),
+        "bottom_level_cost": str(context.bottom_level_cost),
+        "slack": str(context.slack),
+        "on_critical_path": str(context.on_critical_path),
+        "betweenness_centrality": str(context.betweenness_centrality),
+        "immediate_dominator": str(context.immediate_dominator or ""),
+        "bridge_edge_count": str(context.bridge_edge_count),
+        "is_bridge_task": str(context.bridge_edge_count > 0),
+        "is_articulation_task": str(context.is_articulation_task),
+        "plan_signature": context.plan_signature,
+        "plan_fingerprint": context.plan_fingerprint,
+        "plan_task_signature": context.plan_task_signature,
+    }
     if schedule_tags:
-        return tag(
+        tag_payload.update(schedule_tags)
+    return apply_tag(
+        TagPolicy(
             layer="execution",
-            artifact=context.output_name,
             kind="task",
-            task_name=task.name,
-            output=context.output_name,
-            task_kind=task.kind,
-            cache_policy=task.cache_policy,
-            priority=str(task.priority),
-            task_cost=str(context.task_cost),
-            bottom_level_cost=str(context.bottom_level_cost),
-            slack=str(context.slack),
-            on_critical_path=str(context.on_critical_path),
-            betweenness_centrality=str(context.betweenness_centrality),
-            immediate_dominator=str(context.immediate_dominator or ""),
-            bridge_edge_count=str(context.bridge_edge_count),
-            is_bridge_task=str(context.bridge_edge_count > 0),
-            is_articulation_task=str(context.is_articulation_task),
-            plan_signature=context.plan_signature,
-            plan_fingerprint=context.plan_fingerprint,
-            plan_task_signature=context.plan_task_signature,
-            schedule_index=schedule_tags["schedule_index"],
-            generation_index=schedule_tags["generation_index"],
-            generation_order=schedule_tags["generation_order"],
-            generation_size=schedule_tags["generation_size"],
-        )(node_fn)
-    return tag(
-        layer="execution",
-        artifact=context.output_name,
-        kind="task",
-        task_name=task.name,
-        output=context.output_name,
-        task_kind=task.kind,
-        cache_policy=task.cache_policy,
-        priority=str(task.priority),
-        task_cost=str(context.task_cost),
-        bottom_level_cost=str(context.bottom_level_cost),
-        slack=str(context.slack),
-        on_critical_path=str(context.on_critical_path),
-        betweenness_centrality=str(context.betweenness_centrality),
-        immediate_dominator=str(context.immediate_dominator or ""),
-        bridge_edge_count=str(context.bridge_edge_count),
-        is_bridge_task=str(context.bridge_edge_count > 0),
-        is_articulation_task=str(context.is_articulation_task),
-        plan_signature=context.plan_signature,
-        plan_fingerprint=context.plan_fingerprint,
-        plan_task_signature=context.plan_task_signature,
+            artifact=context.output_name,
+            extra_tags=tag_payload,
+        )
     )(node_fn)
 
 

@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
+from datafusion_engine.dataset_registry import dataset_catalog_from_profile
 from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
-from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.planning_pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import (
@@ -68,7 +68,6 @@ if TYPE_CHECKING:
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
-    from relspec.incremental import IncrementalDiff
     from schema_spec.system import ContractSpec, DatasetSpec
 
     OutputContract = ContractSpec | DatasetSpec | object
@@ -130,8 +129,6 @@ class ExecutionPlan:
     requested_task_names: tuple[str, ...] = ()
     impacted_task_names: tuple[str, ...] = ()
     allow_partial: bool = False
-    incremental_diff: IncrementalDiff | None = None
-    incremental_state_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -285,7 +282,6 @@ class _PrunedPlanComponents:
     lineage_by_view: Mapping[str, LineageReport]
     requested_task_names: tuple[str, ...]
     impacted_task_names: tuple[str, ...]
-    incremental_diff: IncrementalDiff | None
 
 
 def priority_for_task(task_name: str) -> int:
@@ -760,33 +756,8 @@ def _dataset_spec_map(session: SessionContext) -> Mapping[str, DatasetSpec]:
 def _dataset_location_map(
     profile: DataFusionRuntimeProfile | None,
 ) -> dict[str, DatasetLocation]:
-    if profile is None:
-        return {}
-    locations: dict[str, DatasetLocation] = {}
-    for name, location in profile.extract_dataset_locations.items():
-        locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
-        )
-    for name, location in profile.scip_dataset_locations.items():
-        locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
-        )
-    for name, location in profile.normalize_dataset_locations().items():
-        locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
-        )
-    for catalog in profile.registry_catalogs.values():
-        for name in catalog.names():
-            if name in locations:
-                continue
-            try:
-                locations[name] = apply_delta_store_policy(
-                    catalog.get(name),
-                    policy=profile.delta_store_policy,
-                )
-            except KeyError:
-                continue
-    return locations
+    catalog = dataset_catalog_from_profile(profile)
+    return {name: catalog.get(name) for name in catalog.names()}
 
 
 def _scan_units_for_inferred(
@@ -1489,13 +1460,9 @@ def _plan_snapshot_map(
 ) -> dict[str, PlanFingerprintSnapshot]:
     snapshots: dict[str, PlanFingerprintSnapshot] = {}
     for node in view_nodes:
-        substrait_bytes = None
-        if node.plan_bundle is not None:
-            substrait_bytes = node.plan_bundle.substrait_bytes
         snapshots[node.name] = PlanFingerprintSnapshot(
             plan_fingerprint=plan_fingerprints.get(node.name, ""),
             plan_task_signature=plan_task_signatures.get(node.name, ""),
-            substrait_bytes=substrait_bytes,
         )
     return snapshots
 
@@ -1815,7 +1782,6 @@ def _pruned_plan_components(
         active_tasks=active_tasks,
         pruned_view_nodes=pruned_view_nodes,
     )
-    pruned_diff = _prune_incremental_diff(plan.incremental_diff, active_tasks=active_tasks)
     return _PrunedPlanComponents(
         task_graph=pruned_graph,
         view_nodes=pruned_view_nodes,
@@ -1838,7 +1804,6 @@ def _pruned_plan_components(
         impacted_task_names=tuple(
             name for name in plan.impacted_task_names if name in active_tasks
         ),
-        incremental_diff=pruned_diff,
     )
 
 
@@ -1940,33 +1905,6 @@ def prune_execution_plan(
         requested_task_names=components.requested_task_names,
         impacted_task_names=components.impacted_task_names,
         allow_partial=plan.allow_partial if allow_partial is None else allow_partial,
-        incremental_diff=components.incremental_diff,
-        incremental_state_dir=plan.incremental_state_dir,
-    )
-
-
-def _prune_incremental_diff(
-    diff: IncrementalDiff | None,
-    *,
-    active_tasks: set[str],
-) -> IncrementalDiff | None:
-    if diff is None:
-        return None
-    changed = tuple(name for name in diff.changed_tasks if name in active_tasks)
-    added = tuple(name for name in diff.added_tasks if name in active_tasks)
-    removed = tuple(name for name in diff.removed_tasks if name in active_tasks)
-    unchanged = tuple(name for name in diff.unchanged_tasks if name in active_tasks)
-    semantic = {
-        name: diff.semantic_changes[name] for name in changed if name in diff.semantic_changes
-    }
-    from relspec.incremental import IncrementalDiff as _IncrementalDiff
-
-    return _IncrementalDiff(
-        changed_tasks=changed,
-        added_tasks=added,
-        removed_tasks=removed,
-        unchanged_tasks=unchanged,
-        semantic_changes=semantic,
     )
 
 

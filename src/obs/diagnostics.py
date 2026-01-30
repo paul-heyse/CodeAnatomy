@@ -14,7 +14,7 @@ from datafusion_engine.diagnostics import (
     view_fingerprint_payload,
     view_udf_parity_payload,
 )
-from datafusion_engine.schema_contracts import SchemaViolation
+from datafusion_engine.schema_contracts import ValidationViolation
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
@@ -168,7 +168,7 @@ def record_view_contract_violations(
     sink: DiagnosticsCollector,
     *,
     table_name: str,
-    violations: Sequence[SchemaViolation],
+    violations: Sequence[ValidationViolation],
 ) -> None:
     """Record schema contract violations for a view."""
     payload = {

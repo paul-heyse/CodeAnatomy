@@ -1,9 +1,7 @@
-use std::any::Any;
 use std::collections::BTreeMap;
 
 use datafusion::config::ConfigOptions;
-use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::config::ConfigExtension;
 
 const PREFIX: &str = "codeanatomy_udf";
 
@@ -91,99 +89,53 @@ impl CodeAnatomyUdfConfig {
     }
 }
 
-impl ExtensionOptions for CodeAnatomyUdfConfig {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        Box::new(self.clone())
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        match key {
-            "utf8_normalize_form" => {
-                self.utf8_normalize_form = value.trim().to_string();
-            }
-            "utf8_normalize_casefold" => {
-                self.utf8_normalize_casefold = parse_bool(value, key)?;
-            }
-            "utf8_normalize_collapse_ws" => {
-                self.utf8_normalize_collapse_ws = parse_bool(value, key)?;
-            }
-            "span_default_line_base" => {
-                self.span_default_line_base = parse_i32(value, key)?;
-            }
-            "span_default_col_unit" => {
-                self.span_default_col_unit = value.trim().to_string();
-            }
-            "span_default_end_exclusive" => {
-                self.span_default_end_exclusive = parse_bool(value, key)?;
-            }
-            "map_normalize_key_case" => {
-                self.map_normalize_key_case = value.trim().to_string();
-            }
-            "map_normalize_sort_keys" => {
-                self.map_normalize_sort_keys = parse_bool(value, key)?;
-            }
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown CodeAnatomy UDF config key: {key}"
-                )))
-            }
-        }
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<ConfigEntry> {
-        vec![
-            ConfigEntry {
-                key: format!("{PREFIX}.utf8_normalize_form"),
-                value: Some(self.utf8_normalize_form.clone()),
-                description: "Default Unicode normalization form for utf8_normalize.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.utf8_normalize_casefold"),
-                value: Some(self.utf8_normalize_casefold.to_string()),
-                description: "Default casefold flag for utf8_normalize.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.utf8_normalize_collapse_ws"),
-                value: Some(self.utf8_normalize_collapse_ws.to_string()),
-                description: "Default collapse_whitespace flag for utf8_normalize.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.span_default_line_base"),
-                value: Some(self.span_default_line_base.to_string()),
-                description: "Default line base for span_make when not specified.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.span_default_col_unit"),
-                value: Some(self.span_default_col_unit.clone()),
-                description: "Default column unit for span_make when not specified.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.span_default_end_exclusive"),
-                value: Some(self.span_default_end_exclusive.to_string()),
-                description: "Default end_exclusive flag for span_make when not specified.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.map_normalize_key_case"),
-                value: Some(self.map_normalize_key_case.clone()),
-                description: "Default key case for map_normalize.",
-            },
-            ConfigEntry {
-                key: format!("{PREFIX}.map_normalize_sort_keys"),
-                value: Some(self.map_normalize_sort_keys.to_string()),
-                description: "Default sort_keys flag for map_normalize.",
-            },
-        ]
-    }
-}
+crate::impl_extension_options!(
+    CodeAnatomyUdfConfig,
+    prefix = PREFIX,
+    unknown_key = "Unknown CodeAnatomy UDF config key: {key}",
+    fields = [
+        (
+            utf8_normalize_form,
+            String,
+            "Default Unicode normalization form for utf8_normalize."
+        ),
+        (
+            utf8_normalize_casefold,
+            bool,
+            "Default casefold flag for utf8_normalize."
+        ),
+        (
+            utf8_normalize_collapse_ws,
+            bool,
+            "Default collapse_whitespace flag for utf8_normalize."
+        ),
+        (
+            span_default_line_base,
+            i32,
+            "Default line base for span_make when not specified."
+        ),
+        (
+            span_default_col_unit,
+            String,
+            "Default column unit for span_make when not specified."
+        ),
+        (
+            span_default_end_exclusive,
+            bool,
+            "Default end_exclusive flag for span_make when not specified."
+        ),
+        (
+            map_normalize_key_case,
+            String,
+            "Default key case for map_normalize."
+        ),
+        (
+            map_normalize_sort_keys,
+            bool,
+            "Default sort_keys flag for map_normalize."
+        ),
+    ]
+);
 
 impl ConfigExtension for CodeAnatomyUdfConfig {
     const PREFIX: &'static str = PREFIX;
@@ -194,21 +146,4 @@ pub enum UdfConfigValue {
     Bool(bool),
     Int(i64),
     String(String),
-}
-
-fn parse_bool(value: &str, key: &str) -> Result<bool> {
-    let normalized = value.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "true" | "t" | "1" | "yes" | "y" => Ok(true),
-        "false" | "f" | "0" | "no" | "n" => Ok(false),
-        _ => Err(DataFusionError::Plan(format!(
-            "Invalid boolean for {key}: {value}"
-        ))),
-    }
-}
-
-fn parse_i32(value: &str, key: &str) -> Result<i32> {
-    value.trim().parse::<i32>().map_err(|err| {
-        DataFusionError::Plan(format!("Invalid integer for {key}: {value} ({err})"))
-    })
 }

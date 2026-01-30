@@ -12,6 +12,14 @@ Exports:
 - symtable extraction -> symtable_files
 - bytecode extraction -> bytecode_files
 - tree-sitter extraction -> tree_sitter_files
+
+Module Organization:
+- extractors/ - Evidence layer implementations
+- coordination/ - Execution context and materialization
+- scanning/ - Repository scanning and scope filtering
+- git/ - Git repository integration
+- python/ - Python-specific scope and environment
+- infrastructure/ - Caching, parallelization, utilities
 """
 
 from __future__ import annotations
@@ -20,103 +28,108 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from extract.ast_extract import (
+    from extract.extractors.ast_extract import (
         AstExtractOptions,
         extract_ast,
         extract_ast_tables,
     )
-    from extract.bytecode_extract import (
+    from extract.extractors.bytecode_extract import (
         BytecodeExtractOptions,
         extract_bytecode,
         extract_bytecode_table,
     )
-    from extract.cst_extract import (
+    from extract.extractors.cst_extract import (
         CstExtractOptions,
         extract_cst,
         extract_cst_tables,
     )
-    from extract.python_external_scope import (
+    from extract.extractors.external_scope import (
         ExternalInterfaceExtractOptions,
         extract_python_external,
         extract_python_external_tables,
     )
-    from extract.python_imports_extract import (
+    from extract.extractors.imports_extract import (
         PythonImportsExtractOptions,
         extract_python_imports,
         extract_python_imports_tables,
     )
-    from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
-    from extract.repo_scan import RepoScanOptions, scan_repo
-    from extract.result_types import ExtractResult
-    from extract.scip_extract import (
+    from extract.extractors.scip.extract import (
         SCIPIndexOptions,
         SCIPParseOptions,
         extract_scip_tables,
         parse_index_scip,
         run_scip_python_index,
     )
-    from extract.scip_identity import ScipIdentity, resolve_scip_identity
-    from extract.scip_indexer import (
+    from extract.extractors.scip.identity import ScipIdentity, resolve_scip_identity
+    from extract.extractors.scip.setup import (
         ScipIndexPaths,
         build_scip_index_options,
         ensure_scip_build_dir,
     )
-    from extract.symtable_extract import (
+    from extract.extractors.symtable_extract import (
         SymtableExtractOptions,
         extract_symtable,
         extract_symtables_table,
     )
-    from extract.tree_sitter_extract import (
+    from extract.extractors.tree_sitter.extract import (
         TreeSitterExtractOptions,
         extract_ts,
         extract_ts_tables,
     )
+    from extract.git.blobs import RepoBlobOptions, scan_repo_blobs
+    from extract.infrastructure.result_types import ExtractResult
+    from extract.scanning.repo_scan import RepoScanOptions, scan_repo
 
+# Map of export names to (module_path, attribute_name) for lazy loading
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "AstExtractOptions": ("extract.ast_extract", "AstExtractOptions"),
-    "BytecodeExtractOptions": ("extract.bytecode_extract", "BytecodeExtractOptions"),
-    "CstExtractOptions": ("extract.cst_extract", "CstExtractOptions"),
-    "ExtractResult": ("extract.result_types", "ExtractResult"),
+    # Extractor options and functions
+    "AstExtractOptions": ("extract.extractors.ast_extract", "AstExtractOptions"),
+    "BytecodeExtractOptions": ("extract.extractors.bytecode_extract", "BytecodeExtractOptions"),
+    "CstExtractOptions": ("extract.extractors.cst_extract", "CstExtractOptions"),
+    "ExtractResult": ("extract.infrastructure.result_types", "ExtractResult"),
     "PythonImportsExtractOptions": (
-        "extract.python_imports_extract",
+        "extract.extractors.imports_extract",
         "PythonImportsExtractOptions",
     ),
-    "RepoBlobOptions": ("extract.repo_blobs", "RepoBlobOptions"),
-    "RepoScanOptions": ("extract.repo_scan", "RepoScanOptions"),
-    "SCIPIndexOptions": ("extract.scip_extract", "SCIPIndexOptions"),
-    "SCIPParseOptions": ("extract.scip_extract", "SCIPParseOptions"),
-    "ScipIdentity": ("extract.scip_identity", "ScipIdentity"),
-    "ScipIndexPaths": ("extract.scip_indexer", "ScipIndexPaths"),
-    "SymtableExtractOptions": ("extract.symtable_extract", "SymtableExtractOptions"),
-    "TreeSitterExtractOptions": ("extract.tree_sitter_extract", "TreeSitterExtractOptions"),
-    "build_scip_index_options": ("extract.scip_indexer", "build_scip_index_options"),
-    "ensure_scip_build_dir": ("extract.scip_indexer", "ensure_scip_build_dir"),
-    "extract_ast": ("extract.ast_extract", "extract_ast"),
-    "extract_ast_tables": ("extract.ast_extract", "extract_ast_tables"),
-    "extract_bytecode": ("extract.bytecode_extract", "extract_bytecode"),
-    "extract_bytecode_table": ("extract.bytecode_extract", "extract_bytecode_table"),
-    "extract_cst": ("extract.cst_extract", "extract_cst"),
-    "extract_cst_tables": ("extract.cst_extract", "extract_cst_tables"),
-    "extract_python_external": ("extract.python_external_scope", "extract_python_external"),
+    "RepoBlobOptions": ("extract.git.blobs", "RepoBlobOptions"),
+    "RepoScanOptions": ("extract.scanning.repo_scan", "RepoScanOptions"),
+    "SCIPIndexOptions": ("extract.extractors.scip.extract", "SCIPIndexOptions"),
+    "SCIPParseOptions": ("extract.extractors.scip.extract", "SCIPParseOptions"),
+    "ScipIdentity": ("extract.extractors.scip.identity", "ScipIdentity"),
+    "ScipIndexPaths": ("extract.extractors.scip.setup", "ScipIndexPaths"),
+    "SymtableExtractOptions": ("extract.extractors.symtable_extract", "SymtableExtractOptions"),
+    "TreeSitterExtractOptions": (
+        "extract.extractors.tree_sitter.extract",
+        "TreeSitterExtractOptions",
+    ),
+    "build_scip_index_options": ("extract.extractors.scip.setup", "build_scip_index_options"),
+    "ensure_scip_build_dir": ("extract.extractors.scip.setup", "ensure_scip_build_dir"),
+    "extract_ast": ("extract.extractors.ast_extract", "extract_ast"),
+    "extract_ast_tables": ("extract.extractors.ast_extract", "extract_ast_tables"),
+    "extract_bytecode": ("extract.extractors.bytecode_extract", "extract_bytecode"),
+    "extract_bytecode_table": ("extract.extractors.bytecode_extract", "extract_bytecode_table"),
+    "extract_cst": ("extract.extractors.cst_extract", "extract_cst"),
+    "extract_cst_tables": ("extract.extractors.cst_extract", "extract_cst_tables"),
+    "extract_python_external": ("extract.extractors.external_scope", "extract_python_external"),
     "extract_python_external_tables": (
-        "extract.python_external_scope",
+        "extract.extractors.external_scope",
         "extract_python_external_tables",
     ),
-    "extract_python_imports": ("extract.python_imports_extract", "extract_python_imports"),
+    "extract_python_imports": ("extract.extractors.imports_extract", "extract_python_imports"),
     "extract_python_imports_tables": (
-        "extract.python_imports_extract",
+        "extract.extractors.imports_extract",
         "extract_python_imports_tables",
     ),
-    "scan_repo_blobs": ("extract.repo_blobs", "scan_repo_blobs"),
-    "extract_scip_tables": ("extract.scip_extract", "extract_scip_tables"),
-    "extract_symtable": ("extract.symtable_extract", "extract_symtable"),
-    "extract_symtables_table": ("extract.symtable_extract", "extract_symtables_table"),
-    "extract_ts": ("extract.tree_sitter_extract", "extract_ts"),
-    "extract_ts_tables": ("extract.tree_sitter_extract", "extract_ts_tables"),
-    "parse_index_scip": ("extract.scip_extract", "parse_index_scip"),
-    "resolve_scip_identity": ("extract.scip_identity", "resolve_scip_identity"),
-    "run_scip_python_index": ("extract.scip_extract", "run_scip_python_index"),
-    "scan_repo": ("extract.repo_scan", "scan_repo"),
+    "extract_scip_tables": ("extract.extractors.scip.extract", "extract_scip_tables"),
+    "extract_symtable": ("extract.extractors.symtable_extract", "extract_symtable"),
+    "extract_symtables_table": ("extract.extractors.symtable_extract", "extract_symtables_table"),
+    "extract_ts": ("extract.extractors.tree_sitter.extract", "extract_ts"),
+    "extract_ts_tables": ("extract.extractors.tree_sitter.extract", "extract_ts_tables"),
+    "parse_index_scip": ("extract.extractors.scip.extract", "parse_index_scip"),
+    "resolve_scip_identity": ("extract.extractors.scip.identity", "resolve_scip_identity"),
+    "run_scip_python_index": ("extract.extractors.scip.extract", "run_scip_python_index"),
+    "scan_repo": ("extract.scanning.repo_scan", "scan_repo"),
+    "scan_repo_blobs": ("extract.git.blobs", "scan_repo_blobs"),
 }
 
 

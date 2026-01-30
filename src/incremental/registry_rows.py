@@ -233,6 +233,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 "planning_env_hash",
                 "information_schema_msgpack",
                 "information_schema_hash",
+                "substrait_msgpack",
                 "lineage_msgpack",
                 "scan_units_msgpack",
                 "scan_keys",

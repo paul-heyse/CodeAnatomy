@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 import rustworkx as rx
 
+from datafusion_engine.arrow_schema.schema_builders import version_field
 from relspec.errors import RelspecValidationError
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from storage.ipc_utils import payload_hash
@@ -77,7 +78,7 @@ _TASK_GRAPH_EDGE_SCHEMA = pa.struct(
 )
 _TASK_GRAPH_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field("label", pa.string(), nullable=False),
         pa.field("output_policy", pa.string(), nullable=False),
         pa.field("nodes", pa.list_(_TASK_GRAPH_NODE_SCHEMA), nullable=False),
@@ -102,7 +103,7 @@ _TASK_DEPENDENCY_EDGE_SCHEMA = pa.struct(
 )
 _TASK_DEPENDENCY_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field("label", pa.string(), nullable=False),
         pa.field("nodes", pa.list_(_TASK_DEPENDENCY_NODE_SCHEMA), nullable=False),
         pa.field("edges", pa.list_(_TASK_DEPENDENCY_EDGE_SCHEMA), nullable=False),

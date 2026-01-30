@@ -6,14 +6,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from core.config_base import config_fingerprint
+from core.config_base import FingerprintableConfig, config_fingerprint
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
 
 
 @dataclass(frozen=True)
-class DeltaStorePolicy:
+class DeltaStorePolicy(FingerprintableConfig):
     """Runtime-level object store and log store configuration."""
 
     storage_options: Mapping[str, str] = field(default_factory=dict)
@@ -78,6 +78,26 @@ def resolve_delta_store_policy(
     return resolved_storage, resolved_log
 
 
+def resolve_store_options_for_location(
+    location: DatasetLocation,
+    *,
+    policy: DeltaStorePolicy | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve store options for a dataset location.
+
+    Returns
+    -------
+    tuple[dict[str, str], dict[str, str]]
+        Effective storage and log-store options.
+    """
+    return resolve_delta_store_policy(
+        table_uri=str(location.path),
+        policy=policy,
+        storage_options=location.storage_options,
+        log_storage_options=location.delta_log_storage_options,
+    )
+
+
 def apply_delta_store_policy(
     location: DatasetLocation,
     *,
@@ -123,4 +143,5 @@ __all__ = [
     "apply_delta_store_policy",
     "delta_store_policy_hash",
     "resolve_delta_store_policy",
+    "resolve_store_options_for_location",
 ]

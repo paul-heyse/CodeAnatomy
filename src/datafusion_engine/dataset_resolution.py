@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from datafusion import SessionContext
@@ -12,26 +12,22 @@ from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_datafusion_provider,
     resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
 )
 from datafusion_engine.delta_control_plane import (
-    DeltaCdfRequest,
     DeltaProviderRequest,
     delta_cdf_provider,
     delta_provider_from_session,
     delta_provider_with_files,
 )
 from datafusion_engine.delta_protocol import validate_delta_gate
-from datafusion_engine.delta_scan_config import (
-    delta_scan_config_snapshot_from_options,
-    delta_scan_identity_hash,
-    resolve_delta_scan_options,
+from datafusion_engine.delta_provider_contracts import (
+    build_delta_cdf_contract,
+    build_delta_provider_contract,
 )
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
-from storage.deltalake.delta import delta_table_version
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
@@ -107,18 +103,12 @@ def _provider_kind(location: DatasetLocation) -> DatasetProviderKind:
 
 
 def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution:
-    delta_scan = _resolve_delta_scan(request.location, request.runtime_profile)
-    storage_options = _merged_storage_options(
-        request.location.storage_options,
-        resolve_delta_log_storage_options(request.location),
+    contract = build_delta_provider_contract(
+        request.location,
+        runtime_profile=request.runtime_profile,
     )
     gate = resolve_delta_feature_gate(request.location)
-    provider_request = DeltaProviderRequest(
-        table_uri=str(request.location.path),
-        storage_options=storage_options,
-        version=request.location.delta_version,
-        timestamp=request.location.delta_timestamp,
-        delta_scan=delta_scan,
+    provider_request = contract.to_request(
         predicate=request.predicate,
         gate=gate,
     )
@@ -129,7 +119,6 @@ def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution
     )
     if gate is not None and bundle.snapshot is not None:
         validate_delta_gate(bundle.snapshot, gate)
-    scan_snapshot = delta_scan_config_snapshot_from_options(delta_scan)
     return DatasetResolution(
         name=request.name,
         location=request.location,
@@ -138,9 +127,9 @@ def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution
         delta_snapshot=bundle.snapshot,
         delta_scan_config=bundle.scan_config,
         delta_scan_effective=bundle.scan_effective,
-        delta_scan_snapshot=scan_snapshot,
-        delta_scan_identity_hash=delta_scan_identity_hash(scan_snapshot),
-        delta_scan_options=delta_scan,
+        delta_scan_snapshot=contract.scan_snapshot,
+        delta_scan_identity_hash=contract.scan_identity_hash,
+        delta_scan_options=contract.scan_options,
         add_actions=bundle.add_actions,
         predicate_error=bundle.predicate_error,
     )
@@ -158,19 +147,8 @@ def _delta_provider_bundle(
 
 
 def _resolve_delta_cdf(*, location: DatasetLocation, name: str | None) -> DatasetResolution:
-    storage_options = _merged_storage_options(
-        location.storage_options,
-        resolve_delta_log_storage_options(location),
-    )
-    request = DeltaCdfRequest(
-        table_uri=str(location.path),
-        storage_options=storage_options,
-        version=location.delta_version,
-        timestamp=location.delta_timestamp,
-        options=location.delta_cdf_options,
-        gate=resolve_delta_feature_gate(location),
-    )
-    bundle = delta_cdf_provider(request=request)
+    contract = build_delta_cdf_contract(location)
+    bundle = delta_cdf_provider(request=contract.to_request())
     return DatasetResolution(
         name=name,
         location=location,
@@ -184,40 +162,6 @@ def _resolve_delta_cdf(*, location: DatasetLocation, name: str | None) -> Datase
         delta_scan_options=None,
         cdf_options=bundle.cdf_options,
     )
-
-
-def _resolve_delta_scan(
-    location: DatasetLocation,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> DeltaScanOptions | None:
-    delta_scan = resolve_delta_scan_options(location)
-    if delta_scan is None:
-        return None
-    if delta_scan.schema_force_view_types is not None:
-        return delta_scan
-    enable_view_types = _schema_hardening_view_types(runtime_profile)
-    return replace(delta_scan, schema_force_view_types=enable_view_types)
-
-
-def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile | None) -> bool:
-    if runtime_profile is None:
-        return False
-    hardening = runtime_profile.schema_hardening
-    if hardening is not None:
-        return hardening.enable_view_types
-    return runtime_profile.schema_hardening_name == "arrow_performance"
-
-
-def _merged_storage_options(
-    storage_options: Mapping[str, str] | None,
-    log_storage_options: Mapping[str, str] | None,
-) -> dict[str, str] | None:
-    merged: dict[str, str] = {}
-    if storage_options:
-        merged.update(storage_options)
-    if log_storage_options:
-        merged.update(log_storage_options)
-    return merged or None
 
 
 _MIN_QUALIFIED_PARTS = 2
@@ -240,26 +184,16 @@ def apply_scan_unit_overrides(
             continue
         if location.datafusion_provider == "delta_cdf" or location.delta_cdf_options is not None:
             continue
-        gate = resolve_delta_feature_gate(location)
         units = units_by_dataset[dataset_name]
-        pinned_version = _pinned_version_for_units(location, units)
-        pinned_timestamp = _pinned_timestamp_for_units(location, units)
         scan_files = _scan_files_for_units(location, units)
-        if pinned_version is None and not scan_files:
+        if not scan_files:
             continue
-        updated_location = location
-        if pinned_version is not None:
-            updated_location = replace(
-                location,
-                delta_version=pinned_version,
-                delta_timestamp=None,
-            )
         _register_delta_override(
             ctx,
             adapter=adapter,
             spec=_DeltaOverrideSpec(
                 name=dataset_name,
-                location=updated_location,
+                location=location,
                 scan_files=scan_files,
                 runtime_profile=runtime_profile,
             ),
@@ -268,9 +202,6 @@ def apply_scan_unit_overrides(
             runtime_profile,
             request=_ScanOverrideArtifactRequest(
                 dataset_name=dataset_name,
-                pinned_version=pinned_version,
-                pinned_timestamp=pinned_timestamp,
-                gate=gate,
                 scan_files=scan_files,
             ),
         )
@@ -287,10 +218,8 @@ def scan_units_hash(scan_units: Sequence[ScanUnit]) -> str:
     payload = tuple(
         sorted(
             (
-                unit.key,
-                unit.delta_version,
-                unit.delta_timestamp,
-                unit.snapshot_timestamp,
+                unit.dataset_name,
+                tuple(sorted(str(path) for path in unit.candidate_files)),
             )
             for unit in scan_units
         )
@@ -322,44 +251,6 @@ def _resolve_dataset_location(
         resolved = runtime_profile.dataset_location(candidate)
         if resolved is not None:
             return resolved
-    return None
-
-
-def _pinned_version_for_units(
-    location: DatasetLocation,
-    units: Sequence[ScanUnit],
-) -> int | None:
-    versions = {unit.delta_version for unit in units if unit.delta_version is not None}
-    if len(versions) > 1:
-        msg = f"Scan units for a dataset resolved to multiple Delta versions: {sorted(versions)}."
-        raise ValueError(msg)
-    if versions:
-        return versions.pop()
-    if location.delta_version is not None:
-        return location.delta_version
-    if location.format != "delta":
-        return None
-    storage_options = dict(location.storage_options)
-    log_storage_options = dict(resolve_delta_log_storage_options(location) or {})
-    return delta_table_version(
-        str(location.path),
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-    )
-
-
-def _pinned_timestamp_for_units(
-    location: DatasetLocation,
-    units: Sequence[ScanUnit],
-) -> str | None:
-    timestamps = {unit.snapshot_timestamp for unit in units if unit.snapshot_timestamp is not None}
-    if len(timestamps) > 1:
-        msg = "Scan units for a dataset resolved to multiple snapshot timestamps."
-        raise ValueError(msg)
-    if timestamps:
-        return str(timestamps.pop())
-    if location.delta_timestamp:
-        return location.delta_timestamp
     return None
 
 
@@ -418,9 +309,6 @@ class _ScanOverrideArtifactRequest:
     """Inputs required to record scan override artifacts."""
 
     dataset_name: str
-    pinned_version: int | None
-    pinned_timestamp: str | None
-    gate: object | None
     scan_files: Sequence[str]
 
 
@@ -432,8 +320,6 @@ def _record_override_artifact(
     scan_files_hash = hash_msgpack_canonical(request.scan_files)[:16]
     payload = {
         "dataset_name": request.dataset_name,
-        "pinned_version": request.pinned_version,
-        "pinned_timestamp": request.pinned_timestamp,
         "scan_file_count": len(request.scan_files),
         "scan_files_hash": scan_files_hash,
     }

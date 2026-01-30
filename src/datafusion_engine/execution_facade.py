@@ -482,8 +482,8 @@ class DataFusionExecutionFacade:
         """Execute a plan bundle with Substrait-first replay.
 
         Substrait replay is the primary execution path for determinism. The
-        original DataFrame is used as fallback when Substrait is unavailable
-        or replay fails. Fallback events are recorded for diagnostics.
+        original DataFrame is used as fallback when replay fails. Fallback
+        events are recorded for diagnostics.
 
         Returns
         -------
@@ -620,31 +620,36 @@ class DataFusionExecutionFacade:
         """Return DataFrame using Substrait-first execution.
 
         Substrait replay is the primary path for deterministic execution.
-        Falls back to the original DataFrame when Substrait is unavailable.
+        Falls back to cached plan protos or the original DataFrame when replay fails.
 
         Returns
         -------
         tuple[DataFrame, bool]
             DataFrame and whether fallback was used.
+
+        Raises
+        ------
+        ValueError
+            Raised when Substrait bytes are missing from the plan bundle.
         """
         substrait_bytes = bundle.substrait_bytes
-        if substrait_bytes is None:
-            cached_entry = self._plan_cache_entry(bundle)
-            if cached_entry is not None and cached_entry.substrait_bytes is not None:
-                substrait_bytes = cached_entry.substrait_bytes
-                self._record_plan_cache_event(bundle, status="hit", source="substrait")
-            else:
-                self._record_plan_cache_event(bundle, status="miss", source="substrait")
-        if substrait_bytes is None:
-            cached_df = self._rehydrate_from_proto(bundle)
-            if cached_df is not None:
-                self._record_plan_cache_event(bundle, status="hit", source="proto")
-                return cached_df, False
-            self._record_plan_cache_event(bundle, status="miss", source="proto")
-            return bundle.df, True
+        if not substrait_bytes:
+            msg = "Plan bundle is missing Substrait bytes."
+            raise ValueError(msg)
+        cached_entry = self._plan_cache_entry(bundle)
+        self._record_plan_cache_event(
+            bundle,
+            status="hit" if cached_entry is not None else "miss",
+            source="substrait",
+        )
         try:
             df = replay_substrait_bytes(self.ctx, substrait_bytes)
         except (RuntimeError, TypeError, ValueError):
+            cached_df = self._rehydrate_from_proto(bundle)
+            if cached_df is not None:
+                self._record_plan_cache_event(bundle, status="hit", source="proto")
+                return cached_df, True
+            self._record_plan_cache_event(bundle, status="miss", source="proto")
             return bundle.df, True
         else:
             return df, False
@@ -732,14 +737,13 @@ class DataFusionExecutionFacade:
         view_name
             Optional view name for diagnostics context.
         reason
-            Reason for the fallback (e.g., 'substrait_unavailable', 'replay_failed').
+            Reason for the fallback (e.g., 'replay_failed').
         """
         if self.runtime_profile is None:
             return
         from datafusion_engine.diagnostics import record_artifact
 
         substrait_bytes = bundle.substrait_bytes
-        has_substrait = substrait_bytes is not None
         record_artifact(
             self.runtime_profile,
             "substrait_fallback_v1",
@@ -747,8 +751,8 @@ class DataFusionExecutionFacade:
                 "view_name": view_name,
                 "plan_fingerprint": bundle.plan_fingerprint,
                 "reason": reason,
-                "has_substrait_bytes": has_substrait,
-                "substrait_bytes_len": len(substrait_bytes) if substrait_bytes is not None else 0,
+                "has_substrait_bytes": True,
+                "substrait_bytes_len": len(substrait_bytes),
             },
         )
 

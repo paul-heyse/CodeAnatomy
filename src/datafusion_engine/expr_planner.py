@@ -10,22 +10,46 @@ from dataclasses import dataclass
 import pyarrow as pa
 from datafusion import SessionContext
 
+from core.config_base import FingerprintableConfig, config_fingerprint
+from datafusion_engine.arrow_schema.schema_builders import version_field
 from storage.ipc_utils import payload_ipc_bytes
 
 EXPR_PLANNER_PAYLOAD_VERSION = 1
 _EXPR_PLANNER_PAYLOAD_SCHEMA = pa.schema(
     [
-        pa.field("version", pa.int32(), nullable=False),
+        version_field(),
         pa.field("planner_names", pa.list_(pa.string()), nullable=False),
     ]
 )
 
 
 @dataclass(frozen=True)
-class ExprPlannerPolicy:
+class ExprPlannerPolicy(FingerprintableConfig):
     """Policy options for ExprPlanner registration."""
 
     planner_names: tuple[str, ...]
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the ExprPlanner policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing ExprPlanner policy settings.
+        """
+        return {
+            "planner_names": tuple(self.planner_names),
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the ExprPlanner policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def to_payload(self) -> dict[str, object]:
         """Return a policy payload for IPC serialization.

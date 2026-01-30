@@ -1,0 +1,1 @@
+{"$ref":"#/$defs/PlanProtoStatus","$defs":{"PlanProtoStatus":{"title":"PlanProtoStatus","description":"Status payload for plan proto serialization.","type":"object","properties":{"enabled":{"type":"boolean"},"installed":{"anyOf":[{"type":"boolean"},{"type":"null"}]},"reason":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null}},"required":["enabled","installed"]}}}

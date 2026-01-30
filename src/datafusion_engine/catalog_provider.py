@@ -40,6 +40,16 @@ if TYPE_CHECKING:
 DATASET_HANDLE_PREFIXES: tuple[str, ...] = ("dataset://", "repo://")
 
 
+def _filter_delta_catalog(catalog: DatasetCatalog) -> DatasetCatalog:
+    filtered = DatasetCatalog()
+    for name in catalog.names():
+        location = catalog.get(name)
+        if location.format != "delta":
+            continue
+        filtered.register(name, location, overwrite=True)
+    return filtered
+
+
 def _normalize_dataset_name(name: str) -> str:
     for prefix in DATASET_HANDLE_PREFIXES:
         if name.startswith(prefix):
@@ -431,7 +441,7 @@ def register_registry_catalog(
     from datafusion_engine.io_adapter import DataFusionIOAdapter
 
     provider = RegistryCatalogProvider(
-        registry,
+        _filter_delta_catalog(registry),
         schema_name=schema_name,
         ctx=ctx,
         runtime_profile=runtime_profile,
@@ -471,8 +481,9 @@ def register_registry_catalogs(
     """
     from datafusion_engine.io_adapter import DataFusionIOAdapter
 
+    delta_catalogs = {name: _filter_delta_catalog(catalog) for name, catalog in catalogs.items()}
     provider = MultiRegistryCatalogProvider(
-        catalogs=catalogs,
+        catalogs=delta_catalogs,
         default_schema=default_schema,
         ctx=ctx,
         runtime_profile=runtime_profile,

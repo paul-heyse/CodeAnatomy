@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow_interop import DataTypeLike
 
 
@@ -17,7 +19,7 @@ class EncodingSpec:
 
 
 @dataclass(frozen=True)
-class EncodingPolicy:
+class EncodingPolicy(FingerprintableConfig):
     """Dictionary encoding policy for schema alignment."""
 
     dictionary_cols: frozenset[str] = field(default_factory=frozenset)
@@ -44,6 +46,45 @@ class EncodingPolicy:
                 spec.column: spec.ordered for spec in self.specs if spec.ordered is not None
             }
             object.__setattr__(self, "dictionary_ordered_flags", ordered_flags)
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the encoding policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing encoding policy settings.
+        """
+        specs_payload = [
+            {
+                "column": spec.column,
+                "index_type": str(spec.index_type) if spec.index_type is not None else None,
+                "ordered": spec.ordered,
+            }
+            for spec in sorted(self.specs, key=lambda spec: spec.column)
+        ]
+        return {
+            "dictionary_cols": tuple(sorted(self.dictionary_cols)),
+            "specs": specs_payload,
+            "dictionary_index_type": (
+                str(self.dictionary_index_type) if self.dictionary_index_type is not None else None
+            ),
+            "dictionary_ordered": self.dictionary_ordered,
+            "dictionary_index_types": {
+                key: str(value) for key, value in sorted(self.dictionary_index_types.items())
+            },
+            "dictionary_ordered_flags": dict(sorted(self.dictionary_ordered_flags.items())),
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the encoding policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 __all__ = ["EncodingPolicy", "EncodingSpec"]

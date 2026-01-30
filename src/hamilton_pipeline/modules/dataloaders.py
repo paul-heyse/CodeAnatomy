@@ -2,78 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from hamilton.function_modifiers import dataloader, inject, resolve_from_config, source, tag
+from hamilton.function_modifiers import inject, resolve_from_config, source
 
-from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
-from engine.runtime_profile import RuntimeProfileSpec
-from extract.helpers import ExtractExecutionContext
-from extract.python_scope import PythonScopePolicy
-from extract.repo_scan import RepoScanOptions, scan_repo_tables
-from extract.repo_scope import RepoScopeOptions
-from extract.scip_extract import (
-    ScipExtractContext,
-    ScipExtractOptions,
-    extract_scip_tables,
-    run_scip_python_index,
-)
-from extract.scip_identity import resolve_scip_identity
-from extract.scip_indexer import (
+from extract.extractors.scip.extract import run_scip_python_index
+from extract.extractors.scip.identity import resolve_scip_identity
+from extract.extractors.scip.setup import (
     build_scip_index_options,
     resolve_scip_paths,
     write_scip_environment_json,
 )
-from hamilton_pipeline.types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
-from incremental.types import IncrementalConfig
+from hamilton_pipeline.io_contracts import (
+    SCIP_INDEX_PATH,
+    SCIP_TABLES_EMPTY,
+    SOURCE_CATALOG_INPUTS,
+)
+from hamilton_pipeline.tag_policy import apply_tag
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from datafusion_engine.arrow_interop import TableLike
+    from hamilton_pipeline.types import ScipIdentityOverrides, ScipIndexConfig
 
 
-def _rows(table: TableLike | RecordBatchReaderLike) -> int:
-    if isinstance(table, RecordBatchReaderLike):
-        table = table.read_all()
-    value = getattr(table, "num_rows", 0)
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return value
-    return 0
-
-
-def _repo_scan_options(
-    config: RepoScanConfig,
-    *,
-    incremental: IncrementalConfig | None,
-    cache_salt: str,
-) -> RepoScanOptions:
-    repo_id = incremental.repo_id if incremental is not None else None
-    if cache_salt:
-        repo_id = f"{repo_id}:{cache_salt}" if repo_id else cache_salt
-    scope_config = config.scope_config
-    scope_policy = RepoScopeOptions(
-        python_scope=PythonScopePolicy(extra_extensions=scope_config.python_extensions),
-        include_globs=scope_config.include_globs,
-        exclude_globs=scope_config.exclude_globs,
-        include_untracked=scope_config.include_untracked,
-        include_submodules=scope_config.include_submodules,
-        include_worktrees=scope_config.include_worktrees,
-        follow_symlinks=scope_config.follow_symlinks,
-    )
-    return RepoScanOptions(
-        repo_id=repo_id,
-        scope_policy=scope_policy,
-        max_files=config.max_files,
-        diff_base_ref=config.diff_base_ref,
-        diff_head_ref=config.diff_head_ref,
-        changed_only=config.changed_only,
-        record_pathspec_trace=config.record_pathspec_trace,
-        pathspec_trace_limit=config.pathspec_trace_limit,
-        pathspec_trace_pattern_limit=config.pathspec_trace_pattern_limit,
-    )
-
-
-@tag(layer="inputs", artifact="scip_index_path", kind="path")
+@apply_tag(SCIP_INDEX_PATH.tag_policy())
 def scip_index_path(
     repo_root: str,
     scip_index_config: ScipIndexConfig,
@@ -130,78 +86,7 @@ def scip_index_path(
     return str(output_path)
 
 
-@dataloader()
-@tag(layer="inputs", artifact="repo_files", kind="dataloader")
-def repo_files(
-    repo_scan_config: RepoScanConfig,
-    runtime_profile_spec: RuntimeProfileSpec,
-    cache_salt: str,
-    incremental_config: IncrementalConfig | None = None,
-) -> tuple[TableLike, dict[str, object]]:
-    """Load repo scan outputs as a TableLike plus metadata.
-
-    Returns
-    -------
-    tuple[TableLike, dict[str, object]]
-        Repo scan table and metadata payload.
-    """
-    options = _repo_scan_options(
-        repo_scan_config,
-        incremental=incremental_config,
-        cache_salt=cache_salt,
-    )
-    exec_ctx = ExtractExecutionContext(runtime_spec=runtime_profile_spec)
-    tables = scan_repo_tables(repo_scan_config.repo_root, options=options, context=exec_ctx)
-    table = tables["repo_files_v1"]
-    if isinstance(table, RecordBatchReaderLike):
-        table = table.read_all()
-    metadata: dict[str, object] = {
-        "repo_root": repo_scan_config.repo_root,
-        "rows": _rows(table),
-        "include_globs": list(repo_scan_config.scope_config.include_globs),
-        "exclude_globs": list(repo_scan_config.scope_config.exclude_globs),
-        "python_extensions": list(repo_scan_config.scope_config.python_extensions),
-        "include_untracked": repo_scan_config.scope_config.include_untracked,
-        "include_submodules": repo_scan_config.scope_config.include_submodules,
-        "include_worktrees": repo_scan_config.scope_config.include_worktrees,
-        "changed_only": options.changed_only,
-        "diff_base_ref": options.diff_base_ref,
-        "diff_head_ref": options.diff_head_ref,
-        "repo_id": options.repo_id,
-    }
-    return table, metadata
-
-
-@dataloader()
-@tag(layer="inputs", artifact="scip_tables", kind="dataloader")
-def scip_tables(
-    repo_root: str,
-    scip_index_path: str | None,
-    scip_extract_options: ScipExtractOptions,
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> tuple[Mapping[str, TableLike], dict[str, object]]:
-    """Load SCIP tables from an index.scip file.
-
-    Returns
-    -------
-    tuple[Mapping[str, TableLike], dict[str, object]]
-        Mapping of table names to tables plus metadata.
-    """
-    context = ScipExtractContext(
-        scip_index_path=scip_index_path,
-        repo_root=repo_root,
-        runtime_spec=runtime_profile_spec,
-    )
-    tables = extract_scip_tables(context=context, options=scip_extract_options, prefer_reader=False)
-    metadata: dict[str, object] = {
-        "scip_index_path": scip_index_path,
-        "tables": sorted(tables.keys()),
-        "row_counts": {name: _rows(table) for name, table in tables.items()},
-    }
-    return tables, metadata
-
-
-@tag(layer="inputs", artifact="scip_tables_empty", kind="catalog")
+@apply_tag(SCIP_TABLES_EMPTY.tag_policy())
 def empty_scip_tables() -> Mapping[str, TableLike]:
     """Return an empty SCIP table mapping for repo-only runs.
 
@@ -213,7 +98,7 @@ def empty_scip_tables() -> Mapping[str, TableLike]:
     return {}
 
 
-@tag(layer="inputs", artifact="source_catalog_inputs", kind="catalog")
+@apply_tag(SOURCE_CATALOG_INPUTS.tag_policy())
 @resolve_from_config(
     decorate_with=lambda source_catalog_mode="full": inject(
         scip_tables=source("empty_scip_tables")
@@ -239,8 +124,6 @@ def source_catalog_inputs(
 
 __all__ = [
     "empty_scip_tables",
-    "repo_files",
     "scip_index_path",
-    "scip_tables",
     "source_catalog_inputs",
 ]

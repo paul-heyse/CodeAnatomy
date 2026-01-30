@@ -57,7 +57,7 @@ class CodeAnatomyHamiltonTracker(sdk_adapters.HamiltonTracker):
         **kwargs: object,
     ) -> None:
         """Stop the tracker after graph execution completes."""
-        success, error, results = _coerce_post_args(list(args), kwargs)
+        success, error, results = _resolve_post_args(list(args), kwargs)
         try:
             super().post_graph_execute(
                 run_id=run_id,
@@ -118,7 +118,7 @@ class CodeAnatomyAsyncHamiltonTracker(sdk_adapters.AsyncHamiltonTracker):
         **kwargs: object,
     ) -> None:
         """Flush tracker state after async graph execution completes."""
-        success, error, results = _coerce_post_args(list(args), kwargs)
+        success, error, results = _resolve_post_args(list(args), kwargs)
         try:
             await super().post_graph_execute(
                 run_id=run_id,
@@ -151,7 +151,7 @@ def _merge_tags(
     return merged
 
 
-def _coerce_post_args(
+def _resolve_post_args(
     args: Sequence[object],
     kwargs: dict[str, object],
 ) -> tuple[bool, Exception | None, dict[str, Any] | None]:

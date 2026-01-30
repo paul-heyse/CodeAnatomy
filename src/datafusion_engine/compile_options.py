@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
+from core.config_base import FingerprintableConfig, config_fingerprint
+
 if TYPE_CHECKING:
     from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -25,12 +27,36 @@ SchemaMapping = (
 
 
 @dataclass(frozen=True)
-class DataFusionSqlPolicy:
+class DataFusionSqlPolicy(FingerprintableConfig):
     """Policy for SQL execution in DataFusion sessions."""
 
     allow_ddl: bool = True
     allow_dml: bool = True
     allow_statements: bool = True
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the SQL policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing SQL policy settings.
+        """
+        return {
+            "allow_ddl": self.allow_ddl,
+            "allow_dml": self.allow_dml,
+            "allow_statements": self.allow_statements,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the SQL policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def to_sql_options(self) -> SQLOptions:
         """Return SQLOptions matching this policy.

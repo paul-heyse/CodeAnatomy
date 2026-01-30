@@ -7,15 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from hamilton.function_modifiers import (
-    inject,
-    parameterized_subdag,
-    resolve_from_config,
-    source,
-    tag,
-    tag_outputs,
-    value,
-)
+from hamilton.function_modifiers import inject, resolve_from_config, source
 from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
@@ -23,22 +15,24 @@ from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
 from datafusion_engine.arrow_schema.build import empty_table
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.plan_execution import (
+    PlanExecutionOptions,
+    PlanScanOverrides,
+)
+from datafusion_engine.plan_execution import (
+    execute_plan_bundle as execute_plan_bundle_helper,
+)
+from datafusion_engine.scan_planner import ScanUnit
 from datafusion_engine.view_registry import ensure_view_graph
-from hamilton_pipeline.modules import cpg_finalize as cpg_finalize_module
+from hamilton_pipeline.modules.subdags import cpg_final_tables
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
 if TYPE_CHECKING:
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
-    from datafusion_engine.scan_planner import ScanUnit
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from engine.session import EngineSession
-else:
-    DataFusionPlanBundle = object
-    DataFusionRuntimeProfile = object
-    SessionRuntime = object
-    ScanUnit = object
-    EngineSession = object
 
 
 @dataclass(frozen=True)
@@ -117,7 +111,13 @@ def _record_output(
     )
 
 
-@tag(layer="execution", artifact="runtime_artifacts", kind="context")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="context",
+        artifact="runtime_artifacts",
+    )
+)
 def runtime_artifacts(
     engine_session: EngineSession,
     relspec_param_values: JsonDict,
@@ -136,7 +136,13 @@ def runtime_artifacts(
     )
 
 
-@tag(layer="execution", artifact="plan_scan_inputs", kind="context")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="context",
+        artifact="plan_scan_inputs",
+    )
+)
 def plan_scan_inputs(
     plan_scan_units: tuple[ScanUnit, ...],
     plan_scan_keys_by_task: Mapping[str, tuple[str, ...]],
@@ -170,7 +176,13 @@ def plan_scan_inputs(
     )
 
 
-@tag(layer="execution", artifact="scan_unit_stream", kind="dynamic")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="dynamic",
+        artifact="scan_unit_stream",
+    )
+)
 def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[ScanUnit]:
     """Yield scan units for dynamic parallel execution.
 
@@ -182,7 +194,13 @@ def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[Sc
     yield from plan_scan_units
 
 
-@tag(layer="execution", artifact="scan_unit_execution", kind="dynamic")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="dynamic",
+        artifact="scan_unit_execution",
+    )
+)
 def scan_unit_execution(
     scan_unit_stream: ScanUnit,
     runtime_artifacts: RuntimeArtifacts,
@@ -208,7 +226,13 @@ def scan_unit_execution(
     return scan_unit_stream.key, result.require_table()
 
 
-@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="mapping",
+        artifact="scan_unit_results_by_key",
+    )
+)
 def scan_unit_results_by_key__dynamic(
     scan_unit_execution: Collect[tuple[str, TableLike]],
 ) -> Mapping[str, TableLike]:
@@ -223,7 +247,13 @@ def scan_unit_results_by_key__dynamic(
     return dict(items)
 
 
-@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="mapping",
+        artifact="scan_unit_results_by_key",
+    )
+)
 def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
     """Return an empty mapping when dynamic scan units are disabled.
 
@@ -244,7 +274,13 @@ def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
         )
     ),
 )
-@tag(layer="execution", artifact="scan_unit_results_by_key", kind="mapping")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="mapping",
+        artifact="scan_unit_results_by_key",
+    )
+)
 def scan_unit_results_by_key(
     scan_unit_results_by_key: Mapping[str, TableLike],
 ) -> Mapping[str, TableLike]:
@@ -258,7 +294,13 @@ def scan_unit_results_by_key(
     return scan_unit_results_by_key
 
 
-@tag(layer="execution", artifact="task_execution_inputs", kind="context")
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="context",
+        artifact="task_execution_inputs",
+    )
+)
 def task_execution_inputs(
     runtime_artifacts: RuntimeArtifacts,
     evidence_catalog: EvidenceCatalog,
@@ -346,15 +388,20 @@ def _execute_view(
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
             raise ValueError(msg)
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
-    execution_result = facade.execute_plan_bundle(
+    execution = execute_plan_bundle_helper(
+        session,
         plan_bundle,
-        view_name=view_name,
-        scan_units=scan_context.scan_units,
-        scan_keys=scan_context.scan_keys_by_task.get(view_name, ()),
+        options=PlanExecutionOptions(
+            runtime_profile=profile,
+            view_name=view_name,
+            scan=PlanScanOverrides(
+                scan_units=scan_context.scan_units,
+                scan_keys=scan_context.scan_keys_by_task.get(view_name, ()),
+                apply_scan_overrides=False,
+            ),
+        ),
     )
+    execution_result = execution.execution_result
     dataframe = execution_result.require_dataframe()
     table = dataframe.to_arrow_table()
     return ExecutionResult.from_table(table)
@@ -489,47 +536,6 @@ def _execute_and_record(
         table=table,
     )
     return table
-
-
-_CPG_FINAL_TAGS: dict[str, dict[str, str | list[str]]] = {
-    "cpg_nodes_final": {"layer": "execution", "artifact": "cpg_nodes_final", "kind": "table"},
-    "cpg_edges_final": {"layer": "execution", "artifact": "cpg_edges_final", "kind": "table"},
-    "cpg_props_final": {"layer": "execution", "artifact": "cpg_props_final", "kind": "table"},
-}
-
-
-@parameterized_subdag(
-    cpg_finalize_module,
-    inputs={"runtime_profile_spec": source("runtime_profile_spec")},
-    cpg_nodes_final={
-        "inputs": {
-            "table": source("cpg_nodes_v1"),
-            "table_name": value("cpg_nodes_v1"),
-        }
-    },
-    cpg_edges_final={
-        "inputs": {
-            "table": source("cpg_edges_v1"),
-            "table_name": value("cpg_edges_v1"),
-        }
-    },
-    cpg_props_final={
-        "inputs": {
-            "table": source("cpg_props_v1"),
-            "table_name": value("cpg_props_v1"),
-        }
-    },
-)
-@tag_outputs(**_CPG_FINAL_TAGS)
-def cpg_final_tables(final_table: TableLike) -> TableLike:
-    """Finalize CPG outputs via parameterized sub-DAGs.
-
-    Returns
-    -------
-    TableLike
-        Finalized output table for the parameterized sub-DAG.
-    """
-    return final_table
 
 
 __all__ = [

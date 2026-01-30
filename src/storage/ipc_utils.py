@@ -184,7 +184,7 @@ def ipc_table(payload: bytes) -> pa.Table:
     return reader.read_all()
 
 
-def _coerce_plan_product(value: IpcWriteInput) -> TableLike | RecordBatchReaderLike:
+def _resolve_plan_product(value: IpcWriteInput) -> TableLike | RecordBatchReaderLike:
     if isinstance(value, PlanProduct):
         if value.writer_strategy != "arrow":
             msg = "IPC writes require an Arrow writer strategy."
@@ -224,7 +224,7 @@ def write_table_ipc_file(
     if overwrite and target.exists():
         target.unlink()
 
-    data = _coerce_plan_product(table)
+    data = _resolve_plan_product(table)
     schema = data.schema
     if schema_metadata:
         schema = _apply_schema_metadata(schema, schema_metadata)
@@ -263,7 +263,7 @@ def write_table_ipc_stream(
     if overwrite and target.exists():
         target.unlink()
 
-    data = _coerce_plan_product(table)
+    data = _resolve_plan_product(table)
     schema = data.schema
     if schema_metadata:
         schema = _apply_schema_metadata(schema, schema_metadata)

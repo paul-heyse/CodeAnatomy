@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
+
+from core.config_base import FingerprintableConfig, config_fingerprint
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -61,7 +64,7 @@ class CdfChangeType(Enum):
 
 
 @dataclass(frozen=True)
-class CdfFilterPolicy:
+class CdfFilterPolicy(FingerprintableConfig):
     """Policy for filtering Delta CDF changes by operation type.
 
     This policy determines which types of changes should be included
@@ -80,6 +83,30 @@ class CdfFilterPolicy:
     include_insert: bool = True
     include_update_postimage: bool = True
     include_delete: bool = True
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the CDF filter policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing CDF filter policy settings.
+        """
+        return {
+            "include_insert": self.include_insert,
+            "include_update_postimage": self.include_update_postimage,
+            "include_delete": self.include_delete,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the CDF filter policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def matches(self, change_type: CdfChangeType) -> bool:
         """Check if a change type should be included per this policy.

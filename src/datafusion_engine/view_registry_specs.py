@@ -17,10 +17,14 @@ from datafusion_engine.arrow_schema.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.lineage_datafusion import extract_lineage
+from datafusion_engine.bundle_extraction import (
+    arrow_schema_from_df,
+    extract_lineage_from_bundle,
+    resolve_required_udfs_from_bundle,
+)
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract
-from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
+from datafusion_engine.udf_runtime import validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
 
 if TYPE_CHECKING:
@@ -95,25 +99,6 @@ def _metadata_from_dataset_spec(spec: DatasetSpec) -> SchemaMetadataSpec:
     return _merge_metadata_specs([spec.metadata_spec, ordering])
 
 
-def _required_udfs_from_plan_bundle(
-    bundle: DataFusionPlanBundle,
-    snapshot: Mapping[str, object],
-) -> tuple[str, ...]:
-    required = bundle.required_udfs
-    if not required and bundle.optimized_logical_plan is not None:
-        lineage = extract_lineage(
-            bundle.optimized_logical_plan,
-            udf_snapshot=bundle.artifacts.udf_snapshot,
-        )
-        required = lineage.required_udfs
-    if not required:
-        return ()
-    snapshot_names = udf_names_from_snapshot(snapshot)
-    lookup = {name.lower(): name for name in snapshot_names}
-    resolved = {lookup[name.lower()] for name in required if name.lower() in lookup}
-    return tuple(sorted(resolved))
-
-
 def _bundle_deps_and_udfs(
     ctx: SessionContext,
     builder: DataFrameBuilder,
@@ -137,15 +122,12 @@ def _bundle_deps_and_udfs(
         ),
     )
     try:
-        lineage = extract_lineage(
-            bundle.optimized_logical_plan,
-            udf_snapshot=bundle.artifacts.udf_snapshot,
-        )
+        lineage = extract_lineage_from_bundle(bundle)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Failed to extract lineage for view {label!r}."
         raise ValueError(msg) from exc
     deps = lineage.referenced_tables
-    required = _required_udfs_from_plan_bundle(bundle, snapshot)
+    required = resolve_required_udfs_from_bundle(bundle, snapshot=snapshot)
     return bundle, deps, required
 
 
@@ -156,29 +138,13 @@ def _deps_and_udfs_from_bundle(
     label: str,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     try:
-        lineage = extract_lineage(
-            bundle.optimized_logical_plan,
-            udf_snapshot=bundle.artifacts.udf_snapshot,
-        )
+        lineage = extract_lineage_from_bundle(bundle)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Failed to extract lineage for view {label!r}."
         raise ValueError(msg) from exc
     deps = lineage.referenced_tables
-    required = _required_udfs_from_plan_bundle(bundle, snapshot)
+    required = resolve_required_udfs_from_bundle(bundle, snapshot=snapshot)
     return deps, required
-
-
-def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve DataFusion schema."
-    raise TypeError(msg)
 
 
 def _arrow_schema_from_contract(schema: SchemaLike) -> pa.Schema:
@@ -517,7 +483,7 @@ def _cpg_view_nodes(
             runtime_profile=runtime_profile,
         )
         metadata = _metadata_with_required_udfs(None, required)
-        schema = _arrow_schema_from_df(bundle.df)
+        schema = arrow_schema_from_df(bundle.df)
         cache_policy = "none"
         if name in {"cpg_edges_v1", "cpg_props_v1"}:
             cache_policy = "delta_staging"

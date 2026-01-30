@@ -9,94 +9,342 @@ schema evolution policies.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
+import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_introspection import schema_from_table
 from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
 from utils.registry_protocol import MutableRegistry, Registry
+from validation.violations import ValidationViolation, ViolationType
 
 SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
 if TYPE_CHECKING:
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.introspection import IntrospectionSnapshot
 
 
-class SchemaViolationType(Enum):
-    """Types of schema violations."""
-
-    MISSING_COLUMN = auto()
-    EXTRA_COLUMN = auto()
-    TYPE_MISMATCH = auto()
-    NULLABILITY_MISMATCH = auto()
-    MISSING_TABLE = auto()
-    METADATA_MISMATCH = auto()
+ConstraintType = Literal["pk", "not_null", "check", "unique"]
 
 
-@dataclass(frozen=True)
-class SchemaViolation:
+def normalize_column_names(values: Iterable[str] | None) -> tuple[str, ...]:
+    """Return normalized column names in stable order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Normalized column names without duplicates.
     """
-    A single schema contract violation.
+    if values is None:
+        return ()
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        name = str(value).strip()
+        if not name or name in seen:
+            continue
+        ordered.append(name)
+        seen.add(name)
+    return tuple(ordered)
+
+
+def merge_constraint_expressions(*parts: Iterable[str]) -> tuple[str, ...]:
+    """Return normalized constraint expressions from multiple sources.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Normalized constraint expressions without duplicates.
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        for entry in part:
+            normalized = str(entry).strip()
+            if not normalized or normalized in seen:
+                continue
+            merged.append(normalized)
+            seen.add(normalized)
+    return tuple(merged)
+
+
+class ConstraintSpec(msgspec.Struct, frozen=True):
+    """Constraint specification for governance policies.
 
     Attributes
     ----------
-    violation_type : SchemaViolationType
-        Category of violation
-    table_name : str
-        Name of table with violation
-    column_name : str | None
-        Column name if violation is column-specific
-    expected : str | None
-        Expected value (type, nullability, etc.)
-    actual : str | None
-        Actual value found in catalog
+    constraint_type : Literal["pk", "not_null", "check", "unique"]
+        Constraint type identifier.
+    column : str | None
+        Single-column constraint target, when applicable.
+    columns : tuple[str, ...] | None
+        Multi-column constraint targets, when applicable.
+    expression : str | None
+        Optional SQL expression for CHECK constraints.
     """
 
-    violation_type: SchemaViolationType
-    table_name: str
-    column_name: str | None
-    expected: str | None
-    actual: str | None
+    constraint_type: ConstraintType
+    column: str | None = None
+    columns: tuple[str, ...] | None = None
+    expression: str | None = None
 
-    def __str__(self) -> str:
-        """
-        Format violation as human-readable message.
+    def normalized_columns(self) -> tuple[str, ...]:
+        """Return normalized column names from the constraint spec.
 
         Returns
         -------
-        str
-            Formatted violation description
+        tuple[str, ...]
+            Normalized column names for the constraint.
         """
-        message = f"Unknown violation: {self.violation_type}"
-        if self.violation_type == SchemaViolationType.MISSING_TABLE:
-            message = f"Table '{self.table_name}' not found"
-        elif self.violation_type == SchemaViolationType.METADATA_MISMATCH:
-            message = (
-                f"Metadata mismatch for '{self.table_name}': "
-                f"key={self.column_name!r} expected={self.expected!r} actual={self.actual!r}"
+        if self.columns:
+            return normalize_column_names(self.columns)
+        if self.column:
+            return normalize_column_names((self.column,))
+        return ()
+
+    def normalized_expression(self) -> str | None:
+        """Return a normalized expression string, if present.
+
+        Returns
+        -------
+        str | None
+            Normalized expression, or None if unavailable.
+        """
+        if self.expression is None:
+            return None
+        normalized = self.expression.strip()
+        return normalized or None
+
+
+class TableConstraints(msgspec.Struct, frozen=True):
+    """Governance constraints for a table.
+
+    Attributes
+    ----------
+    primary_key : tuple[str, ...] | None
+        Ordered primary key column names.
+    not_null : tuple[str, ...] | None
+        Column names that must be non-null.
+    checks : tuple[ConstraintSpec, ...] | None
+        Structured CHECK constraints.
+    unique : tuple[tuple[str, ...], ...] | None
+        Unique constraint column groups.
+    """
+
+    primary_key: tuple[str, ...] | None = None
+    not_null: tuple[str, ...] | None = None
+    checks: tuple[ConstraintSpec, ...] | None = None
+    unique: tuple[tuple[str, ...], ...] | None = None
+
+    def required_non_null(self) -> tuple[str, ...]:
+        """Return normalized non-null column names.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Columns required to be non-null.
+        """
+        return normalize_column_names((*(self.not_null or ()), *(self.primary_key or ())))
+
+    def check_expressions(self) -> tuple[str, ...]:
+        """Return normalized check expressions.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Check expressions for the constraint bundle.
+        """
+        expressions: list[str] = []
+        for check in self.checks or ():
+            if check.constraint_type != "check":
+                continue
+            normalized = check.normalized_expression()
+            if normalized:
+                expressions.append(normalized)
+        return merge_constraint_expressions(expressions)
+
+
+def table_constraints_from_spec(
+    spec: TableSchemaSpec,
+    *,
+    checks: Iterable[str] = (),
+    unique: Iterable[Iterable[str]] = (),
+) -> TableConstraints:
+    """Build a TableConstraints payload from a schema spec.
+
+    Parameters
+    ----------
+    spec : TableSchemaSpec
+        Table schema specification to translate.
+    checks : Iterable[str]
+        CHECK constraint expressions to include.
+    unique : Iterable[Iterable[str]]
+        Unique constraint column groups.
+
+    Returns
+    -------
+    TableConstraints
+        Constraint bundle derived from the schema spec.
+    """
+    primary_key = normalize_column_names(spec.key_fields)
+    not_null = normalize_column_names(spec.required_non_null)
+    check_specs = tuple(
+        ConstraintSpec(constraint_type="check", expression=expression)
+        for expression in merge_constraint_expressions(checks)
+    )
+    unique_specs: list[tuple[str, ...]] = []
+    for entry in unique:
+        normalized = normalize_column_names(entry)
+        if normalized:
+            unique_specs.append(normalized)
+    return TableConstraints(
+        primary_key=primary_key or None,
+        not_null=not_null or None,
+        checks=check_specs or None,
+        unique=tuple(unique_specs) or None,
+    )
+
+
+def constraint_key_fields(constraints: TableConstraints) -> tuple[str, ...]:
+    """Return key fields derived from constraint metadata.
+
+    Parameters
+    ----------
+    constraints : TableConstraints
+        Constraints bundle to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Key fields resolved from primary or unique constraints.
+    """
+    if constraints.primary_key:
+        return constraints.primary_key
+    if constraints.unique:
+        return constraints.unique[0]
+    return ()
+
+
+def delta_check_constraints(constraints: TableConstraints) -> tuple[str, ...]:
+    """Return Delta CHECK constraint expressions for a constraint bundle.
+
+    Parameters
+    ----------
+    constraints : TableConstraints
+        Constraints bundle to translate.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Delta CHECK constraint expressions.
+    """
+    not_null_exprs = tuple(f"{name} IS NOT NULL" for name in constraints.required_non_null())
+    return merge_constraint_expressions(not_null_exprs, constraints.check_expressions())
+
+
+def table_constraint_definitions(constraints: TableConstraints) -> tuple[str, ...]:
+    """Return DDL-style constraint definitions for metadata snapshots.
+
+    Parameters
+    ----------
+    constraints : TableConstraints
+        Constraints bundle to translate.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Constraint definitions for information_schema metadata.
+    """
+    definitions: list[str] = []
+    primary_key = normalize_column_names(constraints.primary_key)
+    if primary_key:
+        definitions.append(f"PRIMARY KEY ({', '.join(primary_key)})")
+    for unique_cols in constraints.unique or ():
+        normalized = normalize_column_names(unique_cols)
+        if normalized:
+            definitions.append(f"UNIQUE ({', '.join(normalized)})")
+    definitions.extend(delta_check_constraints(constraints))
+    return merge_constraint_expressions(definitions)
+
+
+def table_constraints_from_location(
+    location: DatasetLocation | None,
+    *,
+    extra_checks: Iterable[str] = (),
+) -> TableConstraints:
+    """Resolve TableConstraints for a dataset location.
+
+    Parameters
+    ----------
+    location : DatasetLocation | None
+        Dataset location to inspect.
+    extra_checks : Iterable[str]
+        Additional CHECK constraint expressions to merge.
+
+    Returns
+    -------
+    TableConstraints
+        Resolved constraints for the dataset.
+    """
+    if location is None:
+        return TableConstraints(
+            checks=tuple(
+                ConstraintSpec(constraint_type="check", expression=expression)
+                for expression in merge_constraint_expressions(extra_checks)
             )
-        elif self.violation_type == SchemaViolationType.MISSING_COLUMN:
-            message = f"Column '{self.table_name}.{self.column_name}' not found"
-        elif self.violation_type == SchemaViolationType.EXTRA_COLUMN:
-            message = f"Unexpected column '{self.table_name}.{self.column_name}'"
-        elif self.violation_type == SchemaViolationType.TYPE_MISMATCH:
-            message = (
-                f"Type mismatch for '{self.table_name}.{self.column_name}': "
-                f"expected {self.expected}, got {self.actual}"
+            or None,
+        )
+    dataset_spec = location.dataset_spec
+    table_spec = dataset_spec.table_spec if dataset_spec is not None else location.table_spec
+    resolved_checks: tuple[str, ...]
+    if location.delta_constraints:
+        resolved_checks = merge_constraint_expressions(location.delta_constraints, extra_checks)
+    elif dataset_spec is not None:
+        resolved_checks = merge_constraint_expressions(dataset_spec.delta_constraints, extra_checks)
+    else:
+        resolved_checks = merge_constraint_expressions(extra_checks)
+    if table_spec is None:
+        return TableConstraints(
+            checks=tuple(
+                ConstraintSpec(constraint_type="check", expression=expression)
+                for expression in resolved_checks
             )
-        elif self.violation_type == SchemaViolationType.NULLABILITY_MISMATCH:
-            message = (
-                f"Nullability mismatch for '{self.table_name}.{self.column_name}': "
-                f"expected {self.expected}, got {self.actual}"
-            )
-        return message
+            or None,
+        )
+    return table_constraints_from_spec(table_spec, checks=resolved_checks)
+
+
+def delta_constraints_for_location(
+    location: DatasetLocation | None,
+    *,
+    extra_checks: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Return Delta CHECK constraints resolved from a dataset location.
+
+    Parameters
+    ----------
+    location : DatasetLocation | None
+        Dataset location to inspect.
+    extra_checks : Iterable[str]
+        Additional CHECK constraint expressions to merge.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Delta CHECK constraint expressions.
+    """
+    return delta_check_constraints(
+        table_constraints_from_location(location, extra_checks=extra_checks)
+    )
 
 
 class EvolutionPolicy(Enum):
@@ -216,7 +464,7 @@ class SchemaContract:
     def validate_against_introspection(
         self,
         snapshot: IntrospectionSnapshot,
-    ) -> list[SchemaViolation]:
+    ) -> list[ValidationViolation]:
         """
         Validate contract against actual catalog state.
 
@@ -230,16 +478,16 @@ class SchemaContract:
 
         Returns
         -------
-        list[SchemaViolation]
+        list[ValidationViolation]
             List of violations (empty if valid)
         """
-        violations: list[SchemaViolation] = []
+        violations: list[ValidationViolation] = []
 
         # Check table exists
         if not snapshot.table_exists(self.table_name):
             violations.append(
-                SchemaViolation(
-                    violation_type=SchemaViolationType.MISSING_TABLE,
+                ValidationViolation(
+                    violation_type=ViolationType.MISSING_TABLE,
                     table_name=self.table_name,
                     column_name=None,
                     expected=None,
@@ -260,8 +508,8 @@ class SchemaContract:
         for col_name, contract in expected_cols.items():
             if col_name not in actual_cols:
                 violations.append(
-                    SchemaViolation(
-                        violation_type=SchemaViolationType.MISSING_COLUMN,
+                    ValidationViolation(
+                        violation_type=ViolationType.MISSING_COLUMN,
                         table_name=self.table_name,
                         column_name=col_name,
                         expected=str(contract.dtype),
@@ -274,8 +522,8 @@ class SchemaContract:
                 expected_type = self._arrow_type_to_sql(contract.dtype)
                 if not self._types_compatible(expected_type, actual_type):
                     violations.append(
-                        SchemaViolation(
-                            violation_type=SchemaViolationType.TYPE_MISMATCH,
+                        ValidationViolation(
+                            violation_type=ViolationType.TYPE_MISMATCH,
                             table_name=self.table_name,
                             column_name=col_name,
                             expected=expected_type,
@@ -288,8 +536,8 @@ class SchemaContract:
             for col_name, col_type in actual_cols.items():
                 if col_name not in expected_cols:
                     violations.append(
-                        SchemaViolation(
-                            violation_type=SchemaViolationType.EXTRA_COLUMN,
+                        ValidationViolation(
+                            violation_type=ViolationType.EXTRA_COLUMN,
                             table_name=self.table_name,
                             column_name=col_name,
                             expected=None,
@@ -297,6 +545,133 @@ class SchemaContract:
                         )
                     )
 
+        return violations
+
+    def validate_against_schema(self, schema: pa.Schema) -> list[ValidationViolation]:
+        """Validate the contract against an Arrow schema.
+
+        Parameters
+        ----------
+        schema : pa.Schema
+            Arrow schema to validate.
+
+        Returns
+        -------
+        list[ValidationViolation]
+            List of violations (empty if valid).
+        """
+        if not self.enforce_columns:
+            return []
+        actual_cols, expected_cols = self._column_maps(schema)
+        violations = self._column_violations(actual_cols, expected_cols)
+        if self.evolution_policy == EvolutionPolicy.STRICT:
+            violations.extend(self._extra_column_violations(actual_cols, expected_cols))
+        violations.extend(self._metadata_violations(schema))
+        return violations
+
+    def _column_maps(self, schema: pa.Schema) -> tuple[dict[str, pa.Field], dict[str, FieldSpec]]:
+        actual_cols = {field.name: field for field in schema}
+        expected_cols = {col.name: col for col in self.columns}
+        return actual_cols, expected_cols
+
+    def _column_violations(
+        self,
+        actual_cols: Mapping[str, pa.Field],
+        expected_cols: Mapping[str, FieldSpec],
+    ) -> list[ValidationViolation]:
+        violations: list[ValidationViolation] = []
+        for col_name, contract in expected_cols.items():
+            actual_field = actual_cols.get(col_name)
+            if actual_field is None:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.MISSING_COLUMN,
+                        table_name=self.table_name,
+                        column_name=col_name,
+                        expected=str(contract.dtype),
+                        actual=None,
+                    )
+                )
+                continue
+            expected_type = self._arrow_type_to_sql(contract.dtype)
+            actual_type = self._arrow_type_to_sql(actual_field.type)
+            if not self._types_compatible(expected_type, actual_type):
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.TYPE_MISMATCH,
+                        table_name=self.table_name,
+                        column_name=col_name,
+                        expected=expected_type,
+                        actual=actual_type,
+                    )
+                )
+            if contract.nullable is False and actual_field.nullable is True:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.NULLABILITY_MISMATCH,
+                        table_name=self.table_name,
+                        column_name=col_name,
+                        expected="non-nullable",
+                        actual="nullable",
+                    )
+                )
+        return violations
+
+    def _extra_column_violations(
+        self,
+        actual_cols: Mapping[str, pa.Field],
+        expected_cols: Mapping[str, FieldSpec],
+    ) -> list[ValidationViolation]:
+        violations: list[ValidationViolation] = []
+        for col_name, actual_field in actual_cols.items():
+            if col_name in expected_cols:
+                continue
+            violations.append(
+                ValidationViolation(
+                    violation_type=ViolationType.EXTRA_COLUMN,
+                    table_name=self.table_name,
+                    column_name=col_name,
+                    expected=None,
+                    actual=self._arrow_type_to_sql(actual_field.type),
+                )
+            )
+        return violations
+
+    def _metadata_violations(self, schema: pa.Schema) -> list[ValidationViolation]:
+        expected_meta = self.schema_metadata
+        if not expected_meta:
+            return []
+        actual_meta = schema.metadata or {}
+        violations: list[ValidationViolation] = []
+        for key, expected_value in expected_meta.items():
+            if key not in actual_meta:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.METADATA_MISMATCH,
+                        table_name=self.table_name,
+                        column_name=key.decode("utf-8", errors="replace"),
+                        expected=expected_value.decode("utf-8", errors="replace"),
+                        actual=None,
+                    )
+                )
+                continue
+            actual_value = actual_meta.get(key)
+            if actual_value == expected_value:
+                continue
+            actual_text = (
+                actual_value.decode("utf-8", errors="replace")
+                if isinstance(actual_value, (bytes, bytearray))
+                else None
+            )
+            violations.append(
+                ValidationViolation(
+                    violation_type=ViolationType.METADATA_MISMATCH,
+                    table_name=self.table_name,
+                    column_name=key.decode("utf-8", errors="replace"),
+                    expected=expected_value.decode("utf-8", errors="replace"),
+                    actual=actual_text,
+                )
+            )
         return violations
 
     def schema_from_catalog(self, ctx: SessionContext) -> pa.Schema:
@@ -445,15 +820,15 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def validate_all(
         self,
         snapshot: IntrospectionSnapshot,
-    ) -> dict[str, list[SchemaViolation]]:
+    ) -> dict[str, list[ValidationViolation]]:
         """Validate all registered contracts.
 
         Returns
         -------
-        dict[str, list[SchemaViolation]]
+        dict[str, list[ValidationViolation]]
             Mapping from table name to violations.
         """
-        violations_dict: dict[str, list[SchemaViolation]] = {}
+        violations_dict: dict[str, list[ValidationViolation]] = {}
         for name, contract in self.registry.items():
             violations_dict[name] = contract.validate_against_introspection(snapshot)
         return violations_dict
@@ -461,12 +836,12 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def get_violations(
         self,
         snapshot: IntrospectionSnapshot,
-    ) -> list[SchemaViolation]:
+    ) -> list[ValidationViolation]:
         """Get all violations across all contracts.
 
         Returns
         -------
-        list[SchemaViolation]
+        list[ValidationViolation]
             Flattened list of schema violations.
         """
         return [
@@ -608,12 +983,23 @@ def schema_contract_from_contract_spec(
 
 
 __all__ = [
+    "ConstraintSpec",
+    "ConstraintType",
     "ContractRegistry",
     "EvolutionPolicy",
     "SchemaContract",
-    "SchemaViolation",
-    "SchemaViolationType",
+    "TableConstraints",
+    "ValidationViolation",
+    "ViolationType",
+    "constraint_key_fields",
+    "delta_check_constraints",
+    "delta_constraints_for_location",
+    "merge_constraint_expressions",
+    "normalize_column_names",
     "schema_contract_from_contract_spec",
     "schema_contract_from_dataset_spec",
     "schema_contract_from_table_schema_contract",
+    "table_constraint_definitions",
+    "table_constraints_from_location",
+    "table_constraints_from_spec",
 ]

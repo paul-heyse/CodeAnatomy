@@ -1730,7 +1730,18 @@ def _delta_feature_gate_override(options: Mapping[str, object]) -> DeltaFeatureG
         return raw
     if isinstance(raw, Mapping):
         payload = dict(raw)
-        return convert(payload, target_type=DeltaFeatureGate, strict=True)
+        reader_features = payload.get("required_reader_features", ())
+        writer_features = payload.get("required_writer_features", ())
+        try:
+            return DeltaFeatureGate(
+                min_reader_version=payload.get("min_reader_version"),
+                min_writer_version=payload.get("min_writer_version"),
+                required_reader_features=tuple(str(item) for item in reader_features or ()),
+                required_writer_features=tuple(str(item) for item in writer_features or ()),
+            )
+        except TypeError as exc:
+            msg = "delta_feature_gate mapping is invalid."
+            raise TypeError(msg) from exc
     return None
 
 

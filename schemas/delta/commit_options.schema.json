@@ -1,0 +1,39 @@
+{
+  "$id": "schemas/delta/commit_options.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeltaCommitOptions",
+  "type": "object",
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "app_transaction": {
+      "anyOf": [
+        {
+          "$ref": "schemas/delta/app_transaction.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "max_retries": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "minimum": 0
+    },
+    "create_checkpoint": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from arrow_utils.core.expr_types import ScalarValue
-from datafusion_engine.arrow_schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
+from datafusion_engine.arrow_schema.metadata_codec import (
+    encode_metadata_map,
+    encode_metadata_scalar_map,
+)
 from datafusion_engine.expr_spec import ExprIR, ExprSpec
 from datafusion_engine.hashing import (
     masked_stable_id_expr_ir,
@@ -211,8 +214,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="normalize_bytecode",
         view_builder="cfg_blocks_df_builder",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
-            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_blocks"}),
+            EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"span": "span", "role": "kind"}),
+            EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map({"source": "py_bc_blocks"}),
         },
     ),
     DatasetRow(
@@ -238,8 +241,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="normalize_bytecode",
         view_builder="cfg_edges_df_builder",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "kind"}),
-            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_cfg_edges"}),
+            EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"role": "kind"}),
+            EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map(
+                {"source": "py_bc_cfg_edges"}
+            ),
         },
     ),
     DatasetRow(
@@ -279,8 +284,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="normalize_bytecode",
         view_builder="def_use_events_df_builder",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
-            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes(
+            EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"span": "span", "role": "kind"}),
+            EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map(
                 {"source": "py_bc_instructions"}
             ),
         },
@@ -305,7 +310,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="normalize_bytecode",
         view_builder="reaching_defs_df_builder",
         metadata_extra={
-            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_reaches"}),
+            EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map({"source": "py_bc_reaches"}),
         },
     ),
     DatasetRow(

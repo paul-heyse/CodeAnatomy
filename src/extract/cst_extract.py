@@ -357,7 +357,7 @@ def _manifest_row(
         "libcst_version": getattr(cst, "__version__", None),
         "parser_backend": parser_backend,
         "parsed_python_version": parsed_python_version,
-        "schema_fingerprint": libcst_files_fingerprint(),
+        "schema_identity_hash": libcst_files_fingerprint(),
     }
 
 

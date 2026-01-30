@@ -26,9 +26,9 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-schema_fingerprint = cast(
+schema_identity_hash = cast(
     "Callable[[pa.Schema], str]",
-    import_module("datafusion_engine.arrow_schema.abi").schema_fingerprint,
+    import_module("datafusion_engine.arrow_schema.abi").schema_identity_hash,
 )
 dataset_schema = cast(
     "Callable[[str], pa.Schema]",
@@ -143,7 +143,7 @@ def _delta_summary(path: Path, *, validate: bool, table: pa.Table) -> dict[str, 
     schema = table.schema
     summary["rows"] = int(table.num_rows)
     summary["columns"] = len(schema.names)
-    summary["schema_fingerprint"] = schema_fingerprint(schema)
+    summary["schema_identity_hash"] = schema_identity_hash(schema)
     summary["schema_metadata"] = _decode_metadata(schema)
     if validate:
         table.validate(full=True)
@@ -235,8 +235,8 @@ def _check_contract_schema(
             expected = incremental_dataset_schema(schema_name)
         except KeyError:
             return
-    actual_fp = schema_fingerprint(schema)
-    expected_fp = schema_fingerprint(expected)
+    actual_fp = schema_identity_hash(schema)
+    expected_fp = schema_identity_hash(expected)
     if actual_fp != expected_fp:
         issues.append(
             Issue(

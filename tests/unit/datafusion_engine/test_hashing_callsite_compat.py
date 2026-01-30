@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import cast
 
 from datafusion_engine.delta_protocol import delta_feature_gate_tuple
+from datafusion_engine.delta_scan_config import delta_scan_identity_hash
 from datafusion_engine.plan_artifact_store import _plan_identity_payload
 from datafusion_engine.plan_bundle import (
     DataFusionPlanBundle,
@@ -21,7 +22,7 @@ from datafusion_engine.plan_bundle import (
     _delta_protocol_payload as plan_delta_protocol_payload,
 )
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.scan_planner import ScanUnit, _delta_scan_config_hash
+from datafusion_engine.scan_planner import ScanUnit
 from datafusion_engine.view_artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.repo_scan import _sha256_path
@@ -132,7 +133,7 @@ def test_delta_scan_config_hash_matches_msgpack_encoder() -> None:
         schema={"fields": [{"name": "id"}]},
     )
     expected = hashlib.sha256(MSGPACK_ENCODER.encode(snapshot)).hexdigest()
-    assert _delta_scan_config_hash(snapshot) == expected
+    assert delta_scan_identity_hash(snapshot) == expected
 
 
 def test_extract_cache_key_matches_msgpack_encoder() -> None:

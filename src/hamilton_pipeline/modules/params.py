@@ -12,8 +12,8 @@ from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import tag
 
 from core_types import JsonDict
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.param_tables import (
     ListParamSpec,
@@ -227,8 +227,8 @@ def param_table_registry(
     """
     specs = {spec.logical_name: spec for spec in param_table_specs}
     inputs = param_table_inputs or ParamTableInputs()
-    registry = ParamTableRegistry(
-        specs=specs,
+    registry = ParamTableRegistry.from_specs(
+        specs,
         policy=param_table_policy,
         scope_key=inputs.scope_key,
     )
@@ -239,7 +239,7 @@ def param_table_registry(
             continue
         if spec.logical_name in paths:
             artifact = _artifact_from_delta(spec, paths[spec.logical_name])
-            registry.artifacts[spec.logical_name] = artifact
+            registry.artifacts.register(spec.logical_name, artifact, overwrite=True)
             continue
         values = param_bundle.list_values(spec.logical_name)
         registry.register_values(spec.logical_name, values)
@@ -257,7 +257,7 @@ def param_table_artifacts(
     Mapping[str, ParamTableArtifact]
         Param table artifacts keyed by logical name.
     """
-    return param_table_registry.artifacts
+    return param_table_registry.artifacts.snapshot()
 
 
 @tag(layer="params", artifact="param_table_name_map", kind="object")
@@ -335,7 +335,7 @@ def write_param_tables_delta(
         format_options: dict[str, object] = {
             "commit_metadata": {
                 "dataset_name": logical_name,
-                "schema_fingerprint": artifact.schema_fingerprint,
+                "schema_identity_hash": artifact.schema_identity_hash,
             },
             "table_properties": configuration or None,
             "schema_mode": "overwrite",
@@ -450,5 +450,5 @@ def _artifact_from_delta(spec: ParamTableSpec, path: str) -> ParamTableArtifact:
         table=table,
         signature=signature,
         rows=table.num_rows,
-        schema_fingerprint=schema_fingerprint(table.schema),
+        schema_identity_hash=schema_identity_hash(table.schema),
     )

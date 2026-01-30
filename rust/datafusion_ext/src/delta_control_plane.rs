@@ -23,9 +23,8 @@ use deltalake::{ensure_table_uri, DeltaTable, DeltaTableBuilder};
 use object_store::DynObjectStore;
 use url::{Position, Url};
 
-use crate::delta_protocol::{
-    delta_snapshot_info, protocol_gate, DeltaFeatureGate, DeltaSnapshotInfo,
-};
+use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
+use crate::DeltaFeatureGate;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeltaScanOverrides {

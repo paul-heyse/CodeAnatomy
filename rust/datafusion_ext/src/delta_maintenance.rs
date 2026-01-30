@@ -10,10 +10,10 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::delta_control_plane::load_delta_table;
-use crate::delta_mutations::{commit_properties, DeltaCommitOptions};
-use crate::delta_protocol::{
-    delta_snapshot_info, protocol_gate, DeltaFeatureGate, DeltaSnapshotInfo,
-};
+use crate::delta_mutations::commit_properties;
+use crate::DeltaCommitOptions;
+use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
+use crate::DeltaFeatureGate;
 
 #[derive(Debug, Clone)]
 pub struct DeltaMaintenanceReport {

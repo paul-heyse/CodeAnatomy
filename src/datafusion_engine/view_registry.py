@@ -41,6 +41,7 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.view_graph_registry import ViewNode
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+from utils.registry_protocol import ImmutableRegistry
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -176,7 +177,15 @@ def _ast_record(span: Expr, attrs: Expr) -> Expr:
     return f.named_struct([("span", _span_struct(span)), ("attrs", attrs)])
 
 
-VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
+def _view_exprs(name: str) -> tuple[Expr, ...]:
+    exprs = VIEW_SELECT_REGISTRY.get(name)
+    if exprs is None:
+        msg = f"Unknown view name: {name!r}."
+        raise KeyError(msg)
+    return exprs
+
+
+_VIEW_SELECT_EXPRS: dict[str, tuple[Expr, ...]] = {
     "ast_call_attrs": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
@@ -778,7 +787,7 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("n0")["n0_item"])["libcst_version"].alias("libcst_version"),
         (col("n0")["n0_item"])["parser_backend"].alias("parser_backend"),
         (col("n0")["n0_item"])["parsed_python_version"].alias("parsed_python_version"),
-        (col("n0")["n0_item"])["schema_fingerprint"].alias("schema_fingerprint"),
+        (col("n0")["n0_item"])["schema_identity_hash"].alias("schema_identity_hash"),
     ),
     "cst_ref_span_unnest": (
         col("file_id").alias("file_id"),
@@ -867,14 +876,14 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         f.arrow_typeof(
             _arrow_cast(
                 col("parse_manifest"),
-                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>",
+                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_identity_hash: string>>",
             )
         ).alias("parse_manifest_cast_type"),
         arrow_metadata(col("parse_manifest")).alias("parse_manifest_meta"),
         arrow_metadata(
             _arrow_cast(
                 col("parse_manifest"),
-                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>",
+                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_identity_hash: string>>",
             )
         ).alias("parse_manifest_cast_meta"),
         f.arrow_typeof(col("parse_errors")).alias("parse_errors_type"),
@@ -2243,6 +2252,10 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "python_imports": (),
 }
 
+VIEW_SELECT_REGISTRY: Final[ImmutableRegistry[str, tuple[Expr, ...]]] = ImmutableRegistry.from_dict(
+    _VIEW_SELECT_EXPRS
+)
+
 VIEW_BASE_TABLE: Final[dict[str, str]] = {
     "ast_call_attrs": "ast_calls",
     "ast_calls": "ast_files_v1",
@@ -2393,7 +2406,7 @@ def _map_entries_view_df(
     base_df = _nested_base_df(ctx, base_view) if raw_base else _view_df(ctx, base_view)
     df = base_df.with_column("kv", map_entries(col("attrs")))
     df = df.unnest_columns("kv")
-    exprs = VIEW_SELECT_EXPRS[name]
+    exprs = _view_exprs(name)
     return df.select(*exprs)
 
 
@@ -2401,7 +2414,7 @@ def _map_keys_view_df(ctx: SessionContext, *, name: str, base_view: str) -> Data
     base_df = _nested_base_df(ctx, base_view)
     df = base_df.with_column("attr_key", map_keys(col("attrs")))
     df = df.unnest_columns("attr_key")
-    exprs = [expr for expr in VIEW_SELECT_EXPRS[name] if expr.schema_name() != "attr_key"]
+    exprs = [expr for expr in _view_exprs(name) if expr.schema_name() != "attr_key"]
     exprs.append(col("attr_key").alias("attr_key"))
     return df.select(*exprs)
 
@@ -2474,7 +2487,7 @@ def _symtable_class_methods_df(ctx: SessionContext) -> DataFrame:
 def _symtable_function_partitions_df(ctx: SessionContext) -> DataFrame:
     scopes = _view_df(ctx, "symtable_scopes")
     filtered = scopes.filter(~col("function_partitions").is_null())
-    exprs = VIEW_SELECT_EXPRS["symtable_function_partitions"]
+    exprs = _view_exprs("symtable_function_partitions")
     return filtered.select(*exprs)
 
 
@@ -2775,7 +2788,7 @@ def _view_df(ctx: SessionContext, name: str) -> DataFrame:
     base_df = _base_df(ctx, name)
     if name in NESTED_VIEW_NAMES and name not in SCIP_VIEW_NAMES:
         return base_df
-    exprs = VIEW_SELECT_EXPRS.get(name, ())
+    exprs = VIEW_SELECT_REGISTRY.get(name) or ()
     if _should_skip_exprs(exprs):
         return base_df
     return base_df.select(*exprs)
@@ -2917,7 +2930,7 @@ def registry_view_specs(
     """
     excluded = set(exclude or ())
     specs: list[ViewSpec] = []
-    for name in sorted(VIEW_SELECT_EXPRS):
+    for name in sorted(VIEW_SELECT_REGISTRY):
         if name in excluded:
             continue
         if not _required_roots_available(ctx, name):
@@ -3027,7 +3040,7 @@ def registry_view_nodes(
         raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
     nodes: list[ViewNode] = []
-    for name in sorted(VIEW_SELECT_EXPRS):
+    for name in sorted(VIEW_SELECT_REGISTRY):
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)

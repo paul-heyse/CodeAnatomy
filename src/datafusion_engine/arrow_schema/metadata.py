@@ -27,7 +27,6 @@ from datafusion_engine.arrow_interop import (
     ArrayLike,
     DataTypeLike,
     FieldLike,
-    ScalarLike,
     SchemaLike,
     TableLike,
 )
@@ -40,13 +39,18 @@ from datafusion_engine.arrow_schema.encoding_metadata import (
     ENCODING_META,
     dict_field_metadata,
 )
+from datafusion_engine.arrow_schema.metadata_codec import (
+    decode_metadata_list,
+    encode_metadata_list,
+    encode_metadata_map,
+)
 from datafusion_engine.arrow_schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
-from storage.ipc_utils import ipc_hash, ipc_table, payload_ipc_bytes
+from serde_msgspec import dumps_msgpack, loads_msgpack
+from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
-    from arrow_utils.core.expr_types import ScalarValue
     from schema_spec.specs import TableSchemaSpec
 
 _POSITION_COLS: tuple[str, ...] = (
@@ -70,7 +74,6 @@ _POSITION_COLS: tuple[str, ...] = (
     *PROVENANCE_COLS,
 )
 
-METADATA_PAYLOAD_VERSION: int = 1
 ORDERING_KEYS_VERSION: int = 1
 OPTIONS_HASH_VERSION: int = 1
 EXTRACTOR_DEFAULTS_VERSION: int = 1
@@ -84,71 +87,6 @@ _INDEX_TYPES: Mapping[str, pa.DataType] = {
 }
 
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
-
-_MAP_ENTRY_TYPE = pa.struct(
-    [
-        pa.field("key", pa.string()),
-        pa.field("value", pa.string()),
-    ]
-)
-_MAP_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(_MAP_ENTRY_TYPE)),
-    ]
-)
-_LIST_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(pa.string())),
-    ]
-)
-_SCALAR_ENTRY_TYPE = pa.struct(
-    [
-        pa.field("key", pa.string()),
-        pa.field("value_kind", pa.string()),
-        pa.field("value_bool", pa.bool_()),
-        pa.field("value_int", pa.int64()),
-        pa.field("value_float", pa.float64()),
-        pa.field("value_string", pa.string()),
-        pa.field("value_binary", pa.binary()),
-    ]
-)
-_SCALAR_MAP_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(_SCALAR_ENTRY_TYPE)),
-    ]
-)
-_ORDERING_KEYS_ENTRY = pa.struct(
-    [
-        pa.field("column", pa.string()),
-        pa.field("order", pa.string()),
-    ]
-)
-_ORDERING_KEYS_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(_ORDERING_KEYS_ENTRY)),
-    ]
-)
-_EXTRACTOR_DEFAULTS_ENTRY = pa.struct(
-    [
-        pa.field("key", pa.string(), nullable=False),
-        pa.field("value_kind", pa.string(), nullable=False),
-        pa.field("value_bool", pa.bool_(), nullable=True),
-        pa.field("value_int", pa.int64(), nullable=True),
-        pa.field("value_float", pa.float64(), nullable=True),
-        pa.field("value_string", pa.string(), nullable=True),
-        pa.field("value_strings", pa.list_(pa.string()), nullable=True),
-    ]
-)
-_EXTRACTOR_DEFAULTS_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("entries", pa.list_(_EXTRACTOR_DEFAULTS_ENTRY), nullable=False),
-    ]
-)
 
 
 class _ListType(Protocol):
@@ -373,244 +311,6 @@ class _TableSchemaSpec(Protocol):
     def to_arrow_schema(self) -> SchemaLike: ...
 
 
-def metadata_map_bytes(entries: Mapping[str, str]) -> bytes:
-    """Encode string mapping metadata as IPC bytes.
-
-    Parameters
-    ----------
-    entries:
-        Mapping of string keys to string values.
-
-    Returns
-    -------
-    bytes
-        IPC bytes for the mapping payload.
-    """
-    payload = {
-        "version": METADATA_PAYLOAD_VERSION,
-        "entries": [
-            {"key": str(key), "value": str(value)}
-            for key, value in sorted(entries.items(), key=lambda item: str(item[0]))
-        ],
-    }
-    return payload_ipc_bytes(payload, _MAP_SCHEMA)
-
-
-def metadata_list_bytes(entries: Sequence[str]) -> bytes:
-    """Encode string list metadata as IPC bytes.
-
-    Parameters
-    ----------
-    entries:
-        Sequence of string values.
-
-    Returns
-    -------
-    bytes
-        IPC bytes for the list payload.
-    """
-    payload = {"version": METADATA_PAYLOAD_VERSION, "entries": [str(item) for item in entries]}
-    return payload_ipc_bytes(payload, _LIST_SCHEMA)
-
-
-def metadata_scalar_map_bytes(entries: Mapping[str, ScalarValue]) -> bytes:
-    """Encode scalar mapping metadata as IPC bytes.
-
-    Parameters
-    ----------
-    entries:
-        Mapping of scalar values keyed by string.
-
-    Returns
-    -------
-    bytes
-        IPC bytes for the scalar mapping payload.
-    """
-    payload = {
-        "version": METADATA_PAYLOAD_VERSION,
-        "entries": [
-            _scalar_entry(str(key), value)
-            for key, value in sorted(entries.items(), key=lambda item: str(item[0]))
-        ],
-    }
-    return payload_ipc_bytes(payload, _SCALAR_MAP_SCHEMA)
-
-
-def decode_metadata_map(payload: bytes) -> dict[str, str]:
-    """Decode IPC metadata bytes into a string mapping.
-
-    Parameters
-    ----------
-    payload:
-        IPC payload bytes.
-
-    Returns
-    -------
-    dict[str, str]
-        Decoded string mapping.
-
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
-    """
-    table = ipc_table(payload)
-    rows = table.to_pylist()
-    if not rows:
-        return {}
-    entry = rows[0]
-    if not isinstance(entry, Mapping):
-        msg = "metadata_map_bytes payload must contain a mapping."
-        raise TypeError(msg)
-    entries = entry.get("entries")
-    if entries is None:
-        return {}
-    if not isinstance(entries, list):
-        msg = "metadata_map_bytes entries must be a list."
-        raise TypeError(msg)
-    results: dict[str, str] = {}
-    for item in entries:
-        if not isinstance(item, Mapping):
-            msg = "metadata_map_bytes entries must be mappings."
-            raise TypeError(msg)
-        key = item.get("key")
-        value = item.get("value")
-        if key is None:
-            continue
-        results[str(key)] = str(value) if value is not None else ""
-    return results
-
-
-def decode_metadata_list(payload: bytes) -> list[str]:
-    """Decode IPC metadata bytes into a list of strings.
-
-    Parameters
-    ----------
-    payload:
-        IPC payload bytes.
-
-    Returns
-    -------
-    list[str]
-        Decoded list of strings.
-
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
-    """
-    table = ipc_table(payload)
-    rows = table.to_pylist()
-    if not rows:
-        return []
-    entry = rows[0]
-    if not isinstance(entry, Mapping):
-        msg = "metadata_list_bytes payload must contain a mapping."
-        raise TypeError(msg)
-    entries = entry.get("entries")
-    if entries is None:
-        return []
-    if not isinstance(entries, list):
-        msg = "metadata_list_bytes entries must be a list."
-        raise TypeError(msg)
-    return [str(item) for item in entries if item is not None]
-
-
-def decode_metadata_scalar_map(payload: bytes) -> dict[str, object]:
-    """Decode IPC metadata bytes into a scalar mapping.
-
-    Parameters
-    ----------
-    payload:
-        IPC payload bytes.
-
-    Returns
-    -------
-    dict[str, object]
-        Decoded scalar mapping.
-
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
-    """
-    table = ipc_table(payload)
-    rows = table.to_pylist()
-    if not rows:
-        return {}
-    entry = rows[0]
-    if not isinstance(entry, Mapping):
-        msg = "metadata_scalar_map_bytes payload must contain a mapping."
-        raise TypeError(msg)
-    entries = entry.get("entries")
-    if entries is None:
-        return {}
-    if not isinstance(entries, list):
-        msg = "metadata_scalar_map_bytes entries must be a list."
-        raise TypeError(msg)
-    results: dict[str, object] = {}
-    for item in entries:
-        if not isinstance(item, Mapping):
-            msg = "metadata_scalar_map_bytes entries must be mappings."
-            raise TypeError(msg)
-        key = item.get("key")
-        if key is None:
-            continue
-        results[str(key)] = _decode_scalar_value(item)
-    return results
-
-
-def _scalar_entry(key: str, value: ScalarValue) -> dict[str, object]:
-    entry: dict[str, object] = {
-        "key": key,
-        "value_kind": "null",
-        "value_bool": None,
-        "value_int": None,
-        "value_float": None,
-        "value_string": None,
-        "value_binary": None,
-    }
-    resolved = value.as_py() if isinstance(value, ScalarLike) else value
-    if resolved is None:
-        return entry
-    if isinstance(resolved, bool):
-        entry["value_kind"] = "bool"
-        entry["value_bool"] = resolved
-    elif isinstance(resolved, int) and not isinstance(resolved, bool):
-        entry["value_kind"] = "int64"
-        entry["value_int"] = resolved
-    elif isinstance(resolved, float):
-        entry["value_kind"] = "float64"
-        entry["value_float"] = resolved
-    elif isinstance(resolved, bytes):
-        entry["value_kind"] = "binary"
-        entry["value_binary"] = resolved
-    else:
-        entry["value_kind"] = "string"
-        entry["value_string"] = str(resolved)
-    return entry
-
-
-def _decode_scalar_value(entry: Mapping[str, object]) -> object:
-    kind = entry.get("value_kind")
-    if kind == "bool":
-        value = entry.get("value_bool")
-        return value if isinstance(value, bool) else None
-    if kind == "int64":
-        value = entry.get("value_int")
-        return int(value) if isinstance(value, int) else None
-    if kind == "float64":
-        value = entry.get("value_float")
-        return float(value) if isinstance(value, (int, float)) else None
-    if kind == "binary":
-        value = entry.get("value_binary")
-        return value if isinstance(value, (bytes, bytearray)) else None
-    if kind == "string":
-        value = entry.get("value_string")
-        return str(value) if value is not None else None
-    return None
-
-
 def options_hash(options: object) -> str:
     """Return a stable hash for options objects.
 
@@ -621,8 +321,7 @@ def options_hash(options: object) -> str:
     """
     normalized = _normalize_option_value(options)
     payload = {"version": OPTIONS_HASH_VERSION, "options": normalized}
-    table = pa.Table.from_pylist([payload])
-    return ipc_hash(table)
+    return hash_msgpack_canonical(payload)
 
 
 def options_metadata_spec(
@@ -656,14 +355,11 @@ def extractor_option_defaults_spec(
     Returns
     -------
     SchemaMetadataSpec
-        Metadata spec storing IPC-encoded option defaults.
+        Metadata spec storing MessagePack-encoded option defaults.
     """
     if not defaults:
         return SchemaMetadataSpec()
-    payload = payload_ipc_bytes(
-        _extractor_defaults_payload(defaults),
-        _EXTRACTOR_DEFAULTS_SCHEMA,
-    )
+    payload = dumps_msgpack(_extractor_defaults_payload(defaults))
     return SchemaMetadataSpec(schema_metadata={EXTRACTOR_DEFAULTS_META: payload})
 
 
@@ -680,21 +376,17 @@ def extractor_option_defaults_from_metadata(
     Raises
     ------
     TypeError
-        Raised when metadata is not an IPC mapping payload.
+        Raised when metadata is not a MessagePack mapping payload.
     """
     metadata = source if isinstance(source, Mapping) else (source.metadata or {})
     payload = metadata.get(EXTRACTOR_DEFAULTS_META)
     if not payload:
         return {}
-    table = ipc_table(payload)
-    rows = table.to_pylist()
-    if not rows:
-        return {}
-    row = rows[0]
-    if not isinstance(row, Mapping):
+    decoded = loads_msgpack(payload, target_type=object, strict=False)
+    if not isinstance(decoded, Mapping):
         msg = "extractor_option_defaults metadata must be a mapping payload."
         raise TypeError(msg)
-    return _extractor_defaults_from_row(row)
+    return _extractor_defaults_from_row(decoded)
 
 
 def _extractor_defaults_payload(defaults: Mapping[str, object]) -> dict[str, object]:
@@ -866,9 +558,9 @@ def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
     if metadata.evidence_rank is not None:
         meta[b"evidence_rank"] = str(metadata.evidence_rank).encode("utf-8")
     if metadata.required_columns:
-        meta[b"evidence_required_columns"] = metadata_list_bytes(metadata.required_columns)
+        meta[b"evidence_required_columns"] = encode_metadata_list(metadata.required_columns)
     if metadata.required_types:
-        meta[b"evidence_required_types"] = metadata_map_bytes(metadata.required_types)
+        meta[b"evidence_required_types"] = encode_metadata_map(metadata.required_types)
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
@@ -1081,10 +773,7 @@ def ordering_metadata_spec(
     """
     meta = {b"ordering_level": level.value.encode("utf-8")}
     if keys:
-        meta[b"ordering_keys"] = payload_ipc_bytes(
-            _ordering_keys_payload(keys),
-            _ORDERING_KEYS_SCHEMA,
-        )
+        meta[b"ordering_keys"] = dumps_msgpack(_ordering_keys_payload(keys))
     if extra:
         meta.update(extra)
     return SchemaMetadataSpec(schema_metadata=meta)
@@ -1461,13 +1150,13 @@ def function_requirements_metadata_spec(
     """
     meta: dict[bytes, bytes] = {}
     if required:
-        meta[REQUIRED_FUNCTIONS_META] = metadata_list_bytes(required)
+        meta[REQUIRED_FUNCTIONS_META] = encode_metadata_list(required)
     if optional:
-        meta[OPTIONAL_FUNCTIONS_META] = metadata_list_bytes(optional)
+        meta[OPTIONAL_FUNCTIONS_META] = encode_metadata_list(optional)
     if signatures:
-        meta[REQUIRED_FUNCTION_SIGNATURES_META] = metadata_list_bytes(signatures)
+        meta[REQUIRED_FUNCTION_SIGNATURES_META] = encode_metadata_list(signatures)
     if signature_types:
-        meta[REQUIRED_FUNCTION_SIGNATURE_TYPES_META] = metadata_list_bytes(signature_types)
+        meta[REQUIRED_FUNCTION_SIGNATURE_TYPES_META] = encode_metadata_list(signature_types)
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
@@ -1508,19 +1197,15 @@ def metadata_payload(
 
 
 def _ordering_keys_from_payload(payload: bytes) -> tuple[OrderingKey, ...]:
-    table = ipc_table(payload)
-    rows = table.to_pylist()
-    if not rows:
-        return ()
-    row = rows[0]
-    if not isinstance(row, Mapping):
+    decoded = loads_msgpack(payload, target_type=object, strict=False)
+    if not isinstance(decoded, Mapping):
         msg = "ordering_keys metadata must be a mapping payload."
         raise TypeError(msg)
-    version = row.get("version")
+    version = decoded.get("version")
     if version is not None and int(version) != ORDERING_KEYS_VERSION:
         msg = "ordering_keys metadata version mismatch."
         raise ValueError(msg)
-    entries = row.get("entries")
+    entries = decoded.get("entries")
     if entries is None:
         return ()
     if not isinstance(entries, list):
@@ -1576,9 +1261,6 @@ __all__ = [
     "SchemaMetadataSpec",
     "TableSchemaSpec",
     "apply_spec_metadata",
-    "decode_metadata_list",
-    "decode_metadata_map",
-    "decode_metadata_scalar_map",
     "dict_field_metadata",
     "dictionary_array_from_indices",
     "encoding_policy_from_fields",
@@ -1592,9 +1274,6 @@ __all__ = [
     "function_requirements_metadata_spec",
     "infer_ordering_keys",
     "merge_metadata_specs",
-    "metadata_list_bytes",
-    "metadata_map_bytes",
-    "metadata_scalar_map_bytes",
     "metadata_spec_from_schema",
     "normalize_dictionaries",
     "optional_functions_from_metadata",

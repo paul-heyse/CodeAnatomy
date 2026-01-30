@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict, schema_to_msgpack
+from datafusion_engine.arrow_schema.abi import schema_to_dict, schema_to_msgpack
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 from serde_artifacts import ViewArtifactPayload
 from serde_msgspec import (
@@ -93,7 +94,7 @@ class DataFusionViewArtifact:
             "name": self.name,
             "plan_fingerprint": self.plan_fingerprint,
             "plan_task_signature": self.plan_task_signature,
-            "schema_fingerprint": schema_fingerprint(self.schema),
+            "schema_identity_hash": schema_identity_hash(self.schema),
             "schema_msgpack": schema_to_msgpack(self.schema),
             "schema_describe_msgpack": dumps_msgpack([dict(row) for row in self.schema_describe]),
             "schema_provenance_msgpack": dumps_msgpack(
@@ -286,7 +287,7 @@ def _schema_provenance_payload(schema: pa.Schema) -> Mapping[str, object]:
     abi_value = metadata_payload.get(abi_key)
     return {
         "source": "arrow_schema",
-        "schema_fingerprint": schema_fingerprint(schema),
+        "schema_identity_hash": schema_identity_hash(schema),
         "schema_metadata": metadata_payload,
         "explicit_schema": abi_value is not None,
         "schema_abi_fingerprint": abi_value,

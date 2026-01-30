@@ -5,15 +5,10 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
-from typing import cast
 
 import msgspec
 
-from datafusion_engine.delta_protocol import (
-    DeltaFeatureGate,
-    DeltaProtocolCompatibility,
-    DeltaProtocolSnapshot,
-)
+from datafusion_engine.delta_protocol import DeltaProtocolCompatibility, DeltaProtocolSnapshot
 from serde_artifacts import (
     DeltaScanConfigSnapshot,
     DeltaStatsDecision,
@@ -69,7 +64,6 @@ SCHEMA_TYPES = (
     DeltaScanConfigSnapshot,
     DeltaProtocolSnapshot,
     DeltaProtocolCompatibility,
-    DeltaFeatureGate,
     DeltaWritePolicy,
     DeltaSchemaPolicy,
     ParquetWriterPolicy,
@@ -152,7 +146,6 @@ _SCHEMA_TAGS: dict[type[object], dict[str, object]] = {
     },
     DeltaProtocolSnapshot: {"x-codeanatomy-domain": "protocol"},
     DeltaProtocolCompatibility: {"x-codeanatomy-domain": "protocol"},
-    DeltaFeatureGate: {"x-codeanatomy-domain": "protocol"},
     DeltaWritePolicy: {"x-codeanatomy-domain": "policy", "x-codeanatomy-scope": "delta"},
     DeltaSchemaPolicy: {"x-codeanatomy-domain": "policy", "x-codeanatomy-scope": "delta"},
     ParquetWriterPolicy: {"x-codeanatomy-domain": "policy", "x-codeanatomy-scope": "parquet"},
@@ -180,11 +173,14 @@ def schema_components() -> tuple[dict[str, object], dict[str, object]]:
         SCHEMA_TYPES,
         schema_hook=_schema_hook,
     )
-    schema_map = {
+    schema_map: dict[str, object] = {
         schema_type.__name__: schema
         for schema_type, schema in zip(SCHEMA_TYPES, schemas, strict=False)
     }
-    component_map = dict(components)
+    component_map: dict[str, object] = dict(components)
+    external_components: dict[str, object] = _external_schema_components()
+    component_map.update(external_components)
+    schema_map.update(external_components)
     for schema_type in SCHEMA_TYPES:
         name = schema_type.__name__
         schema = component_map.get(name)
@@ -193,7 +189,24 @@ def schema_components() -> tuple[dict[str, object], dict[str, object]]:
         metadata = _schema_hook(schema_type)
         for key, value in metadata.items():
             schema.setdefault(key, value)
-    return cast("dict[str, object]", schema_map), cast("dict[str, object]", component_map)
+    return schema_map, component_map
+
+
+def _external_schema_components() -> dict[str, object]:
+    root = Path(__file__).resolve().parents[1]
+    schema_dir = root / "schemas" / "delta"
+    if not schema_dir.exists():
+        return {}
+    components: dict[str, object] = {}
+    for path in sorted(schema_dir.glob("*.schema.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        title = payload.get("title")
+        if not isinstance(title, str) or not title:
+            continue
+        if "x-codeanatomy-domain" not in payload:
+            payload["x-codeanatomy-domain"] = "protocol"
+        components[title] = payload
+    return components
 
 
 def schema_contract_payload() -> dict[str, object]:

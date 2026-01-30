@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -202,6 +203,48 @@ def hash_settings(settings: Mapping[str, str]) -> str:
     return hash_msgpack_canonical(payload)
 
 
+# -----------------------------------------------------------------------------
+# Cache key builder
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class CacheKeyBuilder:
+    """Builder for deterministic cache keys."""
+
+    prefix: str = ""
+    _components: dict[str, object] = field(default_factory=dict)
+
+    def add(self, name: str, value: object) -> CacheKeyBuilder:
+        """Add a component to the cache key.
+
+        Parameters
+        ----------
+        name
+            Component name.
+        value
+            Component value.
+
+        Returns
+        -------
+        CacheKeyBuilder
+            The updated builder instance.
+        """
+        self._components[name] = value
+        return self
+
+    def build(self) -> str:
+        """Return the cache key string.
+
+        Returns
+        -------
+        str
+            Cache key string.
+        """
+        digest = hash_msgpack_canonical(self._components)
+        return f"{self.prefix}:{digest}" if self.prefix else digest
+
+
 def hash_storage_options(
     storage_options: Mapping[str, str] | None,
     log_storage_options: Mapping[str, str] | None = None,
@@ -256,24 +299,8 @@ def hash_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def config_fingerprint(payload: Mapping[str, object]) -> str:
-    """Return a stable fingerprint for configuration payloads.
-
-    Parameters
-    ----------
-    payload
-        Mapping of configuration values.
-
-    Returns
-    -------
-    str
-        SHA-256 hexdigest.
-    """
-    return hash_json_canonical(payload, str_keys=True)
-
-
 __all__ = [
-    "config_fingerprint",
+    "CacheKeyBuilder",
     "hash64_from_text",
     "hash128_from_text",
     "hash_file_sha256",

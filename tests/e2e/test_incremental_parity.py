@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.runtime import read_delta_as_reader
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
@@ -66,4 +66,4 @@ def _assert_delta_parity(full_path: Path, incremental_path: Path) -> None:
 
 def _delta_summary(path: Path) -> tuple[int, str]:
     table = read_delta_as_reader(str(path)).read_all()
-    return int(table.num_rows), schema_fingerprint(table.schema)
+    return int(table.num_rows), schema_identity_hash(table.schema)

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_guard import safe_sql
 
@@ -334,7 +334,7 @@ def _schema_metadata_violations(
     violations: list[SchemaViolation] = []
     expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
     if expected_abi is not None:
-        actual_abi = schema_fingerprint(schema).encode("utf-8")
+        actual_abi = schema_identity_hash(schema).encode("utf-8")
         if actual_abi != expected_abi:
             violations.append(
                 SchemaViolation(

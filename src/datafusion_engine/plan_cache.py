@@ -10,6 +10,7 @@ from cache.diskcache_factory import (
     cache_for_kind,
     default_diskcache_profile,
 )
+from utils.hashing import CacheKeyBuilder
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -34,7 +35,7 @@ class PlanCacheEntry:
         str
             Cache key for the plan entry.
         """
-        return f"plan_proto:{self.plan_identity_hash}"
+        return _plan_cache_key(self.plan_identity_hash)
 
 
 @dataclass
@@ -70,7 +71,7 @@ class PlanProtoCache:
         cache = self._ensure_cache()
         if cache is None:
             return None
-        key = f"plan_proto:{plan_identity_hash}"
+        key = _plan_cache_key(plan_identity_hash)
         value = cache.get(key, default=None, retry=True)
         if isinstance(value, PlanCacheEntry):
             return value
@@ -100,7 +101,7 @@ class PlanProtoCache:
         if cache is None:
             return False
         sentinel = object()
-        value = cache.get(f"plan_proto:{plan_identity_hash}", default=sentinel, retry=True)
+        value = cache.get(_plan_cache_key(plan_identity_hash), default=sentinel, retry=True)
         return value is not sentinel
 
     def snapshot(self) -> list[PlanCacheEntry]:
@@ -122,6 +123,12 @@ class PlanProtoCache:
             if isinstance(value, PlanCacheEntry):
                 entries.append(value)
         return entries
+
+
+def _plan_cache_key(plan_identity_hash: str) -> str:
+    builder = CacheKeyBuilder(prefix="plan_proto")
+    builder.add("plan_identity_hash", plan_identity_hash)
+    return builder.build()
 
 
 __all__ = ["PlanCacheEntry", "PlanProtoCache"]

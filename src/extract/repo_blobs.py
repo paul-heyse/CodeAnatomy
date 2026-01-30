@@ -124,7 +124,7 @@ def _repo_blob_cache_key(
         {
             "file_id": file_ctx.file_id,
             "file_sha256": file_ctx.file_sha256,
-            "schema_fingerprint": repo_file_blobs_fingerprint(),
+            "schema_identity_hash": repo_file_blobs_fingerprint(),
             "options": to_builtins(options),
         },
     )

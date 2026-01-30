@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
 from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
-from datafusion_engine.delta_protocol import DeltaFeatureGate
+from datafusion_engine.arrow_schema.abi import schema_to_dict
+from datafusion_engine.delta_protocol import DeltaFeatureGate, delta_feature_gate_payload
+from datafusion_engine.delta_scan_config import delta_scan_config_snapshot_from_options
+from datafusion_engine.identity import schema_identity_hash
 from schema_spec.specs import TableSchemaSpec
+from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
-from storage.deltalake.scan_profile import build_delta_scan_config
 from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
@@ -174,19 +176,12 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "projection_exprs": list(loc.datafusion_scan.projection_exprs),
                 "unbounded": loc.datafusion_scan.unbounded,
             }
-        delta_scan = None
-        if loc.delta_scan is not None:
-            delta_scan = {
-                "file_column_name": loc.delta_scan.file_column_name,
-                "enable_parquet_pushdown": loc.delta_scan.enable_parquet_pushdown,
-                "schema_force_view_types": loc.delta_scan.schema_force_view_types,
-                "wrap_partition_values": loc.delta_scan.wrap_partition_values,
-                "schema": (
-                    schema_to_dict(loc.delta_scan.schema)
-                    if loc.delta_scan.schema is not None
-                    else None
-                ),
-            }
+        delta_scan_snapshot = delta_scan_config_snapshot_from_options(loc.delta_scan)
+        delta_scan = (
+            cast("dict[str, object]", to_builtins(delta_scan_snapshot, str_keys=True))
+            if delta_scan_snapshot is not None
+            else None
+        )
         delta_write_policy = None
         if loc.delta_write_policy is not None:
             parquet_writer_policy = None
@@ -225,14 +220,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "schema_mode": loc.delta_schema_policy.schema_mode,
                 "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
             }
-        delta_feature_gate = None
-        if loc.delta_feature_gate is not None:
-            delta_feature_gate = {
-                "min_reader_version": loc.delta_feature_gate.min_reader_version,
-                "min_writer_version": loc.delta_feature_gate.min_writer_version,
-                "required_reader_features": list(loc.delta_feature_gate.required_reader_features),
-                "required_writer_features": list(loc.delta_feature_gate.required_writer_features),
-            }
+        delta_feature_gate = delta_feature_gate_payload(loc.delta_feature_gate)
         provider = resolve_datafusion_provider(loc)
         snapshot.append(
             {
@@ -254,7 +242,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
                 "ddl_fingerprint": None,
-                "schema_fingerprint": schema_fingerprint(schema) if schema is not None else None,
+                "schema_identity_hash": schema_identity_hash(schema) if schema is not None else None,
                 "schema": schema_to_dict(schema) if schema is not None else None,
             }
         )
@@ -311,17 +299,6 @@ def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider
     if location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf":
         return "delta_cdf"
     return None
-
-
-def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | None:
-    """Return Delta scan options for a dataset location.
-
-    Returns
-    -------
-    DeltaScanOptions | None
-        Delta scan options derived from the dataset location, when present.
-    """
-    return build_delta_scan_config(location)
 
 
 def resolve_delta_cdf_policy(location: DatasetLocation) -> DeltaCdfPolicy | None:
@@ -487,7 +464,6 @@ __all__ = [
     "resolve_delta_feature_gate",
     "resolve_delta_log_storage_options",
     "resolve_delta_maintenance_policy",
-    "resolve_delta_scan_options",
     "resolve_delta_schema_policy",
     "resolve_delta_write_policy",
 ]

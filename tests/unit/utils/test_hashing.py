@@ -8,9 +8,9 @@ from pathlib import Path
 
 import msgspec
 
+from core.config_base import config_fingerprint
 from serde_msgspec import JSON_ENCODER, JSON_ENCODER_SORTED, MSGPACK_ENCODER, to_builtins
 from utils.hashing import (
-    config_fingerprint,
     hash64_from_text,
     hash128_from_text,
     hash_file_sha256,

@@ -22,6 +22,10 @@ if TYPE_CHECKING:
         DiagnosticsSink,
         InMemoryDiagnosticsSink,
     )
+    from datafusion_engine.errors import (
+        DataFusionEngineError,
+        ErrorKind,
+    )
     from datafusion_engine.execution_facade import (
         DataFusionExecutionFacade,
         ExecutionResult,
@@ -79,7 +83,6 @@ if TYPE_CHECKING:
         snapshot_plans,
     )
     from datafusion_engine.schema_contracts import (
-        ColumnContract,
         ContractRegistry,
         EvolutionPolicy,
         SchemaContract,
@@ -119,10 +122,10 @@ __all__ = [
     "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
     "ChangeCategory",
-    "ColumnContract",
     "ContractRegistry",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
+    "DataFusionEngineError",
     "DataFusionExecutionFacade",
     "DataFusionIOAdapter",
     "DataFusionParamBindings",
@@ -133,6 +136,7 @@ __all__ = [
     "DiagnosticsContext",
     "DiagnosticsRecorder",
     "DiagnosticsSink",
+    "ErrorKind",
     "EvolutionPolicy",
     "ExecutionLabel",
     "ExecutionResult",
@@ -200,8 +204,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ExecutionLabel": ("datafusion_engine.runtime", "ExecutionLabel"),
     "DataFusionCompileOptions": ("datafusion_engine.compile_options", "DataFusionCompileOptions"),
     "DataFusionConfigPolicy": ("datafusion_engine.runtime", "DataFusionConfigPolicy"),
+    "DataFusionEngineError": ("datafusion_engine.errors", "DataFusionEngineError"),
     "DataFusionRuntimeProfile": ("datafusion_engine.runtime", "DataFusionRuntimeProfile"),
     "DeltaStorePolicy": ("datafusion_engine.delta_store_policy", "DeltaStorePolicy"),
+    "ErrorKind": ("datafusion_engine.errors", "ErrorKind"),
     "SchemaHardeningProfile": ("datafusion_engine.runtime", "SchemaHardeningProfile"),
     "DataFusionSqlPolicy": ("datafusion_engine.compile_options", "DataFusionSqlPolicy"),
     "MemoryPool": ("datafusion_engine.runtime", "MemoryPool"),
@@ -290,7 +296,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SemanticDiff": ("datafusion_engine.semantic_diff", "SemanticDiff"),
     "compute_rebuild_needed": ("datafusion_engine.semantic_diff", "compute_rebuild_needed"),
     # Schema Contracts
-    "ColumnContract": ("datafusion_engine.schema_contracts", "ColumnContract"),
     "ContractRegistry": ("datafusion_engine.schema_contracts", "ContractRegistry"),
     "EvolutionPolicy": ("datafusion_engine.schema_contracts", "EvolutionPolicy"),
     "SchemaContract": ("datafusion_engine.schema_contracts", "SchemaContract"),

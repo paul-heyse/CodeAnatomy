@@ -10,9 +10,8 @@ from typing import Literal, TypedDict, cast
 
 from diskcache import Cache, Deque, FanoutCache, Index
 
-from serde_msgspec import to_builtins
+from core.config_base import config_fingerprint
 from utils.env_utils import env_value
-from utils.hashing import hash_msgpack_canonical
 
 type DiskCacheKind = Literal[
     "plan",
@@ -27,6 +26,13 @@ type DiskCacheKind = Literal[
 
 
 def _default_cache_root() -> Path:
+    """Return the default DiskCache root path.
+
+    Returns
+    -------
+    pathlib.Path
+        Default cache root path.
+    """
     root = env_value("CODEANATOMY_DISKCACHE_DIR")
     if root:
         return Path(root).expanduser()
@@ -49,15 +55,15 @@ class DiskCacheSettings:
     sqlite_mmap_size: int | None = None
     sqlite_synchronous: str | None = None
 
-    def fingerprint(self) -> str:
-        """Return a stable fingerprint for cache settings.
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for settings fingerprinting.
 
         Returns
         -------
-        str
-            Stable fingerprint for settings.
+        Mapping[str, object]
+            Payload used for settings fingerprinting.
         """
-        payload = {
+        return {
             "size_limit_bytes": self.size_limit_bytes,
             "cull_limit": self.cull_limit,
             "eviction_policy": self.eviction_policy,
@@ -70,7 +76,16 @@ class DiskCacheSettings:
             "sqlite_mmap_size": self.sqlite_mmap_size,
             "sqlite_synchronous": self.sqlite_synchronous,
         }
-        return hash_msgpack_canonical(to_builtins(payload))
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for cache settings.
+
+        Returns
+        -------
+        str
+            Stable fingerprint for settings.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 class DiskCacheKwargs(TypedDict, total=False):
@@ -130,7 +145,7 @@ class DiskCacheProfile:
             "settings": self.settings_for(kind).fingerprint(),
             "ttl_seconds": self.ttl_for(kind),
         }
-        return hash_msgpack_canonical(to_builtins(payload))
+        return config_fingerprint(payload)
 
 
 @cache

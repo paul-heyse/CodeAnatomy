@@ -7,30 +7,11 @@ from typing import Annotated
 
 import msgspec
 
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
+from datafusion_engine.generated.delta_types import DeltaFeatureGate
 from serde_msgspec import StructBaseCompat, StructBaseStrict
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
-
-
-class DeltaFeatureGate(StructBaseStrict, frozen=True):
-    """Protocol and feature-gating requirements for Delta tables.
-
-    Parameters
-    ----------
-    min_reader_version:
-        Minimum reader protocol version required.
-    min_writer_version:
-        Minimum writer protocol version required.
-    required_reader_features:
-        Required Delta reader features.
-    required_writer_features:
-        Required Delta writer features.
-    """
-
-    min_reader_version: NonNegInt | None = None
-    min_writer_version: NonNegInt | None = None
-    required_reader_features: tuple[str, ...] = ()
-    required_writer_features: tuple[str, ...] = ()
 
 
 class DeltaProtocolSupport(StructBaseStrict, frozen=True):
@@ -156,46 +137,39 @@ def validate_delta_gate(
 ) -> None:
     """Validate Delta protocol and feature gates against snapshot metadata.
 
-    Parameters
-    ----------
-    snapshot
-        Delta snapshot metadata from the control plane.
-    gate
-        Protocol and feature gate requirements.
-
     Raises
     ------
-    ValueError
-        Raised when protocol versions or feature requirements are not satisfied.
+    DataFusionEngineError
+        Raised when the snapshot is missing or the extension is unavailable.
     """
     resolved = _protocol_snapshot(snapshot)
     if resolved is None:
         msg = "Delta protocol snapshot is required for gate validation."
-        raise ValueError(msg)
-    reader_version = resolved.min_reader_version
-    writer_version = resolved.min_writer_version
-    reader_features = set(resolved.reader_features)
-    writer_features = set(resolved.writer_features)
-    if gate.min_reader_version is not None and (
-        reader_version is None or reader_version < gate.min_reader_version
-    ):
-        msg = "Delta reader protocol gate failed."
-        raise ValueError(msg)
-    if gate.min_writer_version is not None and (
-        writer_version is None or writer_version < gate.min_writer_version
-    ):
-        msg = "Delta writer protocol gate failed."
-        raise ValueError(msg)
-    if gate.required_reader_features:
-        required = set(gate.required_reader_features)
-        if not required.issubset(reader_features):
-            msg = "Delta reader feature gate failed."
-            raise ValueError(msg)
-    if gate.required_writer_features:
-        required = set(gate.required_writer_features)
-        if not required.issubset(writer_features):
-            msg = "Delta writer feature gate failed."
-            raise ValueError(msg)
+        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
+    try:
+        import datafusion_ext
+    except ImportError as exc:  # pragma: no cover - extension optional in tests
+        msg = "datafusion_ext is required for Delta protocol gate validation."
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
+    snapshot_payload = {
+        "min_reader_version": resolved.min_reader_version,
+        "min_writer_version": resolved.min_writer_version,
+        "reader_features": list(resolved.reader_features),
+        "writer_features": list(resolved.writer_features),
+    }
+    gate_payload = {
+        "min_reader_version": gate.min_reader_version,
+        "min_writer_version": gate.min_writer_version,
+        "required_reader_features": list(gate.required_reader_features),
+        "required_writer_features": list(gate.required_writer_features),
+    }
+    snapshot_msgpack = msgspec.msgpack.encode(snapshot_payload)
+    gate_msgpack = msgspec.msgpack.encode(gate_payload)
+    try:
+        datafusion_ext.validate_protocol_gate(snapshot_msgpack, gate_msgpack)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = "Delta protocol gate validation failed."
+        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
 
 
 def delta_feature_gate_payload(

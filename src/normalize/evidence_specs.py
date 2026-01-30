@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow_interop import SchemaLike
-from datafusion_engine.arrow_schema.metadata import (
+from datafusion_engine.arrow_schema.metadata_codec import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,

@@ -12,7 +12,10 @@ from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
+)
+from datafusion_engine.dataset_resolution import (
+    DatasetResolutionRequest,
+    resolve_dataset_provider,
 )
 from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.diagnostics import record_artifact
@@ -21,7 +24,6 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from storage.deltalake.delta import delta_table_version
 from utils.hashing import hash_msgpack_canonical
-from utils.storage_options import merged_storage_options
 
 _MIN_QUALIFIED_PARTS = 2
 
@@ -200,14 +202,18 @@ def _register_delta_override(
     spec: _DeltaOverrideSpec,
 ) -> None:
     if spec.scan_files:
-        provider = _delta_table_provider_with_files(
-            location=spec.location,
-            scan_files=spec.scan_files,
-            runtime_profile=spec.runtime_profile,
+        resolution = resolve_dataset_provider(
+            DatasetResolutionRequest(
+                ctx=ctx,
+                location=spec.location,
+                runtime_profile=spec.runtime_profile,
+                name=spec.name,
+                scan_files=spec.scan_files,
+            )
         )
         adapter.register_delta_table_provider(
             spec.name,
-            TableProviderCapsule(provider),
+            TableProviderCapsule(resolution.provider),
             overwrite=True,
         )
         invalidate_introspection_cache(ctx)
@@ -220,64 +226,6 @@ def _register_delta_override(
         location=spec.location,
         runtime_profile=spec.runtime_profile,
     )
-
-
-def _delta_table_provider_with_files(
-    *,
-    location: DatasetLocation,
-    scan_files: Sequence[str],
-    runtime_profile: DataFusionRuntimeProfile,
-) -> object:
-    manager = _plugin_manager_for_profile(runtime_profile)
-    delta_scan = resolve_delta_scan_options(location)
-    if delta_scan is not None and delta_scan.schema_force_view_types is None:
-        enable_view_types = _schema_hardening_view_types(runtime_profile)
-        delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
-    storage_options = _delta_storage_options(location)
-    gate = resolve_delta_feature_gate(location)
-    options: dict[str, object] = {
-        "table_uri": str(location.path),
-        "storage_options": dict(storage_options) if storage_options else None,
-        "version": location.delta_version,
-        "timestamp": location.delta_timestamp,
-        "file_column_name": delta_scan.file_column_name if delta_scan else None,
-        "enable_parquet_pushdown": delta_scan.enable_parquet_pushdown if delta_scan else None,
-        "schema_force_view_types": delta_scan.schema_force_view_types if delta_scan else None,
-        "wrap_partition_values": delta_scan.wrap_partition_values if delta_scan else None,
-        "files": list(scan_files),
-    }
-    gate_payload = delta_feature_gate_payload(gate)
-    if gate_payload is not None:
-        options.update(gate_payload)
-    return manager.create_table_provider(provider_name="delta", options=options)
-
-
-def _plugin_manager_for_profile(
-    runtime_profile: DataFusionRuntimeProfile,
-) -> DataFusionPluginManager:
-    manager = runtime_profile.plugin_manager
-    if manager is not None:
-        return manager
-    from datafusion_engine.plugin_manager import DataFusionPluginManager
-
-    if not runtime_profile.plugin_specs:
-        msg = "Plugin-based Delta overrides require plugin specs."
-        raise RuntimeError(msg)
-    return DataFusionPluginManager(runtime_profile.plugin_specs)
-
-
-def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
-    return merged_storage_options(
-        location.storage_options,
-        resolve_delta_log_storage_options(location),
-    )
-
-
-def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:
-    hardening = runtime_profile.schema_hardening
-    if hardening is not None:
-        return hardening.enable_view_types
-    return runtime_profile.schema_hardening_name == "arrow_performance"
 
 
 @dataclass(frozen=True)
@@ -309,7 +257,6 @@ def _record_override_artifact(
 
 
 if TYPE_CHECKING:
-    from datafusion_engine.plugin_manager import DataFusionPluginManager
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
 

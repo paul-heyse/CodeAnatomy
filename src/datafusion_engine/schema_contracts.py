@@ -9,6 +9,7 @@ schema evolution policies.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, cast
@@ -16,10 +17,11 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 from datafusion import SessionContext
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema_introspection import schema_from_table
+from schema_spec.field_spec import FieldSpec
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
-from utils.registry_protocol import MutableRegistry
+from utils.registry_protocol import MutableRegistry, Registry
 
 SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
@@ -105,64 +107,27 @@ class EvolutionPolicy(Enum):
     RELAXED = auto()  # Any compatible change allowed
 
 
-@dataclass(frozen=True)
-class ColumnContract:
-    """
-    Contract for a single column.
+def _decode_field_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+    if not metadata:
+        return {}
+    return {
+        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
+        for key, value in metadata.items()
+    }
 
-    Attributes
-    ----------
-    name : str
-        Column name
-    arrow_type : pa.DataType
-        PyArrow data type for column
-    nullable : bool
-        Whether column permits NULL values
-    description : str | None
-        Optional column documentation
-    metadata : dict[bytes, bytes] | None
-        Optional Arrow field metadata to preserve.
-    """
 
-    name: str
-    arrow_type: pa.DataType
-    nullable: bool = True
-    description: str | None = None
-    metadata: dict[bytes, bytes] | None = None
-
-    @classmethod
-    def from_arrow_field(cls, field: pa.Field) -> ColumnContract:
-        """
-        Create from PyArrow field.
-
-        Parameters
-        ----------
-        field : pa.Field
-            PyArrow field definition
-
-        Returns
-        -------
-        ColumnContract
-            Column contract derived from field
-        """
-        return cls(
-            name=field.name,
-            arrow_type=field.type,
-            nullable=field.nullable,
-            metadata=dict(field.metadata or {}) or None,
-        )
-
-    def to_arrow_field(self) -> pa.Field:
-        """
-        Convert to PyArrow field.
-
-        Returns
-        -------
-        pa.Field
-            PyArrow field representation
-        """
-        metadata = self.metadata or None
-        return pa.field(self.name, self.arrow_type, nullable=self.nullable, metadata=metadata)
+def _field_spec_from_arrow_field(field: pa.Field) -> FieldSpec:
+    metadata = _decode_field_metadata(field.metadata)
+    encoding_value = metadata.get("encoding")
+    encoding = "dictionary" if encoding_value == "dictionary" else None
+    return FieldSpec(
+        name=field.name,
+        dtype=field.type,
+        nullable=field.nullable,
+        metadata=metadata,
+        default_value=metadata.get("default_value"),
+        encoding=encoding,
+    )
 
 
 @dataclass(frozen=True)
@@ -178,7 +143,7 @@ class SchemaContract:
     ----------
     table_name : str
         Name of table this contract applies to
-    columns : tuple[ColumnContract, ...]
+    columns : tuple[FieldSpec, ...]
         Column definitions
     partition_cols : tuple[str, ...]
         Partitioning column names
@@ -189,7 +154,7 @@ class SchemaContract:
     """
 
     table_name: str
-    columns: tuple[ColumnContract, ...]
+    columns: tuple[FieldSpec, ...]
     partition_cols: tuple[str, ...] = ()
     ordering: tuple[str, ...] = ()
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT
@@ -220,12 +185,12 @@ class SchemaContract:
         SchemaContract
             Contract derived from schema
         """
-        columns = tuple(ColumnContract.from_arrow_field(field) for field in schema)
+        columns = tuple(_field_spec_from_arrow_field(field) for field in schema)
         metadata_override = kwargs.pop("schema_metadata", None)
         metadata = dict(schema.metadata or {})
         metadata.setdefault(
             SCHEMA_ABI_FINGERPRINT_META,
-            schema_fingerprint(schema).encode("utf-8"),
+            schema_identity_hash(schema).encode("utf-8"),
         )
         if metadata_override:
             metadata.update(metadata_override)
@@ -299,14 +264,14 @@ class SchemaContract:
                         violation_type=SchemaViolationType.MISSING_COLUMN,
                         table_name=self.table_name,
                         column_name=col_name,
-                        expected=str(contract.arrow_type),
+                        expected=str(contract.dtype),
                         actual=None,
                     )
                 )
             else:
                 # Check type compatibility
                 actual_type = actual_cols[col_name]
-                expected_type = self._arrow_type_to_sql(contract.arrow_type)
+                expected_type = self._arrow_type_to_sql(contract.dtype)
                 if not self._types_compatible(expected_type, actual_type):
                     violations.append(
                         SchemaViolation(
@@ -399,48 +364,97 @@ class SchemaContract:
 
 
 @dataclass
-class ContractRegistry(MutableRegistry[str, SchemaContract]):
+class ContractRegistry(Registry[str, SchemaContract]):
     """
     Registry of schema contracts for validation.
 
     Maintains a collection of schema contracts and provides
     batch validation against introspection snapshots.
-
-    Attributes
-    ----------
-    _entries : dict[str, SchemaContract]
-        Mapping of table names to their contracts
     """
 
-    def register_contract(self, contract: SchemaContract) -> None:
-        """Register a schema contract by table name.
+    registry: MutableRegistry[str, SchemaContract] = field(default_factory=MutableRegistry)
 
-        Parameters
-        ----------
-        contract
-            Contract to register.
+    def register(self, key: str, value: SchemaContract) -> None:
+        """Register a schema contract by table name."""
+        self.registry.register(key, value)
+
+    def get(self, key: str) -> SchemaContract | None:
+        """Return a schema contract when present.
+
+        Returns
+        -------
+        SchemaContract | None
+            Matching schema contract or None.
         """
-        self.register(contract.table_name, contract)
+        return self.registry.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a contract is registered.
+
+        Returns
+        -------
+        bool
+            True when the key is registered.
+        """
+        return key in self.registry
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered contract names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator over registered keys.
+        """
+        return iter(self.registry)
+
+    def __len__(self) -> int:
+        """Return the number of registered contracts.
+
+        Returns
+        -------
+        int
+            Number of registered contracts.
+        """
+        return len(self.registry)
+
+    def items(self) -> Iterator[tuple[str, SchemaContract]]:
+        """Iterate over contract entries.
+
+        Returns
+        -------
+        Iterator[tuple[str, SchemaContract]]
+            Iterator of registry items.
+        """
+        return self.registry.items()
+
+    def snapshot(self) -> Mapping[str, SchemaContract]:
+        """Return a snapshot of registered contracts.
+
+        Returns
+        -------
+        Mapping[str, SchemaContract]
+            Snapshot of current registry contents.
+        """
+        return self.registry.snapshot()
+
+    def register_contract(self, contract: SchemaContract) -> None:
+        """Register a schema contract by table name."""
+        self.registry.register(contract.table_name, contract)
 
     def validate_all(
         self,
         snapshot: IntrospectionSnapshot,
     ) -> dict[str, list[SchemaViolation]]:
-        """
-        Validate all registered contracts.
-
-        Parameters
-        ----------
-        snapshot : IntrospectionSnapshot
-            Catalog snapshot to validate against
+        """Validate all registered contracts.
 
         Returns
         -------
         dict[str, list[SchemaViolation]]
-            Mapping of table names to their violations
+            Mapping from table name to violations.
         """
-        violations_dict = {}
-        for name, contract in self.items():
+        violations_dict: dict[str, list[SchemaViolation]] = {}
+        for name, contract in self.registry.items():
             violations_dict[name] = contract.validate_against_introspection(snapshot)
         return violations_dict
 
@@ -448,22 +462,16 @@ class ContractRegistry(MutableRegistry[str, SchemaContract]):
         self,
         snapshot: IntrospectionSnapshot,
     ) -> list[SchemaViolation]:
-        """
-        Get all violations across all contracts.
-
-        Parameters
-        ----------
-        snapshot : IntrospectionSnapshot
-            Catalog snapshot to validate against
+        """Get all violations across all contracts.
 
         Returns
         -------
         list[SchemaViolation]
-            All violations found across all contracts
+            Flattened list of schema violations.
         """
         return [
             violation
-            for contract in self._entries.values()
+            for _, contract in self.registry.items()
             for violation in contract.validate_against_introspection(snapshot)
         ]
 
@@ -493,13 +501,13 @@ def schema_contract_from_table_schema_contract(
     SchemaContract
         Schema contract constructed from the table schema contract.
     """
-    columns = tuple(ColumnContract.from_arrow_field(field) for field in contract.file_schema)
+    columns = tuple(_field_spec_from_arrow_field(field) for field in contract.file_schema)
     partition_cols = tuple(name for name, _dtype in contract.partition_cols)
     if contract.partition_cols:
         partition_fields = tuple(
-            ColumnContract(
+            FieldSpec(
                 name=name,
-                arrow_type=dtype,
+                dtype=dtype,
                 nullable=False,
             )
             for name, dtype in contract.partition_cols
@@ -600,7 +608,6 @@ def schema_contract_from_contract_spec(
 
 
 __all__ = [
-    "ColumnContract",
     "ContractRegistry",
     "EvolutionPolicy",
     "SchemaContract",

@@ -50,7 +50,7 @@ class DeltaSnapshotArtifact:
     snapshot: Mapping[str, object]
     dataset_name: str | None = None
     storage_options_hash: str | None = None
-    schema_fingerprint: str | None = None
+    schema_identity_hash: str | None = None
     ddl_fingerprint: str | None = None
 
 
@@ -152,7 +152,7 @@ def record_delta_snapshot(
         "writer_features": _string_list(snapshot.get("writer_features") or ()),
         "table_properties": _string_map(snapshot.get("table_properties") or {}),
         "schema_msgpack": _msgpack_payload(_schema_payload(snapshot.get("schema_json"))),
-        "schema_fingerprint": artifact.schema_fingerprint,
+        "schema_identity_hash": artifact.schema_identity_hash,
         "ddl_fingerprint": artifact.ddl_fingerprint,
         "partition_columns": _string_list(snapshot.get("partition_columns") or ()),
         "storage_options_hash": artifact.storage_options_hash,
@@ -425,7 +425,7 @@ def _delta_snapshot_schema() -> pa.Schema:
             list_field("writer_features", pa.string()),
             pa.field("table_properties", pa.map_(pa.string(), pa.string())),
             binary_field("schema_msgpack", nullable=False),
-            string_field("schema_fingerprint"),
+            string_field("schema_identity_hash"),
             string_field("ddl_fingerprint"),
             list_field("partition_columns", pa.string()),
             string_field("storage_options_hash"),

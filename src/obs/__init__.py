@@ -8,14 +8,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     column_stats_table: object
     dataset_stats_table: object
+    schema_identity_hash: object
     table_summary: object
-    schema_fingerprint: object
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "column_stats_table": ("obs.metrics", "column_stats_table"),
     "dataset_stats_table": ("obs.metrics", "dataset_stats_table"),
+    "schema_identity_hash": ("datafusion_engine.identity", "schema_identity_hash"),
     "table_summary": ("obs.metrics", "table_summary"),
-    "schema_fingerprint": ("datafusion_engine.arrow_schema.abi", "schema_fingerprint"),
 }
 
 
@@ -38,6 +38,6 @@ def __dir__() -> list[str]:
 __all__ = (
     "column_stats_table",
     "dataset_stats_table",
-    "schema_fingerprint",
+    "schema_identity_hash",
     "table_summary",
 )

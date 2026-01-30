@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
@@ -17,15 +17,17 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from datafusion_engine.arrow_interop import DataTypeLike, FieldLike, SchemaLike
+from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike
 from datafusion_engine.arrow_schema.build import list_view_type
 from datafusion_engine.arrow_schema.encoding_metadata import (
     ENCODING_DICTIONARY,
     ENCODING_META,
     dict_field_metadata,
 )
-from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec, metadata_list_bytes
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
+from datafusion_engine.arrow_schema.metadata_codec import encode_metadata_list
 from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaTransform
+from schema_spec.field_spec import FieldSpec
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -57,21 +59,10 @@ def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
     """
     meta = schema_metadata(spec.name, spec.version)
     if spec.required_non_null:
-        meta[REQUIRED_NON_NULL_META] = metadata_list_bytes(spec.required_non_null)
+        meta[REQUIRED_NON_NULL_META] = encode_metadata_list(spec.required_non_null)
     if spec.key_fields:
-        meta[KEY_FIELDS_META] = metadata_list_bytes(spec.key_fields)
+        meta[KEY_FIELDS_META] = encode_metadata_list(spec.key_fields)
     return meta
-
-
-def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
-    """Encode metadata keys/values for Arrow.
-
-    Returns
-    -------
-    dict[bytes, bytes]
-        Encoded metadata mapping.
-    """
-    return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
 
 
 def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
@@ -110,34 +101,6 @@ def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:
     raise TypeError(msg)
 
 
-@dataclass(frozen=True)
-class ArrowFieldSpec:
-    """Specification for a single Arrow field."""
-
-    name: str
-    dtype: DataTypeLike
-    nullable: bool = True
-    metadata: dict[str, str] = field(default_factory=dict)
-    default_value: str | None = None
-    encoding: Literal["dictionary"] | None = None
-
-    def to_arrow_field(self) -> FieldLike:
-        """Build a pyarrow.Field from the spec.
-
-        Returns
-        -------
-        pyarrow.Field
-            Arrow field instance.
-        """
-        metadata = dict(self.metadata)
-        if self.default_value is not None:
-            metadata.setdefault("default_value", self.default_value)
-        if self.encoding is not None:
-            metadata[ENCODING_META] = self.encoding
-        metadata = _field_metadata(metadata)
-        return interop.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
-
-
 def dict_field(
     name: str,
     *,
@@ -145,19 +108,19 @@ def dict_field(
     ordered: bool = False,
     nullable: bool = True,
     metadata: dict[str, str] | None = None,
-) -> ArrowFieldSpec:
-    """Return an ArrowFieldSpec configured for dictionary encoding.
+) -> FieldSpec:
+    """Return a FieldSpec configured for dictionary encoding.
 
     Returns
     -------
-    ArrowFieldSpec
+    FieldSpec
         Field spec configured with dictionary encoding metadata.
     """
     idx_type = index_type or interop.int32()
     meta = dict_field_metadata(index_type=idx_type, ordered=ordered, metadata=metadata)
     dict_factory = cast("Callable[..., object]", interop.dictionary)
     dtype = cast("DataTypeLike", dict_factory(idx_type, interop.string(), ordered=ordered))
-    return ArrowFieldSpec(
+    return FieldSpec(
         name=name,
         dtype=dtype,
         nullable=nullable,
@@ -178,7 +141,7 @@ class TableSchemaSpec:
     """Specification for a table schema and associated constraints."""
 
     name: str
-    fields: list[ArrowFieldSpec]
+    fields: list[FieldSpec]
     version: int | None = None
     required_non_null: tuple[str, ...] = ()
     key_fields: tuple[str, ...] = ()
@@ -212,12 +175,12 @@ class TableSchemaSpec:
             schema_identity_from_metadata,
         )
 
-        fields: list[ArrowFieldSpec] = []
+        fields: list[FieldSpec] = []
         for schema_field in schema:
             meta = _decode_metadata(schema_field.metadata)
             encoding = _encoding_hint_from_field(meta, dtype=schema_field.type)
             fields.append(
-                ArrowFieldSpec(
+                FieldSpec(
                     name=schema_field.name,
                     dtype=schema_field.type,
                     nullable=schema_field.nullable,
@@ -332,7 +295,7 @@ class FieldBundle:
     """Bundle of fields plus required/key constraints."""
 
     name: str
-    fields: tuple[ArrowFieldSpec, ...]
+    fields: tuple[FieldSpec, ...]
     required_non_null: tuple[str, ...] = ()
     key_fields: tuple[str, ...] = ()
 
@@ -355,11 +318,11 @@ def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
         Bundle containing file identity fields.
     """
     fields = [
-        ArrowFieldSpec(name="file_id", dtype=interop.string()),
-        ArrowFieldSpec(name="path", dtype=interop.string()),
+        FieldSpec(name="file_id", dtype=interop.string()),
+        FieldSpec(name="path", dtype=interop.string()),
     ]
     if include_sha256:
-        fields.append(ArrowFieldSpec(name="file_sha256", dtype=interop.string()))
+        fields.append(FieldSpec(name="file_sha256", dtype=interop.string()))
     return FieldBundle(name="file_identity", fields=tuple(fields))
 
 
@@ -374,8 +337,8 @@ def span_bundle() -> FieldBundle:
     return FieldBundle(
         name="span",
         fields=(
-            ArrowFieldSpec(name="bstart", dtype=interop.int64()),
-            ArrowFieldSpec(name="bend", dtype=interop.int64()),
+            FieldSpec(name="bstart", dtype=interop.int64()),
+            FieldSpec(name="bend", dtype=interop.int64()),
         ),
     )
 
@@ -391,8 +354,8 @@ def call_span_bundle() -> FieldBundle:
     return FieldBundle(
         name="call_span",
         fields=(
-            ArrowFieldSpec(name="call_bstart", dtype=interop.int64()),
-            ArrowFieldSpec(name="call_bend", dtype=interop.int64()),
+            FieldSpec(name="call_bstart", dtype=interop.int64()),
+            FieldSpec(name="call_bend", dtype=interop.int64()),
         ),
     )
 
@@ -407,13 +370,13 @@ def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBu
     """
     normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
     fields = [
-        ArrowFieldSpec(name=f"{normalized}start_line", dtype=interop.int32()),
-        ArrowFieldSpec(name=f"{normalized}start_char", dtype=interop.int32()),
-        ArrowFieldSpec(name=f"{normalized}end_line", dtype=interop.int32()),
-        ArrowFieldSpec(name=f"{normalized}end_char", dtype=interop.int32()),
+        FieldSpec(name=f"{normalized}start_line", dtype=interop.int32()),
+        FieldSpec(name=f"{normalized}start_char", dtype=interop.int32()),
+        FieldSpec(name=f"{normalized}end_line", dtype=interop.int32()),
+        FieldSpec(name=f"{normalized}end_char", dtype=interop.int32()),
     ]
     if include_len:
-        fields.append(ArrowFieldSpec(name=f"{normalized}range_len", dtype=interop.int32()))
+        fields.append(FieldSpec(name=f"{normalized}range_len", dtype=interop.int32()))
     name = f"{normalized}scip_range" if normalized else "scip_range"
     return FieldBundle(name=name, fields=tuple(fields))
 
@@ -429,10 +392,10 @@ def provenance_bundle() -> FieldBundle:
     return FieldBundle(
         name="provenance",
         fields=(
-            ArrowFieldSpec(name=PROVENANCE_COLS[0], dtype=interop.string()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[1], dtype=interop.int32()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[2], dtype=interop.int32()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[3], dtype=interop.bool_()),
+            FieldSpec(name=PROVENANCE_COLS[0], dtype=interop.string()),
+            FieldSpec(name=PROVENANCE_COLS[1], dtype=interop.int32()),
+            FieldSpec(name=PROVENANCE_COLS[2], dtype=interop.int32()),
+            FieldSpec(name=PROVENANCE_COLS[3], dtype=interop.bool_()),
         ),
     )
 
@@ -447,9 +410,9 @@ __all__ = [
     "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
-    "ArrowFieldSpec",
     "DerivedFieldSpec",
     "FieldBundle",
+    "FieldSpec",
     "NestedFieldSpec",
     "TableSchemaSpec",
     "call_span_bundle",

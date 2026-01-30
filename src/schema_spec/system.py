@@ -13,7 +13,6 @@ and information_schema.key_column_usage views.
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -43,12 +42,8 @@ from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_f
 from datafusion_engine.schema_registry import extract_nested_dataset_names
 from datafusion_engine.schema_validation import ArrowValidationOptions, validate_table
 from schema_spec.dataset_handle import DatasetHandle
-from schema_spec.specs import (
-    ArrowFieldSpec,
-    DerivedFieldSpec,
-    FieldBundle,
-    TableSchemaSpec,
-)
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
@@ -57,6 +52,7 @@ from storage.dataset_sources import (
 )
 from storage.deltalake import DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
@@ -822,9 +818,9 @@ def _delta_constraints_from_table_spec(table_spec: TableSchemaSpec) -> tuple[str
 
 def _merge_fields(
     bundles: Iterable[FieldBundle],
-    fields: Iterable[ArrowFieldSpec],
-) -> list[ArrowFieldSpec]:
-    merged: list[ArrowFieldSpec] = []
+    fields: Iterable[FieldSpec],
+) -> list[FieldSpec]:
+    merged: list[FieldSpec] = []
     for bundle in bundles:
         merged.extend(bundle.fields)
     merged.extend(fields)
@@ -836,7 +832,7 @@ def make_table_spec(
     *,
     version: int | None,
     bundles: Iterable[FieldBundle],
-    fields: Iterable[ArrowFieldSpec],
+    fields: Iterable[FieldSpec],
     constraints: TableSpecConstraints | None = None,
 ) -> TableSchemaSpec:
     """Create a TableSchemaSpec from field bundles and explicit fields.
@@ -1042,7 +1038,7 @@ def ddl_fingerprint_from_definition(ddl: str) -> str:
     str
         Stable fingerprint of the DDL string.
     """
-    return hashlib.sha256(ddl.encode("utf-8")).hexdigest()
+    return hash_sha256_hex(ddl.encode("utf-8"))
 
 
 def dataset_table_ddl_fingerprint(name: str) -> str | None:

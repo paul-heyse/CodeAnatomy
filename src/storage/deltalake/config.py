@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal
 
 import msgspec
 
+from core.config_base import config_fingerprint
 from serde_msgspec import StructBaseStrict
 
 _COLUMN_NAME_PATTERN = "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
@@ -106,6 +107,39 @@ class DeltaWritePolicy(StructBaseStrict, frozen=True):
         ...,
     ] = ()
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "target_file_size": self.target_file_size,
+            "partition_by": self.partition_by,
+            "zorder_by": self.zorder_by,
+            "stats_policy": self.stats_policy,
+            "stats_columns": self.stats_columns,
+            "stats_max_columns": self.stats_max_columns,
+            "parquet_writer_policy": (
+                self.parquet_writer_policy.fingerprint_payload()
+                if self.parquet_writer_policy is not None
+                else None
+            ),
+            "enable_features": self.enable_features,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
 
 class ParquetWriterPolicy(StructBaseStrict, frozen=True):
     """Per-column Parquet writer settings for Delta writes."""
@@ -117,12 +151,62 @@ class ParquetWriterPolicy(StructBaseStrict, frozen=True):
     bloom_filter_ndv: NonNegInt | None = None
     dictionary_enabled: tuple[ColumnName, ...] = ()
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "statistics_enabled": self.statistics_enabled,
+            "statistics_level": self.statistics_level,
+            "bloom_filter_enabled": self.bloom_filter_enabled,
+            "bloom_filter_fpp": self.bloom_filter_fpp,
+            "bloom_filter_ndv": self.bloom_filter_ndv,
+            "dictionary_enabled": self.dictionary_enabled,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
 
 class DeltaSchemaPolicy(StructBaseStrict, frozen=True):
     """Schema evolution and column mapping policy for Delta."""
 
     schema_mode: SchemaMode | None = None
     column_mapping_mode: ColumnMappingMode | None = None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "schema_mode": self.schema_mode,
+            "column_mapping_mode": self.column_mapping_mode,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 class StatsColumnsInputs(StructBaseStrict, frozen=True):

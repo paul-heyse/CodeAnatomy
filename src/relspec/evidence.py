@@ -51,9 +51,7 @@ class EvidenceCatalog:
         self.contracts_by_dataset[name] = contract
         if contract.enforce_columns:
             self.columns_by_dataset[name] = {col.name for col in contract.columns}
-            self.types_by_dataset[name] = {
-                col.name: str(col.arrow_type) for col in contract.columns
-            }
+            self.types_by_dataset[name] = {col.name: str(col.dtype) for col in contract.columns}
         if contract.schema_metadata:
             self.metadata_by_dataset.setdefault(name, {}).update(contract.schema_metadata)
         if ctx is not None:
@@ -593,8 +591,8 @@ def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
         metadata.setdefault("file_format", provider.file_format)
     if provider.partition_columns:
         metadata.setdefault("partition_columns", list(provider.partition_columns))
-    if provider.schema_fingerprint is not None:
-        metadata.setdefault("schema_fingerprint", provider.schema_fingerprint)
+    if provider.schema_identity_hash is not None:
+        metadata.setdefault("schema_identity_hash", provider.schema_identity_hash)
     if provider.ddl_fingerprint is not None:
         metadata.setdefault("ddl_fingerprint", provider.ddl_fingerprint)
     metadata.setdefault("unbounded", provider.unbounded)

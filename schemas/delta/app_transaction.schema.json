@@ -1,0 +1,27 @@
+{
+  "$id": "schemas/delta/app_transaction.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeltaAppTransaction",
+  "type": "object",
+  "properties": {
+    "app_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "last_updated": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    }
+  },
+  "required": [
+    "app_id",
+    "version"
+  ],
+  "additionalProperties": false
+}

@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.arrow_schema.build import column_or_null, table_from_columns
 from datafusion_engine.dataset_registry import resolve_delta_constraints
+from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.runtime import dataset_schema_from_context
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
@@ -108,7 +108,7 @@ def write_repo_snapshot(
     target.parent.mkdir(parents=True, exist_ok=True)
     metadata = {
         "snapshot_kind": "repo_snapshot",
-        "schema_fingerprint": schema_fingerprint(snapshot.schema),
+        "schema_identity_hash": schema_identity_hash(snapshot.schema),
         "dataset": str(target),
     }
     storage = context.resolve_storage(table_uri=str(target))

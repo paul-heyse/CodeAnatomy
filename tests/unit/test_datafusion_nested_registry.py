@@ -44,7 +44,7 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert schema.names[:2] == ("file_id", "path")
     assert "module_name" in schema.names
-    assert "schema_fingerprint" in schema.names
+    assert "schema_identity_hash" in schema.names
 
 
 def test_nested_schema_for_cst_refs() -> None:

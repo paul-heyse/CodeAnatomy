@@ -7,11 +7,10 @@ from dataclasses import dataclass
 
 from arrow_utils.core.ordering import OrderingLevel
 from core_types import DeterminismTier
-from datafusion_engine.arrow_schema.metadata import (
-    EvidenceMetadataSpec,
-    evidence_metadata,
-    metadata_map_bytes,
-    metadata_scalar_map_bytes,
+from datafusion_engine.arrow_schema.metadata import EvidenceMetadataSpec, evidence_metadata
+from datafusion_engine.arrow_schema.metadata_codec import (
+    encode_metadata_map,
+    encode_metadata_scalar_map,
 )
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 
@@ -47,8 +46,8 @@ _TEMPLATES: dict[str, NormalizeTemplate] = {
             ),
             extra={
                 b"confidence_policy": b"cst",
-                EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "expr_role"}),
-                EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes(
+                EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"role": "expr_role"}),
+                EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map(
                     {"source": "cst_type_exprs"}
                 ),
             },
@@ -94,7 +93,7 @@ _TEMPLATES: dict[str, NormalizeTemplate] = {
             ),
             extra={
                 b"confidence_policy": b"diagnostic",
-                EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes(
+                EVIDENCE_OUTPUT_MAP_META: encode_metadata_map(
                     {"role": "severity", "source": "diag_source"}
                 ),
             },
@@ -113,8 +112,10 @@ _TEMPLATES: dict[str, NormalizeTemplate] = {
             ),
             extra={
                 b"confidence_policy": b"span",
-                EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "reason"}),
-                EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "span_errors"}),
+                EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"role": "reason"}),
+                EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map(
+                    {"source": "span_errors"}
+                ),
             },
         ),
     ),
@@ -131,8 +132,8 @@ _TEMPLATES: dict[str, NormalizeTemplate] = {
             ),
             extra={
                 b"confidence_policy": b"type",
-                EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "type_form"}),
-                EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "type_nodes"}),
+                EVIDENCE_OUTPUT_MAP_META: encode_metadata_map({"role": "type_form"}),
+                EVIDENCE_OUTPUT_LITERALS_META: encode_metadata_scalar_map({"source": "type_nodes"}),
             },
         ),
     ),

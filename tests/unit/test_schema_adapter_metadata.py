@@ -66,13 +66,13 @@ def test_with_constraints_preserves_schema_adapter_flag() -> None:
     assert updated.schema_adapter_enabled is True
 
 
-def test_with_schema_fingerprint_preserves_schema_adapter_flag() -> None:
-    """with_schema_fingerprint should preserve schema_adapter_enabled."""
+def test_with_schema_identity_hash_preserves_schema_adapter_flag() -> None:
+    """with_schema_identity_hash should preserve schema_adapter_enabled."""
     metadata = TableProviderMetadata(
         table_name="test_table",
         schema_adapter_enabled=True,
     )
-    updated = metadata.with_schema_fingerprint("fingerprint123")
+    updated = metadata.with_schema_identity_hash("fingerprint123")
     assert updated.schema_adapter_enabled is True
 
 

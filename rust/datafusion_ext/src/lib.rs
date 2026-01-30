@@ -10,6 +10,7 @@ pub mod errors;
 pub mod expr_planner;
 pub mod function_factory;
 pub mod function_rewrite;
+pub mod generated;
 pub mod registry_snapshot;
 pub mod udaf_builtin;
 #[cfg(feature = "async-udf")]
@@ -22,6 +23,8 @@ pub mod udf_registry;
 pub mod udtf_builtin;
 pub mod udtf_external;
 pub mod udwf_builtin;
+
+pub use generated::delta_types::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 
 use std::sync::Arc;
 

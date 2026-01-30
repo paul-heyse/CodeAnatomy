@@ -82,7 +82,7 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert payload["name"] == "test_view"
     assert payload["plan_fingerprint"] == "test_fp"
     assert payload["plan_task_signature"] == "sig:test_fp"
-    assert "schema_fingerprint" in payload
+    assert "schema_identity_hash" in payload
     assert "schema_msgpack" in payload
     assert "schema_describe_msgpack" in payload
     assert "schema_provenance_msgpack" in payload

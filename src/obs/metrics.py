@@ -20,7 +20,7 @@ from datafusion_engine.arrow_interop import (
     SchemaLike,
     TableLike,
 )
-from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
+from datafusion_engine.arrow_schema.abi import schema_to_dict
 from datafusion_engine.arrow_schema.build import (
     const_array,
     empty_table,
@@ -29,6 +29,7 @@ from datafusion_engine.arrow_schema.build import (
 )
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import NormalizePolicy
+from datafusion_engine.identity import schema_identity_hash
 from obs.otel.metrics import set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER
 
@@ -45,7 +46,7 @@ DATASET_STATS_SCHEMA = pa.schema(
         ("dataset_name", pa.string()),
         ("rows", pa.int64()),
         ("columns", pa.int32()),
-        ("schema_fingerprint", pa.string()),
+        ("schema_identity_hash", pa.string()),
     ]
 )
 
@@ -92,7 +93,7 @@ class TableSummary(TypedDict):
 
     rows: int
     columns: int
-    schema_fingerprint: str
+    schema_identity_hash: str
     schema: list[JsonDict]
 
 
@@ -104,12 +105,12 @@ def table_summary(table: TableLike) -> TableSummary:
     TableSummary
         Summary statistics for the table.
     """
-    sch_fp = schema_fingerprint(table.schema)
+    sch_fp = schema_identity_hash(table.schema)
     schema_fields = cast("list[JsonDict]", schema_to_dict(table.schema).get("fields", []))
     return {
         "rows": int(table.num_rows),
         "columns": len(table.column_names),
-        "schema_fingerprint": sch_fp,
+        "schema_identity_hash": sch_fp,
         "schema": schema_fields,
     }
 
@@ -118,7 +119,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     """Build a dataset-level stats table.
 
     Table columns:
-      dataset_name, rows, columns, schema_fingerprint
+      dataset_name, rows, columns, schema_identity_hash
 
     Returns
     -------
@@ -129,14 +130,14 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     for name, t in tables.items():
         if t is None:
             continue
-        sch_fp = schema_fingerprint(t.schema)
+        sch_fp = schema_identity_hash(t.schema)
         set_dataset_stats(str(name), rows=int(t.num_rows), columns=len(t.column_names))
         rows.append(
             {
                 "dataset_name": str(name),
                 "rows": int(t.num_rows),
                 "columns": len(t.column_names),
-                "schema_fingerprint": sch_fp,
+                "schema_identity_hash": sch_fp,
             }
         )
     table = rows_to_table(rows, DATASET_STATS_SCHEMA)

@@ -14,6 +14,7 @@ from pyarrow import Table as ArrowTable
 
 from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.coercion import to_arrow_table
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema_introspection import table_constraint_rows
 from datafusion_engine.session_helpers import deregister_table, register_temp_table, temp_table
@@ -186,10 +187,10 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
     with temp_table(ctx, table, prefix="_dtype_") as temp_name:
         df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
         result = _expr_table(df)
-        value = result["dtype"][0].as_py()
+    value = result["dtype"][0].as_py()
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
-        raise TypeError(msg)
+        raise DataFusionEngineError(msg, kind=ErrorKind.DATAFUSION)
     return value
 
 
@@ -246,7 +247,7 @@ def _cast_failure_count(
         table = _expr_table(ctx.table(table_name).aggregate([], [failures_expr]))
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"DataFusion cast check failed for column {column!r}: {exc}."
-        raise ValueError(msg) from exc
+        raise DataFusionEngineError(msg, kind=ErrorKind.DATAFUSION) from exc
     value = table["failures"][0].as_py() if table.num_rows else 0
     return int(value or 0)
 

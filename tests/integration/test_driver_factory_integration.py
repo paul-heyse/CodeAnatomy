@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -13,7 +12,7 @@ pytest.importorskip("datafusion")
 pytest.importorskip("rustworkx")
 
 import rustworkx as rx
-from hamilton import async_driver, driver
+from hamilton import driver
 
 from core_types import DeterminismTier, JsonValue
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -22,7 +21,6 @@ from hamilton_pipeline.driver_factory import (
     DriverBuildRequest,
     ExecutionMode,
     ViewGraphContext,
-    build_async_driver,
     build_driver,
 )
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
@@ -165,22 +163,3 @@ def test_build_driver_with_stub_plan() -> None:
     )
     driver_instance = build_driver(request=request)
     assert isinstance(driver_instance, driver.Driver)
-
-
-@pytest.mark.integration
-def test_build_async_driver_with_stub_plan() -> None:
-    """Ensure build_async_driver assembles an async driver with a stub plan."""
-    plan = _stub_execution_plan()
-    view_ctx = _stub_view_context(plan)
-    request = DriverBuildRequest(
-        config=_base_config(),
-        plan=plan,
-        view_ctx=view_ctx,
-        execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
-    )
-
-    async def _build() -> async_driver.AsyncDriver:
-        return await build_async_driver(request=request)
-
-    driver_instance = asyncio.run(_build())
-    assert isinstance(driver_instance, async_driver.AsyncDriver)

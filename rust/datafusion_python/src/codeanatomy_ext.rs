@@ -63,14 +63,14 @@ use crate::delta_maintenance::{
 use crate::delta_mutations::{
     delta_data_check as delta_data_check_native, delta_delete as delta_delete_native,
     delta_merge as delta_merge_native, delta_update as delta_update_native,
-    delta_write_ipc as delta_write_ipc_native, DeltaAppTransaction, DeltaCommitOptions,
-    DeltaMutationReport,
+    delta_write_ipc as delta_write_ipc_native, DeltaMutationReport,
 };
 use crate::delta_observability::{
     add_action_payloads, maintenance_report_payload, mutation_report_payload, scan_config_payload,
     scan_config_schema_ipc, snapshot_payload,
 };
-use crate::delta_protocol::{gate_from_parts, DeltaFeatureGate, DeltaSnapshotInfo};
+use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo};
+use crate::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
 use crate::{registry_snapshot, udf_builtin, udf_custom_py, udf_docs};
@@ -1561,6 +1561,14 @@ fn delta_snapshot_info(
 }
 
 #[pyfunction]
+fn validate_protocol_gate(snapshot_msgpack: Vec<u8>, gate_msgpack: Vec<u8>) -> PyResult<()> {
+    crate::delta_protocol::validate_protocol_gate_payload(&snapshot_msgpack, &gate_msgpack)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!("Delta protocol gate validation failed: {err}"))
+        })
+}
+
+#[pyfunction]
 fn delta_add_actions(
     py: Python<'_>,
     table_uri: String,
@@ -2438,6 +2446,9 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module
     )?)?;
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
+    module.add_class::<DeltaAppTransaction>()?;
+    module.add_class::<DeltaCommitOptions>()?;
+    module.add_class::<DeltaFeatureGate>()?;
     module.add_class::<DeltaCdfOptions>()?;
     module.add_class::<DeltaRuntimeEnvOptions>()?;
     module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
@@ -2445,6 +2456,7 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(install_delta_plan_codecs, module)?)?;
     module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_snapshot_info, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_protocol_gate, module)?)?;
     module.add_function(wrap_pyfunction!(delta_add_actions, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider_from_session, module)?)?;
     module.add_function(wrap_pyfunction!(delta_scan_config_from_session, module)?)?;

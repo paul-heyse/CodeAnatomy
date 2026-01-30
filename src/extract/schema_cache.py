@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from functools import cache
 
-from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema
+from datafusion_engine.identity import schema_identity_hash
 
 
 @cache
-def cached_schema_fingerprint(dataset_name: str) -> str:
+def cached_schema_identity_hash(dataset_name: str) -> str:
     """Return cached schema fingerprint for a dataset.
 
     Parameters
@@ -22,7 +22,7 @@ def cached_schema_fingerprint(dataset_name: str) -> str:
     str
         SHA-256 fingerprint of the dataset schema.
     """
-    return schema_fingerprint(dataset_schema(dataset_name))
+    return schema_identity_hash(dataset_schema(dataset_name))
 
 
 def ast_files_fingerprint() -> str:
@@ -33,7 +33,7 @@ def ast_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("ast_files_v1")
+    return cached_schema_identity_hash("ast_files_v1")
 
 
 def bytecode_files_fingerprint() -> str:
@@ -44,7 +44,7 @@ def bytecode_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("bytecode_files_v1")
+    return cached_schema_identity_hash("bytecode_files_v1")
 
 
 def libcst_files_fingerprint() -> str:
@@ -55,7 +55,7 @@ def libcst_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("libcst_files_v1")
+    return cached_schema_identity_hash("libcst_files_v1")
 
 
 def symtable_files_fingerprint() -> str:
@@ -66,7 +66,7 @@ def symtable_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("symtable_files_v1")
+    return cached_schema_identity_hash("symtable_files_v1")
 
 
 def tree_sitter_files_fingerprint() -> str:
@@ -77,7 +77,7 @@ def tree_sitter_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("tree_sitter_files_v1")
+    return cached_schema_identity_hash("tree_sitter_files_v1")
 
 
 def repo_file_blobs_fingerprint() -> str:
@@ -88,7 +88,7 @@ def repo_file_blobs_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("repo_file_blobs_v1")
+    return cached_schema_identity_hash("repo_file_blobs_v1")
 
 
 def repo_files_fingerprint() -> str:
@@ -99,13 +99,13 @@ def repo_files_fingerprint() -> str:
     str
         Cached schema fingerprint.
     """
-    return cached_schema_fingerprint("repo_files_v1")
+    return cached_schema_identity_hash("repo_files_v1")
 
 
 __all__ = [
     "ast_files_fingerprint",
     "bytecode_files_fingerprint",
-    "cached_schema_fingerprint",
+    "cached_schema_identity_hash",
     "libcst_files_fingerprint",
     "repo_file_blobs_fingerprint",
     "repo_files_fingerprint",

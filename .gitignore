@@ -27,3 +27,6 @@ Cargo.lock
 
 # Plan artifact store outputs
 .artifacts/
+
+# CQ analysis artifacts
+.cq/

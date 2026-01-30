@@ -106,7 +106,7 @@ class ParamTableSummarySaver(DataSaver):
             entry: dict[str, object] = {
                 "logical_name": logical_name,
                 "rows": int(artifact.rows),
-                "schema_fingerprint": artifact.schema_fingerprint,
+                "schema_identity_hash": artifact.schema_identity_hash,
                 "signature": artifact.signature,
             }
             if output_dir is not None:

@@ -333,7 +333,7 @@ def _types_from_contract(
     for name in columns:
         column = by_name.get(name)
         if column is not None:
-            pairs.append((name, str(column.arrow_type)))
+            pairs.append((name, str(column.dtype)))
     return tuple(pairs)
 
 

@@ -14,8 +14,8 @@ from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_cdf_policy,
     resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
 )
+from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore

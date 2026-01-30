@@ -11,6 +11,7 @@ pub mod expr_planner;
 pub mod function_factory;
 pub mod function_rewrite;
 pub mod generated;
+pub mod planner_rules;
 pub mod registry_snapshot;
 pub mod udaf_builtin;
 #[cfg(feature = "async-udf")]

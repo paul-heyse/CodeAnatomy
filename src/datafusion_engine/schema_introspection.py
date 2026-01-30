@@ -425,93 +425,13 @@ def _aligned_rows(
 
 
 def _merge_registry_routines(ctx: SessionContext, base: pa.Table) -> pa.Table:
-    snapshot = _registry_snapshot(ctx)
-    if snapshot is None:
-        return base
-    schema_names = tuple(base.schema.names)
-    aliases = _normalized_aliases(snapshot.get("aliases"))
-    volatility = snapshot.get("volatility", {})
-    volatility_map = (
-        {str(key): str(value) for key, value in volatility.items()}
-        if isinstance(volatility, Mapping)
-        else {}
-    )
-    routines: list[dict[str, object]] = base.to_pylist()
-    known: set[str] = set()
-    for row in routines:
-        name = _routine_name_from_row(row)
-        if name is not None:
-            known.add(name.lower())
-    registry_kinds = (
-        ("scalar", "FUNCTION"),
-        ("aggregate", "AGGREGATE"),
-        ("window", "WINDOW"),
-        ("table", "TABLE"),
-    )
-    for key, routine_type in registry_kinds:
-        for name in _registry_names(snapshot, key):
-            lowered = name.lower()
-            if lowered in known:
-                continue
-            routines.append(
-                _routine_row(
-                    name=name,
-                    routine_type=routine_type,
-                    specific_name=name,
-                    volatility=volatility_map.get(name),
-                    schema_names=schema_names,
-                )
-            )
-            known.add(lowered)
-            for alias in aliases.get(name, ()):
-                alias_lower = alias.lower()
-                if alias_lower in known:
-                    continue
-                routines.append(
-                    _routine_row(
-                        name=alias,
-                        routine_type=routine_type,
-                        specific_name=name,
-                        volatility=volatility_map.get(name),
-                        schema_names=schema_names,
-                    )
-                )
-                known.add(alias_lower)
-    if not routines:
-        return base
-    return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base.schema)
+    _ = ctx
+    return base
 
 
 def _merge_registry_parameters(ctx: SessionContext, base: pa.Table | None) -> pa.Table:
-    snapshot = _registry_snapshot(ctx)
-    base_table = base or _empty_parameters_table()
-    if snapshot is None:
-        return base_table
-    schema_names = tuple(base_table.schema.names)
-    parameter_names = _normalized_parameter_names(snapshot.get("parameter_names"))
-    routines: list[dict[str, object]] = base_table.to_pylist()
-    known: set[str] = set()
-    for row in routines:
-        name = _routine_name_from_row(row)
-        if name is not None:
-            known.add(name.lower())
-    for name, params in parameter_names.items():
-        if name.lower() in known:
-            continue
-        for ordinal, param_name in enumerate(params, start=1):
-            routines.append(
-                _parameter_row(
-                    name=name,
-                    specific_name=name,
-                    ordinal=ordinal,
-                    param_name=param_name,
-                    schema_names=schema_names,
-                )
-            )
-        known.add(name.lower())
-    if not routines:
-        return base_table
-    return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base_table.schema)
+    _ = ctx
+    return base or _empty_parameters_table()
 
 
 def _information_schema_table(

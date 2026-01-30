@@ -104,7 +104,6 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         scan_units_msgpack=dumps_msgpack(({"name": "scan-1"},)),
         scan_keys=("scan_key_1",),
         plan_details_msgpack=dumps_msgpack({"mode": "test"}),
-        function_registry_snapshot_msgpack=dumps_msgpack({"hash": "registry-hash"}),
         udf_snapshot_msgpack=dumps_msgpack({"hash": "udf-hash"}),
         udf_planner_snapshot_msgpack=None,
         udf_compatibility_ok=True,

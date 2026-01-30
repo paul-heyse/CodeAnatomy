@@ -32,7 +32,6 @@ from datafusion_engine.write_pipeline import (
     WriteRequest,
 )
 from obs.diagnostics import DiagnosticsCollector
-from storage.deltalake import DeltaWriteOptions, write_delta_table
 from storage.deltalake.config import DeltaSchemaPolicy
 
 
@@ -53,18 +52,26 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
         enable_schema_evolution_adapter=False,
     )
     ctx = profile.session_context()
-    write_delta_table(
-        pa.table({"id": [1], "value": ["a"]}),
-        str(delta_path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
-        ctx=ctx,
+    seed = datafusion_from_arrow(
+        ctx,
+        name="events_seed",
+        value=pa.table({"id": [1], "value": ["a"]}),
+    )
+    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=seed,
+            destination=str(delta_path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            format_options={"schema_mode": "overwrite"},
+        )
     )
     df = datafusion_from_arrow(
         ctx,
         name="events_updates",
         value=pa.table({"id": [2], "value": ["b"], "extra": [1]}),
     )
-    pipeline = WritePipeline(ctx, runtime_profile=profile)
     pipeline.write(
         WriteRequest(
             source=df,
@@ -93,18 +100,26 @@ def test_delta_protocol_support_warns_and_records(tmp_path: Path) -> None:
         enable_schema_evolution_adapter=False,
     )
     ctx = profile.session_context()
-    write_delta_table(
-        pa.table({"id": [1], "value": ["a"]}),
-        str(delta_path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
-        ctx=ctx,
+    seed = datafusion_from_arrow(
+        ctx,
+        name="events_seed",
+        value=pa.table({"id": [1], "value": ["a"]}),
+    )
+    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=seed,
+            destination=str(delta_path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            format_options={"schema_mode": "overwrite"},
+        )
     )
     df = datafusion_from_arrow(
         ctx,
         name="events_more",
         value=pa.table({"id": [2], "value": ["b"]}),
     )
-    pipeline = WritePipeline(ctx, runtime_profile=profile)
     pipeline.write(
         WriteRequest(
             source=df,

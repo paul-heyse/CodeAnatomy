@@ -142,6 +142,103 @@ def ensure_table(value: object, *, label: str = "input") -> pa.Table:
         raise TypeError(msg) from exc
 
 
+def ensure_not_empty[T](
+    value: Sequence[T],
+    *,
+    label: str = "value",
+) -> Sequence[T]:
+    """Ensure sequence is not empty.
+
+    Parameters
+    ----------
+    value
+        Sequence to validate.
+    label
+        Label for error messages.
+
+    Returns
+    -------
+    Sequence[T]
+        The validated sequence.
+
+    Raises
+    ------
+    ValueError
+        Raised when sequence is empty.
+    """
+    if not value:
+        msg = f"{label} must not be empty"
+        raise ValueError(msg)
+    return value
+
+
+def ensure_subset(
+    items: Iterable[T],
+    universe: Container[T],
+    *,
+    label: str = "items",
+) -> None:
+    """Ensure all items are in the universe.
+
+    Parameters
+    ----------
+    items
+        Items to validate.
+    universe
+        Container of allowed values.
+    label
+        Label for error messages.
+
+    Raises
+    ------
+    ValueError
+        Raised when items contain invalid values.
+    """
+    extra = [item for item in items if item not in universe]
+    if extra:
+        msg = f"{label} contains invalid values: {extra}"
+        raise ValueError(msg)
+
+
+def ensure_unique[T](
+    items: Iterable[T],
+    *,
+    label: str = "items",
+) -> list[T]:
+    """Ensure all items are unique.
+
+    Parameters
+    ----------
+    items
+        Items to validate.
+    label
+        Label for error messages.
+
+    Returns
+    -------
+    list[T]
+        Deduplicated list of items.
+
+    Raises
+    ------
+    ValueError
+        Raised when duplicates are present.
+    """
+    seen: set[T] = set()
+    duplicates: list[T] = []
+    result: list[T] = []
+    for item in items:
+        if item in seen:
+            duplicates.append(item)
+        else:
+            seen.add(item)
+            result.append(item)
+    if duplicates:
+        msg = f"{label} contains duplicates: {duplicates}"
+        raise ValueError(msg)
+    return result
+
+
 def find_missing(required: Iterable[T], available: Container[T]) -> list[T]:
     """Find items in required that are not in available.
 
@@ -189,8 +286,11 @@ def validate_required_items(
 __all__ = [
     "ensure_callable",
     "ensure_mapping",
+    "ensure_not_empty",
     "ensure_sequence",
+    "ensure_subset",
     "ensure_table",
+    "ensure_unique",
     "find_missing",
     "validate_required_items",
 ]

@@ -157,7 +157,7 @@ def plan_scan_inputs(
     )
     scan_hash: str | None = None
     if units:
-        from datafusion_engine.scan_overrides import scan_units_hash
+        from datafusion_engine.dataset_resolution import scan_units_hash
 
         scan_hash = scan_units_hash(units)
     scan_task_name_by_key = {unit.key: name for name, unit in plan_scan_units_by_task_name.items()}

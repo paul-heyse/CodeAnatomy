@@ -17,12 +17,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonValue
-from datafusion_engine.delta_protocol import (
-    DeltaFeatureGate,
-    DeltaProtocolSnapshot,
-    delta_feature_gate_payload,
-    delta_feature_gate_tuple,
-)
+from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta_store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
@@ -219,9 +214,7 @@ def _delta_inputs_from_scan_units(
         timestamp = unit.delta_timestamp
         if timestamp is None and unit.snapshot_timestamp is not None:
             timestamp = str(unit.snapshot_timestamp)
-        gate = unit.delta_feature_gate
         protocol = unit.delta_protocol
-        storage_hash = unit.storage_options_hash
         scan_config = unit.delta_scan_config
         scan_config_hash = unit.delta_scan_config_hash
         provider = unit.datafusion_provider
@@ -234,9 +227,7 @@ def _delta_inputs_from_scan_units(
             dataset_name=unit.dataset_name,
             version=unit.delta_version,
             timestamp=timestamp,
-            feature_gate=gate,
             protocol=protocol,
-            storage_options_hash=storage_hash,
             delta_scan_config=scan_config,
             delta_scan_config_hash=scan_config_hash,
             datafusion_provider=provider,
@@ -262,9 +253,7 @@ def _delta_pin_state_from_pin(
 ) -> tuple[
     int | None,
     str | None,
-    DeltaFeatureGate | None,
     DeltaProtocolSnapshot | None,
-    str | None,
     str | None,
     str | None,
     bool | None,
@@ -279,9 +268,7 @@ def _delta_pin_state_from_pin(
     return (
         pin.version,
         pin.timestamp,
-        pin.feature_gate,
         pin.protocol,
-        pin.storage_options_hash,
         pin.delta_scan_config_hash,
         pin.datafusion_provider,
         pin.protocol_compatible,
@@ -973,7 +960,6 @@ def _plan_artifacts_from_components(
         ),
         udf_snapshot_hash=inputs.udf_artifacts.snapshot_hash,
         function_registry_hash=inputs.registry_artifacts.registry_hash,
-        function_registry_snapshot=dict(inputs.registry_artifacts.registry_snapshot),
         rewrite_tags=tuple(inputs.udf_artifacts.rewrite_tags),
         domain_planner_names=tuple(inputs.udf_artifacts.domain_planner_names),
         udf_snapshot=dict(inputs.udf_artifacts.snapshot),
@@ -1114,10 +1100,9 @@ class _UdfArtifacts:
 
 @dataclass(frozen=True)
 class _RegistryArtifacts:
-    """Function registry snapshot metadata."""
+    """Function registry metadata hash."""
 
     registry_hash: str
-    registry_snapshot: Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -1157,11 +1142,9 @@ def _delta_inputs_payload(
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
-            "storage_options_hash": pin.storage_options_hash,
             "delta_scan_config": (
                 to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
             ),
@@ -1190,13 +1173,11 @@ def _scan_units_payload(
             "delta_version": unit.delta_version,
             "delta_timestamp": unit.delta_timestamp,
             "snapshot_timestamp": unit.snapshot_timestamp,
-            "delta_feature_gate": delta_feature_gate_payload(unit.delta_feature_gate),
             "delta_protocol": (
                 to_builtins(unit.delta_protocol, str_keys=True)
                 if unit.delta_protocol is not None
                 else None
             ),
-            "storage_options_hash": unit.storage_options_hash,
             "delta_scan_config": (
                 to_builtins(unit.delta_scan_config) if unit.delta_scan_config is not None else None
             ),
@@ -1517,9 +1498,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
                     pin.dataset_name,
                     pin.version,
                     pin.timestamp,
-                    delta_feature_gate_tuple(pin.feature_gate),
                     _delta_protocol_payload(pin.protocol),
-                    pin.storage_options_hash,
                     pin.delta_scan_config_hash,
                     pin.datafusion_provider,
                     pin.protocol_compatible,
@@ -2074,7 +2053,6 @@ def _function_registry_artifacts(
     snapshot: Mapping[str, object] = {"functions": list(functions)}
     return _RegistryArtifacts(
         registry_hash=_function_registry_hash(snapshot),
-        registry_snapshot=snapshot,
     )
 
 

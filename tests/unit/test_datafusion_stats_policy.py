@@ -8,8 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from datafusion_engine.dataset_registration import register_dataset_df
 from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile, settings_snapshot_for_profile
 from schema_spec.system import DataFusionScanOptions, table_spec_from_schema
 

@@ -47,6 +47,7 @@ from extract.helpers import (
 )
 from extract.options import RepoOptions, WorkerOptions, WorklistQueueOptions
 from extract.parallel import resolve_max_workers
+from extract.result_types import ExtractResult
 from extract.schema_cache import bytecode_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
@@ -91,13 +92,6 @@ class BytecodeExtractOptions(RepoOptions, WorklistQueueOptions, WorkerOptions):
         "RAISE_VARARGS",
         "RERAISE",
     )
-
-
-@dataclass(frozen=True)
-class BytecodeExtractResult:
-    """Extracted bytecode tables for code units, instructions, and edges."""
-
-    bytecode_files: TableLike
 
 
 @dataclass(frozen=True)
@@ -1628,12 +1622,12 @@ def extract_bytecode(
     options: BytecodeExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> BytecodeExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract bytecode tables from repository files.
 
     Returns
     -------
-    BytecodeExtractResult
+    ExtractResult[TableLike]
         Nested bytecode file table.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
@@ -1660,15 +1654,14 @@ def extract_bytecode(
         normalize=normalize,
         apply_post_kernels=True,
     )
-    return BytecodeExtractResult(
-        bytecode_files=materialize_extract_plan(
-            "bytecode_files_v1",
-            plan,
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=materialize_options,
-        )
+    table = materialize_extract_plan(
+        "bytecode_files_v1",
+        plan,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=materialize_options,
     )
+    return ExtractResult(table=table, extractor_name="bytecode")
 
 
 def extract_bytecode_plans(

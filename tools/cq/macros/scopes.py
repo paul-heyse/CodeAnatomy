@@ -19,6 +19,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -175,6 +182,11 @@ def _iter_search_files(root: Path, max_files: int) -> list[Path]:
 
 
 def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]:
+    # Handle both absolute and relative paths
+    target_as_path = Path(target)
+    # Check if target is already an absolute or relative path that exists
+    if target_as_path.exists() and target_as_path.is_file():
+        return [target_as_path.resolve()]
     target_path = root / target
     if target_path.exists() and target_path.is_file():
         return [target_path]
@@ -193,7 +205,11 @@ def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]
 def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
     all_scopes: list[ScopeInfo] = []
     for pyfile in files[:_MAX_FILES_ANALYZED]:
-        rel = str(pyfile.relative_to(root))
+        try:
+            rel = str(pyfile.relative_to(root))
+        except ValueError:
+            # File is outside root (e.g., absolute path)
+            rel = pyfile.name
         try:
             source = pyfile.read_text(encoding="utf-8")
             st = symtable.symtable(source, rel, "exec")
@@ -203,7 +219,11 @@ def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
     return all_scopes
 
 
-def _append_scope_section(result: CqResult, all_scopes: list[ScopeInfo]) -> None:
+def _append_scope_section(
+    result: CqResult,
+    all_scopes: list[ScopeInfo],
+    scoring_details: dict[str, object],
+) -> None:
     if not all_scopes:
         return
     section = Section(title="Scope Capture Details")
@@ -223,6 +243,7 @@ def _append_scope_section(result: CqResult, all_scopes: list[ScopeInfo]) -> None
                 message=f"{scope.name}: {'; '.join(detail_parts)}",
                 anchor=Anchor(file=scope.file, line=scope.line),
                 severity=severity,
+                details=dict(scoring_details),
             )
         )
 
@@ -232,14 +253,19 @@ def _append_scope_section(result: CqResult, all_scopes: list[ScopeInfo]) -> None
                 category="truncated",
                 message=f"... and {len(all_scopes) - _MAX_SCOPES_DISPLAY} more",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(section)
 
 
-def _append_scope_evidence(result: CqResult, all_scopes: list[ScopeInfo]) -> None:
+def _append_scope_evidence(
+    result: CqResult,
+    all_scopes: list[ScopeInfo],
+    scoring_details: dict[str, object],
+) -> None:
     for scope in all_scopes:
-        evidence_details: dict[str, object] = {}
+        evidence_details: dict[str, object] = dict(scoring_details)
         if scope.free_vars:
             evidence_details["free_vars"] = scope.free_vars
         if scope.cell_vars:
@@ -292,6 +318,26 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
         "scopes_with_captures": len(all_scopes),
     }
 
+    # Compute scoring signals
+    unique_files = len({s.file for s in all_scopes})
+    imp_signals = ImpactSignals(
+        sites=len(all_scopes),
+        files=unique_files,
+        depth=0,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     closures = [s for s in all_scopes if s.free_vars]
     providers = [s for s in all_scopes if s.cell_vars]
@@ -303,6 +349,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="closure",
                 message=f"{len(closures)} closures capturing outer variables",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
     if providers:
@@ -311,6 +358,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="provider",
                 message=f"{len(providers)} functions providing variables to nested scopes",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     if nonlocal_users:
@@ -319,6 +367,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="nonlocal",
                 message=f"{len(nonlocal_users)} functions using nonlocal declarations",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
     if not all_scopes:
@@ -327,10 +376,11 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="info",
                 message="No scope captures or closures detected",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
-    _append_scope_section(result, all_scopes)
-    _append_scope_evidence(result, all_scopes)
+    _append_scope_section(result, all_scopes, scoring_details)
+    _append_scope_evidence(result, all_scopes, scoring_details)
 
     return result

@@ -11,7 +11,7 @@ All write operations route through DataFusion-native APIs:
 1. **CSV/JSON/Arrow**: `DataFrame.write_csv()`, `DataFrame.write_json()`, Arrow IPC
 2. **Parquet**: `DataFrame.write_parquet()` with `DataFrameWriteOptions`
 3. **Table inserts**: `DataFrame.write_table()` with `InsertOp.APPEND/OVERWRITE`
-4. **Delta**: Streaming writes via Delta Lake writer with partitioning support
+4. **Delta**: `DataFrame.write_table()` inserts into DeltaTableProvider
 
 Pattern
 -------
@@ -58,11 +58,9 @@ from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
 from storage.deltalake import (
-    DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
     idempotent_commit_properties,
-    write_delta_table,
 )
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
@@ -83,8 +81,7 @@ from storage.deltalake.delta import (
     enable_delta_row_tracking,
     enable_delta_v2_checkpoints,
 )
-from utils.hashing import hash_storage_options
-from utils.storage_options import normalize_storage_options
+from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -913,16 +910,16 @@ class WritePipeline:
         ValueError
             Raised when partition_by is specified or mode is ERROR.
         """
-        if request.partition_by:
-            msg = "Table writes do not support partition_by."
-            raise ValueError(msg)
         if request.mode == WriteMode.ERROR:
             msg = "Table writes require APPEND or OVERWRITE mode."
             raise ValueError(msg)
         insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
         df.write_table(
             table_name,
-            write_options=DataFrameWriteOptions(insert_operation=insert_op),
+            write_options=DataFrameWriteOptions(
+                insert_operation=insert_op,
+                partition_by=request.partition_by or None,
+            ),
         )
 
     def _prepare_commit_metadata(
@@ -1224,11 +1221,6 @@ class WritePipeline:
         )
 
         commit_run_id = spec.commit_run.run_id if spec.commit_run is not None else None
-        storage_options, log_storage_options = normalize_storage_options(
-            spec.storage_options,
-            spec.log_storage_options,
-        )
-        storage_hash = hash_storage_options(storage_options, log_storage_options)
         record_delta_mutation(
             self.runtime_profile,
             artifact=DeltaMutationArtifact(
@@ -1243,7 +1235,6 @@ class WritePipeline:
                 commit_run_id=commit_run_id,
                 constraint_status=constraint_status,
                 constraint_violations=(),
-                storage_options_hash=storage_hash,
             ),
         )
 
@@ -1272,11 +1263,6 @@ class WritePipeline:
             record_delta_maintenance,
         )
 
-        storage_options, log_storage_options = normalize_storage_options(
-            spec.storage_options,
-            spec.log_storage_options,
-        )
-        storage_options_hash = hash_storage_options(storage_options, log_storage_options)
         if policy.optimize_on_write:
             z_order_cols: tuple[str, ...] | None = None
             if policy.z_order_cols and policy.z_order_when != "never":
@@ -1301,7 +1287,6 @@ class WritePipeline:
                     operation="optimize",
                     report=report,
                     dataset_name=spec.commit_key,
-                    storage_options_hash=storage_options_hash,
                 ),
             )
         if policy.vacuum_on_write:
@@ -1337,7 +1322,6 @@ class WritePipeline:
                     dataset_name=spec.commit_key,
                     retention_hours=retention_hours,
                     dry_run=policy.vacuum_dry_run,
-                    storage_options_hash=storage_options_hash,
                 ),
             )
 
@@ -1389,25 +1373,15 @@ class WritePipeline:
             log_storage_options=spec.log_storage_options,
             gate=spec.feature_gate,
         )
-        delta_options = DeltaWriteOptions(
-            mode=spec.mode,
-            schema_mode=spec.schema_mode,
-            partition_by=spec.partition_by,
-            configuration=spec.table_properties,
-            commit_properties=spec.commit_properties,
-            commit_metadata=spec.commit_metadata,
-            target_file_size=spec.target_file_size,
-            writer_properties=spec.writer_properties,
-            storage_options=spec.storage_options,
-            log_storage_options=spec.log_storage_options,
-            extra_constraints=spec.extra_constraints,
+        table_name = self._delta_insert_table_name(spec)
+        self._register_delta_insert_target(spec, table_name=table_name)
+        insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
+        write_options = DataFrameWriteOptions(
+            insert_operation=insert_op,
+            partition_by=spec.partition_by or None,
         )
-        delta_result = write_delta_table(
-            result.to_arrow_stream(),
-            spec.table_uri,
-            options=delta_options,
-            ctx=self.ctx,
-        )
+        result.df.write_table(table_name, write_options=write_options)
+        delta_result = DeltaWriteResult(path=spec.table_uri, version=None, report=None)
         self._record_delta_mutation(
             spec=spec,
             delta_result=delta_result,
@@ -1438,8 +1412,6 @@ class WritePipeline:
             log_storage_options=spec.log_storage_options,
         )
         if final_version is None:
-            final_version = delta_result.version
-        if final_version is None:
             msg = f"Failed to resolve Delta version after write: {spec.table_uri}"
             raise RuntimeError(msg)
         self._finalize_delta_commit(
@@ -1458,6 +1430,49 @@ class WritePipeline:
             enabled_features=enabled_features,
             commit_app_id=spec.commit_app_id,
             commit_version=spec.commit_version,
+        )
+
+    @staticmethod
+    def _delta_insert_table_name(spec: DeltaWriteSpec) -> str:
+        base = spec.commit_key or "delta_write"
+        normalized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in base)
+        digest = hash_sha256_hex(spec.table_uri.encode("utf-8"))[:8]
+        return f"{normalized}_{digest}"
+
+    def _register_delta_insert_target(self, spec: DeltaWriteSpec, *, table_name: str) -> None:
+        from datafusion_engine.dataset_resolution import (
+            DatasetResolutionRequest,
+            resolve_dataset_provider,
+        )
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+        from datafusion_engine.table_provider_capsule import TableProviderCapsule
+
+        location = spec.dataset_location
+        if location is None:
+            location = DatasetLocation(
+                path=spec.table_uri,
+                format="delta",
+                storage_options=dict(spec.storage_options or {}),
+                delta_log_storage_options=dict(spec.log_storage_options or {}),
+                delta_feature_gate=spec.feature_gate,
+            )
+        if self.runtime_profile is not None:
+            location = apply_delta_store_policy(
+                location, policy=self.runtime_profile.delta_store_policy
+            )
+        resolution = resolve_dataset_provider(
+            DatasetResolutionRequest(
+                ctx=self.ctx,
+                location=location,
+                runtime_profile=self.runtime_profile,
+                name=table_name,
+            )
+        )
+        adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
+        adapter.register_delta_table_provider(
+            table_name,
+            TableProviderCapsule(resolution.provider),
+            overwrite=True,
         )
 
     def _write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:
@@ -1861,10 +1876,6 @@ def _delta_storage_options(
     *,
     dataset_location: DatasetLocation | None,
 ) -> tuple[dict[str, str] | None, dict[str, str] | None]:
-    storage_options, log_storage_options = normalize_storage_options(
-        dataset_location.storage_options if dataset_location is not None else None,
-        dataset_location.delta_log_storage_options if dataset_location is not None else None,
-    )
     raw_storage_options = options.get("storage_options")
     raw_log_storage_options = options.get("log_storage_options")
     option_storage_options = (
@@ -1873,12 +1884,36 @@ def _delta_storage_options(
     option_log_storage_options = (
         raw_log_storage_options if isinstance(raw_log_storage_options, Mapping) else None
     )
-    option_storage, option_log_storage = normalize_storage_options(
-        option_storage_options,
-        option_log_storage_options,
+
+    def _require_str_mapping(
+        values: Mapping[str, object] | None,
+        *,
+        label: str,
+    ) -> dict[str, str]:
+        if values is None:
+            return {}
+        resolved: dict[str, str] = {}
+        for key, value in values.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                msg = f"{label} must map string keys to string values."
+                raise TypeError(msg)
+            resolved[key] = value
+        return resolved
+
+    base_storage = _require_str_mapping(
+        dataset_location.storage_options if dataset_location is not None else None,
+        label="storage_options",
     )
-    merged_storage = {**(storage_options or {}), **(option_storage or {})}
-    merged_log_storage = {**(log_storage_options or {}), **(option_log_storage or {})}
+    base_log_storage = _require_str_mapping(
+        dataset_location.delta_log_storage_options if dataset_location is not None else None,
+        label="log_storage_options",
+    )
+    option_storage = _require_str_mapping(option_storage_options, label="storage_options override")
+    option_log_storage = _require_str_mapping(
+        option_log_storage_options, label="log_storage_options override"
+    )
+    merged_storage = {**base_storage, **option_storage}
+    merged_log_storage = {**base_log_storage, **option_log_storage}
     if not merged_log_storage and merged_storage:
         merged_log_storage = dict(merged_storage)
     return merged_storage or None, merged_log_storage or None

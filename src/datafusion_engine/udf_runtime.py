@@ -10,7 +10,6 @@ from weakref import WeakKeyDictionary, WeakSet
 
 from datafusion import SessionContext
 
-from datafusion_engine.plugin_discovery import assert_plugin_available
 from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
@@ -44,7 +43,6 @@ RustUdfSnapshot = Mapping[str, object]
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    assert_plugin_available()
     snapshot = _datafusion_internal().registry_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.registry_snapshot returned a non-mapping payload."
@@ -90,6 +88,20 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
             "batch_size": batch_size,
         }
     return payload
+
+
+def _install_rust_udfs(
+    ctx: SessionContext,
+    *,
+    enable_async: bool,
+    async_udf_timeout_ms: int | None,
+    async_udf_batch_size: int | None,
+) -> None:
+    installer = getattr(_datafusion_internal(), "register_codeanatomy_udfs", None)
+    if not callable(installer):
+        msg = "datafusion._internal.register_codeanatomy_udfs is unavailable."
+        raise TypeError(msg)
+    installer(ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
 
 
 def _datafusion_internal() -> ModuleType:
@@ -375,7 +387,6 @@ def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
 
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    assert_plugin_available()
     snapshot = _datafusion_internal().udf_docs_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.udf_docs_snapshot returned a non-mapping payload."
@@ -586,6 +597,12 @@ def register_rust_udfs(
         msg = f"Invalid async UDF policy: {exc}"
         raise ValueError(msg) from exc
     _install_udf_config(ctx)
+    _install_rust_udfs(
+        ctx,
+        enable_async=enable_async,
+        async_udf_timeout_ms=async_udf_timeout_ms,
+        async_udf_batch_size=async_udf_batch_size,
+    )
     existing = _registered_snapshot(
         ctx,
         policy=policy,

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from core_types import DeterminismTier
 from graph import GraphProductBuildRequest, build_graph_product
-from hamilton_pipeline.pipeline_types import ExecutionMode, ExecutorConfig, ScipIndexConfig
+from hamilton_pipeline.types import ExecutionMode, ExecutorConfig, ScipIndexConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:

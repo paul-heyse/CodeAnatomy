@@ -36,8 +36,8 @@ from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+    from datafusion_engine.dataset_registration import DataFusionCachePolicy
     from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -918,7 +918,7 @@ class DataFusionExecutionFacade:
         if self.runtime_profile is None:
             msg = "Runtime profile is required for dataset registration."
             raise ValueError(msg)
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.dataset_registration import register_dataset_df
 
         return register_dataset_df(
             self.ctx,

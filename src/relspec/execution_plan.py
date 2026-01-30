@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
-from datafusion_engine.delta_protocol import delta_feature_gate_tuple
+from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.planning_pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
@@ -1237,9 +1237,7 @@ DeltaInputPayload = tuple[
     str,
     int | None,
     str | None,
-    tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None,
     tuple[tuple[str, object], ...] | None,
-    str | None,
 ]
 
 
@@ -1255,9 +1253,7 @@ def _delta_inputs_payload(
         dataset_name = getattr(item, "dataset_name", None)
         version = getattr(item, "version", None)
         timestamp = getattr(item, "timestamp", None)
-        gate = getattr(item, "feature_gate", None)
         protocol = getattr(item, "protocol", None)
-        storage_hash = getattr(item, "storage_options_hash", None)
         if not isinstance(dataset_name, str) or not dataset_name:
             continue
         version_value = int(version) if isinstance(version, int) else None
@@ -1272,9 +1268,7 @@ def _delta_inputs_payload(
                 dataset_name,
                 version_value,
                 timestamp_value,
-                delta_feature_gate_tuple(gate),
                 _protocol_payload(protocol),
-                str(storage_hash) if isinstance(storage_hash, str) else None,
             )
         )
     return tuple(sorted(payload, key=lambda entry: entry[0]))
@@ -1290,9 +1284,7 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
         ("delta_version", scan_unit.delta_version),
         ("delta_timestamp", scan_unit.delta_timestamp),
         ("snapshot_timestamp", scan_unit.snapshot_timestamp),
-        ("delta_feature_gate", delta_feature_gate_tuple(scan_unit.delta_feature_gate)),
         ("delta_protocol", _protocol_payload(scan_unit.delta_protocol)),
-        ("storage_options_hash", scan_unit.storage_options_hash),
         ("total_files", scan_unit.total_files),
         ("candidate_file_count", scan_unit.candidate_file_count),
         ("pruned_file_count", scan_unit.pruned_file_count),
@@ -1339,9 +1331,7 @@ def _scan_unit_delta_inputs_payload(
                 unit.dataset_name,
                 unit.delta_version,
                 timestamp,
-                delta_feature_gate_tuple(unit.delta_feature_gate),
                 _protocol_payload(unit.delta_protocol),
-                unit.storage_options_hash,
             )
         )
     return tuple(sorted(payload, key=lambda entry: entry[0]))

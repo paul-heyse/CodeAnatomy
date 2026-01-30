@@ -12,10 +12,11 @@ from pathlib import Path
 
 from datafusion_engine.arrow_schema.abi import schema_identity_hash
 from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
-from storage.deltalake import DeltaWriteOptions, write_delta_table
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from utils.uuid_factory import uuid7_hex
 
 
@@ -100,6 +101,18 @@ def _write_report(report: CloneReport, report_path: str | None) -> None:
     Path(report_path).write_text(payload + "\n", encoding="utf-8")
 
 
+def _resolve_write_mode(mode: str) -> WriteMode:
+    normalized = mode.strip().lower()
+    if normalized == "overwrite":
+        return WriteMode.OVERWRITE
+    if normalized == "append":
+        return WriteMode.APPEND
+    if normalized == "error":
+        return WriteMode.ERROR
+    msg = f"Unsupported write mode: {mode!r}."
+    raise ValueError(msg)
+
+
 def clone_delta_snapshot(
     path: str,
     target: str,
@@ -154,15 +167,21 @@ def clone_delta_snapshot(
         commit_metadata["source_version"] = str(resolved.version)
     if resolved.timestamp is not None:
         commit_metadata["source_timestamp"] = resolved.timestamp
-    write_delta_table(
-        arrow_table,
-        str(target_path),
-        options=DeltaWriteOptions(
-            mode=resolved.mode or "overwrite",
-            schema_mode=resolved.schema_mode or "overwrite",
-            commit_metadata=commit_metadata,
-            storage_options=resolved.storage_options,
-        ),
+    format_options: dict[str, object] = {"commit_metadata": commit_metadata}
+    if resolved.schema_mode is not None:
+        format_options["schema_mode"] = resolved.schema_mode
+    if resolved.storage_options is not None:
+        format_options["storage_options"] = dict(resolved.storage_options)
+    df = datafusion_from_arrow(ctx, name=f"__delta_clone_{uuid7_hex()}", value=arrow_table)
+    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(target_path),
+            format=WriteFormat.DELTA,
+            mode=_resolve_write_mode(resolved.mode or "overwrite"),
+            format_options=format_options,
+        )
     )
     return CloneReport(
         path=path,

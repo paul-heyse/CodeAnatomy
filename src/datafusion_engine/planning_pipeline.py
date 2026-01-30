@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING
 from datafusion import SessionContext
 
 from datafusion_engine.dataset_registry import DatasetLocation
+from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.lineage_datafusion import LineageReport
 from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.scan_overrides import apply_scan_unit_overrides
 from datafusion_engine.scan_planner import ScanUnit, plan_scan_units
 from datafusion_engine.view_registry import ensure_view_graph
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes

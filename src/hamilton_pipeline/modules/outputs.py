@@ -26,12 +26,12 @@ from hamilton.function_modifiers.dependencies import ParametrizedDependency
 from core_types import JsonDict, JsonValue
 from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from datafusion_engine.arrow_interop import TableLike
-from datafusion_engine.delta_protocol import DeltaFeatureGate, delta_feature_gate_payload
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
-from hamilton_pipeline.pipeline_types import CacheRuntimeContext, OutputConfig
+from hamilton_pipeline.types import CacheRuntimeContext, OutputConfig
 from hamilton_pipeline.validators import NonEmptyTableValidator, TableSchemaValidator
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import (
@@ -543,7 +543,7 @@ def _delta_inputs_payload(
     seen: set[tuple[object, ...]] = set()
     for bundle in plan_bundles_by_task.values():
         for pin in bundle.delta_inputs:
-            key = (pin.dataset_name, pin.version, pin.timestamp, pin.storage_options_hash)
+            key = (pin.dataset_name, pin.version, pin.timestamp)
             if key in seen:
                 continue
             seen.add(key)
@@ -552,9 +552,7 @@ def _delta_inputs_payload(
                     "dataset_name": pin.dataset_name,
                     "version": pin.version,
                     "timestamp": pin.timestamp,
-                    "feature_gate": delta_feature_gate_payload(pin.feature_gate),
                     "protocol": _delta_protocol_payload(pin.protocol),
-                    "storage_options_hash": pin.storage_options_hash,
                     "delta_scan_config": pin.delta_scan_config,
                     "delta_scan_config_hash": pin.delta_scan_config_hash,
                     "datafusion_provider": pin.datafusion_provider,

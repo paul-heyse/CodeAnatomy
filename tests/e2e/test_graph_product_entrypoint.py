@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from graph import GraphProductBuildRequest, build_graph_product
-from hamilton_pipeline.pipeline_types import ScipIndexConfig
+from hamilton_pipeline.types import ScipIndexConfig
 
 
 @pytest.mark.e2e

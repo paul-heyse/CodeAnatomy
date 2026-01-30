@@ -22,36 +22,32 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from extract.ast_extract import (
         AstExtractOptions,
-        AstExtractResult,
         extract_ast,
         extract_ast_tables,
     )
     from extract.bytecode_extract import (
         BytecodeExtractOptions,
-        BytecodeExtractResult,
         extract_bytecode,
         extract_bytecode_table,
     )
     from extract.cst_extract import (
         CstExtractOptions,
-        CstExtractResult,
         extract_cst,
         extract_cst_tables,
     )
     from extract.python_external_scope import (
         ExternalInterfaceExtractOptions,
-        ExternalInterfaceExtractResult,
         extract_python_external,
         extract_python_external_tables,
     )
     from extract.python_imports_extract import (
         PythonImportsExtractOptions,
-        PythonImportsExtractResult,
         extract_python_imports,
         extract_python_imports_tables,
     )
     from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
     from extract.repo_scan import RepoScanOptions, scan_repo
+    from extract.result_types import ExtractResult
     from extract.scip_extract import (
         SCIPIndexOptions,
         SCIPParseOptions,
@@ -67,29 +63,24 @@ if TYPE_CHECKING:
     )
     from extract.symtable_extract import (
         SymtableExtractOptions,
-        SymtableExtractResult,
         extract_symtable,
         extract_symtables_table,
     )
     from extract.tree_sitter_extract import (
         TreeSitterExtractOptions,
-        TreeSitterExtractResult,
         extract_ts,
         extract_ts_tables,
     )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "AstExtractOptions": ("extract.ast_extract", "AstExtractOptions"),
-    "AstExtractResult": ("extract.ast_extract", "AstExtractResult"),
     "BytecodeExtractOptions": ("extract.bytecode_extract", "BytecodeExtractOptions"),
-    "BytecodeExtractResult": ("extract.bytecode_extract", "BytecodeExtractResult"),
     "CstExtractOptions": ("extract.cst_extract", "CstExtractOptions"),
-    "CstExtractResult": ("extract.cst_extract", "CstExtractResult"),
+    "ExtractResult": ("extract.result_types", "ExtractResult"),
     "PythonImportsExtractOptions": (
         "extract.python_imports_extract",
         "PythonImportsExtractOptions",
     ),
-    "PythonImportsExtractResult": ("extract.python_imports_extract", "PythonImportsExtractResult"),
     "RepoBlobOptions": ("extract.repo_blobs", "RepoBlobOptions"),
     "RepoScanOptions": ("extract.repo_scan", "RepoScanOptions"),
     "SCIPIndexOptions": ("extract.scip_extract", "SCIPIndexOptions"),
@@ -97,9 +88,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ScipIdentity": ("extract.scip_identity", "ScipIdentity"),
     "ScipIndexPaths": ("extract.scip_indexer", "ScipIndexPaths"),
     "SymtableExtractOptions": ("extract.symtable_extract", "SymtableExtractOptions"),
-    "SymtableExtractResult": ("extract.symtable_extract", "SymtableExtractResult"),
     "TreeSitterExtractOptions": ("extract.tree_sitter_extract", "TreeSitterExtractOptions"),
-    "TreeSitterExtractResult": ("extract.tree_sitter_extract", "TreeSitterExtractResult"),
     "build_scip_index_options": ("extract.scip_indexer", "build_scip_index_options"),
     "ensure_scip_build_dir": ("extract.scip_indexer", "ensure_scip_build_dir"),
     "extract_ast": ("extract.ast_extract", "extract_ast"),
@@ -147,15 +136,11 @@ def __dir__() -> list[str]:
 
 __all__ = (
     "AstExtractOptions",
-    "AstExtractResult",
     "BytecodeExtractOptions",
-    "BytecodeExtractResult",
     "CstExtractOptions",
-    "CstExtractResult",
     "ExternalInterfaceExtractOptions",
-    "ExternalInterfaceExtractResult",
+    "ExtractResult",
     "PythonImportsExtractOptions",
-    "PythonImportsExtractResult",
     "RepoBlobOptions",
     "RepoScanOptions",
     "SCIPIndexOptions",
@@ -163,9 +148,7 @@ __all__ = (
     "ScipIdentity",
     "ScipIndexPaths",
     "SymtableExtractOptions",
-    "SymtableExtractResult",
     "TreeSitterExtractOptions",
-    "TreeSitterExtractResult",
     "build_scip_index_options",
     "ensure_scip_build_dir",
     "extract_ast",

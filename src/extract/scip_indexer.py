@@ -12,7 +12,7 @@ from extract.scip_extract import SCIPIndexOptions
 from extract.scip_identity import ScipIdentity
 
 if TYPE_CHECKING:
-    from hamilton_pipeline.pipeline_types import ScipIndexConfig
+    from hamilton_pipeline.types import ScipIndexConfig
 
 BUILD_SUBDIR = Path("build") / "scip"
 

@@ -172,41 +172,6 @@ def validate_delta_gate(
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
 
 
-def delta_feature_gate_payload(
-    gate: object | None,
-) -> dict[str, object] | None:
-    """Return a JSON-ready payload for a Delta feature gate.
-
-    Returns
-    -------
-    dict[str, object] | None
-        JSON-ready Delta feature gate payload, or ``None`` when unavailable.
-    """
-    normalized = _delta_gate_values(gate)
-    if normalized is None:
-        return None
-    min_reader, min_writer, reader_features, writer_features = normalized
-    return {
-        "min_reader_version": min_reader,
-        "min_writer_version": min_writer,
-        "required_reader_features": list(reader_features),
-        "required_writer_features": list(writer_features),
-    }
-
-
-def delta_feature_gate_tuple(
-    gate: object | None,
-) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
-    """Return a tuple payload for Delta feature gates.
-
-    Returns
-    -------
-    tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None
-        Canonical tuple payload for feature gates, or ``None`` when unavailable.
-    """
-    return _delta_gate_values(gate)
-
-
 def delta_feature_gate_rust_payload(
     gate: DeltaFeatureGate | None,
 ) -> tuple[int | None, int | None, list[str] | None, list[str] | None]:
@@ -326,9 +291,7 @@ __all__ = [
     "DeltaProtocolCompatibility",
     "DeltaProtocolSnapshot",
     "DeltaProtocolSupport",
-    "delta_feature_gate_payload",
     "delta_feature_gate_rust_payload",
-    "delta_feature_gate_tuple",
     "delta_protocol_compatibility",
     "validate_delta_gate",
 ]

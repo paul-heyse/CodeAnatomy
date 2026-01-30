@@ -19,6 +19,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -212,6 +219,7 @@ def _append_hazard_sections(
     result: CqResult,
     all_hazards: list[AsyncHazard],
     by_call: dict[str, list[AsyncHazard]],
+    scoring_details: dict[str, object],
 ) -> None:
     if all_hazards:
         section = Section(title="Async Hazards")
@@ -222,6 +230,7 @@ def _append_hazard_sections(
                     message=f"async {hazard.async_func}() calls blocking {hazard.blocking_call}()",
                     anchor=Anchor(file=hazard.file, line=hazard.line),
                     severity="warning",
+                    details=dict(scoring_details),
                 )
             )
         if len(all_hazards) > _MAX_HAZARDS_DISPLAY:
@@ -230,6 +239,7 @@ def _append_hazard_sections(
                     category="truncated",
                     message=f"... and {len(all_hazards) - _MAX_HAZARDS_DISPLAY} more",
                     severity="info",
+                    details=dict(scoring_details),
                 )
             )
         result.sections.append(section)
@@ -241,6 +251,7 @@ def _append_hazard_sections(
                     category="call_type",
                     message=f"{call}: {len(hazards)} occurrences",
                     severity="info",
+                    details=dict(scoring_details),
                 )
             )
         result.sections.append(call_section)
@@ -249,17 +260,20 @@ def _append_hazard_sections(
 def _append_hazard_evidence(
     result: CqResult,
     all_hazards: list[AsyncHazard],
+    scoring_details: dict[str, object],
 ) -> None:
     for hazard in all_hazards:
+        details = {
+            "async_function": hazard.async_func,
+            "blocking_call": hazard.blocking_call,
+            **scoring_details,
+        }
         result.evidence.append(
             Finding(
                 category="hazard",
                 message=f"async {hazard.async_func}() -> {hazard.blocking_call}()",
                 anchor=Anchor(file=hazard.file, line=hazard.line),
-                details={
-                    "async_function": hazard.async_func,
-                    "blocking_call": hazard.blocking_call,
-                },
+                details=details,
             )
         )
 
@@ -304,6 +318,26 @@ def cmd_async_hazards(request: AsyncHazardsRequest) -> CqResult:
         "blocking_patterns": len(blocking),
     }
 
+    # Compute scoring signals
+    unique_files = len({h.file for h in all_hazards})
+    imp_signals = ImpactSignals(
+        sites=len(all_hazards),
+        files=unique_files,
+        depth=0,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     if all_hazards:
         result.key_findings.append(
@@ -311,6 +345,7 @@ def cmd_async_hazards(request: AsyncHazardsRequest) -> CqResult:
                 category="hazard",
                 message=f"{len(all_hazards)} blocking calls found in async functions",
                 severity="warning",
+                details=dict(scoring_details),
             )
         )
         # Most common blocking call
@@ -321,6 +356,7 @@ def cmd_async_hazards(request: AsyncHazardsRequest) -> CqResult:
                     category="common",
                     message=f"Most common: {most_common[0]} ({len(most_common[1])} occurrences)",
                     severity="info",
+                    details=dict(scoring_details),
                 )
             )
     else:
@@ -329,10 +365,11 @@ def cmd_async_hazards(request: AsyncHazardsRequest) -> CqResult:
                 category="info",
                 message="No blocking-in-async hazards detected",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
-    _append_hazard_sections(result, all_hazards, by_call)
-    _append_hazard_evidence(result, all_hazards)
+    _append_hazard_sections(result, all_hazards, by_call, scoring_details)
+    _append_hazard_evidence(result, all_hazards, scoring_details)
 
     return result

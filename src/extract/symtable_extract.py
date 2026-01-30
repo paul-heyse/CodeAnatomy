@@ -37,6 +37,7 @@ from extract.helpers import (
 )
 from extract.options import RepoOptions, WorkerOptions, WorklistQueueOptions
 from extract.parallel import resolve_max_workers
+from extract.result_types import ExtractResult
 from extract.schema_cache import symtable_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import WorklistRequest, iter_worklist_contexts, worklist_queue_name
@@ -56,13 +57,6 @@ class SymtableExtractOptions(RepoOptions, WorklistQueueOptions, WorkerOptions):
     """Configure symtable extraction."""
 
     compile_type: str = "exec"
-
-
-@dataclass(frozen=True)
-class SymtableExtractResult:
-    """Hold extracted nested symtable file table."""
-
-    symtable_files: TableLike
 
 
 @dataclass(frozen=True)
@@ -722,12 +716,12 @@ def extract_symtable(
     options: SymtableExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> SymtableExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract symbol table artifacts from repository files.
 
     Returns
     -------
-    SymtableExtractResult
+    ExtractResult[TableLike]
         Nested symtable file table.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
@@ -751,21 +745,20 @@ def extract_symtable(
         evidence_plan=exec_context.evidence_plan,
         session=session,
     )
-    return SymtableExtractResult(
-        symtable_files=cast(
-            "TableLike",
-            materialize_extract_plan(
-                "symtable_files_v1",
-                plan,
-                runtime_profile=runtime_profile,
-                determinism_tier=determinism_tier,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    apply_post_kernels=True,
-                ),
+    table = cast(
+        "TableLike",
+        materialize_extract_plan(
+            "symtable_files_v1",
+            plan,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
             ),
-        )
+        ),
     )
+    return ExtractResult(table=table, extractor_name="symtable")
 
 
 def extract_symtable_plans(

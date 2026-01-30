@@ -13,7 +13,6 @@ import msgspec
 import pyarrow as pa
 
 from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_log_storage_options
-from datafusion_engine.delta_protocol import delta_feature_gate_payload
 from datafusion_engine.delta_scan_config import resolve_delta_scan_options
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.sql_options import planning_sql_options
@@ -41,7 +40,7 @@ if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v8"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v9"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v2"
 HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v2"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
@@ -851,9 +850,6 @@ def build_plan_artifact_row(
         scan_units_msgpack=_msgpack_payload(scan_payload),
         scan_keys=scan_keys_payload,
         plan_details_msgpack=_msgpack_payload(plan_details_payload),
-        function_registry_snapshot_msgpack=_msgpack_payload(
-            request.bundle.artifacts.function_registry_snapshot
-        ),
         udf_snapshot_msgpack=_msgpack_payload(request.bundle.artifacts.udf_snapshot),
         udf_planner_snapshot_msgpack=_msgpack_or_none(
             request.bundle.artifacts.udf_planner_snapshot
@@ -973,9 +969,9 @@ def _refresh_plan_artifacts_registration(
     *,
     table_name: str = PLAN_ARTIFACTS_TABLE_NAME,
 ) -> None:
+    from datafusion_engine.dataset_registration import DataFusionCachePolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.io_adapter import DataFusionIOAdapter
-    from datafusion_engine.registry_bridge import DataFusionCachePolicy
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     if ctx.table_exist(table_name):
@@ -1051,9 +1047,9 @@ def _refresh_hamilton_events_registration(
     profile: DataFusionRuntimeProfile,
     location: DatasetLocation,
 ) -> None:
+    from datafusion_engine.dataset_registration import DataFusionCachePolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.io_adapter import DataFusionIOAdapter
-    from datafusion_engine.registry_bridge import DataFusionCachePolicy
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     if ctx.table_exist(HAMILTON_EVENTS_TABLE_NAME):
@@ -1215,11 +1211,9 @@ def _scan_units_payload(
                 "delta_version": unit.delta_version,
                 "delta_timestamp": unit.delta_timestamp,
                 "snapshot_timestamp": unit.snapshot_timestamp,
-                "delta_feature_gate": delta_feature_gate_payload(unit.delta_feature_gate),
                 "delta_protocol": (
                     to_builtins(unit.delta_protocol) if unit.delta_protocol is not None else None
                 ),
-                "storage_options_hash": unit.storage_options_hash,
                 "delta_scan_config": (
                     to_builtins(unit.delta_scan_config)
                     if unit.delta_scan_config is not None
@@ -1251,11 +1245,9 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
-            "feature_gate": delta_feature_gate_payload(pin.feature_gate),
             "protocol": (
                 to_builtins(pin.protocol, str_keys=True) if pin.protocol is not None else None
             ),
-            "storage_options_hash": pin.storage_options_hash,
             "delta_scan_config": (
                 to_builtins(pin.delta_scan_config) if pin.delta_scan_config is not None else None
             ),

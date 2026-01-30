@@ -25,7 +25,7 @@ from datafusion_engine.schema_registry import (
     validate_required_engine_functions,
     validate_required_symtable_functions,
 )
-from datafusion_engine.udf_runtime import register_rust_udfs
+from datafusion_engine.udf_platform import ensure_rust_udfs
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -77,7 +77,7 @@ def test_required_functions_present() -> None:
     """Validate required CST function inventory and signatures."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     validate_required_cst_functions(ctx)
 
 
@@ -85,7 +85,7 @@ def test_required_symtable_functions_present() -> None:
     """Validate required symtable function inventory and signatures."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     validate_required_symtable_functions(ctx)
 
 
@@ -93,7 +93,7 @@ def test_required_bytecode_functions_present() -> None:
     """Validate required bytecode function inventory and signatures."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     validate_required_bytecode_functions(ctx)
 
 
@@ -101,7 +101,7 @@ def test_required_engine_functions_present() -> None:
     """Validate required engine function inventory."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     validate_required_engine_functions(ctx)
 
 
@@ -109,7 +109,7 @@ def test_validate_ast_views_smoke() -> None:
     """Ensure AST view validation runs against registered views."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     validate_ast_views(ctx, view_names=AST_VIEW_NAMES)
 
 

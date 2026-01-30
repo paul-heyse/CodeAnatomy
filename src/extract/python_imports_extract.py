@@ -17,6 +17,7 @@ from extract.helpers import (
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.result_types import ExtractResult
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
 
@@ -31,13 +32,6 @@ class PythonImportsExtractOptions:
     repo_id: str | None = None
 
 
-@dataclass(frozen=True)
-class PythonImportsExtractResult:
-    """Result for python imports extraction."""
-
-    python_imports: TableLike
-
-
 def extract_python_imports(
     ast_imports: TableLike | None = None,
     cst_imports: TableLike | None = None,
@@ -45,12 +39,12 @@ def extract_python_imports(
     options: PythonImportsExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> PythonImportsExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract unified python imports into a physical dataset.
 
     Returns
     -------
-    PythonImportsExtractResult
+    ExtractResult[TableLike]
         Extracted python imports table.
     """
     normalized_options = normalize_options(
@@ -88,7 +82,7 @@ def extract_python_imports(
             apply_post_kernels=True,
         ),
     )
-    return PythonImportsExtractResult(python_imports=table)
+    return ExtractResult(table=table, extractor_name="python_imports")
 
 
 def _build_python_imports_plan(
@@ -231,7 +225,6 @@ def extract_python_imports_tables(
 
 __all__ = [
     "PythonImportsExtractOptions",
-    "PythonImportsExtractResult",
     "extract_python_imports",
     "extract_python_imports_tables",
 ]

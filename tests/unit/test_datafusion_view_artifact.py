@@ -152,7 +152,6 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
         execution_plan_proto=None,
         udf_snapshot_hash="mock_udf_hash",
         function_registry_hash="mock_registry_hash",
-        function_registry_snapshot={},
         rewrite_tags=(),
         domain_planner_names=(),
         udf_snapshot={},

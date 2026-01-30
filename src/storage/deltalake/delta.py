@@ -5,10 +5,10 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, Transaction, WriterProperties
+from deltalake import CommitProperties, Transaction
 
 from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.arrow_schema.encoding import EncodingPolicy
@@ -16,8 +16,6 @@ from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
-from utils.hashing import hash_storage_options
-from utils.storage_options import normalize_storage_options
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -161,26 +159,6 @@ class DeltaWriteResult:
     path: str
     version: int | None
     report: Mapping[str, object] | None = None
-
-
-@dataclass(frozen=True)
-class DeltaWriteOptions:
-    """Options for Delta Lake writes."""
-
-    mode: Literal["error", "append", "overwrite", "ignore"] = "append"
-    schema_mode: Literal["merge", "overwrite"] | None = None
-    predicate: str | None = None
-    partition_by: Sequence[str] | None = None
-    configuration: Mapping[str, str | None] | None = None
-    commit_metadata: Mapping[str, str] | None = None
-    commit_properties: CommitProperties | None = None
-    target_file_size: int | None = None
-    writer_properties: WriterProperties | None = None
-    app_id: str | None = None
-    version: int | None = None
-    storage_options: StorageOptions | None = None
-    log_storage_options: StorageOptions | None = None
-    extra_constraints: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -2057,131 +2035,6 @@ def read_delta_cdf(
     return cast("TableLike", df.to_arrow_table())
 
 
-def write_delta_table(
-    data: TableLike | RecordBatchReaderLike,
-    path: str,
-    *,
-    options: DeltaWriteOptions | None = None,
-    ctx: SessionContext | None = None,
-) -> DeltaWriteResult:
-    """Write an Arrow table or stream to a Delta table path.
-
-    Parameters
-    ----------
-    data
-        Table-like or record-batch reader to persist.
-    path
-        Delta table path.
-    options
-        Optional Delta write options.
-    ctx
-        Optional DataFusion session context for the write.
-
-    Returns
-    -------
-    DeltaWriteResult
-        Delta write result containing path and version metadata.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when Rust control-plane adapters are unavailable.
-    ValueError
-        Raised when the write mode is not append or overwrite.
-    """
-    resolved = options or DeltaWriteOptions()
-    if resolved.mode not in {"append", "overwrite"}:
-        msg = "Delta control-plane writes support only append or overwrite modes."
-        raise ValueError(msg)
-    storage = dict(resolved.storage_options or {})
-    if resolved.log_storage_options is not None:
-        storage.update(dict(resolved.log_storage_options))
-    commit_properties = resolved.commit_properties or build_commit_properties(
-        app_id=resolved.app_id,
-        version=resolved.version,
-        commit_metadata=resolved.commit_metadata,
-    )
-    commit_options = _delta_commit_options(
-        commit_properties=commit_properties,
-        commit_metadata=resolved.commit_metadata,
-        app_id=resolved.app_id,
-        app_version=resolved.version,
-    )
-    if resolved.writer_properties is not None:
-        if resolved.extra_constraints:
-            msg = "Delta writer_properties are not supported with extra_constraints."
-            raise ValueError(msg)
-        from deltalake import writer as delta_writer
-
-        if isinstance(data, RecordBatchReaderLike):
-            table = cast("pa.Table", data.read_all())
-        else:
-            table = cast("pa.Table", data)
-        partition_by = list(resolved.partition_by or []) or None
-        if resolved.mode == "overwrite":
-            delta_writer.write_deltalake(
-                path,
-                table,
-                partition_by=partition_by,
-                mode="overwrite",
-                configuration=resolved.configuration,
-                schema_mode=resolved.schema_mode,
-                storage_options=storage or None,
-                predicate=resolved.predicate,
-                target_file_size=resolved.target_file_size,
-                writer_properties=resolved.writer_properties,
-                commit_properties=commit_properties,
-            )
-        else:
-            delta_writer.write_deltalake(
-                path,
-                table,
-                partition_by=partition_by,
-                mode=resolved.mode,
-                configuration=resolved.configuration,
-                schema_mode=resolved.schema_mode,
-                storage_options=storage or None,
-                target_file_size=resolved.target_file_size,
-                writer_properties=resolved.writer_properties,
-                commit_properties=commit_properties,
-            )
-        version = delta_table_version(
-            path,
-            storage_options=resolved.storage_options,
-            log_storage_options=resolved.log_storage_options,
-        )
-        return DeltaWriteResult(path=path, version=version, report=None)
-    if isinstance(data, RecordBatchReaderLike):
-        table = cast("pa.Table", data.read_all())
-    else:
-        table = cast("pa.Table", data)
-    data_ipc = ipc_bytes(table)
-    ctx = _runtime_ctx(ctx)
-    try:
-        from datafusion_engine.delta_control_plane import DeltaWriteRequest, delta_write_ipc
-    except ImportError as exc:
-        msg = "Rust Delta control-plane adapters are required for Delta writes."
-        raise RuntimeError(msg) from exc
-    report = delta_write_ipc(
-        ctx,
-        request=DeltaWriteRequest(
-            table_uri=path,
-            storage_options=storage or None,
-            version=resolved.version,
-            timestamp=None,
-            data_ipc=data_ipc,
-            mode=resolved.mode,
-            schema_mode=resolved.schema_mode,
-            partition_columns=resolved.partition_by,
-            target_file_size=resolved.target_file_size,
-            extra_constraints=resolved.extra_constraints,
-            commit_options=commit_options,
-        ),
-    )
-    version = _mutation_version(report)
-    return DeltaWriteResult(path=path, version=version, report=report)
-
-
 def delta_delete_where(
     ctx: SessionContext,
     *,
@@ -2222,11 +2075,6 @@ def delta_delete_where(
             commit_options=commit_options,
         ),
     )
-    storage_options, log_storage_options = normalize_storage_options(
-        request.storage_options,
-        request.log_storage_options,
-    )
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_mutation_artifact(
         _MutationArtifactRequest(
             profile=request.runtime_profile,
@@ -2238,7 +2086,6 @@ def delta_delete_where(
             commit_properties=request.commit_properties,
             constraint_status=_constraint_status(request.extra_constraints, checked=False),
             constraint_violations=(),
-            storage_options_hash=storage_hash,
             dataset_name=request.dataset_name,
         )
     )
@@ -2306,11 +2153,6 @@ def delta_merge_arrow(
                 commit_options=commit_options,
             ),
         )
-        storage_options, log_storage_options = normalize_storage_options(
-            request.storage_options,
-            request.log_storage_options,
-        )
-        storage_hash = hash_storage_options(storage_options, log_storage_options)
         _record_mutation_artifact(
             _MutationArtifactRequest(
                 profile=request.runtime_profile,
@@ -2322,7 +2164,6 @@ def delta_merge_arrow(
                 commit_properties=request.commit_properties,
                 constraint_status=_constraint_status(request.extra_constraints, checked=True),
                 constraint_violations=(),
-                storage_options_hash=storage_hash,
                 dataset_name=request.dataset_name,
             )
         )
@@ -2421,11 +2262,6 @@ def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None
         record_delta_mutation,
     )
 
-    storage_options, log_storage_options = normalize_storage_options(
-        request.storage_options,
-        request.log_storage_options,
-    )
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
     record_delta_mutation(
         request.runtime_profile,
         artifact=DeltaMutationArtifact(
@@ -2434,7 +2270,6 @@ def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None
             report=request.report,
             dataset_name=request.dataset_name,
             commit_metadata=request.commit_metadata,
-            storage_options_hash=storage_hash,
         ),
     )
 
@@ -2454,11 +2289,6 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
         record_delta_maintenance,
     )
 
-    storage_options, log_storage_options = normalize_storage_options(
-        request.storage_options,
-        request.log_storage_options,
-    )
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
     record_delta_maintenance(
         request.runtime_profile,
         artifact=DeltaMaintenanceArtifact(
@@ -2468,7 +2298,6 @@ def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:
             dataset_name=request.dataset_name,
             retention_hours=request.retention_hours,
             dry_run=request.dry_run,
-            storage_options_hash=storage_hash,
             commit_metadata=request.commit_metadata,
         ),
     )
@@ -2497,7 +2326,6 @@ class _MutationArtifactRequest:
     commit_properties: CommitProperties | None
     constraint_status: str
     constraint_violations: Sequence[str]
-    storage_options_hash: str | None
     dataset_name: str | None
 
 
@@ -2543,7 +2371,6 @@ def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
             commit_run_id=commit_run_id,
             constraint_status=request.constraint_status,
             constraint_violations=request.constraint_violations,
-            storage_options_hash=request.storage_options_hash,
         ),
     )
 
@@ -2729,7 +2556,6 @@ __all__ = [
     "DeltaReadRequest",
     "DeltaSchemaRequest",
     "DeltaVacuumOptions",
-    "DeltaWriteOptions",
     "DeltaWriteResult",
     "EncodingPolicy",
     "IdempotentWriteOptions",
@@ -2774,5 +2600,4 @@ __all__ = [
     "read_delta_cdf",
     "read_delta_table",
     "vacuum_delta",
-    "write_delta_table",
 ]

@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 from tools.cq.core.artifacts import save_artifact_json
-from tools.cq.core.report import render_markdown
+from tools.cq.core.findings_table import apply_filters, build_frame, flatten_result, rehydrate_result
+from tools.cq.core.report import render_markdown, render_summary
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.async_hazards import AsyncHazardsRequest, cmd_async_hazards
@@ -42,14 +43,110 @@ def _find_repo_root(start: Path | None = None) -> Path:
     return Path.cwd().resolve()
 
 
+def _apply_cli_filters(
+    result: CqResult,
+    *,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    impact: list[str] | None,
+    confidence: list[str] | None,
+    severity: list[str] | None,
+    limit: int | None,
+) -> CqResult:
+    """Apply CLI filter options to a result.
+
+    Parameters
+    ----------
+    result : CqResult
+        Original analysis result.
+    include : list[str] | None
+        File include patterns.
+    exclude : list[str] | None
+        File exclude patterns.
+    impact : list[str] | None
+        Impact bucket filters.
+    confidence : list[str] | None
+        Confidence bucket filters.
+    severity : list[str] | None
+        Severity level filters.
+    limit : int | None
+        Maximum results.
+
+    Returns
+    -------
+    CqResult
+        Filtered result.
+    """
+    # Skip filtering if no filters specified
+    if not any([include, exclude, impact, confidence, severity, limit]):
+        return result
+
+    records = flatten_result(result)
+    if not records:
+        return result
+
+    df = build_frame(records)
+    filtered_df = apply_filters(
+        df,
+        include=include,
+        exclude=exclude,
+        impact=impact,
+        confidence=confidence,
+        severity=severity,
+        limit=limit,
+    )
+    return rehydrate_result(result, filtered_df)
+
+
 def _output_result(
     result: CqResult,
     format_type: str,
     artifact_dir: str | None,
     *,
     no_save: bool,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    impact: list[str] | None = None,
+    confidence: list[str] | None = None,
+    severity: list[str] | None = None,
+    limit: int | None = None,
 ) -> None:
-    """Output result in requested format."""
+    """Output result in requested format.
+
+    Parameters
+    ----------
+    result : CqResult
+        Analysis result.
+    format_type : str
+        Output format.
+    artifact_dir : str | None
+        Artifact directory.
+    no_save : bool
+        Skip artifact saving.
+    include : list[str] | None
+        File include patterns.
+    exclude : list[str] | None
+        File exclude patterns.
+    impact : list[str] | None
+        Impact bucket filters.
+    confidence : list[str] | None
+        Confidence bucket filters.
+    severity : list[str] | None
+        Severity level filters.
+    limit : int | None
+        Maximum results.
+    """
+    # Apply filters before output
+    result = _apply_cli_filters(
+        result,
+        include=include,
+        exclude=exclude,
+        impact=impact,
+        confidence=confidence,
+        severity=severity,
+        limit=limit,
+    )
+
     # Save artifact unless disabled
     if not no_save:
         artifact = save_artifact_json(result, artifact_dir)
@@ -59,6 +156,8 @@ def _output_result(
         sys.stdout.write(f"{json.dumps(result.to_dict(), indent=2)}\n")
     elif format_type == "md":
         sys.stdout.write(f"{render_markdown(result)}\n")
+    elif format_type == "summary":
+        sys.stdout.write(f"{render_summary(result)}\n")
     elif format_type == "both":
         sys.stdout.write(f"{render_markdown(result)}\n")
         sys.stdout.write("\n---\n\n")
@@ -77,7 +176,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--format",
-        choices=["md", "json", "both"],
+        choices=["md", "json", "both", "summary"],
         default="md",
         dest="output_format",
         help="Output format (default: md)",
@@ -92,6 +191,42 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--no-save-artifact",
         action="store_true",
         help="Don't save JSON artifact",
+    )
+    parser.add_argument(
+        "--impact",
+        type=str,
+        default=None,
+        help="Filter by impact bucket (comma-separated: low,med,high)",
+    )
+    parser.add_argument(
+        "--confidence",
+        type=str,
+        default=None,
+        help="Filter by confidence bucket (comma-separated: low,med,high)",
+    )
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=None,
+        help="Include files matching pattern (glob or ~regex, repeatable)",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        help="Exclude files matching pattern (glob or ~regex, repeatable)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of findings",
+    )
+    parser.add_argument(
+        "--severity",
+        type=str,
+        default=None,
+        help="Filter by severity (comma-separated: error,warning,info)",
     )
 
 
@@ -466,11 +601,22 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("\nInterrupted\n")
         return 130
     else:
+        # Parse filter options
+        impact_filter = args.impact.split(",") if args.impact else None
+        confidence_filter = args.confidence.split(",") if args.confidence else None
+        severity_filter = args.severity.split(",") if args.severity else None
+
         _output_result(
             result,
             args.output_format,
             args.artifact_dir,
             no_save=args.no_save_artifact,
+            include=args.include,
+            exclude=args.exclude,
+            impact=impact_filter,
+            confidence=confidence_filter,
+            severity=severity_filter,
+            limit=args.limit,
         )
         return 0
 

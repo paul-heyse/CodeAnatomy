@@ -19,15 +19,21 @@ from datafusion_engine.arrow_schema.field_builders import (
     list_field,
     string_field,
 )
+from datafusion_engine.dataset_registration import register_dataset_df
 from datafusion_engine.dataset_registry import DatasetLocation
-from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.ingest import datafusion_from_arrow
+from datafusion_engine.write_pipeline import (
+    WriteFormat,
+    WriteMode,
+    WritePipeline,
+    WriteRequest,
+)
 from serde_msgspec import dumps_msgpack, to_builtins
-from storage.deltalake import DeltaWriteOptions, idempotent_commit_properties, write_delta_table
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.delta_protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+    from datafusion_engine.delta_protocol import DeltaProtocolSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
@@ -49,7 +55,6 @@ class DeltaSnapshotArtifact:
     table_uri: str
     snapshot: Mapping[str, object]
     dataset_name: str | None = None
-    storage_options_hash: str | None = None
     schema_identity_hash: str | None = None
     ddl_fingerprint: str | None = None
 
@@ -69,7 +74,6 @@ class DeltaMutationArtifact:
     commit_run_id: str | None = None
     constraint_status: str | None = None
     constraint_violations: Sequence[str] = ()
-    storage_options_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,8 +90,6 @@ class DeltaScanPlanArtifact:
     pushed_filters: Sequence[str]
     projected_columns: Sequence[str]
     delta_protocol: DeltaProtocolSnapshot | None
-    delta_feature_gate: DeltaFeatureGate | None
-    storage_options_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +102,6 @@ class DeltaMaintenanceArtifact:
     dataset_name: str | None = None
     retention_hours: int | None = None
     dry_run: bool | None = None
-    storage_options_hash: str | None = None
     commit_metadata: Mapping[str, str] | None = None
 
 
@@ -109,6 +110,7 @@ class _AppendObservabilityRequest:
     """Inputs required to append a Delta observability row."""
 
     ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile | None
     location: DatasetLocation
     schema: pa.Schema
     payload: Mapping[str, object]
@@ -155,11 +157,11 @@ def record_delta_snapshot(
         "schema_identity_hash": artifact.schema_identity_hash,
         "ddl_fingerprint": artifact.ddl_fingerprint,
         "partition_columns": _string_list(snapshot.get("partition_columns") or ()),
-        "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
             ctx=ctx,
+            runtime_profile=profile,
             location=location,
             schema=_delta_snapshot_schema(),
             payload=payload,
@@ -214,11 +216,11 @@ def record_delta_mutation(
         "commit_run_id": artifact.commit_run_id,
         "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
         "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
-        "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
             ctx=ctx,
+            runtime_profile=profile,
             location=location,
             schema=_delta_mutation_schema(),
             payload=payload,
@@ -263,12 +265,11 @@ def record_delta_scan_plan(
         "pushed_filters": _string_list(artifact.pushed_filters),
         "projected_columns": _string_list(artifact.projected_columns),
         "delta_protocol_msgpack": _msgpack_or_none(artifact.delta_protocol),
-        "delta_feature_gate_msgpack": _msgpack_or_none(artifact.delta_feature_gate),
-        "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
             ctx=ctx,
+            runtime_profile=profile,
             location=location,
             schema=_delta_scan_plan_schema(),
             payload=payload,
@@ -327,11 +328,11 @@ def record_delta_maintenance(
         "dry_run": artifact.dry_run,
         "metrics_msgpack": _msgpack_payload(report.get("metrics") or {}),
         "commit_metadata": _string_map(dict(artifact.commit_metadata or {})),
-        "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
             ctx=ctx,
+            runtime_profile=profile,
             location=location,
             schema=_delta_maintenance_schema(),
             payload=payload,
@@ -375,34 +376,42 @@ def _bootstrap_observability_table(
         [pa.array([], type=field.type) for field in schema],
         schema=schema,
     )
-    options = DeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        commit_properties=idempotent_commit_properties(
-            operation=operation,
-            mode="overwrite",
-            extra_metadata={"table": table_path.name},
-        ),
-        commit_metadata={"operation": operation, "table": table_path.name},
+    df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
+    pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(table_path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            format_options={
+                "commit_metadata": {"operation": operation, "table": table_path.name},
+            },
+        )
     )
-    _ = write_delta_table(empty, str(table_path), options=options, ctx=ctx)
-    _ = profile
 
 
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
     table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
-    options = DeltaWriteOptions(
-        mode="append",
-        schema_mode="merge",
-        commit_properties=idempotent_commit_properties(
-            operation=request.operation,
-            mode="append",
-            extra_metadata={"operation": request.operation},
-        ),
-        commit_metadata={"operation": request.operation, **(request.commit_metadata or {})},
+    df = datafusion_from_arrow(request.ctx, name=f"{request.location.path}_append", value=table)
+    pipeline = WritePipeline(ctx=request.ctx, runtime_profile=request.runtime_profile)
+    result = pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(request.location.path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.APPEND,
+            format_options={
+                "commit_metadata": {
+                    "operation": request.operation,
+                    **(request.commit_metadata or {}),
+                }
+            },
+        )
     )
-    result = write_delta_table(table, str(request.location.path), options=options, ctx=request.ctx)
-    return result.version
+    if result.delta_result is None:
+        return None
+    return result.delta_result.version
 
 
 def _observability_root(profile: DataFusionRuntimeProfile) -> Path:
@@ -428,7 +437,6 @@ def _delta_snapshot_schema() -> pa.Schema:
             string_field("schema_identity_hash"),
             string_field("ddl_fingerprint"),
             list_field("partition_columns", pa.string()),
-            string_field("storage_options_hash"),
         ]
     )
 
@@ -454,7 +462,6 @@ def _delta_mutation_schema() -> pa.Schema:
             string_field("commit_run_id"),
             pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
             binary_field("metrics_msgpack", nullable=False),
-            string_field("storage_options_hash"),
         ]
     )
 
@@ -473,8 +480,6 @@ def _delta_scan_plan_schema() -> pa.Schema:
             list_field("pushed_filters", pa.string()),
             list_field("projected_columns", pa.string()),
             binary_field("delta_protocol_msgpack"),
-            binary_field("delta_feature_gate_msgpack"),
-            string_field("storage_options_hash"),
         ]
     )
 
@@ -500,7 +505,6 @@ def _delta_maintenance_schema() -> pa.Schema:
             bool_field("dry_run"),
             binary_field("metrics_msgpack", nullable=False),
             pa.field("commit_metadata", pa.map_(pa.string(), pa.string())),
-            string_field("storage_options_hash"),
         ]
     )
 

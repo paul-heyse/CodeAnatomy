@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
-from datafusion_engine.delta_protocol import delta_feature_gate_tuple
 from datafusion_engine.delta_scan_config import delta_scan_identity_hash
 from datafusion_engine.plan_artifact_store import _plan_identity_payload
 from datafusion_engine.plan_bundle import (
@@ -65,9 +64,7 @@ def test_hash_plan_matches_legacy_payload() -> None:
         dataset_name="demo",
         version=7,
         timestamp="123",
-        feature_gate=None,
         protocol=None,
-        storage_options_hash="storage",
         delta_scan_config=None,
         delta_scan_config_hash="scan_hash",
         datafusion_provider="provider",
@@ -96,9 +93,7 @@ def test_hash_plan_matches_legacy_payload() -> None:
                     pin.dataset_name,
                     pin.version,
                     pin.timestamp,
-                    delta_feature_gate_tuple(pin.feature_gate),
                     plan_delta_protocol_payload(pin.protocol),
-                    pin.storage_options_hash,
                     pin.delta_scan_config_hash,
                     pin.datafusion_provider,
                     pin.protocol_compatible,
@@ -169,9 +164,7 @@ def test_scan_unit_signature_matches_msgpack_encoder() -> None:
         delta_version=3,
         delta_timestamp="456",
         snapshot_timestamp=789,
-        delta_feature_gate=None,
         delta_protocol=None,
-        storage_options_hash="storage_hash",
         delta_scan_config=None,
         delta_scan_config_hash="scan_hash",
         datafusion_provider=None,
@@ -193,9 +186,7 @@ def test_scan_unit_signature_matches_msgpack_encoder() -> None:
         ("delta_version", scan_unit.delta_version),
         ("delta_timestamp", scan_unit.delta_timestamp),
         ("snapshot_timestamp", scan_unit.snapshot_timestamp),
-        ("delta_feature_gate", delta_feature_gate_tuple(scan_unit.delta_feature_gate)),
         ("delta_protocol", exec_protocol_payload(scan_unit.delta_protocol)),
-        ("storage_options_hash", scan_unit.storage_options_hash),
         ("total_files", scan_unit.total_files),
         ("candidate_file_count", scan_unit.candidate_file_count),
         ("pruned_file_count", scan_unit.pruned_file_count),
@@ -227,7 +218,6 @@ def test_plan_task_signature_matches_msgpack_encoder() -> None:
         execution_plan_proto=None,
         udf_snapshot_hash="udf_hash",
         function_registry_hash="registry_hash",
-        function_registry_snapshot={},
         rewrite_tags=("tag",),
         domain_planner_names=("domain",),
         udf_snapshot={},
@@ -238,9 +228,7 @@ def test_plan_task_signature_matches_msgpack_encoder() -> None:
             dataset_name="dataset",
             version=1,
             timestamp="123",
-            feature_gate=None,
             protocol=None,
-            storage_options_hash=None,
             delta_scan_config=None,
             delta_scan_config_hash=None,
             datafusion_provider=None,
@@ -298,7 +286,6 @@ def test_plan_identity_hash_matches_json_encoder() -> None:
         execution_plan_proto=None,
         udf_snapshot_hash="udf_hash",
         function_registry_hash="registry_hash",
-        function_registry_snapshot={},
         rewrite_tags=(),
         domain_planner_names=("domain",),
         udf_snapshot={},
@@ -316,9 +303,7 @@ def test_plan_identity_hash_matches_json_encoder() -> None:
             "dataset_name": "dataset",
             "version": 1,
             "timestamp": "123",
-            "feature_gate": None,
             "protocol": None,
-            "storage_options_hash": "storage",
             "delta_scan_config_hash": None,
             "datafusion_provider": None,
             "protocol_compatible": None,

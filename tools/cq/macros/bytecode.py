@@ -21,6 +21,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -181,6 +188,11 @@ def _iter_search_files(root: Path, max_files: int) -> Iterator[Path]:
 
 
 def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]:
+    # Handle both absolute and relative paths
+    target_as_path = Path(target)
+    # Check if target is already an absolute or relative path that exists
+    if target_as_path.exists() and target_as_path.is_file():
+        return [target_as_path.resolve()]
     target_path = root / target
     if target_path.exists() and target_path.is_file():
         return [target_path]
@@ -199,7 +211,11 @@ def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]
 def _collect_surfaces(root: Path, files: list[Path]) -> list[BytecodeSurface]:
     all_surfaces: list[BytecodeSurface] = []
     for pyfile in files[:_MAX_FILES_SURFACE]:
-        rel = str(pyfile.relative_to(root))
+        try:
+            rel = str(pyfile.relative_to(root))
+        except ValueError:
+            # File is outside root (e.g., absolute path)
+            rel = pyfile.name
         try:
             source = pyfile.read_text(encoding="utf-8")
             co = compile(source, rel, "exec")
@@ -232,6 +248,7 @@ def _append_surface_section(
     result: CqResult,
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
+    scoring_details: dict[str, object],
 ) -> None:
     if not all_surfaces:
         return
@@ -246,6 +263,7 @@ def _append_surface_section(
                 message=f"{surface.qualname}: {'; '.join(parts)}",
                 anchor=Anchor(file=surface.file, line=surface.line),
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
@@ -255,6 +273,7 @@ def _append_surface_section(
                 category="truncated",
                 message=f"... and {len(all_surfaces) - _MAX_SURFACES_DISPLAY} more",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(section)
@@ -286,6 +305,7 @@ def _append_global_summary(
     all_globals: set[str],
     all_surfaces: list[BytecodeSurface],
     show_set: set[str],
+    scoring_details: dict[str, object],
 ) -> None:
     if "globals" not in show_set or not all_globals:
         return
@@ -297,6 +317,7 @@ def _append_global_summary(
                 category="global",
                 message=f"{name}: {count} code objects",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     if len(all_globals) > _MAX_GLOBAL_SUMMARY:
@@ -305,6 +326,7 @@ def _append_global_summary(
                 category="truncated",
                 message=f"... and {len(all_globals) - _MAX_GLOBAL_SUMMARY} more",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(glob_section)
@@ -314,6 +336,7 @@ def _append_opcode_summary(
     result: CqResult,
     total_opcodes: dict[str, int],
     show_set: set[str],
+    scoring_details: dict[str, object],
 ) -> None:
     if "opcodes" not in show_set or not total_opcodes:
         return
@@ -326,23 +349,30 @@ def _append_opcode_summary(
                 category="opcode",
                 message=f"{op}: {count}",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(op_section)
 
 
-def _append_evidence(result: CqResult, all_surfaces: list[BytecodeSurface]) -> None:
+def _append_evidence(
+    result: CqResult,
+    all_surfaces: list[BytecodeSurface],
+    scoring_details: dict[str, object],
+) -> None:
     for surface in all_surfaces:
+        details = {
+            "globals": surface.globals,
+            "attrs": surface.attrs,
+            "constants_count": len(surface.constants),
+            **scoring_details,
+        }
         result.evidence.append(
             Finding(
                 category="bytecode",
                 message=f"{surface.file}::{surface.qualname}",
                 anchor=Anchor(file=surface.file, line=surface.line),
-                details={
-                    "globals": surface.globals,
-                    "attrs": surface.attrs,
-                    "constants_count": len(surface.constants),
-                },
+                details=details,
             )
         )
 
@@ -383,6 +413,26 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
         "unique_attrs": len(all_attrs),
     }
 
+    # Compute scoring signals - bytecode uses "bytecode" evidence kind
+    unique_files = len({s.file for s in all_surfaces})
+    imp_signals = ImpactSignals(
+        sites=len(all_surfaces),
+        files=unique_files,
+        depth=0,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="bytecode")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
     # Key findings
     if all_globals:
         result.key_findings.append(
@@ -390,6 +440,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="globals",
                 message=f"{len(all_globals)} unique global references",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     if all_attrs:
@@ -398,6 +449,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="attrs",
                 message=f"{len(all_attrs)} unique attribute accesses",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     if not all_surfaces:
@@ -406,12 +458,13 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="info",
                 message=f"No code objects found for '{request.target}'",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
 
-    _append_surface_section(result, all_surfaces, show_set)
-    _append_global_summary(result, all_globals, all_surfaces, show_set)
-    _append_opcode_summary(result, total_opcodes, show_set)
-    _append_evidence(result, all_surfaces)
+    _append_surface_section(result, all_surfaces, show_set, scoring_details)
+    _append_global_summary(result, all_globals, all_surfaces, show_set, scoring_details)
+    _append_opcode_summary(result, total_opcodes, show_set, scoring_details)
+    _append_evidence(result, all_surfaces, scoring_details)
 
     return result

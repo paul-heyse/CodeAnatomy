@@ -122,7 +122,6 @@
       "scan_units_msgpack",
       "scan_keys",
       "plan_details_msgpack",
-      "function_registry_snapshot_msgpack",
       "udf_snapshot_msgpack",
       "udf_planner_snapshot_msgpack",
       "udf_compatibility_ok",
@@ -149,7 +148,6 @@
       "execution_plan_proto",
       "udf_snapshot_hash",
       "function_registry_hash",
-      "function_registry_snapshot",
       "rewrite_tags",
       "domain_planner_names",
       "udf_snapshot",
@@ -678,23 +676,6 @@
               "min_length": 1,
               "pattern": null
             }
-          }
-        },
-        {
-          "default": "NODEFAULT",
-          "default_factory": "NODEFAULT",
-          "encode_name": "function_registry_snapshot",
-          "name": "function_registry_snapshot",
-          "required": true,
-          "type": {
-            "key_type": {
-              "max_length": null,
-              "min_length": null,
-              "pattern": null
-            },
-            "max_length": null,
-            "min_length": null,
-            "value_type": {}
           }
         },
         {
@@ -1336,17 +1317,6 @@
           "default_factory": "NODEFAULT",
           "encode_name": "plan_details_msgpack",
           "name": "plan_details_msgpack",
-          "required": true,
-          "type": {
-            "max_length": null,
-            "min_length": null
-          }
-        },
-        {
-          "default": "NODEFAULT",
-          "default_factory": "NODEFAULT",
-          "encode_name": "function_registry_snapshot_msgpack",
-          "name": "function_registry_snapshot_msgpack",
           "required": true,
           "type": {
             "max_length": null,

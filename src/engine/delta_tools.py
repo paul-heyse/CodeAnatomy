@@ -16,8 +16,6 @@ from storage.deltalake import (
     delta_table_version,
     vacuum_delta,
 )
-from utils.hashing import hash_storage_options
-from utils.storage_options import normalize_storage_options
 
 _DELTA_MIN_RETENTION_HOURS = 168
 
@@ -112,17 +110,11 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         history=history,
         protocol=protocol,
     )
-    storage_options, log_storage_options = normalize_storage_options(
-        request.storage_options,
-        request.log_storage_options,
-    )
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_delta_snapshot_table(
         request.runtime_profile,
         table_uri=request.path,
         snapshot=history or {},
         dataset_name=request.dataset,
-        storage_hash=storage_hash,
     )
     _record_maintenance(
         request.runtime_profile,
@@ -173,11 +165,6 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
         dry_run=resolved.dry_run,
         retention_hours=resolved.retention_hours,
     )
-    storage_options, log_storage_options = normalize_storage_options(
-        request.storage_options,
-        request.log_storage_options,
-    )
-    storage_hash = hash_storage_options(storage_options, log_storage_options)
     _record_delta_maintenance_table(
         _DeltaMaintenanceRecordRequest(
             profile=request.runtime_profile,
@@ -187,7 +174,6 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             dataset_name=request.dataset,
             retention_hours=resolved.retention_hours,
             dry_run=resolved.dry_run,
-            storage_hash=storage_hash,
         )
     )
     _record_maintenance(
@@ -224,21 +210,12 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     -------
     RecordBatchReaderLike
         Streaming reader over the query results.
-
-    Raises
-    ------
-    ValueError
-        Raised when SQL execution is disabled in the runtime profile.
     """
     profile = request.runtime_profile
     if profile is None:
         from datafusion_engine.runtime import DataFusionRuntimeProfile
 
         profile = DataFusionRuntimeProfile()
-    sql_policy = profile.sql_policy
-    if sql_policy is None or not sql_policy.allow_statements:
-        msg = "Delta SQL execution is disabled by the runtime SQL policy."
-        raise ValueError(msg)
     storage = dict(request.storage_options or {})
     if request.log_storage_options:
         storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
@@ -261,8 +238,8 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
             },
         )
         return reader
+    from datafusion_engine.dataset_registration import register_dataset_df
     from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.registry_bridge import register_dataset_df
 
     ctx = profile.session_context()
     location = DatasetLocation(
@@ -314,7 +291,6 @@ def _record_delta_snapshot_table(
     table_uri: str,
     snapshot: Mapping[str, object],
     dataset_name: str | None,
-    storage_hash: str | None,
 ) -> None:
     if profile is None or not snapshot:
         return
@@ -329,7 +305,6 @@ def _record_delta_snapshot_table(
             table_uri=table_uri,
             snapshot=snapshot,
             dataset_name=dataset_name,
-            storage_options_hash=storage_hash,
         ),
     )
 
@@ -345,7 +320,6 @@ class _DeltaMaintenanceRecordRequest:
     dataset_name: str | None
     retention_hours: int | None
     dry_run: bool | None
-    storage_hash: str | None
 
 
 def _record_delta_maintenance_table(request: _DeltaMaintenanceRecordRequest) -> None:
@@ -365,7 +339,6 @@ def _record_delta_maintenance_table(request: _DeltaMaintenanceRecordRequest) -> 
             dataset_name=request.dataset_name,
             retention_hours=request.retention_hours,
             dry_run=request.dry_run,
-            storage_options_hash=request.storage_hash,
         ),
     )
 

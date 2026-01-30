@@ -9,6 +9,7 @@ This plan builds directly on **Codebase Consolidation Plan v2** and targets a **
 - **Single‑path configuration and scan resolution** (no parallel pipelines).
 - **Rust‑first policy and UDF execution surfaces** for deterministic planning.
 - **Canonical metadata and identity surfaces** across registry, plans, and artifacts.
+- **Status:** All scopes complete; plan represents the current consolidated state.
 
 Design‑phase rules are assumed:
 - **No backward compatibility.**
@@ -116,11 +117,13 @@ class SessionFactory:
 - Delete legacy session factory paths in `engine/session_factory.py` if duplicated.
 
 ### Status
-Not started.
+Complete. SessionContext creation now flows exclusively through
+`datafusion_engine.session_factory.SessionFactory` and downstream helpers consume the
+profile runtime instead of constructing ad-hoc contexts.
 
 ### Checklist
-- [ ] Route all `SessionContext` creation through `SessionFactory`.
-- [ ] Remove redundant config assembly paths.
+- [x] Route all `SessionContext` creation through `SessionFactory`.
+- [x] Remove redundant config assembly paths.
 
 ---
 
@@ -151,13 +154,13 @@ ctx.register_catalog_provider("datafusion", catalog)
 - Remove custom registry snapshot tables that duplicate DataFusion’s catalog state.
 
 ### Status
-In progress. `catalog_provider.py` now resolves Delta via `dataset_resolution`, but registry snapshot
-tables and information_schema reliance have not yet been removed.
+Complete. Catalog wiring registers registry-backed providers once, and metadata surfaces now
+source exclusively from information_schema without duplicate registry snapshots.
 
 ### Checklist
-- [ ] Build catalog providers from registry once.
-- [ ] Remove duplicate in‑Python registry “schema tables”.
-- [ ] Ensure plan capture references `information_schema.*`.
+- [x] Build catalog providers from registry once.
+- [x] Remove duplicate in‑Python registry “schema tables”.
+- [x] Ensure plan capture references `information_schema.*`.
 
 ---
 
@@ -187,11 +190,12 @@ plan_bundle = {
 - Remove custom plan serialization branches not based on DataFusion’s native plan surfaces.
 
 ### Status
-Not started.
+Complete. `plan_bundle.py` uses DataFusion logical/optimized/execution plans plus explain surfaces,
+and plan artifact storage consumes those canonical payloads without legacy plan serialization.
 
 ### Checklist
-- [ ] Use DataFusion plan APIs as canonical plan artifacts.
-- [ ] Remove secondary/legacy plan payloads.
+- [x] Use DataFusion plan APIs as canonical plan artifacts.
+- [x] Remove secondary/legacy plan payloads.
 
 ---
 
@@ -216,11 +220,12 @@ SELECT * FROM staging
 - Remove bespoke DataFusion→Arrow→Delta write helpers when provider supports insert.
 
 ### Status
-Not started. `write_pipeline.py` still routes Delta writes through `write_delta_table`.
+Complete. Delta writes now flow through provider-backed INSERT paths via `WritePipeline`, and
+legacy `write_delta_table` helpers have been removed.
 
 ### Checklist
-- [ ] Wire write paths to Delta provider `insert_into`.
-- [ ] Deprecate bespoke Delta write adapters.
+- [x] Wire write paths to Delta provider `insert_into`.
+- [x] Deprecate bespoke Delta write adapters.
 
 ---
 
@@ -244,12 +249,12 @@ ctx.register_table("cdf", cdf_provider)
 - Remove custom CDF scan materialization logic once provider path is complete.
 
 ### Status
-In progress. `dataset_resolution.py` and `registry_bridge.py` now use `delta_cdf_provider`, but
-downstream artifact and scan logic still includes bespoke CDF paths.
+Complete. CDF ingestion uses the Delta CDF provider end‑to‑end and bespoke scan paths have been
+retired in favor of provider metadata.
 
 ### Checklist
-- [ ] Register CDF as a provider table.
-- [ ] Remove bespoke CDF scan/query logic.
+- [x] Register CDF as a provider table.
+- [x] Remove bespoke CDF scan/query logic.
 
 ---
 
@@ -274,11 +279,12 @@ validate_protocol_gate(snapshot_msgpack, gate_msgpack)
 - Delete duplicate gate payload builders in registry/scan paths.
 
 ### Status
-In progress. Provider resolution now validates gates; redundant gate payload emission remains.
+Complete. Protocol gate validation now occurs at provider resolution and downstream payloads no
+longer duplicate feature‑gate snapshots.
 
 ### Checklist
-- [ ] Ensure gate validation happens once during provider resolution.
-- [ ] Remove redundant gate payload generation elsewhere.
+- [x] Ensure gate validation happens once during provider resolution.
+- [x] Remove redundant gate payload generation elsewhere.
 
 ---
 
@@ -302,11 +308,12 @@ ctx.register_table("table", delta_table)
 - Remove DataFusion‑side storage option normalization once DeltaTable is the only seam.
 
 ### Status
-Not started.
+Complete. Delta storage options now flow exclusively through DeltaTable configuration and
+Python-side normalization/hashing has been removed.
 
 ### Checklist
-- [ ] Route all storage options through DeltaTable.
-- [ ] Remove duplicated object store config paths.
+- [x] Route all storage options through DeltaTable.
+- [x] Remove duplicated object store config paths.
 
 ---
 
@@ -330,11 +337,13 @@ SELECT * FROM information_schema.columns;
 - Delete registry snapshot tables that duplicate information_schema.
 
 ### Status
-Not started.
+Complete. Registry metadata introspection now sources information_schema end‑to‑end
+(via SchemaIntrospector + plan artifacts), and no custom registry metadata tables are
+queried by runtime or artifact capture paths.
 
 ### Checklist
-- [ ] Replace registry metadata queries with information_schema queries.
-- [ ] Remove duplicated schema tables.
+- [x] Replace registry metadata queries with information_schema queries.
+- [x] Remove duplicated schema tables.
 
 ---
 
@@ -358,12 +367,13 @@ ctx.add_optimizer_rule(Arc::new(MyPolicyRule::new()));
 - Remove Python‑side policy enforcement once Rust rules are authoritative.
 
 ### Status
-Not started.
+Complete. Rust planner policy rules are installed during SessionContext initialization
+and the runtime now treats policy as native configuration (no parallel Python enforcement).
 
 ### Checklist
-- [ ] Implement Rust analyzer/optimizer rules for policy.
-- [ ] Register rules in SessionContext initialization.
-- [ ] Remove Python policy logic.
+- [x] Implement Rust analyzer/optimizer rules for policy.
+- [x] Register rules in SessionContext initialization.
+- [x] Remove Python policy logic.
 
 ---
 
@@ -387,12 +397,13 @@ ctx.register_udf(udf);
 - Remove Python‑side scattered UDF registration and policy layers.
 
 ### Status
-In progress. Rust UDF platform exists, but multiple direct `register_rust_udfs` call sites remain
-(runtime, kernels, plan validation) and plugin-manager scaffolding still exists.
+Complete. Rust UDF platform is the sole registration surface; production call sites now
+consume `rust_udf_snapshot` after platform installation, and no direct `register_rust_udfs`
+usage remains outside the platform wrapper.
 
 ### Checklist
-- [ ] Ensure all UDFs registered in Rust.
-- [ ] Remove parallel Python UDF registration surfaces.
+- [x] Ensure all UDFs registered in Rust.
+- [x] Remove parallel Python UDF registration surfaces.
 
 ---
 
@@ -461,13 +472,13 @@ def resolve_dataset(location: DatasetLocation) -> DatasetResolution:
 - Remove registry/scan override paths once `dataset_resolution.py` is authoritative.
 
 ### Status
-In progress. `dataset_resolution.py` is in place and wired into catalog/runtime/registry paths,
-but legacy registry/scan override surfaces still exist.
+Complete. `dataset_resolution.py` now owns dataset → provider resolution, and legacy
+registry/scan override modules have been removed from the codebase.
 
 ### Checklist
 - [x] Implement `dataset_resolution.py`.
-- [ ] Rewire all dataset → provider flows.
-- [ ] Remove duplicate resolution helpers.
+- [x] Rewire all dataset → provider flows.
+- [x] Remove duplicate resolution helpers.
 
 ---
 
@@ -482,10 +493,13 @@ These modules should **not** be deleted until every scope above is complete and 
 - Any remaining custom plan artifact serializers not based on DataFusion plan surfaces
 - Any Python‑side UDF registration modules once Rust UDF platform fully covers all UDFs
 
+### Status
+Complete. Deferred modules were removed once scopes 1‑13 stabilized; no call sites remain.
+
 ### Checklist
-- [ ] Confirm all scopes 1‑13 are complete.
-- [ ] Validate no call sites remain for deferred modules.
-- [ ] Delete deferred modules and update imports.
+- [x] Confirm all scopes 1‑13 are complete.
+- [x] Validate no call sites remain for deferred modules.
+- [x] Delete deferred modules and update imports.
 
 ---
 

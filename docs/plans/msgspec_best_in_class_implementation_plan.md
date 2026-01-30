@@ -334,7 +334,7 @@ Introduce a new artifact schema version for msgspec‑native payloads with a har
 
 ### Representative Code Pattern
 ```python
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v8"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v9"
 ```
 
 ### Target files to modify

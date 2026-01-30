@@ -58,6 +58,7 @@ from datafusion_engine.expr_udf_shims import arrow_metadata
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+from utils.registry_protocol import ImmutableRegistry
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
@@ -1343,7 +1344,7 @@ DATAFUSION_RUNS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_plan_artifacts_v8",
+    "datafusion_plan_artifacts_v9",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1378,7 +1379,6 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("scan_units_msgpack", pa.binary(), nullable=False),
             pa.field("scan_keys", pa.list_(pa.string()), nullable=False),
             pa.field("plan_details_msgpack", pa.binary(), nullable=False),
-            pa.field("function_registry_snapshot_msgpack", pa.binary(), nullable=False),
             pa.field("udf_snapshot_msgpack", pa.binary(), nullable=False),
             pa.field("udf_planner_snapshot_msgpack", pa.binary(), nullable=True),
             pa.field("udf_compatibility_ok", pa.bool_(), nullable=False),
@@ -1541,7 +1541,7 @@ DATAFUSION_SQL_INGEST_SCHEMA = _schema_with_metadata(
 )
 
 ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
-    "engine_runtime_v1",
+    "engine_runtime_v2",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1550,7 +1550,6 @@ ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
             pa.field("runtime_profile_hash", pa.string(), nullable=False),
             pa.field("runtime_profile_snapshot", pa.binary(), nullable=False),
             pa.field("function_registry_hash", pa.string(), nullable=True),
-            pa.field("function_registry_snapshot", pa.binary(), nullable=True),
             pa.field("datafusion_settings_hash", pa.string(), nullable=True),
             pa.field("datafusion_settings", pa.binary(), nullable=True),
         ]
@@ -1667,393 +1666,399 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-_BASE_EXTRACT_SCHEMA_BY_NAME: dict[str, pa.Schema] = {
-    "libcst_files_v1": LIBCST_FILES_SCHEMA,
-    "ast_files_v1": AST_FILES_SCHEMA,
-    "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
-    "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
-    "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
-    "scip_index_v1": SCIP_INDEX_SCHEMA,
-}
+_BASE_EXTRACT_SCHEMA_BY_NAME: ImmutableRegistry[str, pa.Schema] = ImmutableRegistry.from_dict(
+    {
+        "libcst_files_v1": LIBCST_FILES_SCHEMA,
+        "ast_files_v1": AST_FILES_SCHEMA,
+        "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
+        "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
+        "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+        "scip_index_v1": SCIP_INDEX_SCHEMA,
+    }
+)
 
-NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
-    "cst_nodes": {
-        "root": "libcst_files_v1",
-        "path": "nodes",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "cst_edges": {
-        "root": "libcst_files_v1",
-        "path": "edges",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "cst_parse_manifest": {
-        "root": "libcst_files_v1",
-        "path": "parse_manifest",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "cst_parse_errors": {
-        "root": "libcst_files_v1",
-        "path": "parse_errors",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_refs": {
-        "root": "libcst_files_v1",
-        "path": "refs",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_imports": {
-        "root": "libcst_files_v1",
-        "path": "imports",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_callsites": {
-        "root": "libcst_files_v1",
-        "path": "callsites",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_defs": {
-        "root": "libcst_files_v1",
-        "path": "defs",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_type_exprs": {
-        "root": "libcst_files_v1",
-        "path": "type_exprs",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_docstrings": {
-        "root": "libcst_files_v1",
-        "path": "docstrings",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_decorators": {
-        "root": "libcst_files_v1",
-        "path": "decorators",
-        "role": "derived",
-        "context": {},
-    },
-    "cst_call_args": {
-        "root": "libcst_files_v1",
-        "path": "call_args",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_nodes": {
-        "root": "ast_files_v1",
-        "path": "nodes",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_edges": {
-        "root": "ast_files_v1",
-        "path": "edges",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_errors": {
-        "root": "ast_files_v1",
-        "path": "errors",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_docstrings": {
-        "root": "ast_files_v1",
-        "path": "docstrings",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_imports": {
-        "root": "ast_files_v1",
-        "path": "imports",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_defs": {
-        "root": "ast_files_v1",
-        "path": "defs",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_calls": {
-        "root": "ast_files_v1",
-        "path": "calls",
-        "role": "derived",
-        "context": {},
-    },
-    "ast_type_ignores": {
-        "root": "ast_files_v1",
-        "path": "type_ignores",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_nodes": {
-        "root": "tree_sitter_files_v1",
-        "path": "nodes",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_edges": {
-        "root": "tree_sitter_files_v1",
-        "path": "edges",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "ts_errors": {
-        "root": "tree_sitter_files_v1",
-        "path": "errors",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_missing": {
-        "root": "tree_sitter_files_v1",
-        "path": "missing",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_captures": {
-        "root": "tree_sitter_files_v1",
-        "path": "captures",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_defs": {
-        "root": "tree_sitter_files_v1",
-        "path": "defs",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_calls": {
-        "root": "tree_sitter_files_v1",
-        "path": "calls",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_imports": {
-        "root": "tree_sitter_files_v1",
-        "path": "imports",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_docstrings": {
-        "root": "tree_sitter_files_v1",
-        "path": "docstrings",
-        "role": "derived",
-        "context": {},
-    },
-    "ts_stats": {
-        "root": "tree_sitter_files_v1",
-        "path": "stats",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "symtable_scopes": {
-        "root": "symtable_files_v1",
-        "path": "blocks",
-        "role": "derived",
-        "context": {},
-    },
-    "symtable_symbols": {
-        "root": "symtable_files_v1",
-        "path": "blocks.symbols",
-        "role": "derived",
-        "context": {"block_id": "blocks.block_id", "scope_id": "blocks.scope_id"},
-    },
-    "symtable_scope_edges": {
-        "root": "symtable_files_v1",
-        "path": "blocks",
-        "role": "derived",
-        "context": {},
-    },
-    "py_bc_code_units": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects",
-        "role": "derived",
-        "context": {},
-    },
-    "py_bc_line_table": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.line_table",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+NESTED_DATASET_INDEX: ImmutableRegistry[str, NestedDatasetSpec] = ImmutableRegistry.from_dict(
+    {
+        "cst_nodes": {
+            "root": "libcst_files_v1",
+            "path": "nodes",
+            "role": "intrinsic",
+            "context": {},
         },
-    },
-    "py_bc_instructions": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.instructions",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_edges": {
+            "root": "libcst_files_v1",
+            "path": "edges",
+            "role": "intrinsic",
+            "context": {},
         },
-    },
-    "py_bc_cache_entries": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.instructions.cache_info",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
-            "instr_index": "code_objects.instructions.instr_index",
-            "offset": "code_objects.instructions.offset",
+        "cst_parse_manifest": {
+            "root": "libcst_files_v1",
+            "path": "parse_manifest",
+            "role": "intrinsic",
+            "context": {},
         },
-    },
-    "py_bc_consts": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.consts",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_parse_errors": {
+            "root": "libcst_files_v1",
+            "path": "parse_errors",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "py_bc_blocks": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.blocks",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_refs": {
+            "root": "libcst_files_v1",
+            "path": "refs",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "py_bc_cfg_edges": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.cfg_edges",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_imports": {
+            "root": "libcst_files_v1",
+            "path": "imports",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "py_bc_dfg_edges": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.dfg_edges",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_callsites": {
+            "root": "libcst_files_v1",
+            "path": "callsites",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "bytecode_exception_table": {
-        "root": "bytecode_files_v1",
-        "path": "code_objects.exception_table",
-        "role": "derived",
-        "context": {
-            "code_unit_qualpath": "code_objects.qualname",
-            "code_unit_name": "code_objects.name",
-            "code_unit_firstlineno": "code_objects.firstlineno1",
+        "cst_defs": {
+            "root": "libcst_files_v1",
+            "path": "defs",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "bytecode_errors": {
-        "root": "bytecode_files_v1",
-        "path": "errors",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_metadata": {
-        "root": "scip_index_v1",
-        "path": "metadata",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_index_stats": {
-        "root": "scip_index_v1",
-        "path": "index_stats",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_documents": {
-        "root": "scip_index_v1",
-        "path": "documents",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_document_texts": {
-        "root": "scip_index_v1",
-        "path": "documents",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_document_symbols": {
-        "root": "scip_index_v1",
-        "path": "documents.symbols",
-        "role": "derived",
-        "context": {
-            "document_id": "documents.document_id",
-            "path": "documents.path",
+        "cst_type_exprs": {
+            "root": "libcst_files_v1",
+            "path": "type_exprs",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "scip_occurrences": {
-        "root": "scip_index_v1",
-        "path": "documents.occurrences",
-        "role": "derived",
-        "context": {
-            "document_id": "documents.document_id",
-            "path": "documents.path",
+        "cst_docstrings": {
+            "root": "libcst_files_v1",
+            "path": "docstrings",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "scip_diagnostics": {
-        "root": "scip_index_v1",
-        "path": "documents.diagnostics",
-        "role": "derived",
-        "context": {
-            "document_id": "documents.document_id",
-            "path": "documents.path",
+        "cst_decorators": {
+            "root": "libcst_files_v1",
+            "path": "decorators",
+            "role": "derived",
+            "context": {},
         },
-    },
-    "scip_symbol_information": {
-        "root": "scip_index_v1",
-        "path": "symbol_information",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_external_symbol_information": {
-        "root": "scip_index_v1",
-        "path": "external_symbol_information",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_symbol_relationships": {
-        "root": "scip_index_v1",
-        "path": "symbol_relationships",
-        "role": "intrinsic",
-        "context": {},
-    },
-    "scip_signature_occurrences": {
-        "root": "scip_index_v1",
-        "path": "signature_occurrences",
-        "role": "intrinsic",
-        "context": {},
-    },
-}
+        "cst_call_args": {
+            "root": "libcst_files_v1",
+            "path": "call_args",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_nodes": {
+            "root": "ast_files_v1",
+            "path": "nodes",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_edges": {
+            "root": "ast_files_v1",
+            "path": "edges",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_errors": {
+            "root": "ast_files_v1",
+            "path": "errors",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_docstrings": {
+            "root": "ast_files_v1",
+            "path": "docstrings",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_imports": {
+            "root": "ast_files_v1",
+            "path": "imports",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_defs": {
+            "root": "ast_files_v1",
+            "path": "defs",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_calls": {
+            "root": "ast_files_v1",
+            "path": "calls",
+            "role": "derived",
+            "context": {},
+        },
+        "ast_type_ignores": {
+            "root": "ast_files_v1",
+            "path": "type_ignores",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_nodes": {
+            "root": "tree_sitter_files_v1",
+            "path": "nodes",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_edges": {
+            "root": "tree_sitter_files_v1",
+            "path": "edges",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "ts_errors": {
+            "root": "tree_sitter_files_v1",
+            "path": "errors",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_missing": {
+            "root": "tree_sitter_files_v1",
+            "path": "missing",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_captures": {
+            "root": "tree_sitter_files_v1",
+            "path": "captures",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_defs": {
+            "root": "tree_sitter_files_v1",
+            "path": "defs",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_calls": {
+            "root": "tree_sitter_files_v1",
+            "path": "calls",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_imports": {
+            "root": "tree_sitter_files_v1",
+            "path": "imports",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_docstrings": {
+            "root": "tree_sitter_files_v1",
+            "path": "docstrings",
+            "role": "derived",
+            "context": {},
+        },
+        "ts_stats": {
+            "root": "tree_sitter_files_v1",
+            "path": "stats",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "symtable_scopes": {
+            "root": "symtable_files_v1",
+            "path": "blocks",
+            "role": "derived",
+            "context": {},
+        },
+        "symtable_symbols": {
+            "root": "symtable_files_v1",
+            "path": "blocks.symbols",
+            "role": "derived",
+            "context": {"block_id": "blocks.block_id", "scope_id": "blocks.scope_id"},
+        },
+        "symtable_scope_edges": {
+            "root": "symtable_files_v1",
+            "path": "blocks",
+            "role": "derived",
+            "context": {},
+        },
+        "py_bc_code_units": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects",
+            "role": "derived",
+            "context": {},
+        },
+        "py_bc_line_table": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.line_table",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "py_bc_instructions": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.instructions",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "py_bc_cache_entries": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.instructions.cache_info",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+                "instr_index": "code_objects.instructions.instr_index",
+                "offset": "code_objects.instructions.offset",
+            },
+        },
+        "py_bc_consts": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.consts",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "py_bc_blocks": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.blocks",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "py_bc_cfg_edges": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.cfg_edges",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "py_bc_dfg_edges": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.dfg_edges",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "bytecode_exception_table": {
+            "root": "bytecode_files_v1",
+            "path": "code_objects.exception_table",
+            "role": "derived",
+            "context": {
+                "code_unit_qualpath": "code_objects.qualname",
+                "code_unit_name": "code_objects.name",
+                "code_unit_firstlineno": "code_objects.firstlineno1",
+            },
+        },
+        "bytecode_errors": {
+            "root": "bytecode_files_v1",
+            "path": "errors",
+            "role": "derived",
+            "context": {},
+        },
+        "scip_metadata": {
+            "root": "scip_index_v1",
+            "path": "metadata",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_index_stats": {
+            "root": "scip_index_v1",
+            "path": "index_stats",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_documents": {
+            "root": "scip_index_v1",
+            "path": "documents",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_document_texts": {
+            "root": "scip_index_v1",
+            "path": "documents",
+            "role": "derived",
+            "context": {},
+        },
+        "scip_document_symbols": {
+            "root": "scip_index_v1",
+            "path": "documents.symbols",
+            "role": "derived",
+            "context": {
+                "document_id": "documents.document_id",
+                "path": "documents.path",
+            },
+        },
+        "scip_occurrences": {
+            "root": "scip_index_v1",
+            "path": "documents.occurrences",
+            "role": "derived",
+            "context": {
+                "document_id": "documents.document_id",
+                "path": "documents.path",
+            },
+        },
+        "scip_diagnostics": {
+            "root": "scip_index_v1",
+            "path": "documents.diagnostics",
+            "role": "derived",
+            "context": {
+                "document_id": "documents.document_id",
+                "path": "documents.path",
+            },
+        },
+        "scip_symbol_information": {
+            "root": "scip_index_v1",
+            "path": "symbol_information",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_external_symbol_information": {
+            "root": "scip_index_v1",
+            "path": "external_symbol_information",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_symbol_relationships": {
+            "root": "scip_index_v1",
+            "path": "symbol_relationships",
+            "role": "intrinsic",
+            "context": {},
+        },
+        "scip_signature_occurrences": {
+            "root": "scip_index_v1",
+            "path": "signature_occurrences",
+            "role": "intrinsic",
+            "context": {},
+        },
+    }
+)
 
-ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
-    "ast_files_v1": _AST_IDENTITY_FIELDS,
-    "bytecode_files_v1": _BYTECODE_IDENTITY_FIELDS,
-    "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
-    "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
-    "tree_sitter_files_v1": _TREE_SITTER_IDENTITY_FIELDS,
-    "scip_index_v1": _SCIP_INDEX_IDENTITY_FIELDS,
-}
+ROOT_IDENTITY_FIELDS: ImmutableRegistry[str, tuple[str, ...]] = ImmutableRegistry.from_dict(
+    {
+        "ast_files_v1": _AST_IDENTITY_FIELDS,
+        "bytecode_files_v1": _BYTECODE_IDENTITY_FIELDS,
+        "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
+        "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
+        "tree_sitter_files_v1": _TREE_SITTER_IDENTITY_FIELDS,
+        "scip_index_v1": _SCIP_INDEX_IDENTITY_FIELDS,
+    }
+)
 
 AST_CORE_VIEW_NAMES: tuple[str, ...] = (
     "ast_nodes",
@@ -2197,7 +2202,7 @@ def _function_requirements(schema: pa.Schema) -> FunctionRequirements:
 
 
 ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
-    "engine_runtime_v1",
+    "engine_runtime_v2",
     ENGINE_RUNTIME_SCHEMA,
     extra_metadata=_ENGINE_FUNCTION_REQUIREMENTS,
 )
@@ -2291,9 +2296,14 @@ def extract_nested_schema_names() -> tuple[str, ...]:
     tuple[str, ...]
         Sorted intrinsic extract nested dataset name tuple.
     """
-    return tuple(
-        sorted(name for name, spec in NESTED_DATASET_INDEX.items() if spec["role"] == "intrinsic")
-    )
+    names: list[str] = []
+    for name in NESTED_DATASET_INDEX:
+        spec = NESTED_DATASET_INDEX.get(name)
+        if spec is None:
+            continue
+        if spec["role"] == "intrinsic":
+            names.append(name)
+    return tuple(sorted(names))
 
 
 def extract_nested_spec_for(name: str) -> NestedDatasetSpec:
@@ -2324,13 +2334,14 @@ def extract_datasets_for_path(root: str, path: str) -> tuple[str, ...]:
     tuple[str, ...]
         Sorted extract nested dataset name tuple for the path.
     """
-    return tuple(
-        sorted(
-            name
-            for name, spec in NESTED_DATASET_INDEX.items()
-            if spec["root"] == root and spec["path"] == path
-        )
-    )
+    names: list[str] = []
+    for name in NESTED_DATASET_INDEX:
+        spec = NESTED_DATASET_INDEX.get(name)
+        if spec is None:
+            continue
+        if spec["root"] == root and spec["path"] == path:
+            names.append(name)
+    return tuple(sorted(names))
 
 
 def extract_nested_path_for(name: str) -> tuple[str, str]:
@@ -2656,7 +2667,7 @@ def identity_fields_for(
         Identity column names for the dataset.
     """
     root, _ = nested_path_for(name)
-    identities = ROOT_IDENTITY_FIELDS.get(root, ())
+    identities = ROOT_IDENTITY_FIELDS.get(root) or ()
     row_fields = {field.name for field in row_struct}
     resolved: list[str] = []
     for field_name in identities:

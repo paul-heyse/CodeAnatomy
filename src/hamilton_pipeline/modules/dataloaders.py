@@ -26,7 +26,7 @@ from extract.scip_indexer import (
     resolve_scip_paths,
     write_scip_environment_json,
 )
-from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
+from hamilton_pipeline.types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
 from incremental.types import IncrementalConfig
 
 

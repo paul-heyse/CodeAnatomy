@@ -20,6 +20,13 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.scoring import (
+    ConfidenceSignals,
+    ImpactSignals,
+    bucket,
+    confidence_score,
+    impact_score,
+)
 from tools.cq.index.graph_utils import find_sccs
 
 if TYPE_CHECKING:
@@ -331,6 +338,7 @@ def _partition_dependencies(
 def _append_cycle_section(
     result: CqResult,
     cycles: list[list[str]],
+    scoring_details: dict[str, object],
 ) -> None:
     if not cycles:
         result.key_findings.append(
@@ -338,6 +346,7 @@ def _append_cycle_section(
                 category="info",
                 message="No import cycles detected",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
         return
@@ -346,17 +355,19 @@ def _append_cycle_section(
             category="cycle",
             message=f"Found {len(cycles)} import cycle(s)",
             severity="warning",
+            details=dict(scoring_details),
         )
     )
     cycle_section = Section(title="Import Cycles")
     for index, cycle in enumerate(cycles[:_CYCLE_LIMIT], 1):
         cycle_str = " -> ".join(cycle) + f" -> {cycle[0]}"
+        details = {"modules": cycle, **scoring_details}
         cycle_section.findings.append(
             Finding(
                 category="cycle",
                 message=f"Cycle {index}: {cycle_str}",
                 severity="warning",
-                details={"modules": cycle},
+                details=details,
             )
         )
     result.sections.append(cycle_section)
@@ -366,17 +377,19 @@ def _append_external_section(
     result: CqResult,
     all_imports: list[ImportInfo],
     external_deps: set[str],
+    scoring_details: dict[str, object],
 ) -> None:
     if not external_deps:
         return
     ext_section = Section(title="External Dependencies")
     for dep in sorted(external_deps)[:_EXTERNAL_LIMIT]:
-        count = sum(1 for imp in all_imports if imp.module.split(".")[0] == dep)
+        count = sum(1 for imp_info in all_imports if imp_info.module.split(".")[0] == dep)
         ext_section.findings.append(
             Finding(
                 category="external",
                 message=f"{dep}: {count} imports",
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(ext_section)
@@ -385,18 +398,20 @@ def _append_external_section(
 def _append_relative_section(
     result: CqResult,
     relative_imports: list[ImportInfo],
+    scoring_details: dict[str, object],
 ) -> None:
     if not relative_imports:
         return
     rel_section = Section(title="Relative Imports")
-    for imp in relative_imports[:_REL_IMPORT_LIMIT]:
-        dots = "." * imp.level
+    for imp_info in relative_imports[:_REL_IMPORT_LIMIT]:
+        dots = "." * imp_info.level
         rel_section.findings.append(
             Finding(
                 category="relative",
-                message=f"from {dots}{imp.module or ''} import {', '.join(imp.names) or '*'}",
-                anchor=Anchor(file=imp.file, line=imp.line),
+                message=f"from {dots}{imp_info.module or ''} import {', '.join(imp_info.names) or '*'}",
+                anchor=Anchor(file=imp_info.file, line=imp_info.line),
                 severity="info",
+                details=dict(scoring_details),
             )
         )
     result.sections.append(rel_section)
@@ -406,34 +421,41 @@ def _append_module_focus(
     result: CqResult,
     deps: dict[str, ModuleDeps],
     module: str,
+    scoring_details: dict[str, object],
 ) -> None:
     focus_section = Section(title=f"Imports in {module}")
     for file, mod_deps in deps.items():
         if module in file or _file_to_module(file).startswith(module):
-            for imp in mod_deps.imports:
+            for imp_info in mod_deps.imports:
                 focus_section.findings.append(
                     Finding(
                         category="import",
-                        message=f"{'from ' if imp.is_from else 'import '}{imp.module}",
-                        anchor=Anchor(file=imp.file, line=imp.line),
+                        message=f"{'from ' if imp_info.is_from else 'import '}{imp_info.module}",
+                        anchor=Anchor(file=imp_info.file, line=imp_info.line),
                         severity="info",
+                        details=dict(scoring_details),
                     )
                 )
     result.sections.append(focus_section)
 
 
-def _append_import_evidence(result: CqResult, all_imports: list[ImportInfo]) -> None:
-    for imp in all_imports:
+def _append_import_evidence(
+    result: CqResult,
+    all_imports: list[ImportInfo],
+    scoring_details: dict[str, object],
+) -> None:
+    for imp_info in all_imports:
         what = (
-            f"from {imp.module} import {', '.join(imp.names)}"
-            if imp.is_from
-            else f"import {imp.module}"
+            f"from {imp_info.module} import {', '.join(imp_info.names)}"
+            if imp_info.is_from
+            else f"import {imp_info.module}"
         )
         result.evidence.append(
             Finding(
                 category="import",
                 message=what,
-                anchor=Anchor(file=imp.file, line=imp.line),
+                anchor=Anchor(file=imp_info.file, line=imp_info.line),
+                details=dict(scoring_details),
             )
         )
 
@@ -497,16 +519,40 @@ def cmd_imports(request: ImportRequest) -> CqResult:
     if request.module:
         result.summary["module_filter"] = request.module
 
+    # Compute scoring signals
+    max_cycle_len = 0
+    found_cycles: list[list[str]] = []
     if request.cycles:
         found_cycles = _find_import_cycles(deps, internal_prefix)
         result.summary["cycles_found"] = len(found_cycles)
-        _append_cycle_section(result, found_cycles)
+        max_cycle_len = max((len(c) for c in found_cycles), default=0)
 
-    _append_external_section(result, all_imports, external_deps)
+    imp_signals = ImpactSignals(
+        sites=len(all_imports),
+        files=len(deps),
+        depth=max_cycle_len,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
+    if request.cycles:
+        _append_cycle_section(result, found_cycles, scoring_details)
+
+    _append_external_section(result, all_imports, external_deps, scoring_details)
     relative_imports = [imp for imp in all_imports if imp.is_relative]
-    _append_relative_section(result, relative_imports)
+    _append_relative_section(result, relative_imports, scoring_details)
     if request.module:
-        _append_module_focus(result, deps, request.module)
-    _append_import_evidence(result, all_imports)
+        _append_module_focus(result, deps, request.module, scoring_details)
+    _append_import_evidence(result, all_imports, scoring_details)
 
     return result

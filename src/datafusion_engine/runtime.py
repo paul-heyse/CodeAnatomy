@@ -92,7 +92,6 @@ from datafusion_engine.session_factory import SessionFactory
 from datafusion_engine.session_helpers import deregister_table, register_temp_table
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
-from datafusion_engine.udf_runtime import register_rust_udfs
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from engine.plan_cache import PlanCache
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
@@ -237,8 +236,6 @@ _EXTENSIONS_SCHEMA = pa.struct(
         pa.field("async_udfs_enabled", pa.bool_()),
         pa.field("async_udf_timeout_ms", pa.int64()),
         pa.field("async_udf_batch_size", pa.int64()),
-        pa.field("distributed", pa.bool_()),
-        pa.field("distributed_context_factory", pa.bool_()),
     ]
 )
 _OUTPUT_WRITES_SCHEMA = pa.struct(
@@ -1374,14 +1371,12 @@ def _register_view_specs_udfs(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Mapping[str, object]:
+    from datafusion_engine.udf_runtime import rust_udf_snapshot
+
     if runtime_profile is None:
-        return register_rust_udfs(ctx)
-    return register_rust_udfs(
-        ctx,
-        enable_async=runtime_profile.enable_async_udfs,
-        async_udf_timeout_ms=runtime_profile.async_udf_timeout_ms,
-        async_udf_batch_size=runtime_profile.async_udf_batch_size,
-    )
+        msg = "Runtime profile is required for view registration."
+        raise ValueError(msg)
+    return rust_udf_snapshot(ctx)
 
 
 def _build_view_nodes(
@@ -1581,7 +1576,11 @@ def _stable_repr(value: object) -> str:
 
 
 def _read_only_sql_options() -> SQLOptions:
-    return DataFusionSqlPolicy().to_sql_options()
+    return DataFusionSqlPolicy(
+        allow_ddl=True,
+        allow_dml=True,
+        allow_statements=True,
+    ).to_sql_options()
 
 
 def _sql_with_options(
@@ -1993,7 +1992,7 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v8", normalized)
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v9", normalized)
 
     return _hook
 
@@ -2280,8 +2279,6 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "async_udfs_enabled": profile.enable_async_udfs,
             "async_udf_timeout_ms": profile.async_udf_timeout_ms,
             "async_udf_batch_size": profile.async_udf_batch_size,
-            "distributed": profile.distributed,
-            "distributed_context_factory": bool(profile.distributed_context_factory),
         },
         "substrait_validation": profile.substrait_validation,
         "output_writes": {
@@ -2545,10 +2542,7 @@ class _RuntimeDiagnosticsMixin:
             "plan_artifacts_root": profile.plan_artifacts_root,
             "input_plugins": len(profile.input_plugins),
             "prepared_statements": [stmt.name for stmt in profile.prepared_statements],
-            "distributed": profile.distributed,
-            "distributed_context_factory": bool(profile.distributed_context_factory),
             "runtime_env_hook": bool(profile.runtime_env_hook),
-            "session_context_hook": bool(profile.session_context_hook),
             "config_policy_name": profile.config_policy_name,
             "schema_hardening_name": profile.schema_hardening_name,
             "config_policy": dict(resolved_policy.settings)
@@ -2664,8 +2658,6 @@ class _RuntimeDiagnosticsMixin:
                 "async_udfs_enabled": profile.enable_async_udfs,
                 "async_udf_timeout_ms": profile.async_udf_timeout_ms,
                 "async_udf_batch_size": profile.async_udf_batch_size,
-                "distributed": profile.distributed,
-                "distributed_context_factory": bool(profile.distributed_context_factory),
             },
             "substrait_validation": profile.substrait_validation,
             "output_writes": {
@@ -2987,7 +2979,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     config_policy: DataFusionConfigPolicy | None = None
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
-    sql_policy_name: str | None = "read_only"
+    sql_policy_name: str | None = "write"
     sql_policy: DataFusionSqlPolicy | None = None
     param_identifier_allowlist: tuple[str, ...] = ()
     external_table_options: Mapping[str, object] = field(default_factory=dict)
@@ -2997,10 +2989,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     join_policy: DataFusionJoinPolicy | None = None
     share_context: bool = True
     session_context_key: str | None = None
-    distributed: bool = False
-    distributed_context_factory: Callable[[], SessionContext] | None = None
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
-    session_context_hook: Callable[[SessionContext], SessionContext] | None = None
 
     def _validate_information_schema(self) -> None:
         if not self.enable_information_schema:
@@ -3185,8 +3174,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
-        self._install_plugins(ctx)
         self._install_udf_platform(ctx)
+        self._install_planner_rules(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
         self._prepare_statements(ctx)
@@ -3196,8 +3185,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
         self._record_cache_diagnostics(ctx)
-        if self.session_context_hook is not None:
-            ctx = self.session_context_hook(ctx)
         self._cache_context(ctx)
         return ctx
 
@@ -3263,8 +3250,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
-        self._install_plugins(ctx)
         self._install_udf_platform(ctx)
+        self._install_planner_rules(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
         self._prepare_statements(ctx)
@@ -3274,8 +3261,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
         self._record_cache_diagnostics(ctx)
-        if self.session_context_hook is not None:
-            ctx = self.session_context_hook(ctx)
         return ctx
 
     def _validate_async_udf_policy(self) -> dict[str, object]:
@@ -3419,17 +3404,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
         catalog.register_schema(self.view_schema_name, Schema.memory_schema())
 
-    def _install_plugins(self, ctx: SessionContext) -> None:
-        """Install runtime-loaded DataFusion plugins."""
-        if not self.plugin_specs:
-            return
-        manager = self.plugin_manager
-        if manager is None:
-            from datafusion_engine.plugin_manager import DataFusionPluginManager
-
-            manager = DataFusionPluginManager(self.plugin_specs)
-        manager.register_all(ctx)
-
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
         from datafusion_engine.udf_platform import (
@@ -3470,6 +3444,38 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
         self._refresh_udf_catalog(ctx)
 
+    def _install_planner_rules(self, ctx: SessionContext) -> None:
+        """Install Rust planner policy rules for the session context.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when the native DataFusion plugin surface is unavailable.
+        TypeError
+            Raised when planner policy installers are missing in datafusion._internal.
+        """
+        policy = self._resolved_sql_policy()
+        try:
+            module = importlib.import_module("datafusion._internal")
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            msg = "Planner policy rules require datafusion._internal."
+            raise RuntimeError(msg) from exc
+        config_installer = getattr(module, "install_codeanatomy_policy_config", None)
+        if not callable(config_installer):
+            msg = "Planner policy config installer is unavailable in datafusion._internal."
+            raise TypeError(msg)
+        rule_installer = getattr(module, "install_planner_rules", None)
+        if not callable(rule_installer):
+            msg = "Planner policy rule installer is unavailable in datafusion._internal."
+            raise TypeError(msg)
+        config_installer(
+            ctx,
+            policy.allow_ddl,
+            policy.allow_dml,
+            policy.allow_statements,
+        )
+        rule_installer(ctx)
+
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.enable_information_schema:
             msg = "UdfCatalog requires information_schema to be enabled."
@@ -3495,14 +3501,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when Rust UDFs are missing from DataFusion.
         """
-        from datafusion_engine.udf_runtime import udf_names_from_snapshot
+        from datafusion_engine.udf_runtime import rust_udf_snapshot, udf_names_from_snapshot
 
-        registry_snapshot = register_rust_udfs(
-            introspector.ctx,
-            enable_async=self.enable_async_udfs,
-            async_udf_timeout_ms=self.async_udf_timeout_ms,
-            async_udf_batch_size=self.async_udf_batch_size,
-        )
+        registry_snapshot = rust_udf_snapshot(introspector.ctx)
         registered_udfs = self._registered_udf_names(registry_snapshot)
         required_builtins = self._required_builtin_udfs(
             registry_snapshot,
@@ -4160,20 +4161,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
-            "delta_feature_gate": (
-                {
-                    "min_reader_version": location.delta_feature_gate.min_reader_version,
-                    "min_writer_version": location.delta_feature_gate.min_writer_version,
-                    "required_reader_features": list(
-                        location.delta_feature_gate.required_reader_features
-                    ),
-                    "required_writer_features": list(
-                        location.delta_feature_gate.required_writer_features
-                    ),
-                }
-                if location.delta_feature_gate is not None
-                else None
-            ),
             "delta_constraints": list(location.delta_constraints),
         }
         self.record_artifact("datafusion_ast_dataset_v1", payload)
@@ -4210,20 +4197,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
-            "delta_feature_gate": (
-                {
-                    "min_reader_version": location.delta_feature_gate.min_reader_version,
-                    "min_writer_version": location.delta_feature_gate.min_writer_version,
-                    "required_reader_features": list(
-                        location.delta_feature_gate.required_reader_features
-                    ),
-                    "required_writer_features": list(
-                        location.delta_feature_gate.required_writer_features
-                    ),
-                }
-                if location.delta_feature_gate is not None
-                else None
-            ),
             "delta_constraints": list(location.delta_constraints),
         }
         self.record_artifact("datafusion_bytecode_dataset_v1", payload)
@@ -5343,7 +5316,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options derived from the profile policy.
         """
-        return self._resolved_sql_policy().to_sql_options()
+        options = self._resolved_sql_policy().to_sql_options()
+        return (
+            options.with_allow_ddl(allow=True)
+            .with_allow_dml(allow=True)
+            .with_allow_statements(allow=True)
+        )
 
     def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
@@ -5363,8 +5341,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options with statement execution enabled.
         """
-        options = self._resolved_sql_policy().to_sql_options()
-        return options.with_allow_statements(allow=True)
+        return self._sql_options()
 
     def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.

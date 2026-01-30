@@ -51,6 +51,7 @@ from extract.helpers import (
 )
 from extract.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.parallel import parallel_map, resolve_max_workers, supports_fork
+from extract.result_types import ExtractResult
 from extract.schema_cache import libcst_files_fingerprint
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
@@ -90,13 +91,6 @@ class CstExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
     compute_scope: bool = True
     compute_type_inference: bool = False
     matcher_templates: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class CstExtractResult:
-    """Hold extracted CST nested file table."""
-
-    libcst_files: TableLike
 
 
 _QNAME_FIELD_NAMES: tuple[str, ...] = ("qnames", "callee_qnames")
@@ -1626,12 +1620,12 @@ def extract_cst(
     options: CstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> CstExtractResult:
+) -> ExtractResult[TableLike]:
     """Extract LibCST-derived structures from repo files.
 
     Returns
     -------
-    CstExtractResult
+    ExtractResult[TableLike]
         Tables derived from LibCST parsing and metadata providers.
     """
     normalized_options = normalize_options("cst", options, CstExtractOptions)
@@ -1677,18 +1671,17 @@ def extract_cst(
         evidence_plan=exec_context.evidence_plan,
         session=session,
     )
-    return CstExtractResult(
-        libcst_files=materialize_extract_plan(
-            "libcst_files_v1",
-            plan,
-            runtime_profile=runtime_profile,
-            determinism_tier=determinism_tier,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        )
+    table = materialize_extract_plan(
+        "libcst_files_v1",
+        plan,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            apply_post_kernels=True,
+        ),
     )
+    return ExtractResult(table=table, extractor_name="cst")
 
 
 def extract_cst_plans(

@@ -196,7 +196,7 @@ def _worklist_stream(
         output_table_name=output_name,
     )
     if output_location is not None and output_location.format == "delta":
-        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
         from datafusion_engine.scan_planner import ScanLineage, plan_scan_unit
 
         scan_unit = plan_scan_unit(

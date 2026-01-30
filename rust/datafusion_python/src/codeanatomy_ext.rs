@@ -39,6 +39,9 @@ use datafusion_expr::{
     TableType,
 };
 use datafusion_ext::install_expr_planners_native;
+use datafusion_ext::planner_rules::{
+    ensure_policy_config, install_policy_rules as install_policy_rules_native,
+};
 use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use crate::delta_control_plane::{
@@ -74,6 +77,7 @@ use crate::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 use df_plugin_host::{load_plugin, PluginHandle};
 use serde_json::Value as JsonValue;
 use crate::{registry_snapshot, udf_builtin, udf_custom_py, udf_docs};
+use datafusion_ext::udf_registry;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
@@ -323,6 +327,36 @@ fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> 
     Ok(())
 }
 
+#[pyfunction]
+#[pyo3(signature = (allow_ddl = None, allow_dml = None, allow_statements = None))]
+fn install_codeanatomy_policy_config(
+    ctx: PyRef<PySessionContext>,
+    allow_ddl: Option<bool>,
+    allow_dml: Option<bool>,
+    allow_statements: Option<bool>,
+) -> PyResult<()> {
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let config = state.config_mut();
+    let policy = ensure_policy_config(config.options_mut());
+    if let Some(value) = allow_ddl {
+        policy.allow_ddl = value;
+    }
+    if let Some(value) = allow_dml {
+        policy.allow_dml = value;
+    }
+    if let Some(value) = allow_statements {
+        policy.allow_statements = value;
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn install_planner_rules(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    install_policy_rules_native(&ctx.ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
+}
+
 #[pyfunction(name = "registry_snapshot")]
 fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
     let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
@@ -402,6 +436,24 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
     payload.set_item("custom_udfs", PyList::new(py, snapshot.custom_udfs)?)?;
     payload.set_item("pycapsule_udfs", PyList::empty(py))?;
     Ok(payload.into())
+}
+
+#[pyfunction]
+#[pyo3(signature = (enable_async = false, async_udf_timeout_ms = None, async_udf_batch_size = None))]
+fn register_codeanatomy_udfs(
+    ctx: PyRef<PySessionContext>,
+    enable_async: bool,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
+) -> PyResult<()> {
+    udf_registry::register_all_with_policy(
+        &ctx.ctx,
+        enable_async,
+        async_udf_timeout_ms,
+        async_udf_batch_size,
+    )
+    .map_err(|err| PyRuntimeError::new_err(format!("Failed to register CodeAnatomy UDFs: {err}")))?;
+    Ok(())
 }
 
 #[pyfunction]
@@ -2372,6 +2424,9 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module
     )?)?;
     module.add_function(wrap_pyfunction!(install_codeanatomy_udf_config, module)?)?;
+    module.add_function(wrap_pyfunction!(install_codeanatomy_policy_config, module)?)?;
+    module.add_function(wrap_pyfunction!(install_planner_rules, module)?)?;
+    module.add_function(wrap_pyfunction!(register_codeanatomy_udfs, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;

@@ -247,8 +247,6 @@ class SessionFactory:
         SessionContext
             Configured SessionContext instance.
         """
-        if self.profile.distributed:
-            return self._build_distributed_context()
         return self._build_local_context()
 
     def _build_local_context(self) -> SessionContext:
@@ -315,24 +313,6 @@ class SessionFactory:
             msg = "Delta session context construction failed."
             raise RuntimeError(msg)
         return ctx
-
-    def _build_distributed_context(self) -> SessionContext:
-        profile = self.profile
-        if profile.enable_delta_session_defaults:
-            msg = (
-                "Delta session defaults require a non-distributed SessionContext. "
-                "Provide a delta-configured distributed_context_factory or disable "
-                "enable_delta_session_defaults."
-            )
-            raise ValueError(msg)
-        if profile.distributed_context_factory is None:
-            msg = "Distributed execution requires distributed_context_factory."
-            raise ValueError(msg)
-        context = profile.distributed_context_factory()
-        if not isinstance(context, SessionContext):
-            msg = "distributed_context_factory must return a SessionContext."
-            raise TypeError(msg)
-        return context
 
 
 __all__ = ["SessionFactory"]

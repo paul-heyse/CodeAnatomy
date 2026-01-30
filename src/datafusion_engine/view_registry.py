@@ -41,7 +41,7 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.view_graph_registry import ViewNode
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-from utils.registry_protocol import ImmutableRegistry
+from utils.registry_protocol import ImmutableRegistry, MutableRegistry
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -2256,103 +2256,107 @@ VIEW_SELECT_REGISTRY: Final[ImmutableRegistry[str, tuple[Expr, ...]]] = Immutabl
     _VIEW_SELECT_EXPRS
 )
 
-VIEW_BASE_TABLE: Final[dict[str, str]] = {
-    "ast_call_attrs": "ast_calls",
-    "ast_calls": "ast_files_v1",
-    "ast_def_attrs": "ast_defs",
-    "ast_defs": "ast_files_v1",
-    "ast_docstrings": "ast_files_v1",
-    "ast_edge_attrs": "ast_edges",
-    "ast_edges": "ast_files_v1",
-    "ast_errors": "ast_files_v1",
-    "ast_imports": "ast_files_v1",
-    "ast_node_attrs": "ast_nodes",
-    "ast_nodes": "ast_files_v1",
-    "ast_span_metadata": "ast_files_v1",
-    "ast_type_ignores": "ast_files_v1",
-    "bytecode_errors": "bytecode_files_v1",
-    "bytecode_exception_table": "bytecode_files_v1",
-    "cst_call_args": "libcst_files_v1",
-    "cst_callsite_span_unnest": "cst_callsites",
-    "cst_callsite_spans": "cst_callsites",
-    "cst_callsites": "libcst_files_v1",
-    "cst_callsites_attr_origin": "cst_callsites",
-    "cst_callsites_attrs": "cst_callsites",
-    "cst_decorators": "libcst_files_v1",
-    "cst_def_span_unnest": "cst_defs",
-    "cst_def_spans": "cst_defs",
-    "cst_defs": "libcst_files_v1",
-    "cst_defs_attr_origin": "cst_defs",
-    "cst_defs_attrs": "cst_defs",
-    "cst_docstrings": "libcst_files_v1",
-    "cst_edges_attr_origin": "cst_edges",
-    "cst_edges_attrs": "cst_edges",
-    "cst_imports": "libcst_files_v1",
-    "cst_imports_attr_origin": "cst_imports",
-    "cst_imports_attrs": "cst_imports",
-    "cst_nodes_attr_origin": "cst_nodes",
-    "cst_nodes_attrs": "cst_nodes",
-    "cst_parse_errors": "libcst_files_v1",
-    "cst_parse_manifest": "libcst_files_v1",
-    "cst_ref_span_unnest": "cst_refs",
-    "cst_ref_spans": "cst_refs",
-    "cst_refs": "libcst_files_v1",
-    "cst_refs_attr_origin": "cst_refs",
-    "cst_refs_attrs": "cst_refs",
-    "cst_schema_diagnostics": "libcst_files_v1",
-    "cst_type_exprs": "libcst_files_v1",
-    "py_bc_blocks": "bytecode_files_v1",
-    "py_bc_cache_entries": "bytecode_files_v1",
-    "py_bc_cfg_edge_attrs": "bytecode_files_v1",
-    "py_bc_cfg_edges": "bytecode_files_v1",
-    "py_bc_code_units": "bytecode_files_v1",
-    "py_bc_consts": "bytecode_files_v1",
-    "py_bc_dfg_edges": "bytecode_files_v1",
-    "py_bc_error_attrs": "bytecode_files_v1",
-    "py_bc_flags_detail": "bytecode_files_v1",
-    "py_bc_instruction_attr_keys": "bytecode_files_v1",
-    "py_bc_instruction_attrs": "bytecode_files_v1",
-    "py_bc_instruction_span_fields": "py_bc_instruction_spans",
-    "py_bc_instruction_spans": "py_bc_instructions",
-    "py_bc_instructions": "bytecode_files_v1",
-    "py_bc_line_table": "bytecode_files_v1",
-    "py_bc_metadata": "bytecode_files_v1",
-    "symtable_class_methods": "symtable_files_v1",
-    "symtable_function_partitions": "symtable_files_v1",
-    "symtable_scopes": "symtable_files_v1",
-    "symtable_symbol_attrs": "symtable_files_v1",
-    "symtable_symbols": "symtable_files_v1",
-    "ts_calls": "tree_sitter_files_v1",
-    "ts_captures": "tree_sitter_files_v1",
-    "ts_defs": "tree_sitter_files_v1",
-    "ts_docstrings": "tree_sitter_files_v1",
-    "ts_edges": "tree_sitter_files_v1",
-    "ts_errors": "tree_sitter_files_v1",
-    "ts_imports": "tree_sitter_files_v1",
-    "ts_missing": "tree_sitter_files_v1",
-    "ts_nodes": "tree_sitter_files_v1",
-    "ts_span_metadata": "tree_sitter_files_v1",
-    "ts_stats": "tree_sitter_files_v1",
-}
+VIEW_BASE_TABLE: Final[ImmutableRegistry[str, str]] = ImmutableRegistry.from_dict(
+    {
+        "ast_call_attrs": "ast_calls",
+        "ast_calls": "ast_files_v1",
+        "ast_def_attrs": "ast_defs",
+        "ast_defs": "ast_files_v1",
+        "ast_docstrings": "ast_files_v1",
+        "ast_edge_attrs": "ast_edges",
+        "ast_edges": "ast_files_v1",
+        "ast_errors": "ast_files_v1",
+        "ast_imports": "ast_files_v1",
+        "ast_node_attrs": "ast_nodes",
+        "ast_nodes": "ast_files_v1",
+        "ast_span_metadata": "ast_files_v1",
+        "ast_type_ignores": "ast_files_v1",
+        "bytecode_errors": "bytecode_files_v1",
+        "bytecode_exception_table": "bytecode_files_v1",
+        "cst_call_args": "libcst_files_v1",
+        "cst_callsite_span_unnest": "cst_callsites",
+        "cst_callsite_spans": "cst_callsites",
+        "cst_callsites": "libcst_files_v1",
+        "cst_callsites_attr_origin": "cst_callsites",
+        "cst_callsites_attrs": "cst_callsites",
+        "cst_decorators": "libcst_files_v1",
+        "cst_def_span_unnest": "cst_defs",
+        "cst_def_spans": "cst_defs",
+        "cst_defs": "libcst_files_v1",
+        "cst_defs_attr_origin": "cst_defs",
+        "cst_defs_attrs": "cst_defs",
+        "cst_docstrings": "libcst_files_v1",
+        "cst_edges_attr_origin": "cst_edges",
+        "cst_edges_attrs": "cst_edges",
+        "cst_imports": "libcst_files_v1",
+        "cst_imports_attr_origin": "cst_imports",
+        "cst_imports_attrs": "cst_imports",
+        "cst_nodes_attr_origin": "cst_nodes",
+        "cst_nodes_attrs": "cst_nodes",
+        "cst_parse_errors": "libcst_files_v1",
+        "cst_parse_manifest": "libcst_files_v1",
+        "cst_ref_span_unnest": "cst_refs",
+        "cst_ref_spans": "cst_refs",
+        "cst_refs": "libcst_files_v1",
+        "cst_refs_attr_origin": "cst_refs",
+        "cst_refs_attrs": "cst_refs",
+        "cst_schema_diagnostics": "libcst_files_v1",
+        "cst_type_exprs": "libcst_files_v1",
+        "py_bc_blocks": "bytecode_files_v1",
+        "py_bc_cache_entries": "bytecode_files_v1",
+        "py_bc_cfg_edge_attrs": "bytecode_files_v1",
+        "py_bc_cfg_edges": "bytecode_files_v1",
+        "py_bc_code_units": "bytecode_files_v1",
+        "py_bc_consts": "bytecode_files_v1",
+        "py_bc_dfg_edges": "bytecode_files_v1",
+        "py_bc_error_attrs": "bytecode_files_v1",
+        "py_bc_flags_detail": "bytecode_files_v1",
+        "py_bc_instruction_attr_keys": "bytecode_files_v1",
+        "py_bc_instruction_attrs": "bytecode_files_v1",
+        "py_bc_instruction_span_fields": "py_bc_instruction_spans",
+        "py_bc_instruction_spans": "py_bc_instructions",
+        "py_bc_instructions": "bytecode_files_v1",
+        "py_bc_line_table": "bytecode_files_v1",
+        "py_bc_metadata": "bytecode_files_v1",
+        "symtable_class_methods": "symtable_files_v1",
+        "symtable_function_partitions": "symtable_files_v1",
+        "symtable_scopes": "symtable_files_v1",
+        "symtable_symbol_attrs": "symtable_files_v1",
+        "symtable_symbols": "symtable_files_v1",
+        "ts_calls": "tree_sitter_files_v1",
+        "ts_captures": "tree_sitter_files_v1",
+        "ts_defs": "tree_sitter_files_v1",
+        "ts_docstrings": "tree_sitter_files_v1",
+        "ts_edges": "tree_sitter_files_v1",
+        "ts_errors": "tree_sitter_files_v1",
+        "ts_imports": "tree_sitter_files_v1",
+        "ts_missing": "tree_sitter_files_v1",
+        "ts_nodes": "tree_sitter_files_v1",
+        "ts_span_metadata": "tree_sitter_files_v1",
+        "ts_stats": "tree_sitter_files_v1",
+    }
+)
 
 NESTED_VIEW_NAMES: Final[frozenset[str]] = frozenset(extract_nested_dataset_names())
 
-ATTRS_VIEW_BASE: Final[dict[str, str]] = {
-    "ast_call_attrs": "ast_calls",
-    "ast_def_attrs": "ast_defs",
-    "ast_edge_attrs": "ast_edges",
-    "ast_node_attrs": "ast_nodes",
-    "cst_callsites_attrs": "cst_callsites",
-    "cst_defs_attrs": "cst_defs",
-    "cst_edges_attrs": "cst_edges",
-    "cst_imports_attrs": "cst_imports",
-    "cst_nodes_attrs": "cst_nodes",
-    "cst_refs_attrs": "cst_refs",
-    "py_bc_cfg_edge_attrs": "py_bc_cfg_edges",
-    "py_bc_error_attrs": "bytecode_errors",
-    "py_bc_instruction_attrs": "py_bc_instructions",
-    "symtable_symbol_attrs": "symtable_symbols",
-}
+ATTRS_VIEW_BASE: Final[ImmutableRegistry[str, str]] = ImmutableRegistry.from_dict(
+    {
+        "ast_call_attrs": "ast_calls",
+        "ast_def_attrs": "ast_defs",
+        "ast_edge_attrs": "ast_edges",
+        "ast_node_attrs": "ast_nodes",
+        "cst_callsites_attrs": "cst_callsites",
+        "cst_defs_attrs": "cst_defs",
+        "cst_edges_attrs": "cst_edges",
+        "cst_imports_attrs": "cst_imports",
+        "cst_nodes_attrs": "cst_nodes",
+        "cst_refs_attrs": "cst_refs",
+        "py_bc_cfg_edge_attrs": "py_bc_cfg_edges",
+        "py_bc_error_attrs": "bytecode_errors",
+        "py_bc_instruction_attrs": "py_bc_instructions",
+        "symtable_symbol_attrs": "symtable_symbols",
+    }
+)
 
 ATTRS_RAW_BASE: Final[frozenset[str]] = frozenset(
     {
@@ -2363,19 +2367,21 @@ ATTRS_RAW_BASE: Final[frozenset[str]] = frozenset(
     }
 )
 
-MAP_KEYS_VIEW_BASE: Final[dict[str, str]] = {
-    "py_bc_instruction_attr_keys": "py_bc_instructions",
-}
+MAP_KEYS_VIEW_BASE: Final[ImmutableRegistry[str, str]] = ImmutableRegistry.from_dict(
+    {"py_bc_instruction_attr_keys": "py_bc_instructions"}
+)
 
-MAP_VALUES_VIEW_BASE: Final[dict[str, str]] = {
-    "py_bc_instruction_attr_values": "py_bc_instructions",
-}
+MAP_VALUES_VIEW_BASE: Final[ImmutableRegistry[str, str]] = ImmutableRegistry.from_dict(
+    {"py_bc_instruction_attr_values": "py_bc_instructions"}
+)
 
-CST_SPAN_UNNEST_BASE: Final[dict[str, str]] = {
-    "cst_callsite_span_unnest": "cst_callsites",
-    "cst_def_span_unnest": "cst_defs",
-    "cst_ref_span_unnest": "cst_refs",
-}
+CST_SPAN_UNNEST_BASE: Final[ImmutableRegistry[str, str]] = ImmutableRegistry.from_dict(
+    {
+        "cst_callsite_span_unnest": "cst_callsites",
+        "cst_def_span_unnest": "cst_defs",
+        "cst_ref_span_unnest": "cst_refs",
+    }
+)
 
 
 def _nested_base_df(ctx: SessionContext, name: str) -> DataFrame:
@@ -2804,71 +2810,114 @@ def _base_table_for_view(name: str) -> str:
     raise KeyError(msg)
 
 
-def _register_builder_map() -> dict[str, Callable[[SessionContext], DataFrame]]:
-    builders: dict[str, Callable[[SessionContext], DataFrame]] = {}
-    for view_name, base_view in ATTRS_VIEW_BASE.items():
+def _register_builder_map() -> MutableRegistry[str, Callable[[SessionContext], DataFrame]]:
+    builders: MutableRegistry[str, Callable[[SessionContext], DataFrame]] = MutableRegistry()
+    for view_name in ATTRS_VIEW_BASE:
+        base_view = ATTRS_VIEW_BASE.get(view_name)
+        if base_view is None:
+            msg = f"Missing attribute view base for {view_name!r}."
+            raise KeyError(msg)
         raw_base = view_name in ATTRS_RAW_BASE
-        builders[view_name] = partial(
-            _map_entries_view_df,
-            name=view_name,
-            base_view=base_view,
-            raw_base=raw_base,
+        builders.register(
+            view_name,
+            partial(
+                _map_entries_view_df,
+                name=view_name,
+                base_view=base_view,
+                raw_base=raw_base,
+            ),
         )
-    for view_name, base_view in MAP_KEYS_VIEW_BASE.items():
-        builders[view_name] = partial(
-            _map_keys_view_df,
-            name=view_name,
-            base_view=base_view,
+    for view_name in MAP_KEYS_VIEW_BASE:
+        base_view = MAP_KEYS_VIEW_BASE.get(view_name)
+        if base_view is None:
+            msg = f"Missing map keys base for {view_name!r}."
+            raise KeyError(msg)
+        builders.register(
+            view_name,
+            partial(
+                _map_keys_view_df,
+                name=view_name,
+                base_view=base_view,
+            ),
         )
-    for view_name, base_view in MAP_VALUES_VIEW_BASE.items():
-        builders[view_name] = partial(
-            _map_values_view_df,
-            _name=view_name,
-            base_view=base_view,
+    for view_name in MAP_VALUES_VIEW_BASE:
+        base_view = MAP_VALUES_VIEW_BASE.get(view_name)
+        if base_view is None:
+            msg = f"Missing map values base for {view_name!r}."
+            raise KeyError(msg)
+        builders.register(
+            view_name,
+            partial(
+                _map_values_view_df,
+                _name=view_name,
+                base_view=base_view,
+            ),
         )
-    for view_name, base_view in CST_SPAN_UNNEST_BASE.items():
-        builders[view_name] = partial(
-            _cst_span_unnest_df,
-            name=view_name,
-            base_view=base_view,
+    for view_name in CST_SPAN_UNNEST_BASE:
+        base_view = CST_SPAN_UNNEST_BASE.get(view_name)
+        if base_view is None:
+            msg = f"Missing CST span base for {view_name!r}."
+            raise KeyError(msg)
+        builders.register(
+            view_name,
+            partial(
+                _cst_span_unnest_df,
+                name=view_name,
+                base_view=base_view,
+            ),
         )
-    builders["symtable_class_methods"] = _symtable_class_methods_df
-    builders["symtable_function_partitions"] = _symtable_function_partitions_df
-    builders["symtable_namespace_edges"] = _symtable_namespace_edges_df
-    builders["symtable_scope_edges"] = _symtable_scope_edges_df
-    builders["ts_ast_calls_check"] = partial(
-        _ts_ast_check_df,
-        ts_view="ts_calls",
-        ast_view="ast_calls",
-        label="calls",
+    builders.register("symtable_class_methods", _symtable_class_methods_df)
+    builders.register("symtable_function_partitions", _symtable_function_partitions_df)
+    builders.register("symtable_namespace_edges", _symtable_namespace_edges_df)
+    builders.register("symtable_scope_edges", _symtable_scope_edges_df)
+    builders.register(
+        "ts_ast_calls_check",
+        partial(
+            _ts_ast_check_df,
+            ts_view="ts_calls",
+            ast_view="ast_calls",
+            label="calls",
+        ),
     )
-    builders["ts_ast_defs_check"] = partial(
-        _ts_ast_check_df,
-        ts_view="ts_defs",
-        ast_view="ast_defs",
-        label="defs",
+    builders.register(
+        "ts_ast_defs_check",
+        partial(
+            _ts_ast_check_df,
+            ts_view="ts_defs",
+            ast_view="ast_defs",
+            label="defs",
+        ),
     )
-    builders["ts_ast_imports_check"] = partial(
-        _ts_ast_check_df,
-        ts_view="ts_imports",
-        ast_view="ast_imports",
-        label="imports",
+    builders.register(
+        "ts_ast_imports_check",
+        partial(
+            _ts_ast_check_df,
+            ts_view="ts_imports",
+            ast_view="ast_imports",
+            label="imports",
+        ),
     )
-    builders["ts_cst_docstrings_check"] = _ts_cst_docstrings_check_df
-    builders["python_imports"] = _python_imports_df
+    builders.register("ts_cst_docstrings_check", _ts_cst_docstrings_check_df)
+    builders.register("python_imports", _python_imports_df)
     return builders
 
 
-_CUSTOM_BUILDERS: Final[dict[str, Callable[[SessionContext], DataFrame]]] = _register_builder_map()
+_CUSTOM_BUILDERS: Final[MutableRegistry[str, Callable[[SessionContext], DataFrame]]] = (
+    _register_builder_map()
+)
 
-_CUSTOM_VIEW_DEPENDENCIES: Final[dict[str, tuple[str, ...]]] = {
-    "python_imports": ("python_imports_v1", "ast_imports", "cst_imports", "ts_imports"),
-    "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
-    "ts_ast_calls_check": ("ts_calls", "ast_calls"),
-    "ts_ast_defs_check": ("ts_defs", "ast_defs"),
-    "ts_ast_imports_check": ("ts_imports", "ast_imports"),
-    "ts_cst_docstrings_check": ("ts_docstrings", "cst_docstrings"),
-}
+_CUSTOM_VIEW_DEPENDENCIES: Final[ImmutableRegistry[str, tuple[str, ...]]] = (
+    ImmutableRegistry.from_dict(
+        {
+            "python_imports": ("python_imports_v1", "ast_imports", "cst_imports", "ts_imports"),
+            "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
+            "ts_ast_calls_check": ("ts_calls", "ast_calls"),
+            "ts_ast_defs_check": ("ts_defs", "ast_defs"),
+            "ts_ast_imports_check": ("ts_imports", "ast_imports"),
+            "ts_cst_docstrings_check": ("ts_docstrings", "cst_docstrings"),
+        }
+    )
+)
 
 
 def _resolve_root_table(name: str) -> str:
@@ -3105,7 +3154,7 @@ def ensure_view_graph(
     platform = install_rust_udf_platform(ctx, options=options)
     snapshot = platform.snapshot or rust_udf_snapshot(ctx)
     if scan_units:
-        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(
             ctx,

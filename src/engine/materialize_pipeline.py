@@ -275,7 +275,7 @@ def build_view_product(
     )
     scan_units, scan_keys = _plan_view_scan_units(bundle, runtime_profile=profile)
     if scan_units:
-        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+        from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(
             session,

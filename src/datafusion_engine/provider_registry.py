@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.registry_bridge import DataFusionCachePolicy
+    from datafusion_engine.dataset_registration import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.table_spec import TableSpec
 
@@ -258,11 +258,11 @@ class ProviderRegistry:
         ValueError
             Raised when the runtime profile is missing.
         """
-        from datafusion_engine.dataset_registry import DatasetLocation
-        from datafusion_engine.registry_bridge import (
+        from datafusion_engine.dataset_registration import (
             _build_registration_context,
             _register_dataset_with_context,
         )
+        from datafusion_engine.dataset_registry import DatasetLocation
 
         if self.runtime_profile is None:
             msg = "ProviderRegistry requires a runtime profile for registration."

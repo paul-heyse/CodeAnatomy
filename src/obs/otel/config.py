@@ -32,7 +32,15 @@ from opentelemetry.sdk.trace.sampling import (
 )
 
 from core.config_base import config_fingerprint
-from utils.env_utils import env_bool, env_bool_strict, env_float, env_int, env_text, env_value
+from utils.env_utils import (
+    env_bool,
+    env_bool_strict,
+    env_enum,
+    env_float,
+    env_int,
+    env_text,
+    env_value,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -197,17 +205,19 @@ def _resolve_metrics_temporality() -> AggregationTemporality | None:
     if raw is None:
         return None
     name = raw.lower()
-    if name == "cumulative":
-        return AggregationTemporality.CUMULATIVE
-    if name == "delta":
-        return AggregationTemporality.DELTA
     if name == "lowmemory":
         return AggregationTemporality.DELTA
-    _LOGGER.warning(
-        "Invalid OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: %r",
-        raw,
+    value = env_enum(
+        "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+        AggregationTemporality,
     )
-    return None
+    if value is None:
+        _LOGGER.warning(
+            "Invalid OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: %r",
+            raw,
+        )
+        return None
+    return value
 
 
 def _resolve_metrics_histogram_aggregation() -> Aggregation | None:

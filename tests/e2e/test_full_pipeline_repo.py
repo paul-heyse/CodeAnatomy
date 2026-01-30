@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
-from hamilton_pipeline.pipeline_types import ScipIndexConfig
+from hamilton_pipeline.types import ScipIndexConfig
 
 
 @pytest.mark.e2e

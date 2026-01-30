@@ -5,12 +5,12 @@ from __future__ import annotations
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.udf_catalog import get_default_udf_catalog
-from datafusion_engine.udf_runtime import register_rust_udfs
+from datafusion_engine.udf_platform import ensure_rust_udfs
 
 
 def _udf_catalog() -> SchemaIntrospector:
     ctx = DataFusionRuntimeProfile().session_context()
-    register_rust_udfs(ctx)
+    ensure_rust_udfs(ctx)
     return SchemaIntrospector(ctx, sql_options=None)
 
 

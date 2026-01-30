@@ -18,7 +18,7 @@ from engine.session_factory import build_engine_session
 from extract.repo_scan import default_repo_scan_options
 from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
 from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
-from hamilton_pipeline.pipeline_types import (
+from hamilton_pipeline.types import (
     CacheRuntimeContext,
     OutputConfig,
     OutputStoragePolicy,

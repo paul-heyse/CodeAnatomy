@@ -7,14 +7,15 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.dataset_registration import register_dataset_df
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.expr_spec import ExprSpec
-from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from obs.diagnostics import DiagnosticsCollector
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DatasetSpec
-from storage.deltalake import DeltaWriteOptions, write_delta_table
 
 pytest.importorskip("datafusion")
 pytest.importorskip("deltalake")
@@ -31,11 +32,16 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     sink = DiagnosticsCollector()
     profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
     ctx = profile.session_context()
-    write_delta_table(
-        table,
-        str(delta_path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
-        ctx=ctx,
+    seed = datafusion_from_arrow(ctx, name="delta_seed", value=table)
+    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=seed,
+            destination=str(delta_path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            format_options={"schema_mode": "overwrite"},
+        )
     )
     register_dataset_df(
         ctx,
@@ -60,15 +66,17 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
     sink = DiagnosticsCollector()
     profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
     ctx = profile.session_context()
-    write_delta_table(
-        table,
-        str(delta_path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
+    seed = datafusion_from_arrow(ctx, name="delta_seed", value=table)
+    pipeline = WritePipeline(ctx, runtime_profile=profile)
+    pipeline.write(
+        WriteRequest(
+            source=seed,
+            destination=str(delta_path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
             partition_by=("part",),
-        ),
-        ctx=ctx,
+            format_options={"schema_mode": "overwrite"},
+        )
     )
     table_spec = TableSchemaSpec.from_schema("delta_tbl", table.schema)
     dataset_spec = DatasetSpec(

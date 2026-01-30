@@ -39,8 +39,14 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
     str
         Markdown-formatted line.
     """
-    icon = _severity_icon(f.severity)
-    prefix = f"{icon} " if icon else ""
+    # Use impact/confidence tags if available, otherwise fall back to severity icon
+    if "impact_bucket" in f.details and "confidence_bucket" in f.details:
+        imp_bucket = f.details["impact_bucket"]
+        conf_bucket = f.details["confidence_bucket"]
+        prefix = f"[impact:{imp_bucket}] [conf:{conf_bucket}] "
+    else:
+        icon = _severity_icon(f.severity)
+        prefix = f"{icon} " if icon else ""
 
     if show_anchor and f.anchor:
         loc = f"`{f.anchor.to_ref()}`"
@@ -192,4 +198,96 @@ def render_markdown(result: CqResult) -> str:
     lines.extend(_render_evidence(result.evidence))
     lines.extend(_render_artifacts(result.artifacts))
     lines.extend(_render_footer(result))
+    return "\n".join(lines)
+
+
+def _get_impact_confidence_summary(findings: list[Finding]) -> tuple[str, str]:
+    """Get overall impact and confidence from findings.
+
+    Returns
+    -------
+    tuple[str, str]
+        (impact_bucket, confidence_bucket) based on findings.
+    """
+    impact_buckets = []
+    conf_buckets = []
+    for f in findings:
+        if "impact_bucket" in f.details:
+            impact_buckets.append(f.details["impact_bucket"])
+        if "confidence_bucket" in f.details:
+            conf_buckets.append(f.details["confidence_bucket"])
+
+    # Use highest impact and confidence seen
+    impact_order = {"high": 3, "med": 2, "low": 1}
+    conf_order = {"high": 3, "med": 2, "low": 1}
+
+    max_impact = max(impact_buckets, key=lambda x: impact_order.get(x, 0), default="low")
+    max_conf = max(conf_buckets, key=lambda x: conf_order.get(x, 0), default="low")
+
+    return max_impact, max_conf
+
+
+def render_summary(result: CqResult) -> str:
+    """Render CqResult as condensed single-line output for CI integration.
+
+    Parameters
+    ----------
+    result : CqResult
+        Analysis result to render.
+
+    Returns
+    -------
+    str
+        Condensed summary output.
+    """
+    lines: list[str] = []
+    macro = result.run.macro
+
+    # Collect all findings for summary
+    all_findings: list[Finding] = []
+    all_findings.extend(result.key_findings)
+    for section in result.sections:
+        all_findings.extend(section.findings)
+
+    if not all_findings:
+        return f"{macro}: no findings"
+
+    # Get overall impact/confidence
+    impact, confidence = _get_impact_confidence_summary(all_findings)
+
+    # Build summary line based on macro type
+    summary_parts: list[str] = []
+
+    if result.summary:
+        # Extract key metrics from summary
+        for key in ("total_sites", "call_sites", "hazards_found", "total_raises", "total_catches"):
+            if key in result.summary:
+                value = result.summary[key]
+                label = key.replace("_", " ")
+                summary_parts.append(f"{value} {label}")
+
+        # For sig-impact, show breakage counts
+        if "would_break" in result.summary:
+            wb = result.summary["would_break"]
+            amb = result.summary.get("ambiguous", 0)
+            ok = result.summary.get("ok", 0)
+            summary_parts = [f"break:{wb}", f"ambiguous:{amb}", f"ok:{ok}"]
+
+    if not summary_parts:
+        # Fallback: count findings
+        summary_parts.append(f"{len(all_findings)} findings")
+
+    # Count by severity
+    severity_counts = {"error": 0, "warning": 0, "info": 0}
+    for f in all_findings:
+        sev = f.severity if f.severity in severity_counts else "info"
+        severity_counts[sev] += 1
+
+    severity_str = ", ".join(
+        f"{count} {sev}" for sev, count in severity_counts.items() if count > 0
+    )
+
+    summary_line = ", ".join(summary_parts)
+    lines.append(f"{macro}: {summary_line} [{severity_str}] [impact:{impact} confidence:{confidence}]")
+
     return "\n".join(lines)

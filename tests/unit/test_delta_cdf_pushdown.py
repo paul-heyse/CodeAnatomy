@@ -13,15 +13,24 @@ pytest.importorskip("deltalake")
 
 
 def _create_cdf_table(path: Path) -> None:
-    from storage.deltalake import DeltaWriteOptions, write_delta_table
+    from datafusion_engine.ingest import datafusion_from_arrow
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
     from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     try:
-        write_delta_table(
-            table,
-            str(path),
-            options=DeltaWriteOptions(mode="overwrite"),
+        profile = DataFusionRuntimeProfile()
+        ctx = profile.session_context()
+        df = datafusion_from_arrow(ctx, name="cdf_seed", value=table)
+        pipeline = WritePipeline(ctx, runtime_profile=profile)
+        pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=str(path),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+            )
         )
         enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
     except RuntimeError as exc:
@@ -30,12 +39,10 @@ def _create_cdf_table(path: Path) -> None:
 
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
+    from datafusion_engine.dataset_registration import register_dataset_df
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.lineage_datafusion import extract_lineage
     from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
-    from datafusion_engine.registry_bridge import (
-        DeltaCdfRegistrationOptions,
-        register_delta_cdf_df,
-    )
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from storage.deltalake import DeltaCdfOptions
 
@@ -43,14 +50,15 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     _create_cdf_table(table_path)
     runtime = DataFusionRuntimeProfile()
     ctx = runtime.session_context()
-    register_delta_cdf_df(
+    register_dataset_df(
         ctx,
         name="cdf_table",
-        path=str(table_path),
-        options=DeltaCdfRegistrationOptions(
-            cdf_options=DeltaCdfOptions(starting_version=0),
-            runtime_profile=runtime,
+        location=DatasetLocation(
+            path=table_path,
+            format="delta",
+            delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),
+        runtime_profile=runtime,
     )
     df = ctx.sql("SELECT id FROM cdf_table WHERE id > 1")
     bundle = build_plan_bundle(

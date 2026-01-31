@@ -436,14 +436,10 @@ def _resolve_paths(
     resolved_bundle = Path(run_bundle).resolve() if run_bundle else None
     resolved_bundle = _resolve_run_bundle(resolved_output, resolved_bundle)
     resolved_report = (
-        Path(report_path).resolve()
-        if report_path
-        else resolved_output / "diagnostics_report.json"
+        Path(report_path).resolve() if report_path else resolved_output / "diagnostics_report.json"
     )
     resolved_summary = (
-        Path(summary_path).resolve()
-        if summary_path
-        else resolved_output / "diagnostics_report.md"
+        Path(summary_path).resolve() if summary_path else resolved_output / "diagnostics_report.md"
     )
     return resolved_output, resolved_bundle, resolved_report, resolved_summary
 

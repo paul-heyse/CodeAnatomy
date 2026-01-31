@@ -27,11 +27,11 @@ from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import DatasetRow
 from normalize.dataset_templates import template
 from normalize.diagnostic_types import DIAG_DETAILS_TYPE
-from schema_spec.contract_row import ContractRow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.specs import TableSchemaSpec, dict_field
 from schema_spec.system import (
+    ContractRow,
     ContractSpec,
     DatasetSpec,
     DeltaCdfPolicy,

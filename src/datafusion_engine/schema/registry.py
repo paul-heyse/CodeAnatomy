@@ -62,6 +62,7 @@ from datafusion_engine.arrow.semantic import (
 from datafusion_engine.schema.introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.udf.shims import arrow_metadata
+from schema_spec.file_identity import FILE_ID_FIELD, FILE_SHA256_FIELD, PATH_FIELD
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from utils.registry_protocol import ImmutableRegistry
 from utils.validation import find_missing
@@ -356,9 +357,9 @@ FQN_LIST = pa.list_(pa.string())
 
 CST_PARSE_MANIFEST_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         ("encoding", pa.string()),
         ("default_indent", pa.string()),
         ("default_newline", pa.string()),
@@ -375,9 +376,9 @@ CST_PARSE_MANIFEST_T = pa.struct(
 
 CST_PARSE_ERROR_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         ("error_type", pa.string()),
         ("message", pa.string()),
         ("raw_line", pa.int64()),
@@ -394,9 +395,9 @@ CST_PARSE_ERROR_T = pa.struct(
 
 CST_REF_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("ref_id", pa.string(), nullable=True),
         ("ref_kind", pa.string()),
         ("ref_text", pa.string()),
@@ -414,9 +415,9 @@ CST_REF_T = pa.struct(
 
 CST_IMPORT_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         ("kind", pa.string()),
         ("module", pa.string()),
         ("relative_level", pa.int32()),
@@ -433,9 +434,9 @@ CST_IMPORT_T = pa.struct(
 
 CST_CALLSITE_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("call_id", pa.string(), nullable=True),
         ("call_bstart", pa.int64()),
         ("call_bend", pa.int64()),
@@ -454,9 +455,9 @@ CST_CALLSITE_T = pa.struct(
 
 CST_DEF_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("def_id", pa.string(), nullable=True),
         ("container_def_kind", pa.string()),
         ("container_def_bstart", pa.int64()),
@@ -477,9 +478,9 @@ CST_DEF_T = pa.struct(
 
 CST_TYPE_EXPR_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         ("owner_def_kind", pa.string()),
         ("owner_def_bstart", pa.int64()),
         ("owner_def_bend", pa.int64()),
@@ -494,9 +495,9 @@ CST_TYPE_EXPR_T = pa.struct(
 
 CST_DOCSTRING_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("owner_def_id", pa.string(), nullable=True),
         ("owner_kind", pa.string()),
         ("owner_def_bstart", pa.int64()),
@@ -509,9 +510,9 @@ CST_DOCSTRING_T = pa.struct(
 
 CST_DECORATOR_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("owner_def_id", pa.string(), nullable=True),
         ("owner_kind", pa.string()),
         ("owner_def_bstart", pa.int64()),
@@ -525,9 +526,9 @@ CST_DECORATOR_T = pa.struct(
 
 CST_CALL_ARG_T = pa.struct(
     [
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("path", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("call_id", pa.string(), nullable=True),
         ("call_bstart", pa.int64()),
         ("call_bend", pa.int64()),
@@ -543,9 +544,9 @@ CST_CALL_ARG_T = pa.struct(
 LIBCST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
-        pa.field("path", pa.string(), nullable=False),
-        pa.field("file_id", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        PATH_FIELD,
+        FILE_ID_FIELD,
+        FILE_SHA256_FIELD,
         ("nodes", pa.list_(CST_NODE_T)),
         ("edges", pa.list_(CST_EDGE_T)),
         ("parse_manifest", pa.list_(CST_PARSE_MANIFEST_T)),
@@ -659,9 +660,9 @@ AST_TYPE_IGNORE_T = pa.struct(
 AST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
-        pa.field("path", pa.string(), nullable=False),
-        pa.field("file_id", pa.string(), nullable=False),
-        ("file_sha256", pa.string()),
+        PATH_FIELD,
+        FILE_ID_FIELD,
+        FILE_SHA256_FIELD,
         ("nodes", pa.list_(AST_NODE_T)),
         ("edges", pa.list_(AST_EDGE_T)),
         ("errors", pa.list_(AST_ERROR_T)),
@@ -1078,9 +1079,9 @@ BYTECODE_CODE_OBJ_T = pa.struct(
 BYTECODE_FILES_SCHEMA = pa.schema(
     [
         pa.field("repo", pa.string()),
-        pa.field("path", pa.string(), nullable=False),
-        pa.field("file_id", pa.string(), nullable=False),
-        pa.field("file_sha256", pa.string()),
+        PATH_FIELD,
+        FILE_ID_FIELD,
+        FILE_SHA256_FIELD,
         pa.field("code_objects", pa.list_(BYTECODE_CODE_OBJ_T)),
         pa.field("errors", pa.list_(BYTECODE_ERROR_T)),
         _bytecode_attrs_field(),
@@ -1666,7 +1667,7 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     "param_file_ids_v1",
     pa.schema(
         [
-            pa.field("file_id", pa.string(), nullable=False),
+            FILE_ID_FIELD,
         ]
     ),
 )

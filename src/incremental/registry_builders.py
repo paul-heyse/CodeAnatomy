@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from incremental.registry_rows import DatasetRow
-from schema_spec.contract_row import ContractRow
 from schema_spec.registration import DatasetRegistration, register_dataset
-from schema_spec.system import make_contract_spec, make_table_spec
+from schema_spec.system import ContractRow, make_contract_spec, make_table_spec
 
 if TYPE_CHECKING:
     from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaSpec

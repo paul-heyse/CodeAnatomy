@@ -19,8 +19,6 @@ def test_validate_config_mutual_exclusion_restore_conflict() -> None:
 
 def test_validate_config_mutual_exclusion_export_conflict() -> None:
     """Ensure export config rejects simultaneous version/timestamp."""
-    payload: dict[str, JsonValue] = {
-        "delta": {"export": {"version": 2, "timestamp": "2024-01-02"}}
-    }
+    payload: dict[str, JsonValue] = {"delta": {"export": {"version": 2, "timestamp": "2024-01-02"}}}
     with pytest.raises(ValueError, match="delta\\.export"):
         validate_config_mutual_exclusion(payload)

@@ -22,9 +22,8 @@ from datafusion_engine.hashing import (
     stable_id_expr_ir_from_parts,
 )
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
-from schema_spec.contract_row import ContractRow
 from schema_spec.specs import DerivedFieldSpec
-from schema_spec.system import DedupeSpecSpec, SortKeySpec
+from schema_spec.system import ContractRow, DedupeSpecSpec, SortKeySpec
 
 SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")

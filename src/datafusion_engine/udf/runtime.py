@@ -871,6 +871,40 @@ def _ddl_body_sql(target_name: str, arg_count: int, *, kind: str) -> str:
     return f"{target_name}({placeholders})"
 
 
+def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
+    """Return a diagnostics payload describing UDF volatility and fast-path coverage.
+
+    Parameters
+    ----------
+    snapshot
+        Rust UDF snapshot mapping.
+
+    Returns
+    -------
+    dict[str, object]
+        Diagnostics payload for volatility and fast-path audit.
+    """
+    validate_rust_udf_snapshot(snapshot)
+    names = _snapshot_names(snapshot)
+    volatility = _require_mapping(snapshot, name="volatility")
+    simplify = _require_bool_mapping(snapshot, name="simplify")
+    short_circuits = _require_bool_mapping(snapshot, name="short_circuits")
+    counts: dict[str, int] = {}
+    for value in volatility.values():
+        label = str(value)
+        counts[label] = counts.get(label, 0) + 1
+    simplify_enabled = sum(1 for name in names if simplify.get(name) is True)
+    short_circuit_enabled = sum(1 for name in names if short_circuits.get(name) is True)
+    missing_volatility = sorted(name for name in names if name not in volatility)
+    return {
+        "total_udfs": len(names),
+        "volatility_counts": counts,
+        "simplify_enabled": simplify_enabled,
+        "short_circuit_enabled": short_circuit_enabled,
+        "missing_volatility": missing_volatility,
+    }
+
+
 __all__ = [
     "RustUdfSnapshot",
     "register_rust_udfs",
@@ -884,6 +918,7 @@ __all__ = [
     "snapshot_function_names",
     "snapshot_parameter_names",
     "snapshot_return_types",
+    "udf_audit_payload",
     "udf_names_from_snapshot",
     "validate_required_udfs",
     "validate_rust_udf_snapshot",

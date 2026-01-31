@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -12,55 +11,22 @@ from datafusion import DataFrameWriteOptions, SessionContext, col
 
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
+from datafusion_engine.plan.result_types import (
+    PlanEmissionOptions,
+    PlanExecutionOptions,
+    PlanExecutionResult,
+    PlanScanOverrides,
+)
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.policies import DataFusionWritePolicy
-    from serde_artifacts import PlanArtifacts
 
 
-@dataclass(frozen=True)
-class PlanExecutionResult:
-    """Result payload for plan-bundle execution."""
-
-    plan_bundle: DataFusionPlanBundle
-    execution_result: ExecutionResult
-    output: DataFrame | None
-    artifacts: PlanArtifacts | None
-    telemetry: Mapping[str, float]
-    scan_units: tuple[ScanUnit, ...] = ()
-    scan_keys: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class PlanScanOverrides:
-    """Scan override options for plan execution."""
-
-    scan_units: Sequence[ScanUnit] = ()
-    scan_keys: Sequence[str] | None = None
-    apply_scan_overrides: bool = True
-
-
-@dataclass(frozen=True)
-class PlanEmissionOptions:
-    """Emission options for plan execution artifacts and telemetry."""
-
-    emit_artifacts: bool = True
-    emit_telemetry: bool = True
-
-
-@dataclass(frozen=True)
-class PlanExecutionOptions:
-    """Options that control plan bundle execution."""
-
-    runtime_profile: DataFusionRuntimeProfile | None = None
-    view_name: str | None = None
-    scan: PlanScanOverrides = field(default_factory=PlanScanOverrides)
-    emit: PlanEmissionOptions = field(default_factory=PlanEmissionOptions)
+# Type definitions have been moved to result_types.py to break the circular
+# dependency between this module and facade.py. They are imported above and
+# re-exported via __all__ for backward compatibility.
 
 
 def execute_plan_bundle(
@@ -103,6 +69,9 @@ def execute_plan_bundle(
             scan_units=resolved_units,
             runtime_profile=resolved_options.runtime_profile,
         )
+    # Lazy import to avoid circular dependency with facade.py
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
+
     start = time.perf_counter()
     result = DataFusionExecutionFacade(
         ctx=ctx,
@@ -175,6 +144,7 @@ async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordB
     import asyncio
 
     reader = pa.RecordBatchReader.from_stream(df)
+
     def _collect_batches() -> list[pa.RecordBatch]:
         return list(reader)
 

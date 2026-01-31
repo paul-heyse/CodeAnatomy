@@ -139,7 +139,7 @@ DATASET_STATS_SCHEMA = pa.schema(
         ("dataset_name", pa.string()),
         ("rows", pa.int64()),
         ("columns", pa.int32()),
-        ("schema_fingerprint", pa.string()),
+        ("schema_identity_hash", pa.string()),
     ]
 )
 ```
@@ -165,7 +165,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     """Build a dataset-level stats table.
 
     Table columns:
-      dataset_name, rows, columns, schema_fingerprint
+      dataset_name, rows, columns, schema_identity_hash
     """
 ```
 
@@ -187,7 +187,7 @@ def table_summary(table: TableLike) -> TableSummary:
     Returns
     -------
     TableSummary
-        Summary with rows, columns, schema_fingerprint, and schema fields.
+        Summary with rows, columns, schema_identity_hash, and schema fields.
     """
 ```
 
@@ -556,12 +556,32 @@ def parquet_metadata_factory(
 
 ## Critical Files Reference
 
+### Domain Observability Layer
+
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/obs/diagnostics.py` | ~213 | DiagnosticsCollector and event recording |
-| `src/obs/metrics.py` | ~732 | Dataset/column stats, quality tables, fragment utilities |
-| `src/obs/scan_telemetry.py` | ~148 | ScanTelemetry capture and fragment analysis |
-| `src/obs/datafusion_runs.py` | ~294 | Run envelope tracking with correlation IDs |
+| `src/obs/diagnostics.py` | ~222 | DiagnosticsCollector and event recording |
+| `src/obs/metrics.py` | ~733 | Dataset/column stats, quality tables, fragment utilities |
+| `src/obs/scan_telemetry.py` | ~156 | ScanTelemetry capture and fragment analysis |
+| `src/obs/datafusion_runs.py` | ~295 | Run envelope tracking with correlation IDs |
+
+### OpenTelemetry Transport Layer
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/obs/otel/bootstrap.py` | ~615 | OTel provider configuration and initialization |
+| `src/obs/otel/config.py` | ~527 | Configuration resolution from environment variables |
+| `src/obs/otel/metrics.py` | ~455 | Metric instruments and recording functions |
+| `src/obs/otel/tracing.py` | ~223 | Tracing helpers and span management |
+| `src/obs/otel/logs.py` | ~128 | Structured logging via OTel logs API |
+| `src/obs/otel/hamilton.py` | ~208 | Hamilton lifecycle hooks for OTel instrumentation |
+| `src/obs/otel/resources.py` | ~75 | Resource construction helpers |
+| `src/obs/otel/run_context.py` | ~48 | Run-scoped context variables |
+| `src/obs/otel/processors.py` | - | Custom span and log processors |
+| `src/obs/otel/sampling.py` | - | Sampling rule wrappers |
+| `src/obs/otel/attributes.py` | - | Attribute normalization helpers |
+| `src/obs/otel/constants.py` | ~70 | Canonical metric, attribute, and scope names |
+| `src/obs/otel/scopes.py` | ~62 | Instrumentation scope definitions |
 
 ---
 
@@ -650,14 +670,138 @@ print(f"Estimated rows: {telemetry.estimated_rows}")
 
 ---
 
+## OpenTelemetry Integration
+
+The observability layer is built on OpenTelemetry for standardized telemetry export. The OTel integration (`src/obs/otel/`) provides:
+
+### Bootstrap and Configuration
+
+**File:** `src/obs/otel/bootstrap.py`
+
+The `configure_otel()` function initializes all OTel providers:
+
+```python
+def configure_otel(
+    *,
+    service_name: str | None = None,
+    options: OtelBootstrapOptions | None = None,
+) -> OtelProviders:
+    """Configure OpenTelemetry providers for the current process."""
+```
+
+Returns configured `TracerProvider`, `MeterProvider`, and `LoggerProvider` instances. Respects `OTEL_SDK_DISABLED` and `OTEL_EXPERIMENTAL_CONFIG_FILE` environment variables.
+
+### Custom Processors
+
+**File:** `src/obs/otel/processors.py`
+
+- **RunIdSpanProcessor**: Attaches `codeanatomy.run_id` to all spans from run context
+- **RunIdLogRecordProcessor**: Attaches `codeanatomy.run_id` to all log records from run context
+
+### Hamilton Instrumentation
+
+**File:** `src/obs/otel/hamilton.py`
+
+Hamilton lifecycle hooks emit OTel spans and metrics:
+
+- **OtelNodeHook**: Instruments individual Hamilton node execution with spans and duration metrics
+- **OtelPlanHook**: Instruments Hamilton graph execution with correlation to pipeline run_id
+
+### Metrics Instrumentation
+
+**File:** `src/obs/otel/metrics.py`
+
+Canonical metric instruments:
+- **Histograms**: `codeanatomy.stage.duration`, `codeanatomy.task.duration`, `codeanatomy.datafusion.execute.duration`, `codeanatomy.datafusion.write.duration`
+- **Counters**: `codeanatomy.artifact.count`, `codeanatomy.error.count`
+- **Gauges**: `codeanatomy.dataset.rows`, `codeanatomy.dataset.columns`, `codeanatomy.scan.row_groups`, `codeanatomy.scan.fragments`
+
+### Trace Instrumentation
+
+**File:** `src/obs/otel/tracing.py`
+
+Tracing helpers:
+- `root_span()`: Context manager for root span creation and context storage
+- `stage_span()`: Context manager that emits both spans and stage duration metrics
+- `root_span_link()`: Creates span links to root span for asynchronous execution graphs
+
+### Structured Logging
+
+**File:** `src/obs/otel/logs.py`
+
+The `emit_diagnostics_event()` function emits structured logs via OTel logs API:
+- Flattens nested payload structures
+- Emits both as OTel log records and span events
+- Supports log correlation when enabled
+
+### Run Context
+
+**File:** `src/obs/otel/run_context.py`
+
+Context-scoped run_id tracking via `ContextVar`:
+- `set_run_id()`: Set run_id for current context
+- `get_run_id()`: Retrieve run_id from current context
+- Used by processors and metric recording functions
+
+### Resource Detection
+
+**File:** `src/obs/otel/resource_detectors.py`
+
+Configurable resource detectors via `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS`:
+- Default detectors: `process`, `os`, `host`, `container`, `k8s`
+- Graceful degradation when detectors are unavailable
+- Service instance ID resolution from environment or secure random token
+
+### Instrumentation Scopes
+
+**File:** `src/obs/otel/scopes.py`
+
+Canonical scope names for different pipeline layers:
+- `codeanatomy.pipeline`: Root pipeline operations
+- `codeanatomy.extract`: Extraction layer
+- `codeanatomy.normalize`: Normalization layer
+- `codeanatomy.planning`: Planning layer
+- `codeanatomy.scheduling`: Scheduling layer
+- `codeanatomy.datafusion`: DataFusion execution
+- `codeanatomy.hamilton`: Hamilton orchestration
+- `codeanatomy.cpg`: CPG construction
+- `codeanatomy.obs`: Observability operations
+- `codeanatomy.diagnostics`: Diagnostics events
+
+The `scope_for_layer()` function maps Hamilton layer tags to canonical scopes.
+
+---
+
+## Integration with DiagnosticsCollector
+
+The DiagnosticsCollector integrates with OTel through the logs and metrics modules:
+
+1. **Event Recording**: `record_events()` and `record_event()` call `emit_diagnostics_event()` to emit structured OTel logs
+2. **Artifact Recording**: `record_artifact()` emits diagnostics events and increments the `codeanatomy.artifact.count` metric
+3. **Metric Recording**: Dataset and scan statistics call `set_dataset_stats()` and `set_scan_telemetry()` to update OTel gauge values
+
+All diagnostics events are emitted with `event.name` and `event.kind` attributes for queryability.
+
+---
+
 ## Summary
 
-The Observability Layer provides a comprehensive toolkit for monitoring and debugging CodeAnatomy's inference pipeline:
+The Observability Layer provides a two-tier architecture:
 
+### Domain Layer (`src/obs/`)
 1. **DiagnosticsCollector**: Central sink for events, artifacts, and metrics
 2. **Dataset/Column Statistics**: Schema-aware statistics computation
 3. **Quality Tables**: Tracking of invalid entities without pipeline failures
 4. **Scan Telemetry**: Fragment-level performance metrics
 5. **Run Tracking**: Correlation IDs and lifecycle management
 
-These components integrate with both Hamilton orchestration and DataFusion execution to provide end-to-end observability across the pipeline.
+### Transport Layer (`src/obs/otel/`)
+1. **OpenTelemetry Bootstrap**: Provider configuration and initialization
+2. **Custom Processors**: Run-scoped context injection
+3. **Hamilton Instrumentation**: Lifecycle hooks for spans and metrics
+4. **Metrics/Tracing/Logging**: Canonical instruments and helpers
+5. **Resource Detection**: Environment-aware resource enrichment
+
+These components integrate with both Hamilton orchestration and DataFusion execution to provide end-to-end observability with standardized OTel export to collectors and backends.
+
+See `docs/architecture/observability.md` for operational configuration, environment variables, and deployment patterns.

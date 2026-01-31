@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -38,7 +39,11 @@ from serde_msgspec import convert, to_builtins
 from utils.uuid_factory import uuid7_hex
 from utils.validation import validate_required_items
 
+CachePolicy = Literal["none", "delta_staging", "delta_output"]
+
 if TYPE_CHECKING:
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -62,8 +67,9 @@ class ViewNode:
         Required UDF names for this view.
     plan_bundle : DataFusionPlanBundle | None
         DataFusion plan bundle (preferred source of truth for lineage).
-    cache_policy : Literal["none", "memory", "delta_staging", "delta_output"]
-        Cache policy for view materialization.
+    cache_policy : CachePolicy
+        Cache policy for view materialization. Legacy "memory" is treated
+        as "delta_staging" to avoid in-memory caching.
     """
 
     name: str
@@ -72,7 +78,7 @@ class ViewNode:
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
     plan_bundle: DataFusionPlanBundle | None = None
-    cache_policy: Literal["none", "memory", "delta_staging", "delta_output"] = "none"
+    cache_policy: CachePolicy = "none"
 
 
 class SchemaContractViolationError(ValueError):
@@ -119,6 +125,40 @@ class ViewCacheContext:
     options: ViewGraphOptions
 
 
+@dataclass(frozen=True)
+class ViewGraphContext:
+    """Shared context for view graph registration."""
+
+    ctx: SessionContext
+    snapshot: Mapping[str, object]
+    runtime: ViewGraphRuntimeOptions
+    options: ViewGraphOptions
+    adapter: DataFusionIOAdapter
+    runtime_hash: str | None
+    cache_context: ViewCacheContext
+
+
+@dataclass
+class ViewGraphScanState:
+    """Mutable scan-unit tracking state for view graphs."""
+
+    scan_units_by_key: dict[str, ScanUnit]
+    scan_keys_by_view: dict[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class CacheRegistrationContext:
+    """Inputs required to register a cached view."""
+
+    ctx: SessionContext
+    adapter: DataFusionIOAdapter
+    node: ViewNode
+    df: DataFrame
+    cache: ViewCacheContext
+    schema: pa.Schema
+    schema_hash: str | None
+
+
 def register_view_graph(
     ctx: SessionContext,
     *,
@@ -143,62 +183,278 @@ def register_view_graph(
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime.runtime_profile)
-    runtime_hash: str | None = None
-    if runtime.runtime_profile is not None:
-        from datafusion_engine.session.runtime import session_runtime_hash
-
-        runtime_hash = session_runtime_hash(runtime.runtime_profile.session_runtime())
+    cache_context = ViewCacheContext(runtime=runtime, options=resolved)
+    context = ViewGraphContext(
+        ctx=ctx,
+        snapshot=snapshot,
+        runtime=runtime,
+        options=resolved,
+        adapter=adapter,
+        runtime_hash=_runtime_hash(runtime.runtime_profile),
+        cache_context=cache_context,
+    )
+    scan_state = ViewGraphScanState(scan_units_by_key={}, scan_keys_by_view={})
+    lineage_by_view: dict[str, LineageReport | None] = {}
     for node in ordered:
-        _validate_deps(ctx, node, materialized)
-        _validate_udf_calls(snapshot, node)
-        validate_required_udfs(snapshot, required=node.required_udfs)
-        _validate_required_functions(ctx, node.required_udfs)
-        if runtime.runtime_profile is not None and node.plan_bundle is not None:
-            scan_units = _plan_scan_units_for_bundle(
-                ctx,
-                bundle=node.plan_bundle,
-                runtime_profile=runtime.runtime_profile,
-            )
-            if scan_units:
-                from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
-
-                apply_scan_unit_overrides(
-                    ctx,
-                    scan_units=scan_units,
-                    runtime_profile=runtime.runtime_profile,
-                )
-        df = node.builder(ctx)
-        registered = _register_view_with_cache(
-            ctx,
-            adapter=adapter,
+        _register_view_node(
+            context,
             node=node,
-            df=df,
-            cache=ViewCacheContext(runtime=runtime, options=resolved),
+            materialized=materialized,
+            scan_state=scan_state,
+            lineage_by_view=lineage_by_view,
         )
-        schema = arrow_schema_from_df(registered)
-        if resolved.validate_schema and node.contract_builder is not None:
-            contract = node.contract_builder(schema)
-            _validate_schema_contract(ctx, contract, schema=schema)
-        if runtime.runtime_profile is not None:
-            from datafusion_engine.session.runtime import record_view_definition
+    _record_view_udf_parity(context, nodes=ordered)
+    _record_udf_audit(context)
+    _persist_plan_artifacts(
+        context,
+        ordered,
+        scan_state=scan_state,
+        lineage_by_view=lineage_by_view,
+    )
 
-            # Prefer plan_bundle-based artifact (DataFusion-native)
-            if node.plan_bundle is None:
-                msg = f"View {node.name!r} missing plan bundle for artifact recording."
-                raise ValueError(msg)
-            artifact = build_view_artifact_from_bundle(
-                node.plan_bundle,
-                request=ViewArtifactRequest(
-                    name=node.name,
-                    schema=schema,
-                    lineage=ViewArtifactLineage(
-                        required_udfs=node.required_udfs,
-                        referenced_tables=node.deps,
-                    ),
-                    runtime_hash=runtime_hash,
-                ),
-            )
-            record_view_definition(runtime.runtime_profile, artifact=artifact)
+
+def _runtime_hash(runtime_profile: DataFusionRuntimeProfile | None) -> str | None:
+    if runtime_profile is None:
+        return None
+    from datafusion_engine.session.runtime import session_runtime_hash
+
+    return session_runtime_hash(runtime_profile.session_runtime())
+
+
+def _register_view_node(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+    materialized: Sequence[ViewNode],
+    scan_state: ViewGraphScanState,
+    lineage_by_view: dict[str, LineageReport | None],
+) -> None:
+    _validate_deps(context.ctx, node, materialized)
+    _validate_udf_calls(context.snapshot, node)
+    validate_required_udfs(context.snapshot, required=node.required_udfs)
+    _validate_required_functions(context.ctx, node.required_udfs)
+    _maybe_capture_scan_units(context, node=node, scan_state=scan_state)
+    _maybe_capture_lineage(context.runtime, node=node, lineage_by_view=lineage_by_view)
+    df = node.builder(context.ctx)
+    registered = _register_view_with_cache(
+        context.ctx,
+        adapter=context.adapter,
+        node=node,
+        df=df,
+        cache=context.cache_context,
+    )
+    schema = arrow_schema_from_df(registered)
+    _maybe_validate_schema_contract(context, node=node, schema=schema)
+    _maybe_validate_information_schema(context, node=node, schema=schema)
+    _maybe_record_view_definition(context, node=node, schema=schema)
+    _maybe_record_explain_analyze_threshold(context, node=node)
+
+
+def _maybe_capture_scan_units(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+    scan_state: ViewGraphScanState,
+) -> None:
+    runtime_profile = context.runtime.runtime_profile
+    if runtime_profile is None or node.plan_bundle is None:
+        return
+    scan_units = _plan_scan_units_for_bundle(
+        context.ctx,
+        bundle=node.plan_bundle,
+        runtime_profile=runtime_profile,
+    )
+    if not scan_units:
+        return
+    from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
+
+    apply_scan_unit_overrides(
+        context.ctx,
+        scan_units=scan_units,
+        runtime_profile=runtime_profile,
+    )
+    scan_state.scan_keys_by_view[node.name] = tuple(unit.key for unit in scan_units)
+    for unit in scan_units:
+        scan_state.scan_units_by_key[unit.key] = unit
+
+
+def _maybe_capture_lineage(
+    runtime: ViewGraphRuntimeOptions,
+    *,
+    node: ViewNode,
+    lineage_by_view: dict[str, LineageReport | None],
+) -> None:
+    if runtime.runtime_profile is None or node.plan_bundle is None:
+        return
+    try:
+        lineage_by_view[node.name] = extract_lineage_from_bundle(node.plan_bundle)
+    except (RuntimeError, TypeError, ValueError):
+        lineage_by_view[node.name] = None
+
+
+def _maybe_validate_schema_contract(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+    schema: pa.Schema,
+) -> None:
+    if not context.options.validate_schema or node.contract_builder is None:
+        return
+    contract = node.contract_builder(schema)
+    _validate_schema_contract(context.ctx, contract, schema=schema)
+
+
+def _maybe_validate_information_schema(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+    schema: pa.Schema,
+) -> None:
+    runtime_profile = context.runtime.runtime_profile
+    if runtime_profile is None:
+        return
+    if not context.options.validate_schema or context.options.temporary:
+        return
+    if not runtime_profile.enable_information_schema:
+        return
+    from datafusion_engine.schema.catalog_contracts import (
+        contract_violations_for_schema,
+        schema_contract_from_information_schema,
+    )
+
+    info_contract = schema_contract_from_information_schema(context.ctx, table_name=node.name)
+    info_violations = contract_violations_for_schema(
+        contract=info_contract,
+        schema=schema,
+    )
+    if info_violations:
+        raise SchemaContractViolationError(
+            table_name=node.name,
+            violations=info_violations,
+        )
+
+
+def _maybe_record_view_definition(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+    schema: pa.Schema,
+) -> None:
+    runtime_profile = context.runtime.runtime_profile
+    if runtime_profile is None:
+        return
+    if node.plan_bundle is None:
+        msg = f"View {node.name!r} missing plan bundle for artifact recording."
+        raise ValueError(msg)
+    from datafusion_engine.session.runtime import record_view_definition
+
+    artifact = build_view_artifact_from_bundle(
+        node.plan_bundle,
+        request=ViewArtifactRequest(
+            name=node.name,
+            schema=schema,
+            lineage=ViewArtifactLineage(
+                required_udfs=node.required_udfs,
+                referenced_tables=node.deps,
+            ),
+            runtime_hash=context.runtime_hash,
+        ),
+    )
+    record_view_definition(runtime_profile, artifact=artifact)
+
+
+def _maybe_record_explain_analyze_threshold(
+    context: ViewGraphContext,
+    *,
+    node: ViewNode,
+) -> None:
+    profile = context.runtime.runtime_profile
+    if profile is None:
+        return
+    threshold = profile.explain_analyze_threshold_ms
+    bundle = node.plan_bundle
+    if threshold is None or bundle is None:
+        return
+    duration_ms = _coerce_float(bundle.plan_details.get("explain_analyze_duration_ms"))
+    if duration_ms is None or duration_ms < threshold:
+        return
+    payload = {
+        "view_name": node.name,
+        "plan_fingerprint": bundle.plan_fingerprint,
+        "plan_identity_hash": bundle.plan_identity_hash,
+        "duration_ms": duration_ms,
+        "threshold_ms": float(threshold),
+        "output_rows": bundle.plan_details.get("explain_analyze_output_rows"),
+    }
+    record_artifact(profile, "view_explain_analyze_threshold_v1", payload)
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _persist_plan_artifacts(
+    context: ViewGraphContext,
+    nodes: Sequence[ViewNode],
+    *,
+    scan_state: ViewGraphScanState,
+    lineage_by_view: Mapping[str, LineageReport | None],
+) -> None:
+    runtime_profile = context.runtime.runtime_profile
+    if runtime_profile is None or not runtime_profile.capture_plan_artifacts:
+        return
+    from datafusion_engine.plan.artifact_store import (
+        PlanArtifactsForViewsRequest,
+        persist_plan_artifacts_for_views,
+    )
+
+    persist_plan_artifacts_for_views(
+        context.ctx,
+        runtime_profile,
+        request=PlanArtifactsForViewsRequest(
+            view_nodes=nodes,
+            scan_units=tuple(scan_state.scan_units_by_key.values()),
+            scan_keys_by_view=scan_state.scan_keys_by_view,
+            lineage_by_view={
+                name: report for name, report in lineage_by_view.items() if report is not None
+            },
+        ),
+    )
+
+
+def _record_view_udf_parity(
+    context: ViewGraphContext,
+    *,
+    nodes: Sequence[ViewNode],
+) -> None:
+    profile = context.runtime.runtime_profile
+    if profile is None:
+        return
+    from datafusion_engine.lineage.diagnostics import view_udf_parity_payload
+
+    payload = view_udf_parity_payload(
+        snapshot=context.snapshot,
+        view_nodes=nodes,
+        ctx=context.ctx,
+    )
+    record_artifact(profile, "view_udf_parity_v1", payload)
+
+
+def _record_udf_audit(context: ViewGraphContext) -> None:
+    profile = context.runtime.runtime_profile
+    if profile is None:
+        return
+    from datafusion_engine.udf.runtime import udf_audit_payload
+
+    payload = udf_audit_payload(context.snapshot)
+    record_artifact(profile, "udf_audit_v1", payload)
 
 
 def _record_cache_artifact(
@@ -234,6 +490,28 @@ def _record_cache_artifact(
     )
 
 
+def _record_cache_error(
+    cache: ViewCacheContext,
+    *,
+    node: ViewNode,
+    cache_path: str | None,
+    error: str,
+    expected_schema_hash: str | None,
+) -> None:
+    profile = cache.runtime.runtime_profile
+    if profile is None:
+        return
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "view_name": node.name,
+        "cache_policy": node.cache_policy,
+        "cache_path": cache_path,
+        "expected_schema_hash": expected_schema_hash,
+        "error": error,
+    }
+    record_artifact(profile, "view_cache_errors_v1", payload)
+
+
 def _register_view_with_cache(
     ctx: SessionContext,
     *,
@@ -242,109 +520,314 @@ def _register_view_with_cache(
     df: DataFrame,
     cache: ViewCacheContext,
 ) -> DataFrame:
-    if node.cache_policy == "memory":
-        cached = df.cache()
-        adapter.register_view(
-            node.name,
-            cached,
-            overwrite=cache.options.overwrite,
-            temporary=cache.options.temporary,
-        )
-        _record_cache_artifact(cache, node=node, cache_path=None, status="cached", hit=None)
-        return cached
+    schema = arrow_schema_from_df(df)
+    schema_hash = schema_identity_hash(schema)
+    registration = CacheRegistrationContext(
+        ctx=ctx,
+        adapter=adapter,
+        node=node,
+        df=df,
+        cache=cache,
+        schema=schema,
+        schema_hash=schema_hash,
+    )
     if node.cache_policy == "delta_staging":
-        if cache.runtime.runtime_profile is None:
-            msg = "Delta staging cache requires a runtime profile."
-            raise ValueError(msg)
-        staging_path = _delta_staging_path(node)
-        from datafusion_engine.dataset.registration import register_dataset_df
-        from datafusion_engine.dataset.registry import DatasetLocation
-        from datafusion_engine.io.write import (
-            WriteFormat,
-            WriteMode,
-            WritePipeline,
-            WriteRequest,
-        )
+        return _register_delta_staging_cache(registration)
+    if node.cache_policy == "delta_output":
+        return _register_delta_output_cache(registration)
+    if node.cache_policy != "none":
+        msg = f"Unsupported cache policy: {node.cache_policy!r}."
+        raise ValueError(msg)
+    return _register_uncached_view(registration)
 
-        pipeline = WritePipeline(ctx, runtime_profile=cache.runtime.runtime_profile)
-        plan_fingerprint = (
-            node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else None
+
+def _register_delta_staging_cache(registration: CacheRegistrationContext) -> DataFrame:
+    runtime_profile = _require_runtime_profile(
+        registration.cache,
+        policy_label="Delta staging cache",
+    )
+    staging_path = _delta_staging_path(registration.node)
+    plan_fingerprint, plan_identity_hash = _plan_identifiers(registration.node)
+    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.registry import (
+        CacheHitRequest,
+        record_cache_inventory,
+        register_cached_delta_table,
+        resolve_cache_hit,
+    )
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta import enforce_schema_evolution
+    from datafusion_engine.delta.contracts import DeltaSchemaMismatchError
+    from datafusion_engine.io.write import (
+        WriteFormat,
+        WriteMode,
+        WritePipeline,
+        WriteRequest,
+    )
+    from storage.deltalake import DeltaSchemaRequest
+
+    try:
+        cache_hit = resolve_cache_hit(
+            registration.ctx,
+            runtime_profile,
+            request=CacheHitRequest(
+                view_name=registration.node.name,
+                cache_path=staging_path,
+                plan_identity_hash=plan_identity_hash,
+                expected_schema_hash=registration.schema_hash,
+                allow_evolution=False,
+                storage_options=None,
+                log_storage_options=None,
+            ),
         )
-        pipeline.write(
-            WriteRequest(
-                source=df,
-                destination=staging_path,
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-                plan_fingerprint=plan_fingerprint,
-            )
+    except DeltaSchemaMismatchError as exc:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=staging_path,
+            error=str(exc),
+            expected_schema_hash=registration.schema_hash,
         )
-        register_dataset_df(
-            ctx,
-            name=node.name,
+        raise
+    if cache_hit is not None:
+        register_cached_delta_table(
+            registration.ctx,
+            runtime_profile,
+            name=registration.node.name,
             location=DatasetLocation(path=staging_path, format="delta"),
-            runtime_profile=cache.runtime.runtime_profile,
+            snapshot_version=cache_hit.snapshot_version,
         )
         _record_cache_artifact(
-            cache,
-            node=node,
+            registration.cache,
+            node=registration.node,
             cache_path=staging_path,
             status="cached",
-            hit=None,
+            hit=True,
         )
-        return ctx.table(node.name)
-    if node.cache_policy == "delta_output":
-        if cache.runtime.runtime_profile is None:
-            msg = "Delta output cache requires a runtime profile."
-            raise ValueError(msg)
-        location = cache.runtime.runtime_profile.dataset_location(node.name)
-        if location is None:
-            msg = f"Delta output cache missing dataset location for {node.name!r}."
-            raise ValueError(msg)
-        target_path = str(location.path)
-        from datafusion_engine.dataset.registration import register_dataset_df
-        from datafusion_engine.io.write import (
-            WriteFormat,
-            WriteMode,
-            WritePipeline,
-            WriteRequest,
-        )
+        return registration.ctx.table(registration.node.name)
 
-        pipeline = WritePipeline(ctx, runtime_profile=cache.runtime.runtime_profile)
-        plan_bundle = node.plan_bundle
-        plan_fingerprint = plan_bundle.plan_fingerprint if plan_bundle is not None else None
-        plan_identity_hash = plan_bundle.plan_identity_hash if plan_bundle is not None else None
-        pipeline.write(
-            WriteRequest(
-                source=df,
-                destination=target_path,
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-                plan_fingerprint=plan_fingerprint,
-                plan_identity_hash=plan_identity_hash,
-            )
+    try:
+        enforce_schema_evolution(
+            request=DeltaSchemaRequest(path=staging_path),
+            expected_schema_hash=registration.schema_hash,
+            allow_evolution=False,
         )
-        register_dataset_df(
-            ctx,
-            name=node.name,
+    except DeltaSchemaMismatchError as exc:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=staging_path,
+            error=str(exc),
+            expected_schema_hash=registration.schema_hash,
+        )
+        raise
+    partition_by = _cache_partition_by(registration.schema, location=None)
+    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
+    result = pipeline.write(
+        WriteRequest(
+            source=registration.df,
+            destination=staging_path,
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            partition_by=partition_by,
+            plan_fingerprint=plan_fingerprint,
+            plan_identity_hash=plan_identity_hash,
+        )
+    )
+    register_cached_delta_table(
+        registration.ctx,
+        runtime_profile,
+        name=registration.node.name,
+        location=DatasetLocation(path=staging_path, format="delta"),
+        snapshot_version=result.delta_result.version if result.delta_result else None,
+    )
+    record_cache_inventory(
+        runtime_profile,
+        entry=CacheInventoryEntry(
+            view_name=registration.node.name,
+            cache_policy=registration.node.cache_policy,
+            cache_path=staging_path,
+            plan_fingerprint=plan_fingerprint,
+            plan_identity_hash=plan_identity_hash,
+            schema_identity_hash=registration.schema_hash,
+            snapshot_version=result.delta_result.version if result.delta_result else None,
+            snapshot_timestamp=None,
+            partition_by=partition_by,
+        ),
+        ctx=registration.ctx,
+    )
+    _record_cache_artifact(
+        registration.cache,
+        node=registration.node,
+        cache_path=staging_path,
+        status="cached",
+        hit=False,
+    )
+    return registration.ctx.table(registration.node.name)
+
+
+def _register_delta_output_cache(registration: CacheRegistrationContext) -> DataFrame:
+    runtime_profile = _require_runtime_profile(
+        registration.cache,
+        policy_label="Delta output cache",
+    )
+    location = runtime_profile.dataset_location(registration.node.name)
+    if location is None:
+        msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
+        raise ValueError(msg)
+    target_path = str(location.path)
+    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.registry import (
+        CacheHitRequest,
+        record_cache_inventory,
+        register_cached_delta_table,
+        resolve_cache_hit,
+    )
+    from datafusion_engine.delta import enforce_schema_evolution
+    from datafusion_engine.delta.contracts import DeltaSchemaMismatchError
+    from datafusion_engine.io.write import (
+        WriteFormat,
+        WriteMode,
+        WritePipeline,
+        WriteRequest,
+    )
+    from storage.deltalake import DeltaSchemaRequest
+
+    allow_evolution = _allow_schema_evolution(location)
+    plan_fingerprint, plan_identity_hash = _plan_identifiers(registration.node)
+    try:
+        cache_hit = resolve_cache_hit(
+            registration.ctx,
+            runtime_profile,
+            request=CacheHitRequest(
+                view_name=registration.node.name,
+                cache_path=target_path,
+                plan_identity_hash=plan_identity_hash,
+                expected_schema_hash=registration.schema_hash,
+                allow_evolution=allow_evolution,
+                storage_options=location.storage_options,
+                log_storage_options=location.delta_log_storage_options,
+            ),
+        )
+    except DeltaSchemaMismatchError as exc:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=target_path,
+            error=str(exc),
+            expected_schema_hash=registration.schema_hash,
+        )
+        raise
+    if cache_hit is not None:
+        register_cached_delta_table(
+            registration.ctx,
+            runtime_profile,
+            name=registration.node.name,
             location=location,
-            runtime_profile=cache.runtime.runtime_profile,
+            snapshot_version=cache_hit.snapshot_version,
         )
         _record_cache_artifact(
-            cache,
-            node=node,
+            registration.cache,
+            node=registration.node,
             cache_path=target_path,
             status="cached",
-            hit=None,
+            hit=True,
         )
-        return ctx.table(node.name)
-    adapter.register_view(
-        node.name,
-        df,
-        overwrite=cache.options.overwrite,
-        temporary=cache.options.temporary,
+        return registration.ctx.table(registration.node.name)
+
+    try:
+        enforce_schema_evolution(
+            request=DeltaSchemaRequest(
+                path=target_path,
+                storage_options=location.storage_options,
+                log_storage_options=location.delta_log_storage_options,
+                version=location.delta_version,
+                timestamp=location.delta_timestamp,
+            ),
+            expected_schema_hash=registration.schema_hash,
+            allow_evolution=allow_evolution,
+        )
+    except DeltaSchemaMismatchError as exc:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=target_path,
+            error=str(exc),
+            expected_schema_hash=registration.schema_hash,
+        )
+        raise
+    partition_by = _cache_partition_by(registration.schema, location=location)
+    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
+    result = pipeline.write(
+        WriteRequest(
+            source=registration.df,
+            destination=target_path,
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            partition_by=partition_by,
+            plan_fingerprint=plan_fingerprint,
+            plan_identity_hash=plan_identity_hash,
+        )
     )
-    return df
+    register_cached_delta_table(
+        registration.ctx,
+        runtime_profile,
+        name=registration.node.name,
+        location=location,
+        snapshot_version=result.delta_result.version if result.delta_result else None,
+    )
+    record_cache_inventory(
+        runtime_profile,
+        entry=CacheInventoryEntry(
+            view_name=registration.node.name,
+            cache_policy=registration.node.cache_policy,
+            cache_path=target_path,
+            plan_fingerprint=plan_fingerprint,
+            plan_identity_hash=plan_identity_hash,
+            schema_identity_hash=registration.schema_hash,
+            snapshot_version=result.delta_result.version if result.delta_result else None,
+            snapshot_timestamp=None,
+            partition_by=partition_by,
+        ),
+        ctx=registration.ctx,
+    )
+    _record_cache_artifact(
+        registration.cache,
+        node=registration.node,
+        cache_path=target_path,
+        status="cached",
+        hit=False,
+    )
+    return registration.ctx.table(registration.node.name)
+
+
+def _register_uncached_view(registration: CacheRegistrationContext) -> DataFrame:
+    registration.adapter.register_view(
+        registration.node.name,
+        registration.df,
+        overwrite=registration.cache.options.overwrite,
+        temporary=registration.cache.options.temporary,
+    )
+    return registration.df
+
+
+def _require_runtime_profile(
+    cache: ViewCacheContext,
+    *,
+    policy_label: str,
+) -> DataFusionRuntimeProfile:
+    profile = cache.runtime.runtime_profile
+    if profile is None:
+        msg = f"{policy_label} requires a runtime profile."
+        raise ValueError(msg)
+    return profile
+
+
+def _plan_identifiers(node: ViewNode) -> tuple[str | None, str | None]:
+    plan_bundle = node.plan_bundle
+    if plan_bundle is None:
+        return None, None
+    return plan_bundle.plan_fingerprint, plan_bundle.plan_identity_hash
 
 
 def _delta_staging_path(
@@ -352,9 +835,53 @@ def _delta_staging_path(
 ) -> str:
     cache_root = Path(tempfile.gettempdir()) / "datafusion_view_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
-    fingerprint = node.plan_bundle.plan_fingerprint if node.plan_bundle is not None else uuid7_hex()
+    if node.plan_bundle is not None and node.plan_bundle.plan_identity_hash is not None:
+        fingerprint = node.plan_bundle.plan_identity_hash
+    elif node.plan_bundle is not None and node.plan_bundle.plan_fingerprint is not None:
+        fingerprint = node.plan_bundle.plan_fingerprint
+    else:
+        fingerprint = uuid7_hex()
     safe_name = node.name.replace("/", "_").replace(":", "_")
     return str(cache_root / f"{safe_name}__{fingerprint}")
+
+
+def _cache_partition_by(
+    schema: pa.Schema,
+    *,
+    location: DatasetLocation | None,
+) -> tuple[str, ...]:
+    policy_partition_by: tuple[str, ...] = ()
+    if location is not None:
+        from datafusion_engine.dataset.registry import resolve_delta_write_policy
+
+        policy = resolve_delta_write_policy(location)
+        if policy is not None:
+            policy_partition_by = tuple(str(name) for name in policy.partition_by)
+    available = set(schema.names)
+    if policy_partition_by:
+        missing = [name for name in policy_partition_by if name not in available]
+        if missing:
+            msg = f"Delta partition_by columns missing from schema: {sorted(missing)}."
+            raise ValueError(msg)
+    candidates = policy_partition_by or _default_partition_candidates(schema)
+    return tuple(name for name in candidates if name in available)
+
+
+def _default_partition_candidates(schema: pa.Schema) -> tuple[str, ...]:
+    preferred = ("repo", "path_prefix", "path")
+    names = set(schema.names)
+    return tuple(name for name in preferred if name in names)
+
+
+def _allow_schema_evolution(location: DatasetLocation) -> bool:
+    from datafusion_engine.dataset.registry import resolve_delta_schema_policy
+
+    policy = resolve_delta_schema_policy(location)
+    schema_mode = getattr(policy, "schema_mode", None) if policy is not None else None
+    if isinstance(schema_mode, str):
+        normalized = schema_mode.strip().lower()
+        return normalized in {"merge", "overwrite"}
+    return False
 
 
 def _validate_deps(
@@ -411,8 +938,24 @@ def _materialize_nodes(
             raise ValueError(msg)
         deps = _deps_from_plan_bundle(node.plan_bundle)
         required = resolve_required_udfs_from_bundle(node.plan_bundle, snapshot=snapshot)
-        resolved.append(replace(node, deps=deps, required_udfs=required))
+        normalized_policy = _normalize_cache_policy(node.cache_policy)
+        resolved.append(
+            replace(
+                node,
+                deps=deps,
+                required_udfs=required,
+                cache_policy=normalized_policy,
+            )
+        )
     return tuple(resolved)
+
+
+def _normalize_cache_policy(policy: str) -> CachePolicy:
+    if policy == "memory":
+        return "delta_staging"
+    if policy in {"none", "delta_staging", "delta_output"}:
+        return policy
+    return "none"
 
 
 def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:

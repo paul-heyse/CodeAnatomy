@@ -2636,6 +2636,7 @@ class _RuntimeDiagnosticsMixin:
             "capture_explain": profile.capture_explain,
             "explain_verbose": profile.explain_verbose,
             "explain_analyze": profile.explain_analyze,
+            "explain_analyze_threshold_ms": profile.explain_analyze_threshold_ms,
             "explain_analyze_level": profile.explain_analyze_level,
             "explain_collector": bool(profile.explain_collector),
             "capture_plan_artifacts": profile.capture_plan_artifacts,
@@ -3058,6 +3059,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     capture_explain: bool = True
     explain_verbose: bool = False
     explain_analyze: bool = True
+    explain_analyze_threshold_ms: float | None = None
     explain_analyze_level: str | None = None
     explain_collector: _DataFusionExplainCollector | None = field(
         default_factory=_DataFusionExplainCollector
@@ -5716,6 +5718,24 @@ def evict_diskcache_entries(
     return evict_cache_tag(cache_profile, kind=kind, tag=tag)
 
 
+def register_cdf_inputs_for_profile(
+    profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+    *,
+    table_names: Sequence[str],
+) -> Mapping[str, str]:
+    """Register Delta CDF inputs for the requested tables.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of base table names to registered CDF view names.
+    """
+    from datafusion_engine.delta.cdf import register_cdf_inputs
+
+    return register_cdf_inputs(ctx, profile, table_names=table_names)
+
+
 def collect_datafusion_traces(
     profile: DataFusionRuntimeProfile,
 ) -> Mapping[str, object] | None:
@@ -6285,6 +6305,7 @@ __all__ = [
     "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
     "record_schema_snapshots_for_profile",
+    "register_cdf_inputs_for_profile",
     "register_view_specs",
     "run_diskcache_maintenance",
     "session_runtime_hash",

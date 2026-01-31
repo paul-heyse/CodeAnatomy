@@ -7,9 +7,8 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 
 from datafusion_engine.arrow import interop
-from schema_spec.contract_row import ContractRow
 from schema_spec.field_spec import FieldSpec
-from schema_spec.system import TableSpecConstraints
+from schema_spec.system import ContractRow, TableSpecConstraints
 
 SCHEMA_VERSION = 1
 

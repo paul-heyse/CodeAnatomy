@@ -312,18 +312,26 @@ class NestedFieldSpec:
 def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
     """Return a bundle for file identity columns.
 
+    Parameters
+    ----------
+    include_sha256
+        Include the file_sha256 field. Default True.
+
     Returns
     -------
     FieldBundle
         Bundle containing file identity fields.
+
+    See Also
+    --------
+    schema_spec.file_identity : Canonical file identity constants and helpers.
     """
-    fields = [
-        FieldSpec(name="file_id", dtype=interop.string()),
-        FieldSpec(name="path", dtype=interop.string()),
-    ]
-    if include_sha256:
-        fields.append(FieldSpec(name="file_sha256", dtype=interop.string()))
-    return FieldBundle(name="file_identity", fields=tuple(fields))
+    from schema_spec.file_identity import file_identity_field_specs
+
+    return FieldBundle(
+        name="file_identity",
+        fields=file_identity_field_specs(include_sha256=include_sha256),
+    )
 
 
 def span_bundle() -> FieldBundle:
@@ -332,15 +340,16 @@ def span_bundle() -> FieldBundle:
     Returns
     -------
     FieldBundle
-        Bundle containing byte-span fields.
+        Bundle containing byte-span fields (bstart, bend).
+
+    See Also
+    --------
+    prefixed_span_bundle : Create a span bundle with a custom prefix.
+    schema_spec.span_fields : Low-level span field generators.
     """
-    return FieldBundle(
-        name="span",
-        fields=(
-            FieldSpec(name="bstart", dtype=interop.int64()),
-            FieldSpec(name="bend", dtype=interop.int64()),
-        ),
-    )
+    from schema_spec.span_fields import make_span_field_specs as _span_fields
+
+    return FieldBundle(name="span", fields=_span_fields(""))
 
 
 def call_span_bundle() -> FieldBundle:
@@ -349,15 +358,85 @@ def call_span_bundle() -> FieldBundle:
     Returns
     -------
     FieldBundle
-        Bundle containing callsite byte-span fields.
+        Bundle containing callsite byte-span fields (call_bstart, call_bend).
+
+    See Also
+    --------
+    prefixed_span_bundle : Create a span bundle with a custom prefix.
     """
-    return FieldBundle(
-        name="call_span",
-        fields=(
-            FieldSpec(name="call_bstart", dtype=interop.int64()),
-            FieldSpec(name="call_bend", dtype=interop.int64()),
-        ),
-    )
+    return prefixed_span_bundle("call_")
+
+
+def name_span_bundle() -> FieldBundle:
+    """Return a bundle for name byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing name span fields (name_bstart, name_bend).
+    """
+    return prefixed_span_bundle("name_")
+
+
+def def_span_bundle() -> FieldBundle:
+    """Return a bundle for definition byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing definition span fields (def_bstart, def_bend).
+    """
+    return prefixed_span_bundle("def_")
+
+
+def stmt_span_bundle() -> FieldBundle:
+    """Return a bundle for statement byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing statement span fields (stmt_bstart, stmt_bend).
+    """
+    return prefixed_span_bundle("stmt_")
+
+
+def alias_span_bundle() -> FieldBundle:
+    """Return a bundle for alias byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing alias span fields (alias_bstart, alias_bend).
+    """
+    return prefixed_span_bundle("alias_")
+
+
+def prefixed_span_bundle(prefix: str) -> FieldBundle:
+    """Return a bundle for byte-span columns with a given prefix.
+
+    Parameters
+    ----------
+    prefix
+        Span prefix (e.g., "call_", "def_", "name_").
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing prefixed byte-span fields.
+
+    Examples
+    --------
+    >>> bundle = prefixed_span_bundle("call_")
+    >>> [f.name for f in bundle.fields]
+    ['call_bstart', 'call_bend']
+    """
+    from schema_spec.span_fields import STANDARD_SPAN_TYPES
+    from schema_spec.span_fields import make_span_field_specs as _span_fields
+
+    # Cast prefix to match the SpanPrefix type for known prefixes
+    fields = _span_fields(prefix)  # type: ignore[arg-type]
+    bundle_name = STANDARD_SPAN_TYPES.get(prefix, f"{prefix}span")  # type: ignore[arg-type]
+    return FieldBundle(name=bundle_name, fields=fields)
 
 
 def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBundle:
@@ -415,13 +494,18 @@ __all__ = [
     "FieldSpec",
     "NestedFieldSpec",
     "TableSchemaSpec",
+    "alias_span_bundle",
     "call_span_bundle",
+    "def_span_bundle",
     "dict_field",
     "file_identity_bundle",
     "list_view_type",
+    "name_span_bundle",
+    "prefixed_span_bundle",
     "provenance_bundle",
     "schema_metadata",
     "schema_metadata_for_spec",
     "scip_range_bundle",
     "span_bundle",
+    "stmt_span_bundle",
 ]

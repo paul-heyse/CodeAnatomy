@@ -581,6 +581,8 @@ class _ScipOverrides:
     scip_timeout_s: int | None
     node_max_old_space_mb: int | None
     scip_extra_args: tuple[str, ...]
+
+
 def build_command(
     repo_root: Annotated[
         Path,

@@ -10,6 +10,7 @@ from cpg import kind_catalog
 from cpg.constants import ROLE_FLAG_SPECS
 from cpg.contract_map import prop_fields_from_catalog
 from cpg.kind_catalog import EntityKind
+from cpg.node_families import NODE_FAMILY_DEFAULTS, NodeFamily
 from cpg.specs import (
     INCLUDE_HEAVY_JSON,
     TRANSFORM_EXPR_CONTEXT,
@@ -27,7 +28,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EntityFamilySpec:
-    """Spec for a node/prop family with shared identity columns."""
+    """Spec for a node/prop family with shared identity columns.
+
+    The ``node_family`` field provides sensible defaults for column names
+    (path_cols, bstart_cols, bend_cols, file_id_cols). Explicit values
+    override the family defaults.
+    """
 
     name: str
     node_kind: NodeKindId
@@ -37,11 +43,62 @@ class EntityFamilySpec:
     prop_table: str | None = None
     node_name: str | None = None
     prop_name: str | None = None
-    path_cols: tuple[str, ...] = ()
-    bstart_cols: tuple[str, ...] = ()
-    bend_cols: tuple[str, ...] = ()
-    file_id_cols: tuple[str, ...] = ()
+    node_family: NodeFamily | None = None
+    path_cols: tuple[str, ...] | None = None
+    bstart_cols: tuple[str, ...] | None = None
+    bend_cols: tuple[str, ...] | None = None
+    file_id_cols: tuple[str, ...] | None = None
     prop_include_if_id: str | None = None
+
+    def _resolve_cols(
+        self,
+        explicit: tuple[str, ...] | None,
+        family_attr: str,
+        default: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Resolve column tuple from explicit value, family default, or fallback.
+
+        Parameters
+        ----------
+        explicit
+            Explicitly provided column tuple.
+        family_attr
+            Attribute name on NodeFamilyDefaults.
+        default
+            Fallback default if no family is set.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Resolved column tuple.
+        """
+        if explicit is not None:
+            return explicit
+        if self.node_family is not None:
+            defaults = NODE_FAMILY_DEFAULTS.get(self.node_family)
+            if defaults is not None:
+                return getattr(defaults, family_attr, default)
+        return default
+
+    @property
+    def resolved_path_cols(self) -> tuple[str, ...]:
+        """Return resolved path columns."""
+        return self._resolve_cols(self.path_cols, "path_cols", ())
+
+    @property
+    def resolved_bstart_cols(self) -> tuple[str, ...]:
+        """Return resolved bstart columns."""
+        return self._resolve_cols(self.bstart_cols, "bstart_cols", ())
+
+    @property
+    def resolved_bend_cols(self) -> tuple[str, ...]:
+        """Return resolved bend columns."""
+        return self._resolve_cols(self.bend_cols, "bend_cols", ())
+
+    @property
+    def resolved_file_id_cols(self) -> tuple[str, ...]:
+        """Return resolved file_id columns."""
+        return self._resolve_cols(self.file_id_cols, "file_id_cols", ())
 
     def to_node_plan(self) -> NodePlanSpec | None:
         """Return a NodePlanSpec for this family when configured.
@@ -59,10 +116,10 @@ class EntityFamilySpec:
             emit=NodeEmitSpec(
                 node_kind=self.node_kind,
                 id_cols=self.id_cols,
-                path_cols=self.path_cols,
-                bstart_cols=self.bstart_cols,
-                bend_cols=self.bend_cols,
-                file_id_cols=self.file_id_cols,
+                path_cols=self.resolved_path_cols,
+                bstart_cols=self.resolved_bstart_cols,
+                bend_cols=self.resolved_bend_cols,
+                file_id_cols=self.resolved_file_id_cols,
             ),
         )
 
@@ -115,6 +172,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         node_kind=kind_catalog.NODE_KIND_PY_FILE,
         id_cols=("file_id",),
         node_table="repo_files_nodes",
+        node_family=NodeFamily.FILE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_FILE,
             {
@@ -125,16 +183,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             },
         ),
         prop_table="repo_files",
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="ref",
         node_kind=kind_catalog.NODE_KIND_CST_REF,
         id_cols=("ref_id",),
         node_table="cst_refs",
+        node_family=NodeFamily.CST,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_CST_REF,
             {
@@ -152,16 +207,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "inferred_type": "inferred_type",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="import_alias",
         node_kind=kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
         id_cols=("import_alias_id", "import_id"),
         node_table="cst_imports",
+        node_family=NodeFamily.CST,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
             {
@@ -174,16 +226,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "is_star": "is_star",
             },
         ),
-        path_cols=("path",),
+        # Override span cols for alias-specific columns
         bstart_cols=("bstart", "alias_bstart"),
         bend_cols=("bend", "alias_bend"),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="callsite",
         node_kind=kind_catalog.NODE_KIND_CST_CALLSITE,
         id_cols=("call_id",),
         node_table="cst_callsites",
+        node_family=NodeFamily.CST,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_CST_CALLSITE,
             {
@@ -204,16 +256,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 ),
             },
         ),
-        path_cols=("path",),
+        # Override span cols for callsite-specific columns
         bstart_cols=("call_bstart", "bstart"),
         bend_cols=("call_bend", "bend"),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="definition",
         node_kind=kind_catalog.NODE_KIND_CST_DEF,
         id_cols=("def_id",),
         node_table="cst_defs",
+        node_family=NodeFamily.CST,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_CST_DEF,
             {
@@ -235,16 +287,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             },
         ),
         prop_table="cst_defs_norm",
-        path_cols=("path",),
+        # Override span cols for definition-specific columns
         bstart_cols=("bstart", "name_bstart"),
         bend_cols=("bend", "name_bend"),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="sym_scope",
         node_kind=kind_catalog.NODE_KIND_SYM_SCOPE,
         id_cols=("scope_id",),
         node_table="symtable_scopes",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_SYM_SCOPE,
             {
@@ -266,14 +318,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "path": "path",
             },
         ),
-        path_cols=("path",),
-        file_id_cols=("file_id",),
+        # Symtable scopes have no span
+        bstart_cols=(),
+        bend_cols=(),
     ),
     EntityFamilySpec(
         name="sym_symbol",
         node_kind=kind_catalog.NODE_KIND_SYM_SYMBOL,
         id_cols=("sym_symbol_id",),
         node_table="symtable_symbols",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_SYM_SYMBOL,
             {
@@ -297,14 +351,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "is_namespace": "is_namespace",
             },
         ),
-        path_cols=("path",),
-        file_id_cols=("file_id",),
+        # Symtable symbols have no span
+        bstart_cols=(),
+        bend_cols=(),
     ),
     EntityFamilySpec(
         name="py_scope",
         node_kind=kind_catalog.NODE_KIND_PY_SCOPE,
         id_cols=("scope_id",),
         node_table="symtable_scopes",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_SCOPE,
             {
@@ -313,14 +369,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "path": "path",
             },
         ),
-        path_cols=("path",),
-        file_id_cols=("file_id",),
+        # PY scopes have no span
+        bstart_cols=(),
+        bend_cols=(),
     ),
     EntityFamilySpec(
         name="py_binding",
         node_kind=kind_catalog.NODE_KIND_PY_BINDING,
         id_cols=("binding_id",),
         node_table="symtable_bindings",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_BINDING,
             {
@@ -334,14 +392,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "annotated_here": "annotated_here",
             },
         ),
-        path_cols=("path",),
-        file_id_cols=("file_id",),
+        # Bindings have no span
+        bstart_cols=(),
+        bend_cols=(),
     ),
     EntityFamilySpec(
         name="py_def_site",
         node_kind=kind_catalog.NODE_KIND_PY_DEF_SITE,
         id_cols=("def_site_id",),
         node_table="symtable_def_sites",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_DEF_SITE,
             {
@@ -353,16 +413,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "ambiguity_group_id": "ambiguity_group_id",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="py_use_site",
         node_kind=kind_catalog.NODE_KIND_PY_USE_SITE,
         id_cols=("use_site_id",),
         node_table="symtable_use_sites",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_USE_SITE,
             {
@@ -374,16 +431,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "ambiguity_group_id": "ambiguity_group_id",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="type_param",
         node_kind=kind_catalog.NODE_KIND_TYPE_PARAM,
         id_cols=("type_param_id",),
         node_table="symtable_type_params",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TYPE_PARAM,
             {
@@ -391,27 +445,29 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "variance": "variance",
             },
         ),
-        path_cols=("path",),
-        file_id_cols=("file_id",),
+        # Type params have no span
+        bstart_cols=(),
+        bend_cols=(),
     ),
     EntityFamilySpec(
         name="qualified_name",
         node_kind=kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
         id_cols=("qname_id",),
         node_table="dim_qualified_names",
+        node_family=NodeFamily.SYMTABLE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
             {"qname": "qname"},
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
+        # Override to remove file_id
+        file_id_cols=(),
     ),
     EntityFamilySpec(
         name="scip_symbol",
         node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
         id_cols=("symbol",),
         node_table="scip_symbols",
+        node_family=NodeFamily.SCIP,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_SCIP_SYMBOL,
             {
@@ -443,6 +499,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
         id_cols=("symbol",),
         node_table=None,
+        node_family=NodeFamily.SCIP,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_SCIP_SYMBOL,
             {
@@ -475,6 +532,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         node_kind=kind_catalog.NODE_KIND_TS_NODE,
         id_cols=("ts_node_id",),
         node_table="ts_nodes",
+        node_family=NodeFamily.TREESITTER,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TS_NODE,
             {
@@ -491,16 +549,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "has_changes": "has_changes",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("start_byte",),
-        bend_cols=("end_byte",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="tree_sitter_error",
         node_kind=kind_catalog.NODE_KIND_TS_ERROR,
         id_cols=("ts_error_id",),
         node_table="ts_errors",
+        node_family=NodeFamily.TREESITTER,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TS_ERROR,
             {
@@ -508,16 +563,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "is_error": "is_error",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("start_byte",),
-        bend_cols=("end_byte",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="tree_sitter_missing",
         node_kind=kind_catalog.NODE_KIND_TS_MISSING,
         id_cols=("ts_missing_id",),
         node_table="ts_missing",
+        node_family=NodeFamily.TREESITTER,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TS_MISSING,
             {
@@ -525,16 +577,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "is_missing": "is_missing",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("start_byte",),
-        bend_cols=("end_byte",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="type_expr",
         node_kind=kind_catalog.NODE_KIND_TYPE_EXPR,
         id_cols=("type_expr_id",),
         node_table="type_exprs_norm",
+        node_family=NodeFamily.TYPE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TYPE_EXPR,
             {
@@ -544,16 +593,13 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "param_name": "param_name",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
     EntityFamilySpec(
         name="type",
         node_kind=kind_catalog.NODE_KIND_TYPE,
         id_cols=("type_id",),
         node_table="types_norm",
+        node_family=NodeFamily.TYPE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_TYPE,
             {
@@ -562,6 +608,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "origin": "origin",
             },
         ),
+        # Types have no anchoring
         path_cols=(),
         bstart_cols=(),
         bend_cols=(),
@@ -572,6 +619,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         node_kind=kind_catalog.NODE_KIND_DIAG,
         id_cols=("diag_id",),
         node_table="diagnostics_norm",
+        node_family=NodeFamily.DIAGNOSTIC,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_DIAG,
             {
@@ -582,10 +630,6 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "details": "details",
             },
         ),
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
 )
 

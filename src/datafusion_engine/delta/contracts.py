@@ -17,7 +17,8 @@ from datafusion_engine.delta.scan_config import (
     delta_scan_identity_hash,
     resolve_delta_scan_options,
 )
-from storage.deltalake import DeltaCdfOptions
+from datafusion_engine.identity import schema_identity_hash
+from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from utils.storage_options import merged_storage_options
 
 if TYPE_CHECKING:
@@ -201,9 +202,78 @@ def _profile_settings(runtime_profile: DataFusionRuntimeProfile | None) -> Mappi
     return runtime_profile.settings_payload()
 
 
+class DeltaSchemaMismatchError(ValueError):
+    """Raised when a Delta table schema mismatches expectations."""
+
+    def __init__(
+        self,
+        *,
+        table_uri: str,
+        expected_hash: str | None,
+        actual_hash: str | None,
+    ) -> None:
+        msg = (
+            "Delta schema mismatch for "
+            f"{table_uri!r}: expected={expected_hash!r}, actual={actual_hash!r}."
+        )
+        super().__init__(msg)
+
+
+def delta_schema_identity_hash(request: DeltaSchemaRequest) -> str | None:
+    """Return the schema identity hash for a Delta table when available.
+
+    Parameters
+    ----------
+    request
+        Delta schema request describing the table and snapshot.
+
+    Returns
+    -------
+    str | None
+        Schema identity hash when available.
+    """
+    schema = delta_table_schema(request)
+    if schema is None:
+        return None
+    return schema_identity_hash(schema)
+
+
+def enforce_schema_evolution(
+    *,
+    request: DeltaSchemaRequest,
+    expected_schema_hash: str | None,
+    allow_evolution: bool,
+) -> str | None:
+    """Enforce schema evolution gating for Delta tables.
+
+    Returns
+    -------
+    str | None
+        Actual schema identity hash when available.
+
+    Raises
+    ------
+    DeltaSchemaMismatchError
+        Raised when schema evolution is disallowed and hashes differ.
+    """
+    actual_hash = delta_schema_identity_hash(request)
+    if expected_schema_hash is None or actual_hash is None:
+        return actual_hash
+    if actual_hash != expected_schema_hash and not allow_evolution:
+        raise DeltaSchemaMismatchError(
+            table_uri=request.path,
+            expected_hash=expected_schema_hash,
+            actual_hash=actual_hash,
+        )
+    return actual_hash
+
+
 __all__ = [
     "DeltaCdfContract",
     "DeltaProviderContract",
+    "DeltaSchemaMismatchError",
     "build_delta_cdf_contract",
     "build_delta_provider_contract",
+    "delta_schema_identity_hash",
+    "enforce_schema_evolution",
 ]

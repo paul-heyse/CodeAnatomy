@@ -63,6 +63,7 @@ Target:   Schemas are derived artifacts that emerge from relationships and plans
 2. [Schema Inference from DataFusion Plans](#2-schema-inference-from-datafusion-plans)
 3. [File Identity Canonical Type](#3-file-identity-canonical-type)
 4. [View Builder DSL](#4-view-builder-dsl)
+4b. [DataFusion DataFrame View Registration (Spec-Driven)](#4b-datafusion-dataframe-view-registration-spec-driven)
 5. [Node Family Spec Defaults](#5-node-family-spec-defaults)
 6. [Extraction Row Builder](#6-extraction-row-builder)
 7. [Evidence Metadata Normalization](#7-evidence-metadata-normalization)
@@ -71,6 +72,38 @@ Target:   Schemas are derived artifacts that emerge from relationships and plans
 10. [Nested Type Builder Framework](#10-nested-type-builder-framework)
 11. [Span Field Templating](#11-span-field-templating)
 12. [Extraction Schema Derivation](#12-extraction-schema-derivation)
+
+---
+
+## Implementation Status Snapshot (2026-01-30)
+
+| Scope | Status | Evidence / Notes |
+|-------|--------|------------------|
+| #0a Vestigial Deletion | Not complete | `src/schema_spec/contract_row.py`, `src/schema_spec/literals.py`, `src/schema_spec/bundles.py` still exist and are referenced. |
+| #0b Policy Extraction | Not complete | `src/relspec/policies/` is empty; behavior remains in `schema_spec/system.py` + `schema_spec/relationship_specs.py`. |
+| #0c @cache Replacement | Not complete | `@cache` still present in `schema_spec/relationship_specs.py`; no `schema_spec/catalog.py`. |
+| #0d relationship_specs Collapse | Complete | `src/schema_spec/relationship_specs.py` is fully data-driven (RelationshipData registry + generators). |
+| #0e SessionContext Hardening | Partial | `src/datafusion_engine/session/schema_profile.py` exists but is not wired into runtime/factory creation. |
+| #1 Relationship Spec DSL | Complete | `src/cpg/relationship_specs.py` + `src/cpg/relationship_builder.py`; used by `src/relspec/relationship_datafusion.py`. |
+| #2 Schema Inference | Partial | `src/datafusion_engine/schema/inference.py` + `src/extract/schema_derivation.py`; not wired into relspec compile/execution. |
+| #3 File Identity | Partial | Canonical fields in `schema_spec/file_identity.py`; registry uses shared constants, but nested struct usage not migrated. |
+| #4 View Builder DSL | Partial | `view_spec.py`, `view_specs_catalog.py`, `views/dsl.py` exist; registry still uses manual `_VIEW_SELECT_EXPRS`. |
+| #5 Node Family Defaults | Complete | Defaults implemented in `src/cpg/spec_registry.py`. |
+| #6 Extraction Row Builder | Partial | `src/extract/row_builder.py` exists; extractors do not use it yet. |
+| #7 Evidence Normalization | Partial | `schema_spec/evidence_metadata.py` + `normalize/evidence_specs.py`; join_keys remain manual. |
+| #8 Relationship Contract Gen | Partial | `src/cpg/relationship_contracts.py` exists but not wired; `schema_spec/relationship_specs.py` also generates contracts. |
+| #9 Contract Auto-Population | Not started | No `catalog_contracts.py`; contracts still manual. |
+| #10 Nested Type Builder | Partial | `src/schema_spec/nested_types.py` builder exists; registry still defines nested structs manually. |
+| #11 Span Field Templating | Partial | `src/schema_spec/span_fields.py` covers byte spans; full span metadata templating not implemented. |
+| #12 Extraction Schema Derivation | Partial | `src/extract/schema_derivation.py` exists; registry still uses hardcoded schemas. |
+
+### Deviations from the original plan (observed)
+- Relationship DataFusion entrypoints live in `src/relspec/relationship_datafusion.py` (not `src/cpg/relationship_datafusion.py`).
+- Schema inference lives in `src/datafusion_engine/schema/inference.py` and `src/extract/schema_derivation.py` (not `src/relspec/schema_inference.py`).
+- View DSL is split across `views/view_spec.py`, `views/view_specs_catalog.py`, and `views/dsl.py` and is **not** wired into `views/registry.py`.
+- Span templating exists as `schema_spec/span_fields.py` (byte-span helpers), not the full `span_templates.py` variant.
+- Extraction schema derivation is in `src/extract/schema_derivation.py`, not `src/datafusion_engine/schema/schema_derivation.py`.
+- Extraction row builder exists as `ExtractionRowBuilder` in `src/extract/row_builder.py` (identity + span helpers), not schema-validation-driven; extractors still build rows manually.
 
 ---
 
@@ -89,6 +122,8 @@ Target:   Schemas are derived artifacts that emerge from relationships and plans
 ---
 
 ## 0a. Delete Vestigial Schema Spec Modules
+
+**Status (2026-01-30): Not complete.** `contract_row.py`, `literals.py`, and `bundles.py` still exist and have active references.
 
 ### Problem Statement
 Three modules in `src/schema_spec/` are vestigial artifacts from pre-DataFusion architecture. They contain dead code, duplicate functionality, or trivial wrappers that add complexity without value.
@@ -232,6 +267,8 @@ ast-grep run -p 'from schema_spec.bundles' -l python src/
 ---
 
 ## 0b. Extract Policy Behaviors from Spec Classes
+
+**Status (2026-01-30): Not complete.** `src/relspec/policies/` is empty and behavior remains embedded in spec modules.
 
 ### Problem Statement
 Spec classes in `src/schema_spec/` contain operational behavior (methods that transform data) mixed with declarative specification. This coupling makes specs non-serializable, harder to test, and tightly couples data definitions to execution logic.
@@ -452,6 +489,8 @@ class $NAME:' -l python src/schema_spec/
 ---
 
 ## 0c. Replace @cache Singletons with Catalog Lookups
+
+**Status (2026-01-30): Not complete.** `@cache` is still present and no `schema_spec/catalog.py` exists.
 
 ### Problem Statement
 Module-level `@cache` decorators in `src/schema_spec/system.py` create global singletons that materialize at import time. This pattern:
@@ -706,6 +745,8 @@ ast-grep run -p 'SpecCatalog.for_testing(' -l python tests/
 ---
 
 ## 0d. Collapse relationship_specs.py to Data-Driven Generation
+
+**Status (2026-01-30): Complete.** `schema_spec/relationship_specs.py` is fully data-driven with `RelationshipData` and generator helpers.
 
 ### Problem Statement
 `src/schema_spec/relationship_specs.py` contains **397 lines** with **47-83% code duplication** across 8 relationship builder functions. Analysis shows only **5 unique data points** per relationship are truly necessary - everything else follows patterns that can be generated.
@@ -968,15 +1009,14 @@ ast-grep run -p 'generate_relationship_spec(data)' -l python src/schema_spec/
 ```
 
 ### Implementation Checklist
-- [ ] Create `RelationshipData` dataclass for minimal data
-- [ ] Define `RELATIONSHIP_DATA` tuple with 8 entries
-- [ ] Define `_STANDARD_RELATIONSHIP_FIELDS` constant
-- [ ] Define `_STANDARD_TIE_BREAKERS` constant
-- [ ] Implement `generate_relationship_spec()` function
-- [ ] Generate `RELATIONSHIP_SPECS` dict from data
-- [ ] Delete all `_build_rel_*_spec()` functions
+- [x] Create `RelationshipData` dataclass for minimal data
+- [x] Define `RELATIONSHIP_DATA` tuple
+- [x] Define standard relationship patterns (tie-breakers, virtual fields, dedupe/sort helpers)
+- [x] Implement generator helpers for specs/contracts
+- [x] Generate relationship specs/contracts from data
+- [x] Delete all `_build_rel_*_spec()` functions
 - [ ] Verify generated specs match original specs (field-by-field)
-- [ ] Update any call sites if API changed
+- [x] Update call sites to new data-driven API
 - [ ] Add unit tests comparing generated vs expected schemas
 
 ### Decommissioning List
@@ -993,6 +1033,8 @@ ast-grep run -p 'generate_relationship_spec(data)' -l python src/schema_spec/
 ---
 
 ## 0e. SessionContext Schema Hardening (Baseline Config)
+
+**Status (2026-01-30): Partial.** `schema_profile.py` exists but is not yet used by session factories/runtime.
 
 ### Problem Statement
 Schema inference and catalog introspection depend on **SessionContext configuration**. Without a hardened baseline, the same logical plan can yield **different schema surfaces** (view types, string mapping, timezone, Parquet metadata handling), making derived schemas non-deterministic and tests flaky.
@@ -1084,7 +1126,7 @@ ast-grep run -p 'build_session_config($$$)' -l python src/datafusion_engine/
 ```
 
 ### Implementation Checklist
-- [ ] Create `schema_profile.py` with `SCHEMA_PROFILE`, `build_session_config()`, `create_session_context()`
+- [x] Create `schema_profile.py` with `SCHEMA_PROFILE`, `build_session_config()`, `create_session_context()`
 - [ ] Route all SessionContext creation through the schema profile
 - [ ] Ensure `information_schema` is enabled for schema introspection paths
 - [ ] Add a small validation step that surfaces current `df_settings` in diagnostics
@@ -1099,12 +1141,14 @@ ast-grep run -p 'build_session_config($$$)' -l python src/datafusion_engine/
 
 ## 1. Relationship Spec Declarative DSL
 
+**Status (2026-01-30): Complete.** Implemented in `src/cpg/relationship_specs.py`, `src/cpg/relationship_builder.py`, and wired into `src/relspec/relationship_datafusion.py`. Legacy wrapper functions remain for backward compatibility.
+
 ### Problem Statement
 Five parallel relationship builder functions (`build_rel_name_symbol_df`, `build_rel_import_symbol_df`, etc.) plus five `_relation_output_from_*` wrappers are **95% copy-paste code**. Each manually specifies columns via `.select(col("X").alias("Y"), ...)` with only source table, entity ID column, and symbol column sourcing varying.
 
 ### Current State (Duplicated Pattern)
 ```python
-# src/cpg/relationship_datafusion.py - 150+ lines of nearly identical code
+# src/relspec/relationship_datafusion.py (historical pre-refactor pattern)
 def build_rel_name_symbol_df(ctx: SessionContext, *, task_name: str, task_priority: int) -> DataFrame:
     source = ctx.table("cst_refs")
     return source.select(
@@ -1318,13 +1362,15 @@ def build_all_relations_df(
     return combined
 ```
 
+Note: the current implementation uses `build_all_symbol_relations_dfs()` and `build_all_qname_relations_dfs()` instead of a single `build_all_relations_df()`.
+
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/cpg/relationship_specs.py` | RelationshipSpec dataclass + RELATIONSHIP_SPECS registry |
-| Create | `src/cpg/relationship_builder.py` | `build_relation_df_from_spec()` generator |
-| Modify | `src/cpg/relationship_datafusion.py` | Replace 5 builder functions with generator calls |
-| Delete | (functions) | `build_rel_name_symbol_df`, `build_rel_import_symbol_df`, `build_rel_def_symbol_df`, `build_rel_callsite_symbol_df`, `build_rel_callsite_qname_df`, `_relation_output_from_name`, `_relation_output_from_import`, `_relation_output_from_def`, `_relation_output_from_call_symbol`, `_relation_output_from_call_qname` |
+| Create | `src/cpg/relationship_specs.py` | RelationshipSpec dataclass + RELATIONSHIP_SPECS registry (implemented) |
+| Create | `src/cpg/relationship_builder.py` | Spec-driven generators (`build_relation_df_from_spec`, `build_all_symbol_relations_dfs`, `build_all_qname_relations_dfs`) |
+| Modify | `src/relspec/relationship_datafusion.py` | Generator wired in; wrappers retained for compatibility |
+| Delete | (optional) | Remove legacy wrapper functions after call sites migrate |
 
 ### ast-grep Recipes
 
@@ -1339,7 +1385,7 @@ ast-grep run -p 'def _relation_output_from_$NAME($PARAMS) -> DataFrame:
     $$$BODY' -l python src/cpg/
 
 # Count .select() calls in relationship builders
-ast-grep run -p 'return source.select($$$)' -l python src/cpg/relationship_datafusion.py
+ast-grep run -p 'return source.select($$$)' -l python src/relspec/relationship_datafusion.py
 
 # Find identical metadata injection pattern
 ast-grep run -p 'lit($VALUE).alias("resolution_method")' -l python src/cpg/
@@ -1387,7 +1433,7 @@ YAML
 ./scripts/cq impact build_rel_name_symbol_df --param ctx --root .
 
 # Check for import dependencies
-./scripts/cq imports --module src.cpg.relationship_datafusion --root .
+./scripts/cq imports --module src.relspec.relationship_datafusion --root .
 
 # Find edge kind constant usages
 ./scripts/cq calls EDGE_KIND_PY_REFERENCES_SYMBOL --root .
@@ -1406,196 +1452,84 @@ YAML
 ```
 
 ### Implementation Checklist
-- [ ] Create `src/cpg/relationship_specs.py` with `RelationshipSpec` dataclass
-- [ ] Define `RELATIONSHIP_SPECS` registry with 5 spec instances
-- [ ] Create `src/cpg/relationship_builder.py` with `build_relation_df_from_spec()`
-- [ ] Implement `build_all_relations_df()` for unified output
-- [ ] Refactor `relationship_datafusion.py` to use generator
-- [ ] Update all call sites to use new API
+- [x] Create `src/cpg/relationship_specs.py` with `RelationshipSpec` dataclass
+- [x] Define `RELATIONSHIP_SPECS` registry with 5 spec instances
+- [x] Create `src/cpg/relationship_builder.py` with spec-driven builders
+- [x] Implement `build_all_symbol_relations_dfs()` and `build_all_qname_relations_dfs()`
+- [x] Refactor `relationship_datafusion.py` to use generator
+- [ ] Update call sites to use new API (wrappers still used for compatibility)
 - [ ] Run ast-grep verification patterns
 - [ ] Run cq calls analysis to verify no breakage
 - [ ] Add unit tests for spec-driven generation
 - [ ] Verify DataFrame schemas match original implementations
 
 ### Decommissioning List
-- Remove `build_rel_name_symbol_df()` (~25 lines)
-- Remove `build_rel_import_symbol_df()` (~25 lines)
-- Remove `build_rel_def_symbol_df()` (~25 lines)
-- Remove `build_rel_callsite_symbol_df()` (~25 lines)
-- Remove `build_rel_callsite_qname_df()` (~30 lines)
-- Remove `_relation_output_from_name()` (~10 lines)
-- Remove `_relation_output_from_import()` (~10 lines)
-- Remove `_relation_output_from_def()` (~10 lines)
-- Remove `_relation_output_from_call_symbol()` (~10 lines)
-- Remove `_relation_output_from_call_qname()` (~10 lines)
-- **Estimated reduction: 180 lines → 80 lines of specs + 100 lines of generator = net 0, but massive improvement in maintainability**
+- Remove `build_rel_name_symbol_df()` (~25 lines) once call sites migrate
+- Remove `build_rel_import_symbol_df()` (~25 lines) once call sites migrate
+- Remove `build_rel_def_symbol_df()` (~25 lines) once call sites migrate
+- Remove `build_rel_callsite_symbol_df()` (~25 lines) once call sites migrate
+- Remove `build_rel_callsite_qname_df()` (~30 lines) once call sites migrate
+- Remove `_relation_output_from_name()` (~10 lines) once call sites migrate
+- Remove `_relation_output_from_import()` (~10 lines) once call sites migrate
+- Remove `_relation_output_from_def()` (~10 lines) once call sites migrate
+- Remove `_relation_output_from_call_symbol()` (~10 lines) once call sites migrate
+- Remove `_relation_output_from_call_qname()` (~10 lines) once call sites migrate
+- **Estimated reduction: 180 lines → 80 lines of specs + 100 lines of generator = net 0, but maintainability improves; wrappers are optional**
 
 ---
 
 ## 2. Schema Inference from DataFusion Plans
 
+**Status (2026-01-30): Partial.** Core inference utilities exist in `src/datafusion_engine/schema/inference.py` and extraction schema derivation lives in `src/extract/schema_derivation.py`, but relspec execution planning does not yet capture or persist inferred schemas.
+
 ### Problem Statement
 Schemas are declared explicitly and validated post-hoc. The existing `lineage_datafusion.py` extracts dependencies from DataFusion plans but doesn't derive output schemas. DataFusion exposes **computed schema surfaces** (`DESCRIBE <query>` and plan schema inspection), so schema inference should prioritize those authoritative outputs and only use plan-walking for metadata not present in `DESCRIBE` (ordering, provenance).
 
 ### Current State
-```python
-# src/relspec/inferred_deps.py - Dependencies inferred from plans
-def infer_deps_from_plan_bundle(inputs: InferredDepsInputs) -> InferredDeps:
-    lineage = extract_lineage(
-        plan_bundle.optimized_logical_plan,
-        udf_snapshot=lineage_snapshot,
-    )
-    # Only extracts: inputs, required_columns, required_types, required_metadata
-    # Does NOT extract: output schema
-
-# Schemas are declared separately and validated reactively
-# src/datafusion_engine/schema/contracts.py
-def validate_schema_contract(table: pa.Table, contract: SchemaContract) -> list[str]:
-    # Validates AFTER materialization - catches errors late
-```
+Schema inference is implemented but **not yet wired into relspec execution planning**. `infer_deps_from_plan_bundle()` still focuses on input dependency extraction, while schema contracts remain validated post-hoc.
 
 ### Target Implementation
 ```python
-# src/relspec/schema_inference.py
+# src/datafusion_engine/schema/inference.py (implemented)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
-from datafusion import SessionContext
+import pyarrow as pa
 
-from utils.hashing import hash_msgpack_canonical
-
-
-@dataclass(frozen=True)
-class ColumnSpec:
-    """Specification for a single output column."""
-
-    name: str
-    dtype: str  # Arrow type name
-    nullable: bool = True
-    metadata: Mapping[bytes, bytes] | None = None
+from datafusion_engine.lineage.datafusion import LineageReport
 
 
 @dataclass(frozen=True)
-class SchemaInference:
-    """Inferred schema for an evidence dataset or task output."""
+class SchemaInferenceResult:
+    """Complete schema inference result from a DataFusion plan."""
 
-    name: str
-    source: str  # "evidence" | "view" | "derived"
-    columns: tuple[ColumnSpec, ...]
-    metadata: Mapping[bytes, bytes] | None = None
-    ordering: tuple[tuple[str, str], ...] | None = None  # (col, "asc"|"desc")
-    fingerprint: str = ""
-    inferred_from: str | None = None  # plan_fingerprint or registry name
-
-    def __post_init__(self) -> None:
-        if not self.fingerprint:
-            object.__setattr__(self, "fingerprint", self._compute_fingerprint())
-
-    def _compute_fingerprint(self) -> str:
-        payload = {
-            "columns": [(c.name, c.dtype, c.nullable) for c in self.columns],
-            "metadata": dict(self.metadata) if self.metadata else None,
-            "ordering": self.ordering,
-        }
-        return hash_msgpack_canonical(payload)
-
-    def to_arrow_schema(self) -> "pa.Schema":
-        """Convert to PyArrow schema."""
-        import pyarrow as pa
-
-        fields = [
-            pa.field(c.name, _dtype_from_string(c.dtype), nullable=c.nullable, metadata=c.metadata)
-            for c in self.columns
-        ]
-        return pa.schema(fields, metadata=self.metadata)
+    output_schema: pa.Schema
+    column_lineage: Mapping[str, ColumnLineage]
+    source_tables: frozenset[str]
+    lineage_report: LineageReport | None = None
 
 
-def infer_output_schema(
-    ctx: SessionContext,
-    *,
-    name: str,
-    sql: str,
-    plan_fingerprint: str,
-    plan: object | None = None,
-) -> SchemaInference:
-    """Infer output schema using DataFusion's computed schema surfaces.
-
-    Parameters
-    ----------
-    ctx
-        SessionContext with hardened schema profile.
-    plan
-        Optional optimized logical plan (for metadata not present in DESCRIBE).
-    name
-        Name for the inferred schema.
-    sql
-        Query text to describe for computed schema output.
-    plan_fingerprint
-        Fingerprint of the source plan for caching.
-    """
-    columns = _columns_from_describe(ctx, sql)
-    ordering = _extract_sort_keys(plan) if plan else None
-    metadata = _extract_plan_metadata(plan) if plan else None
-
-    return SchemaInference(
-        name=name,
-        source="view",
-        columns=tuple(columns),
-        metadata=metadata,
-        ordering=ordering,
-        inferred_from=plan_fingerprint,
-    )
+def infer_schema_from_dataframe(df: DataFrame) -> pa.Schema:
+    """Extract Arrow schema from a DataFusion DataFrame."""
 
 
-def _columns_from_describe(ctx: SessionContext, sql: str) -> Sequence[ColumnSpec]:
-    """Return ColumnSpec entries based on DESCRIBE <query> output."""
-    describe_df = ctx.sql(f"DESCRIBE {sql}")
-    rows = describe_df.collect()
-    return tuple(
-        ColumnSpec(
-            name=row["column_name"],
-            dtype=row["data_type"],
-            nullable=row["is_nullable"] == "YES",
-        )
-        for row in rows
-    )
+def infer_schema_from_logical_plan(plan: object) -> pa.Schema:
+    """Extract Arrow schema from a DataFusion LogicalPlan."""
 
 
-def _extract_sort_keys(plan: object) -> tuple[tuple[str, str], ...] | None:
-    """Extract ordering metadata from a logical plan when available."""
-    from datafusion_engine.plan.walk import walk_logical_complete
-
-    ordering: list[tuple[str, str]] = []
-    for node in walk_logical_complete(plan):
-        variant = _plan_variant(node)
-        tag = _variant_name(node=node, variant=variant)
-        if tag == "Sort":
-            ordering = _extract_sort_keys_from_node(variant)
-    return tuple(ordering) if ordering else None
-
-
-def _extract_plan_metadata(plan: object) -> Mapping[bytes, bytes] | None:
-    """Extract table/scan metadata from a logical plan."""
-    from datafusion_engine.plan.walk import walk_logical_complete
-
-    metadata: dict[bytes, bytes] = {}
-    for node in walk_logical_complete(plan):
-        variant = _plan_variant(node)
-        tag = _variant_name(node=node, variant=variant)
-        if tag == "TableScan":
-            metadata.update(_extract_scan_metadata(variant))
-    return metadata or None
+def infer_schema_with_lineage(df: DataFrame) -> SchemaInferenceResult:
+    """Perform complete schema inference with column-level lineage."""
 ```
 
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/relspec/schema_inference.py` | SchemaInference dataclass + computed schema inference |
-| Modify | `src/relspec/execution_plan.py` | Add `inferred_schemas` field to ExecutionPlan |
-| Modify | `src/relspec/compile.py` | Call schema inference during compilation |
-| Modify | `src/datafusion_engine/plan/walk.py` | Add schema extraction helpers |
+| Create | `src/datafusion_engine/schema/inference.py` | Schema inference + lineage (implemented) |
+| Create | `src/extract/schema_derivation.py` | Extraction schema derivation (implemented) |
+| Modify | `src/relspec/execution_plan.py` | (Remaining) Add `inferred_schemas` field + wiring |
+| Modify | `src/datafusion_engine/plan/walk.py` | Optional helpers for plan traversal |
 
 ### ast-grep Recipes
 
@@ -1618,10 +1552,11 @@ ast-grep run -p '$DF.schema()' -l python src/
 **Verification:**
 ```bash
 # After implementation, verify schema inference is called
-ast-grep run -p 'infer_output_schema($$$)' -l python src/relspec/
+ast-grep run -p 'infer_schema_from_dataframe($$$)' -l python src/datafusion_engine/schema/
+ast-grep run -p 'infer_schema_from_logical_plan($$$)' -l python src/datafusion_engine/schema/
 
-# Verify ExecutionPlan has inferred_schemas
-ast-grep run -p 'inferred_schemas: Mapping[str, SchemaInference]' -l python src/relspec/
+# Verify ExecutionPlan wiring (remaining work)
+ast-grep run -p 'inferred_schemas' -l python src/relspec/execution_plan.py
 ```
 
 ### cq Recipes
@@ -1644,23 +1579,20 @@ ast-grep run -p 'inferred_schemas: Mapping[str, SchemaInference]' -l python src/
 **Post-refactor verification:**
 ```bash
 # Verify schema inference integration
-./scripts/cq calls infer_output_schema --root .
+./scripts/cq calls infer_schema_from_dataframe --root .
+./scripts/cq calls infer_schema_from_logical_plan --root .
 
 # Check for import cycles
 ./scripts/cq imports --cycles --root src/relspec
 ```
 
 ### Implementation Checklist
-- [ ] Create `src/relspec/schema_inference.py` with `SchemaInference` dataclass
-- [ ] Implement `ColumnSpec` for individual column specifications
-- [ ] Implement `infer_output_schema()` using `DESCRIBE <query>` as primary signal
-- [ ] Add `_columns_from_describe()` helper
-- [ ] Add `_extract_sort_keys()` helper for ordering metadata
-- [ ] Add `_extract_plan_metadata()` helper for scan metadata
-- [ ] Extend `ExecutionPlan` with `inferred_schemas` field
-- [ ] Integrate schema inference into `compile_execution_plan()`
-- [ ] Add schema fingerprinting for caching
-- [ ] Add unit tests for schema inference from sample plans
+- [x] Implement `SchemaInferenceResult` + lineage helpers (done in `schema/inference.py`)
+- [x] Use `infer_schema_from_dataframe()` and `infer_schema_from_logical_plan()` as core signals
+- [x] Add `schema_fingerprint_from_inference()` for cache keys
+- [ ] Extend `ExecutionPlan` with `inferred_schemas` field (remaining)
+- [ ] Integrate schema inference into `compile_execution_plan()` (remaining)
+- [x] Add unit tests for schema inference from sample plans (done in `tests/unit/test_schema_inference.py`)
 
 ### Decommissioning List
 - Remove post-hoc schema validation where inference can catch errors earlier
@@ -1670,6 +1602,8 @@ ast-grep run -p 'inferred_schemas: Mapping[str, SchemaInference]' -l python src/
 ---
 
 ## 3. File Identity Canonical Type
+
+**Status (2026-01-30): Mostly complete.** Canonical fields and helpers exist in `schema_spec/file_identity.py`, and registry schemas use the shared field constants; nested struct usage remains to be migrated.
 
 ### Problem Statement
 File identity fields (`file_id`, `path`, `file_sha256`, `repo`) are repeated **50+ times** across schema definitions. Each extraction schema, relationship schema, and nested struct type manually declares these fields.
@@ -1830,11 +1764,11 @@ YAML
 ```
 
 ### Implementation Checklist
-- [ ] Add `file_identity_fields()` and `file_identity_struct()` in `file_identity.py`
-- [ ] Add `schema_with_file_identity()` builder function
-- [ ] Refactor `AST_FILES_SCHEMA` to use builder
-- [ ] Refactor `CST_FILES_SCHEMA` to use builder
-- [ ] Refactor `SCIP_INDEX_SCHEMA` to use builder
+- [x] Add `file_identity_fields()` and `file_identity_struct()` in `file_identity.py`
+- [x] Add `schema_with_file_identity()` builder function
+- [x] Refactor `AST_FILES_SCHEMA` to use canonical file identity fields
+- [x] Refactor `CST_FILES_SCHEMA` to use canonical file identity fields
+- [x] Refactor `SCIP_INDEX_SCHEMA` to use canonical file identity fields
 - [ ] Refactor nested struct types to use `file_identity_fields_for_nesting()`
 - [ ] Run ast-grep to verify reduction in direct definitions
 - [ ] Add unit tests for canonical functions
@@ -1847,6 +1781,8 @@ YAML
 ---
 
 ## 4. View Builder DSL
+
+**Status (2026-01-30): Partial.** `view_spec.py`, `view_specs_catalog.py`, and `views/dsl.py` are implemented, but `views/registry.py` still relies on `_VIEW_SELECT_EXPRS`.
 
 ### Problem Statement
 `_VIEW_SELECT_EXPRS` in `src/datafusion_engine/views/registry.py` contains **3,256 lines** of static view select expressions. Each view manually defines column selections that are **80% identical patterns** (file_id, path, aliasing, type casting).
@@ -1988,9 +1924,10 @@ VIEW_SPECS: tuple[ViewProjectionSpec, ...] = (
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/datafusion_engine/views/view_spec.py` | ViewProjectionSpec DSL |
-| Modify | `src/datafusion_engine/views/registry.py` | Replace `_VIEW_SELECT_EXPRS` with spec-driven generation |
-| Modify | `src/datafusion_engine/views/builder.py` | Use ViewProjectionSpec |
+| Create | `src/datafusion_engine/views/view_spec.py` | ViewProjectionSpec DSL (implemented) |
+| Create | `src/datafusion_engine/views/view_specs_catalog.py` | Spec catalog + generator (implemented) |
+| Create | `src/datafusion_engine/views/dsl.py` | Expression DSL helpers (implemented) |
+| Modify | `src/datafusion_engine/views/registry.py` | (Remaining) replace `_VIEW_SELECT_EXPRS` with generator |
 
 ### ast-grep Recipes
 
@@ -2040,11 +1977,11 @@ ast-grep run -p '_VIEW_SELECT_EXPRS' -l python src/datafusion_engine/views/
 ```
 
 ### Implementation Checklist
-- [ ] Create `ViewProjectionSpec` dataclass with common patterns
-- [ ] Create `ColumnTransform` for custom transformations
-- [ ] Implement `to_exprs()` method for expression generation
-- [ ] Create `VIEW_SPECS` registry replacing `_VIEW_SELECT_EXPRS`
-- [ ] Convert 40+ views to spec format
+- [x] Create `ViewProjectionSpec` dataclass with common patterns
+- [x] Create `ColumnTransform` for custom transformations
+- [x] Implement `to_exprs()` method for expression generation
+- [x] Create `VIEW_SPECS` registry (catalog implemented in `view_specs_catalog.py`)
+- [x] Convert 40+ views to spec format
 - [ ] Update view registration to use specs
 - [ ] Verify all views produce identical schemas
 - [ ] Add unit tests comparing spec-generated vs original expressions
@@ -2055,7 +1992,101 @@ ast-grep run -p '_VIEW_SELECT_EXPRS' -l python src/datafusion_engine/views/
 
 ---
 
+## 4b. DataFusion DataFrame View Registration (Spec-Driven)
+
+**Status (2026-01-31): Not complete.** View specs exist but registry still uses manual `_VIEW_SELECT_EXPRS`.
+
+### Goal
+Make **DataFusion DataFrame expressions** the single mechanism for view creation.  
+No SQL strings, no Rust LogicalPlan front‑end, no manual `_VIEW_SELECT_EXPRS`.
+
+### Rationale (Design Phase)
+- We already have **DataFrame‑native view specs** (`ViewProjectionSpec` + `view_specs_catalog.py`).
+- `register_view_specs` + `ViewGraph` already supports **DataFrame builders** with lineage + UDF validation.
+- This eliminates the manual registry dict and reduces ambiguity about “how views are built.”
+
+---
+
+### Current State
+- `views/registry.py` owns a giant `_VIEW_SELECT_EXPRS` dict plus special‑case builders.
+- `views/view_spec.py` + `views/view_specs_catalog.py` can generate expressions but **aren’t wired** to registry.
+- `views/dsl.py` / `views/dsl_views.py` exist but are **unused prototypes**.
+
+---
+
+### Target Architecture
+1. **Single source of truth** for view projection expressions:
+   - `ViewProjectionSpec` (data‑driven) + `view_specs_catalog.generate_view_select_exprs()`.
+2. **Registry builds DataFrame views from specs**:
+   - Registry maps view name → `ViewProjectionSpec` → DataFrame builder → `ViewSpec`.
+3. **Special‑case builders remain** only for:
+   - map_entries/map_keys/map_values attrs views
+   - CST span unnest views
+   - UDF‑dependent manual expressions (stable_id, prefixed_hash64, span_make, etc.)
+
+---
+
+### Target Implementation Sketch
+
+**Spec‑driven view builder (registry):**
+```python
+from datafusion_engine.views.view_specs_catalog import VIEW_SPECS_BY_NAME
+
+
+def _spec_view_df(ctx: SessionContext, *, name: str) -> DataFrame:
+    spec = VIEW_SPECS_BY_NAME.get(name)
+    if spec is None:
+        msg = f"Unknown view spec: {name!r}."
+        raise KeyError(msg)
+    base_df = ctx.table(spec.base_table)
+    if spec.unnest_column is not None:
+        base_df = base_df.unnest_columns(spec.unnest_column)
+    return base_df.select(*spec.to_exprs())
+```
+
+**Registry replaces manual dict:**
+```python
+from datafusion_engine.views.view_specs_catalog import generate_view_select_exprs
+
+_VIEW_SELECT_EXPRS: dict[str, tuple[Expr, ...]] = generate_view_select_exprs()
+```
+
+---
+
+### Target File List
+| Action | File | Description |
+|--------|------|-------------|
+| Modify | `src/datafusion_engine/views/registry.py` | Replace `_VIEW_SELECT_EXPRS` with spec‑generated expressions; add `_spec_view_df` builder. |
+| Modify | `src/datafusion_engine/views/registry.py` | Use spec‑driven builders for registry view specs (via `registry_view_specs`). |
+| Modify | `src/datafusion_engine/views/view_specs_catalog.py` | Ensure `VIEW_SPECS` coverage + `generate_view_select_exprs` is complete. |
+| Modify | `src/datafusion_engine/session/runtime.py` | Ensure view registration uses spec‑based builders (no legacy paths). |
+| Delete | `src/datafusion_engine/views/dsl.py` | Prototype DSL (unused after spec‑driven registry). |
+| Delete | `src/datafusion_engine/views/dsl_views.py` | Prototype DSL builders (unused). |
+
+---
+
+### Decommissioning & Deletion Scope
+- Delete `_VIEW_SELECT_EXPRS` manual map in `views/registry.py`.
+- Delete **duplicated span helpers** in `views/registry.py` once `view_spec.py` is canonical.
+- Remove **DSL prototype files** (`dsl.py`, `dsl_views.py`).
+- Remove any legacy fallback path that creates `ViewSpec` from manual expression dicts.
+
+---
+
+### Implementation Checklist
+- [ ] Wire registry to `VIEW_SPECS_BY_NAME` + `generate_view_select_exprs()`
+- [ ] Add `_spec_view_df` builder (spec → DataFrame)
+- [ ] Ensure `registry_view_specs()` uses spec builder for all spec‑backed views
+- [ ] Keep only necessary special‑case builders (map_entries/keys/values, CST span unnest, UDF‑dependent manual views)
+- [ ] Delete `_VIEW_SELECT_EXPRS` manual dict
+- [ ] Delete `views/dsl.py` and `views/dsl_views.py`
+- [ ] Run end‑to‑end view registration smoke (view graph + UDF snapshot)
+
+---
+
 ## 5. Node Family Spec Defaults
+
+**Status (2026-01-30): Complete.** Defaults implemented in `src/cpg/spec_registry.py` via `NodeFamily` fallbacks.
 
 ### Problem Statement
 35+ `EntityFamilySpec` instances in `spec_registry.py` have **90% identical** column specifications. Almost all use `path_cols=("path",)`, `bstart_cols=("bstart",)`, `bend_cols=("bend",)`, `file_id_cols=("file_id",)`.
@@ -2193,9 +2224,9 @@ ast-grep run -p 'EntityFamilySpec(' -l python src/cpg/spec_registry.py
 ```
 
 ### Implementation Checklist
-- [ ] Add default values to `EntityFamilySpec` fields
-- [ ] Remove explicit default values from 30+ spec instances
-- [ ] Keep explicit overrides only for non-standard cases (3-4 specs)
+- [x] Add default values to `EntityFamilySpec` fields
+- [x] Remove explicit default values from 30+ spec instances
+- [x] Keep explicit overrides only for non-standard cases (3-4 specs)
 - [ ] Verify all node/edge/property generation produces identical results
 - [ ] Run tests to ensure no behavioral changes
 
@@ -2210,12 +2241,14 @@ ast-grep run -p 'EntityFamilySpec(' -l python src/cpg/spec_registry.py
 
 ## 6. Extraction Row Builder
 
+**Status (2026-01-30): Partial.** `ExtractionRowBuilder` exists in `src/extract/row_builder.py` with identity/span helpers (used by coordination context), but extractors still construct rows manually and schema-validation builders are not implemented.
+
 ### Problem Statement
 Each extractor manually constructs rows as dictionaries with explicit field enumeration. There's no validation against schemas at extraction time, causing late error detection.
 
 ### Current State
 ```python
-# src/extract/ast_extract.py
+# src/extract/extractors/ast_extract.py
 def _ast_row_from_walk(
     file_ctx: FileContext,
     *,
@@ -2245,89 +2278,37 @@ def _ast_row_from_walk(
 
 ### Target Implementation
 ```python
-# src/extract/row_builder.py
+# src/extract/row_builder.py (implemented)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import pyarrow as pa
-    from extract.coordination.context import FileContext
 
 
 @dataclass(frozen=True)
-class RowBuildError:
-    """Error encountered during row construction."""
+class ExtractionRowBuilder:
+    """Build extraction rows with consistent file identity and span handling."""
 
-    field_name: str
-    message: str
+    file_id: str
+    path: str
+    file_sha256: str | None = None
+    repo_id: str | None = None
 
-
-class ExtractorRowBuilder:
-    """Schema-reflective row builder for extraction outputs.
-
-    Validates row construction against inferred schema at build time,
-    catching schema drift errors during extraction rather than at
-    materialization.
-    """
-
-    def __init__(self, schema: pa.Schema, *, strict: bool = False) -> None:
-        self.schema = schema
-        self.strict = strict
-        self._field_names = frozenset(f.name for f in schema)
-        self._required_fields = frozenset(
-            f.name for f in schema if not f.nullable
+    @classmethod
+    def from_file_context(cls, file_ctx: FileContext, *, repo_id: str | None = None) -> ExtractionRowBuilder:
+        return cls(
+            file_id=file_ctx.file_id,
+            path=file_ctx.path,
+            file_sha256=file_ctx.file_sha256,
+            repo_id=repo_id,
         )
 
-    def from_file_context(
-        self,
-        file_ctx: FileContext,
-        nested_rows: Mapping[str, Sequence[Mapping[str, object]]],
-        *,
-        extras: Mapping[str, object] | None = None,
-    ) -> dict[str, object] | tuple[dict[str, object], list[RowBuildError]]:
-        """Build row from file context and nested collections."""
-        errors: list[RowBuildError] = []
-        row: dict[str, object] = {}
+    def add_identity(self) -> dict[str, str | None]:
+        return {"file_id": self.file_id, "path": self.path, "file_sha256": self.file_sha256}
 
-        # File identity (auto-populated from context)
-        for field_name in ("file_id", "path", "file_sha256", "repo"):
-            if field_name in self._field_names:
-                value = getattr(file_ctx, field_name, None)
-                if value is not None or field_name not in self._required_fields:
-                    row[field_name] = value
-                elif self.strict:
-                    errors.append(RowBuildError(field_name, "Required field missing"))
-
-        # Nested collections
-        for field_name, nested_list in nested_rows.items():
-            if field_name in self._field_names:
-                row[field_name] = list(nested_list)
-            elif self.strict:
-                errors.append(RowBuildError(field_name, f"Unexpected field: {field_name}"))
-
-        # Extras
-        if extras:
-            for field_name, value in extras.items():
-                if field_name in self._field_names:
-                    row[field_name] = value
-
-        return row if not errors else (row, errors)
-
-
-# Factory for getting builders
-_BUILDER_CACHE: dict[str, ExtractorRowBuilder] = {}
-
-
-def row_builder_for_dataset(name: str) -> ExtractorRowBuilder:
-    """Get cached row builder for a dataset."""
-    if name not in _BUILDER_CACHE:
-        from extract.registry import dataset_schema
-        schema = dataset_schema(name)
-        _BUILDER_CACHE[name] = ExtractorRowBuilder(schema)
-    return _BUILDER_CACHE[name]
+    def build_row(self, *, include_repo: bool = False, **fields: object) -> dict[str, object]:
+        row = {"repo": self.repo_id, **self.add_identity()} if include_repo else dict(self.add_identity())
+        row.update(fields)
+        return row
 ```
 
 ### Delta CDF Integration (Optional)
@@ -2337,11 +2318,11 @@ def row_builder_for_dataset(name: str) -> ExtractorRowBuilder:
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/extract/row_builder.py` | ExtractorRowBuilder class |
-| Modify | `src/extract/ast_extract.py` | Use row builder |
-| Modify | `src/extract/cst_extract.py` | Use row builder |
-| Modify | `src/extract/bytecode_extract.py` | Use row builder |
-| Modify | `src/extract/symtable_extract.py` | Use row builder |
+| Create | `src/extract/row_builder.py` | `ExtractionRowBuilder` + helpers (implemented) |
+| Modify | `src/extract/extractors/ast_extract.py` | Use row builder (remaining) |
+| Modify | `src/extract/extractors/cst_extract.py` | Use row builder (remaining) |
+| Modify | `src/extract/extractors/bytecode_extract.py` | Use row builder (remaining) |
+| Modify | `src/extract/extractors/symtable_extract.py` | Use row builder (remaining) |
 
 ### ast-grep Recipes
 
@@ -2383,14 +2364,15 @@ ast-grep run -p 'builder.from_file_context($$$)' -l python src/extract/
 ```
 
 ### Implementation Checklist
-- [ ] Create `ExtractorRowBuilder` class with schema validation
-- [ ] Implement `from_file_context()` method
-- [ ] Add `row_builder_for_dataset()` factory
+- [x] Create `ExtractionRowBuilder` class with identity/span helpers
+- [x] Implement `from_file_context()` method
+- [x] Implement `build_row()` / `build_row_with_span()` helpers
+- [ ] Add schema-validation builder variant (optional extension)
 - [ ] Refactor `_ast_row_from_walk()` to use builder
 - [ ] Refactor CST row construction to use builder
 - [ ] Refactor bytecode row construction to use builder
 - [ ] Refactor symtable row construction to use builder
-- [ ] Add unit tests for row builder validation
+- [ ] Add unit tests for row builder usage/validation
 
 ### Decommissioning List
 - Remove manual `file_id`, `path`, `file_sha256`, `repo` assignments from 5+ extractors
@@ -2399,6 +2381,8 @@ ast-grep run -p 'builder.from_file_context($$$)' -l python src/extract/
 ---
 
 ## 7. Evidence Metadata Normalization
+
+**Status (2026-01-30): Partial.** Evidence metadata bundles exist in `schema_spec/evidence_metadata.py` and normalization helpers in `normalize/evidence_specs.py`, but join key inference from evidence coordinate systems is not yet implemented.
 
 ### Problem Statement
 Join keys are manually specified per dataset when they could be derived from evidence metadata. The `EvidenceMetadataSpec.coordinate_system` field indicates the span semantics but isn't used to infer join keys.
@@ -2519,6 +2503,7 @@ ast-grep run -p 'join_keys=(' -l python src/normalize/
 ```
 
 ### Implementation Checklist
+- [x] Evidence metadata bundle + normalize helpers implemented (`schema_spec/evidence_metadata.py`, `normalize/evidence_specs.py`)
 - [ ] Create `CoordinateSystem` enum
 - [ ] Create `COORDINATE_JOIN_KEYS` mapping
 - [ ] Implement `infer_join_keys_from_evidence()`
@@ -2535,46 +2520,61 @@ ast-grep run -p 'join_keys=(' -l python src/normalize/
 
 ## 8. Relationship Contract Spec Generator
 
+**Status (2026-01-30): Partial.** Contract generation is data-driven in `schema_spec/relationship_specs.py`, and a spec-driven generator exists in `src/cpg/relationship_contracts.py`, but the runtime contract registry has not been consolidated onto a single source of truth.
+
 ### Problem Statement
 Relationship contract specs in `relationship_specs.py` follow **identical patterns**. All 5 relationships have the same tie-breakers, same virtual fields, and predictable dedupe keys (only entity key varies).
 
-### Current State (280 lines)
+### Current State (data-driven generation in place)
 ```python
 # src/schema_spec/relationship_specs.py
-RELATIONSHIP_CONTRACT_SPECS: Mapping[str, ContractSpec] = {
-    "rel_name_symbol_v1": make_contract_spec(
-        table_spec=rel_name_symbol.table_spec,
+def generate_relationship_contract_entry(
+    data: RelationshipData,
+    spec: DatasetSpec,
+) -> ContractSpec:
+    return make_contract_spec(
+        table_spec=spec.table_spec,
         virtual=VirtualFieldSpec(fields=("origin",)),
         dedupe=DedupeSpecSpec(
-            keys=("ref_id", "symbol", "path", "bstart", "bend"),
-            tie_breakers=(
-                SortKeySpec(column="score", order="descending"),
-                SortKeySpec(column="confidence", order="descending"),
-                SortKeySpec(column="task_priority", order="ascending"),
-            ),
+            keys=_dedupe_keys_for_relationship(data),
+            tie_breakers=STANDARD_RELATIONSHIP_TIE_BREAKERS,
             strategy="KEEP_FIRST_AFTER_SORT",
         ),
-        canonical_sort=(
-            SortKeySpec(column="path", order="ascending"),
-            SortKeySpec(column="bstart", order="ascending"),
-            SortKeySpec(column="ref_id", order="ascending"),
-        ),
+        canonical_sort=_canonical_sort_for_relationship(data),
         version=RELATIONSHIP_SCHEMA_VERSION,
-    ),
-    # ... 4 more nearly identical specs
-}
+    )
+
+
+def relationship_contract_spec(ctx: SessionContext | None = None) -> ContractCatalogSpec:
+    contracts: dict[str, ContractSpec] = {}
+    for data in RELATIONSHIP_DATA:
+        spec = dataset_spec_from_context(ctx, data.table_name)
+        contracts[data.table_name] = generate_relationship_contract_entry(data, spec)
+    return ContractCatalogSpec(contracts=contracts)
 ```
 
 ### Target Implementation
 ```python
-# src/schema_spec/relationship_contract_generator.py
+# src/cpg/relationship_contracts.py (implemented)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING
+
+from cpg.relationship_specs import ALL_RELATIONSHIP_SPECS, QNameRelationshipSpec, RelationshipSpec
+from schema_spec.system import (
+    ContractCatalogSpec,
+    ContractSpec,
+    DedupeSpecSpec,
+    SortKeySpec,
+    VirtualFieldSpec,
+    make_contract_spec,
+)
+
+if TYPE_CHECKING:
+    from schema_spec.specs import TableSchemaSpec
 
 
-# Standard tie-breakers used by ALL relationship contracts
 STANDARD_RELATIONSHIP_TIE_BREAKERS: tuple[SortKeySpec, ...] = (
     SortKeySpec(column="score", order="descending"),
     SortKeySpec(column="confidence", order="descending"),
@@ -2583,39 +2583,23 @@ STANDARD_RELATIONSHIP_TIE_BREAKERS: tuple[SortKeySpec, ...] = (
 
 
 @dataclass(frozen=True)
-class RelationshipContractConfig:
-    """Minimal configuration for generating a relationship contract."""
-
-    name: str
-    entity_keys: tuple[str, ...]  # ("ref_id",), ("call_id", "qname_id"), etc.
-    table_spec_factory: Callable[[], TableSchemaSpec]
-
-    # Overrides (rarely needed)
+class RelationshipContractData:
+    table_name: str
+    entity_id_cols: tuple[str, ...]
     extra_dedupe_keys: tuple[str, ...] = ()
     custom_tie_breakers: tuple[SortKeySpec, ...] | None = None
 
 
-def generate_relationship_contract(
-    config: RelationshipContractConfig,
-) -> ContractSpec:
-    """Generate a relationship contract from minimal config."""
-    # Standard dedupe keys: entity_keys + standard relationship fields
-    dedupe_keys = config.entity_keys + ("symbol", "path", "bstart", "bend")
-    if config.extra_dedupe_keys:
-        dedupe_keys = dedupe_keys + config.extra_dedupe_keys
-
-    # Tie-breakers (use standard unless overridden)
+def generate_relationship_contract(config: RelationshipContractData) -> ContractSpec:
+    dedupe_keys = config.entity_id_cols + ("symbol", "path", "bstart", "bend") + config.extra_dedupe_keys
     tie_breakers = config.custom_tie_breakers or STANDARD_RELATIONSHIP_TIE_BREAKERS
-
-    # Canonical sort: path, bstart, then entity keys
     canonical_sort = (
         SortKeySpec(column="path", order="ascending"),
         SortKeySpec(column="bstart", order="ascending"),
-        *(SortKeySpec(column=k, order="ascending") for k in config.entity_keys),
+        *(SortKeySpec(column=k, order="ascending") for k in config.entity_id_cols),
     )
-
     return make_contract_spec(
-        table_spec=config.table_spec_factory(),
+        table_spec=_resolve_table_spec(config.table_name),
         virtual=VirtualFieldSpec(fields=("origin",)),
         dedupe=DedupeSpecSpec(
             keys=dedupe_keys,
@@ -2627,48 +2611,20 @@ def generate_relationship_contract(
     )
 
 
-# Minimal config registry (replaces 280 lines with ~30)
-RELATIONSHIP_CONTRACT_CONFIGS: tuple[RelationshipContractConfig, ...] = (
-    RelationshipContractConfig(
-        name="rel_name_symbol_v1",
-        entity_keys=("ref_id",),
-        table_spec_factory=lambda: rel_name_symbol.table_spec,
-    ),
-    RelationshipContractConfig(
-        name="rel_import_symbol_v1",
-        entity_keys=("import_alias_id",),
-        table_spec_factory=lambda: rel_import_symbol.table_spec,
-    ),
-    RelationshipContractConfig(
-        name="rel_def_symbol_v1",
-        entity_keys=("def_id",),
-        table_spec_factory=lambda: rel_def_symbol.table_spec,
-    ),
-    RelationshipContractConfig(
-        name="rel_callsite_symbol_v1",
-        entity_keys=("call_id",),
-        table_spec_factory=lambda: rel_callsite_symbol.table_spec,
-    ),
-    RelationshipContractConfig(
-        name="rel_callsite_qname_v1",
-        entity_keys=("call_id", "qname_id"),
-        table_spec_factory=lambda: rel_callsite_qname.table_spec,
-    ),
-)
-
-
-# Generated registry
-RELATIONSHIP_CONTRACT_SPECS: Mapping[str, ContractSpec] = {
-    config.name: generate_relationship_contract(config)
-    for config in RELATIONSHIP_CONTRACT_CONFIGS
-}
+def contract_catalog_from_specs() -> ContractCatalogSpec:
+    contracts = {
+        spec.output_view_name: generate_relationship_contract(contract_data_from_spec(spec))
+        for spec in ALL_RELATIONSHIP_SPECS
+    }
+    return ContractCatalogSpec(contracts=contracts)
 ```
 
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/schema_spec/relationship_contract_generator.py` | Generator + configs |
-| Modify | `src/schema_spec/relationship_specs.py` | Use generated contracts |
+| Create | `src/cpg/relationship_contracts.py` | Spec-driven contract generator (implemented) |
+| Modify | `src/schema_spec/relationship_specs.py` | Already data-driven; consolidate with CPG generator (remaining) |
+| Modify | `src/relspec/contracts.py` | Wire chosen generator into runtime contracts (remaining) |
 
 ### ast-grep Recipes
 
@@ -2687,7 +2643,8 @@ ast-grep run -p 'make_contract_spec(' -l python src/schema_spec/relationship_spe
 **Verification:**
 ```bash
 # After refactor, verify generator usage
-ast-grep run -p 'generate_relationship_contract($$$)' -l python src/schema_spec/
+ast-grep run -p 'generate_relationship_contract($$$)' -l python src/cpg/
+ast-grep run -p 'generate_relationship_contract_entry($$$)' -l python src/schema_spec/
 
 # Find any remaining manual contract creation
 ast-grep run -p 'make_contract_spec(' -l python src/schema_spec/relationship_specs.py
@@ -2699,25 +2656,27 @@ ast-grep run -p 'make_contract_spec(' -l python src/schema_spec/relationship_spe
 **Discovery:**
 ```bash
 # Find contract spec usages
-./scripts/cq calls RELATIONSHIP_CONTRACT_SPECS --root .
+./scripts/cq calls relationship_contract_spec --root .
+./scripts/cq calls contract_catalog_from_specs --root .
 
 # Analyze make_contract_spec patterns
 ./scripts/cq calls make_contract_spec --root .
 ```
 
 ### Implementation Checklist
-- [ ] Create `STANDARD_RELATIONSHIP_TIE_BREAKERS` constant
-- [ ] Create `RelationshipContractConfig` dataclass
-- [ ] Implement `generate_relationship_contract()` function
-- [ ] Create `RELATIONSHIP_CONTRACT_CONFIGS` registry
-- [ ] Generate `RELATIONSHIP_CONTRACT_SPECS` from configs
+- [x] Create `STANDARD_RELATIONSHIP_TIE_BREAKERS` constant
+- [x] Create `RelationshipContractData` dataclass
+- [x] Implement `generate_relationship_contract()` function
+- [x] Generate contracts from `ALL_RELATIONSHIP_SPECS`
+- [ ] Consolidate contract generation (pick schema_spec vs cpg as source of truth)
+- [ ] Wire generator into runtime contract registry
 - [ ] Verify generated contracts match original specs
 - [ ] Add unit tests comparing generated vs original
 
 ### Decommissioning List
-- Remove 5 manual `make_contract_spec()` calls (~280 lines)
-- Replace with 5 config lines (~30 lines) + generator (~50 lines)
-- Estimated reduction: 200 lines
+- Remove remaining manual contract definitions once generator is wired
+- Consolidate duplicate generators (schema_spec vs cpg)
+- Estimated reduction: 200 lines + simplified maintenance
 
 ---
 
@@ -2874,114 +2833,59 @@ ast-grep run -p 'information_schema.columns' -l python src/
 
 ## 10. Nested Type Builder Framework
 
+**Status (2026-01-30): Partial.** `src/schema_spec/nested_types.py` provides the builder utilities, but `schema/registry.py` still defines nested structs manually.
+
 ### Problem Statement
 Nested struct types (AST_NODE_T, CST_REF_T, etc.) are manually defined with repeated patterns. These could be built programmatically from field templates.
 
 ### Target Implementation
 ```python
-# src/schema_spec/nested_types.py
+# src/schema_spec/nested_types.py (implemented)
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 import pyarrow as pa
 
 
-@dataclass(frozen=True)
-class NestedTypeTemplate:
-    """Template for building nested struct types."""
+@dataclass
+class NestedTypeBuilder:
+    """Fluent builder for nested Arrow types."""
 
-    name: str
-    base_bundles: tuple[str, ...]  # "file_identity", "span", "provenance"
-    additional_fields: tuple[pa.Field, ...]
+    fields: list[pa.Field] = field(default_factory=list)
 
+    def add_field(self, name: str, dtype: pa.DataType, *, nullable: bool = True) -> NestedTypeBuilder:
+        self.fields.append(pa.field(name, dtype, nullable=nullable))
+        return self
 
-def build_nested_type(template: NestedTypeTemplate) -> pa.StructType:
-    """Build a struct type from a template."""
-    fields: list[pa.Field] = []
+    def add_struct(self, name: str, builder: NestedTypeBuilder, *, nullable: bool = True) -> NestedTypeBuilder:
+        self.fields.append(pa.field(name, builder.build_struct(), nullable=nullable))
+        return self
 
-    for bundle_name in template.base_bundles:
-        bundle_fields = _get_bundle_fields(bundle_name)
-        fields.extend(bundle_fields)
-
-    fields.extend(template.additional_fields)
-
-    return pa.struct(fields)
+    def build_struct(self) -> pa.StructType:
+        return pa.struct(self.fields)
 
 
-BUNDLE_FIELDS_CACHE: dict[str, tuple[pa.Field, ...]] = {}
+def span_struct_builder() -> NestedTypeBuilder:
+    builder = NestedTypeBuilder()
+    builder.add_field("start_line", pa.int32())
+    builder.add_field("start_col", pa.int32())
+    builder.add_field("end_line", pa.int32())
+    builder.add_field("end_col", pa.int32())
+    builder.add_field("byte_start", pa.int64())
+    builder.add_field("byte_len", pa.int64())
+    return builder
 
 
-def _get_bundle_fields(bundle_name: str) -> tuple[pa.Field, ...]:
-    """Get fields for a named bundle."""
-    cached = BUNDLE_FIELDS_CACHE.get(bundle_name)
-    if cached is not None:
-        return cached
-    match bundle_name:
-        case "file_identity":
-            fields = file_identity_fields_for_nesting()
-        case "span":
-            fields = span_fields()
-        case "provenance":
-            fields = provenance_fields()
-        case "attrs":
-            fields = (_attrs_field(),)
-        case _:
-            fields = ()
-    BUNDLE_FIELDS_CACHE[bundle_name] = fields
-    return fields
-
-
-# Registry of nested type templates
-NESTED_TYPE_TEMPLATES: dict[str, NestedTypeTemplate] = {
-    "ast_node": NestedTypeTemplate(
-        name="ast_node",
-        base_bundles=("span",),
-        additional_fields=(
-            pa.field("ast_id", pa.int32()),
-            pa.field("parent_ast_id", pa.int32()),
-            pa.field("kind", pa.string()),
-            pa.field("name", pa.string()),
-            pa.field("value", pa.string()),
-            _attrs_field(),
-        ),
-    ),
-    "cst_ref": NestedTypeTemplate(
-        name="cst_ref",
-        base_bundles=("file_identity", "span"),
-        additional_fields=(
-            pa.field("ref_id", pa.string()),
-            pa.field("ref_text", pa.string()),
-            pa.field("ref_kind", pa.string()),
-        ),
-    ),
-    # ... more templates
-}
-
-
-NESTED_TYPE_CACHE: dict[str, pa.StructType] = {}
-
-
-def get_nested_type(name: str) -> pa.StructType:
-    """Get a cached nested type by name."""
-    cached = NESTED_TYPE_CACHE.get(name)
-    if cached is not None:
-        return cached
-    template = NESTED_TYPE_TEMPLATES[name]
-    built = build_nested_type(template)
-    NESTED_TYPE_CACHE[name] = built
-    return built
-
-
-# Usage:
-AST_NODE_T = get_nested_type("ast_node")
-CST_REF_T = get_nested_type("cst_ref")
+def span_struct_type() -> pa.StructType:
+    return span_struct_builder().build_struct()
 ```
 
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/schema_spec/nested_types.py` | Nested type builder framework |
-| Modify | `src/datafusion_engine/schema/registry.py` | Use builder for nested types |
+| Create | `src/schema_spec/nested_types.py` | Nested type builder framework (implemented) |
+| Modify | `src/datafusion_engine/schema/registry.py` | Use builder for nested types (remaining) |
 
 ### ast-grep Recipes
 
@@ -2997,10 +2901,8 @@ ast-grep run -p '$NAME_T = pa.struct(' -l python src/datafusion_engine/schema/ -
 ```
 
 ### Implementation Checklist
-- [ ] Create `NestedTypeTemplate` dataclass
-- [ ] Implement `build_nested_type()` function
-- [ ] Create `NESTED_TYPE_TEMPLATES` registry
-- [ ] Implement `get_nested_type()` cached getter
+- [x] Create `NestedTypeBuilder` utilities in `schema_spec/nested_types.py`
+- [x] Implement builder helpers (structs, lists, maps) + span templates
 - [ ] Refactor `AST_NODE_T`, `CST_REF_T`, etc. to use builder
 - [ ] Verify type compatibility with existing code
 
@@ -3012,78 +2914,67 @@ ast-grep run -p '$NAME_T = pa.struct(' -l python src/datafusion_engine/schema/ -
 
 ## 11. Span Field Templating
 
+**Status (2026-01-30): Partial.** `src/schema_spec/span_fields.py` implements byte-span prefix helpers, but coordinate-system-aware span metadata templating (line/col, end_exclusive) is not implemented.
+
 ### Problem Statement
 Span field definitions repeat across schemas with different coordinate system configurations (line_base, col_unit, end_exclusive). These could be templated from evidence metadata.
 
 ### Target Implementation
 ```python
-# src/schema_spec/span_templates.py
+# src/schema_spec/span_fields.py (implemented)
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Literal
+
 import pyarrow as pa
 
-
-@dataclass(frozen=True)
-class SpanFieldConfig:
-    """Configuration for span field generation."""
-
-    line_base: int = 1        # AST=1, SCIP=0
-    col_unit: str = "byte"    # "byte", "utf32", "utf16"
-    end_exclusive: bool = True
-    include_metadata: bool = True
+from datafusion_engine.arrow import interop
+from schema_spec.field_spec import FieldSpec
 
 
-SPAN_CONFIGS_BY_EVIDENCE: dict[str, SpanFieldConfig] = {
-    "ast": SpanFieldConfig(line_base=1, col_unit="byte"),
-    "cst": SpanFieldConfig(line_base=1, col_unit="utf32"),
-    "scip": SpanFieldConfig(line_base=0, col_unit="utf32"),
-    "tree_sitter": SpanFieldConfig(line_base=1, col_unit="byte"),
-}
+SpanPrefix = Literal[
+    "",
+    "call_",
+    "name_",
+    "def_",
+    "stmt_",
+    "alias_",
+    "callee_",
+    "container_def_",
+    "owner_def_",
+]
 
-SPAN_FIELDS_CACHE: dict[str, tuple[pa.Field, ...]] = {}
+
+def span_field_names(prefix: SpanPrefix = "") -> tuple[str, str]:
+    normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
+    return (f"{normalized}bstart", f"{normalized}bend")
 
 
-def span_fields_for_evidence(evidence_family: str) -> tuple[pa.Field, ...]:
-    """Get span fields configured for an evidence family."""
-    cached = SPAN_FIELDS_CACHE.get(evidence_family)
-    if cached is not None:
-        return cached
-
-    config = SPAN_CONFIGS_BY_EVIDENCE.get(evidence_family, SpanFieldConfig())
-
-    metadata = {
-        b"line_base": str(config.line_base).encode(),
-        b"col_unit": config.col_unit.encode(),
-        b"end_exclusive": str(config.end_exclusive).encode(),
-    } if config.include_metadata else None
-
-    fields = (
-        pa.field("bstart", pa.int64(), nullable=True),
-        pa.field("bend", pa.int64(), nullable=True),
-        pa.field("start_line", pa.int32(), nullable=True, metadata=metadata),
-        pa.field("start_col", pa.int32(), nullable=True),
-        pa.field("end_line", pa.int32(), nullable=True),
-        pa.field("end_col", pa.int32(), nullable=True),
+def make_span_field_specs(prefix: SpanPrefix = "") -> tuple[FieldSpec, FieldSpec]:
+    bstart_name, bend_name = span_field_names(prefix)
+    return (
+        FieldSpec(name=bstart_name, dtype=interop.int64()),
+        FieldSpec(name=bend_name, dtype=interop.int64()),
     )
-    SPAN_FIELDS_CACHE[evidence_family] = fields
-    return fields
 
 
-def span_struct_for_evidence(evidence_family: str) -> pa.StructType:
-    """Get span as a struct type for nesting."""
-    fields = span_fields_for_evidence(evidence_family)
-    return pa.struct(fields)
+def make_span_pa_fields(prefix: SpanPrefix = "") -> tuple[pa.Field, pa.Field]:
+    bstart_name, bend_name = span_field_names(prefix)
+    return (
+        pa.field(bstart_name, pa.int64()),
+        pa.field(bend_name, pa.int64()),
+    )
 ```
 
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/schema_spec/span_templates.py` | Span field templating |
-| Modify | `src/datafusion_engine/schema/registry.py` | Use span templates |
+| Create | `src/schema_spec/span_fields.py` | Byte-span prefix helpers (implemented) |
+| Modify | `src/datafusion_engine/schema/registry.py` | Adopt span templates/metadata-driven spans (remaining) |
 
 ### Implementation Checklist
-- [ ] Create `SpanFieldConfig` dataclass
+- [x] Implement byte-span prefix helpers in `schema_spec/span_fields.py`
+- [ ] Create `SpanFieldConfig` dataclass for line/col metadata
 - [ ] Create `SPAN_CONFIGS_BY_EVIDENCE` registry
 - [ ] Implement `span_fields_for_evidence()` function
 - [ ] Implement `span_struct_for_evidence()` for nesting
@@ -3098,119 +2989,61 @@ def span_struct_for_evidence(evidence_family: str) -> pa.StructType:
 
 ## 12. Extraction Schema Derivation
 
+**Status (2026-01-30): Partial.** Derivation utilities exist in `src/extract/schema_derivation.py`, but `schema/registry.py` still uses hardcoded schemas and does not call the derivation flow.
+
 ### Problem Statement
 Extraction schemas in `registry.py` are **2,000+ lines** of literal definitions when they could be derived from the **SessionContext catalog** and extraction metadata. Per repo policy, schema authority should live in DataFusion’s catalog/information_schema, not a Python-side registry.
 
 ### Target Implementation
 ```python
-# src/datafusion_engine/schema/schema_derivation.py
+# src/extract/schema_derivation.py (implemented)
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 import pyarrow as pa
 
-from extract.metadata import extract_metadata
-from extract.templates import TEMPLATES
-from schema_spec.file_identity import file_identity_fields
-from schema_spec.span_templates import span_fields_for_evidence
-from schema_spec.nested_types import get_nested_type
-from datafusion_engine.session.schema_profile import create_session_context
-from datafusion_engine.session.helpers import register_schema_table
+from schema_spec.file_identity import file_identity_field_specs
+from schema_spec.specs import FieldBundle, FieldSpec, TableSchemaSpec
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
 
-def derive_extraction_schema(ctx: SessionContext, name: str) -> pa.Schema:
-    """Derive extraction schema from the SessionContext catalog.
+@dataclass
+class ExtractionSchemaBuilder:
+    """Fluent builder for extraction table schemas."""
 
-    Instead of hardcoding schemas, derive them from:
-    1. DataFusion catalog schema (if registered)
-    2. Extraction metadata + templates (if not registered)
-    3. Re-register and re-read schema through DataFusion
-    """
-    table_name = _resolve_extraction_table(ctx, name)
-    if table_name:
-        return ctx.table(table_name).schema()
+    _name: str
+    _version: int = 1
+    _bundles: list[FieldBundle] = field(default_factory=list)
+    _fields: list[FieldSpec] = field(default_factory=list)
 
-    metadata = extract_metadata(name)
-    evidence_family = _evidence_family_from_name(name)
-    template = TEMPLATES.get(evidence_family)
+    def with_file_identity(self, *, include_sha256: bool = True) -> ExtractionSchemaBuilder:
+        specs = file_identity_field_specs(include_sha256=include_sha256)
+        self._bundles.append(FieldBundle(name="file_identity", fields=specs))
+        return self
 
-    fields: list[pa.Field] = []
-
-    # File identity fields
-    fields.extend(file_identity_fields())
-
-    # Span fields based on coordinate system
-    if template and template.metadata_extra:
-        fields.extend(span_fields_for_evidence(evidence_family))
-
-    # Nested collections from metadata
-    for row_field in metadata.row_fields:
-        nested_type = _infer_nested_type(row_field, evidence_family)
-        fields.append(pa.field(row_field, pa.list_(nested_type), nullable=True))
-
-    # Extra fields
-    for extra_field in metadata.row_extras:
-        extra_type = _infer_extra_type(extra_field)
-        fields.append(pa.field(extra_field, extra_type, nullable=True))
-
-    schema = pa.schema(fields)
-    register_schema_table(ctx, name=name, schema=schema)
-    return ctx.table(name).schema()
+    def build(self) -> TableSchemaSpec:
+        return TableSchemaSpec(name=self._name, version=self._version, bundles=tuple(self._bundles))
 
 
-def _evidence_family_from_name(name: str) -> str:
-    """Extract evidence family from dataset name."""
-    # "ast_files_v1" -> "ast"
-    parts = name.split("_")
-    return parts[0] if parts else ""
-
-
-def _infer_nested_type(field_name: str, evidence_family: str) -> pa.DataType:
-    """Infer nested type for a collection field."""
-    type_map = {
-        "nodes": f"{evidence_family}_node",
-        "edges": f"{evidence_family}_edge",
-        "errors": "error",
-        "refs": f"{evidence_family}_ref",
-        "imports": f"{evidence_family}_import",
-        "calls": f"{evidence_family}_call",
-        "defs": f"{evidence_family}_def",
-    }
-    template_name = type_map.get(field_name)
-    if template_name:
-        with suppress(KeyError):
-            return get_nested_type(template_name)
-    return pa.string()  # Fallback
-
-
-def _infer_extra_type(field_name: str) -> pa.DataType:
-    """Infer type for extra fields."""
-    type_map = {
-        "attrs": pa.map_(pa.string(), pa.string()),
-        "parse_manifest": pa.list_(pa.struct([
-            pa.field("key", pa.string()),
-            pa.field("value", pa.string()),
-        ])),
-    }
-    return type_map.get(field_name, pa.string())
-
-
-# Replace hardcoded registry with derived schemas
-def get_extraction_schema(name: str) -> pa.Schema:
-    """Get extraction schema using a hardened SessionContext."""
-    ctx = create_session_context()
-    return derive_extraction_schema(ctx, name)
+def derive_extraction_schema(
+    extractor_name: str,
+    source_table: str,
+    *,
+    ctx: SessionContext,
+) -> pa.Schema:
+    """Derive a schema from a DataFusion source table + standard bundles."""
 ```
 
 ### Target File List
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `src/datafusion_engine/schema/schema_derivation.py` | Schema derivation from catalog + metadata |
-| Modify | `src/datafusion_engine/schema/registry.py` | Use derived schemas as primary source |
-| Modify | `src/datafusion_engine/session/helpers.py` | Add `register_schema_table()` helper |
+| Create | `src/extract/schema_derivation.py` | Extraction schema builder + `derive_extraction_schema()` (implemented) |
+| Modify | `src/datafusion_engine/schema/registry.py` | Use derived schemas as primary source (remaining) |
+| Modify | `src/datafusion_engine/session/runtime.py` | Expose schema registration helper (optional) |
 
 ### ast-grep Recipes
 
@@ -3247,13 +3080,10 @@ ast-grep run -p 'register_schema_table($$$)' -l python src/datafusion_engine/
 ```
 
 ### Implementation Checklist
-- [ ] Create `derive_extraction_schema()` function
-- [ ] Implement `_resolve_extraction_table()` to locate registered tables
-- [ ] Implement `_evidence_family_from_name()` helper
-- [ ] Implement `_infer_nested_type()` mapping
-- [ ] Implement `_infer_extra_type()` mapping
-- [ ] Add `register_schema_table()` helper and use it for schema registration
-- [ ] Create `get_extraction_schema()` that uses a hardened SessionContext
+- [x] Implement `ExtractionSchemaBuilder` and bundle composition helpers
+- [x] Create `derive_extraction_schema()` in `extract/schema_derivation.py`
+- [ ] Wire derivation into `schema/registry.py` as primary source
+- [ ] Expose/standardize schema registration helper (optional)
 - [ ] Verify derived schemas match legacy definitions (schema-by-schema diff)
 - [ ] Migrate primary usage to derived schemas
 - [ ] Remove legacy schema fallback once parity is verified

@@ -2,7 +2,7 @@
 
 ### Overview
 
-The Normalization and Scheduling subsystem transforms raw extraction outputs into canonical, queryable forms and orchestrates their execution through inference-driven dependency resolution. This architecture eliminates manual dependency declarations—the system automatically infers task dependencies by analyzing DataFusion plan artifacts using SQLGlot lineage extraction. The result is a bipartite task graph (tasks and evidence nodes) that drives generation-based parallel scheduling with column-level validation.
+The Normalization and Scheduling subsystem transforms raw extraction outputs into canonical, queryable forms and orchestrates their execution through inference-driven dependency resolution. This architecture eliminates manual dependency declarations—the system automatically infers task dependencies by analyzing DataFusion plan artifacts using DataFusion-native lineage extraction. The result is a bipartite task graph (tasks and evidence nodes) that drives generation-based parallel scheduling with column-level validation.
 
 At its core, this subsystem operates on a fundamental architectural principle: **dependencies are properties of the computation itself, not annotations developers must maintain**. When a view definition references `SELECT col1 FROM table_a`, the system extracts this dependency automatically from the compiled DataFusion plan. This inference-driven approach ensures schedules remain correct as queries evolve, prevents drift between declared and actual dependencies, and provides column-level precision for validation.
 
@@ -19,14 +19,14 @@ flowchart TB
     end
 
     subgraph "2. Plan Bundle Layer"
-        PB[Plan Bundle<br/>plan_bundle.py]
+        PB[Plan Bundle<br/>plan/bundle.py]
         OPT[Optimized Logical Plan]
         DF -->|"compile"| PB
         PB -->|"extract"| OPT
     end
 
     subgraph "3. Lineage Extraction"
-        LIN[Lineage Extractor<br/>lineage_datafusion.py]
+        LIN[Lineage Extractor<br/>lineage/datafusion.py]
         DEPS[InferredDeps<br/>inferred_deps.py]
         OPT -->|"walk plan"| LIN
         LIN -->|"table refs + columns"| DEPS
@@ -218,7 +218,7 @@ If `cst_nodes` evolves to add a `parent_id` column, the scheduler knows this tas
 
 #### Lineage Extraction from DataFusion Plans
 
-**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/lineage_datafusion.py` (lines 111-153)
+**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/lineage/datafusion.py` (lines 111-153)
 
 The `extract_lineage` function walks the optimized logical plan to extract table references, column requirements, and UDF dependencies:
 
@@ -293,7 +293,7 @@ The walker recursively descends into nested expressions (CASE, window functions,
 
 #### Plan Bundle Compilation
 
-**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/plan_bundle.py` (lines 134-169)
+**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/plan/bundle.py` (lines 105-143)
 
 A `DataFusionPlanBundle` is the canonical artifact for scheduling:
 
@@ -342,11 +342,11 @@ def infer_deps_from_plan_bundle(
     This is the preferred path for dependency inference, using DataFusion-native
     lineage extraction instead of SQLGlot parsing.
     """
-    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.lineage.datafusion import extract_lineage
 
     plan_bundle = inputs.plan_bundle
 
-    # Extract lineage from optimized logical plan
+    # Extract lineage from the optimized logical plan
     lineage = extract_lineage(
         plan_bundle.optimized_logical_plan,
         udf_snapshot=inputs.snapshot,
@@ -919,7 +919,7 @@ Tasks within a generation can execute in parallel.
 
 #### View Graph Registry
 
-**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/view_graph_registry.py`
+**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/views/graph.py`
 
 The view registry maps view names to `ViewNode` instances, which bundle:
 - View name
@@ -953,25 +953,9 @@ This decouples view definition (builders) from execution (plan bundles) and sche
 
 #### Dynamic View Registration
 
-**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/view_registry.py` (lines 172-300)
+**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/views/registry.py`
 
-Dynamic views are constructed programmatically for nested dataset access:
-
-**SCIP Symbol Flattening:**
-
-```python
-VIEW_SELECT_EXPRS: dict[str, tuple[Expr, ...]] = {
-    "scip_symbols": (
-        col("document_id"),
-        col("symbol"),
-        list_extract(map_extract(col("attrs"), "package"), 1).alias("package"),
-        list_extract(map_extract(col("attrs"), "version"), 1).alias("version"),
-        ...
-    ),
-}
-```
-
-These views flatten nested structs/maps into relational schemas, enabling SQL queries over hierarchical data.
+Dynamic views are constructed programmatically for nested dataset access. These views flatten nested structs/maps into relational schemas, enabling SQL queries over hierarchical data. The registry module manages view lifecycle, compilation, and integration with the task graph.
 
 ### Critical Design Patterns
 
@@ -1073,30 +1057,29 @@ Benefits:
 #### Critical Paths
 
 1. **View Definition to Schedule:**
-   - `src/normalize/df_view_builders.py:196-256` → Define `type_exprs_df_builder`
-   - `src/datafusion_engine/plan_bundle.py:134-169` → Compile to `DataFusionPlanBundle`
-   - `src/datafusion_engine/lineage_datafusion.py:111-153` → Extract lineage from optimized plan
+   - `src/normalize/df_view_builders.py` → Define view builders (e.g., `type_exprs_df_builder`)
+   - `src/datafusion_engine/plan/bundle.py:105-143` → Compile to `DataFusionPlanBundle`
+   - `src/datafusion_engine/lineage/datafusion.py:111-153` → Extract lineage from optimized plan
    - `src/relspec/inferred_deps.py:87-153` → Map to `InferredDeps`
-   - `src/relspec/rustworkx_graph.py:261-321` → Build task graph
-   - `src/relspec/rustworkx_schedule.py:36-98` → Generate schedule
+   - `src/relspec/rustworkx_graph.py:270-331` → Build task graph
+   - `src/relspec/rustworkx_schedule.py:61-134` → Generate schedule
 
 2. **Dependency Inference:**
-   - `src/datafusion_engine/lineage_datafusion.py:233-248` → Extract TableScan lineage
-   - `src/datafusion_engine/lineage_datafusion.py:278-300` → Extract expression column refs
-   - `src/relspec/inferred_deps.py:204-238` → Resolve types from registry
-   - `src/relspec/rustworkx_graph.py:1072-1124` → Attach to edges
+   - `src/datafusion_engine/lineage/datafusion.py` → Extract TableScan and expression lineage
+   - `src/relspec/inferred_deps.py` → Resolve types from registry
+   - `src/relspec/rustworkx_graph.py` → Attach requirements to edges
 
 3. **Validation Path:**
-   - `src/relspec/evidence.py:41-65` → Register contract in catalog
-   - `src/relspec/graph_edge_validation.py:112-165` → Validate edge requirements
-   - `src/relspec/rustworkx_schedule.py:69-77` → Filter invalid tasks
+   - `src/relspec/evidence.py` → Register contract in catalog
+   - `src/relspec/graph_edge_validation.py` → Validate edge requirements
+   - `src/relspec/rustworkx_schedule.py` → Filter invalid tasks
 
 #### Supporting Infrastructure
 
-- **Schema Specs:** `src/schema_spec/specs.py:113-275` → Declarative schema definitions
-- **Dataset Builders:** `src/normalize/dataset_builders.py:34-200` → Programmatic schema construction
-- **Plan Artifacts:** `src/datafusion_engine/plan_bundle.py:47-75` → Diagnostic metadata
-- **Task Diagnostics:** `src/relspec/rustworkx_graph.py:426-511` → Cycle detection, critical path
+- **Schema Specs:** `src/schema_spec/specs.py` → Declarative schema definitions
+- **Dataset Builders:** `src/normalize/dataset_builders.py` → Programmatic schema construction
+- **Plan Artifacts:** `src/datafusion_engine/plan/bundle.py` → Diagnostic metadata
+- **Task Diagnostics:** `src/relspec/rustworkx_graph.py` → Cycle detection, critical path
 
 ### Integration Points
 

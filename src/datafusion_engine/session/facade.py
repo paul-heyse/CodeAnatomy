@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from datafusion import DataFrame, SessionContext
@@ -18,7 +17,6 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.write import (
     WritePipeline,
     WriteRequest,
-    WriteResult,
     WriteViewRequest,
 )
 from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder, recorder_for_profile
@@ -28,14 +26,16 @@ from datafusion_engine.plan.bundle import (
     build_plan_bundle,
 )
 from datafusion_engine.plan.cache import PlanCacheEntry
-from datafusion_engine.plan.execution import replay_substrait_bytes
+from datafusion_engine.plan.result_types import (
+    ExecutionResult,
+    ExecutionResultKind,
+)
 from obs.otel.metrics import record_datafusion_duration, record_error, record_write_duration
 from obs.otel.scopes import SCOPE_DATAFUSION
 from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
-    from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scan import ScanUnit
@@ -92,171 +92,9 @@ def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle)
     _validate_required_rewrite_tags(snapshot, required_tags=bundle.required_rewrite_tags)
 
 
-class ExecutionResultKind(StrEnum):
-    """Execution result kind discriminator."""
-
-    DATAFRAME = "dataframe"
-    TABLE = "table"
-    READER = "reader"
-    WRITE = "write"
-
-
-@dataclass(frozen=True)
-class ExecutionResult:
-    """Unified execution result wrapper."""
-
-    kind: ExecutionResultKind
-    dataframe: DataFrame | None = None
-    table: TableLike | None = None
-    reader: RecordBatchReaderLike | None = None
-    write_result: WriteResult | None = None
-    plan_bundle: DataFusionPlanBundle | None = None
-
-    @staticmethod
-    def from_dataframe(
-        df: DataFrame,
-        *,
-        plan_bundle: DataFusionPlanBundle | None = None,
-    ) -> ExecutionResult:
-        """Wrap a DataFusion DataFrame.
-
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to wrap.
-        plan_bundle
-            Optional plan bundle for lineage tracking.
-
-        Returns
-        -------
-        ExecutionResult
-            Wrapped execution result.
-        """
-        return ExecutionResult(
-            kind=ExecutionResultKind.DATAFRAME,
-            dataframe=df,
-            plan_bundle=plan_bundle,
-        )
-
-    @staticmethod
-    def from_table(table: TableLike) -> ExecutionResult:
-        """Wrap a materialized table-like object.
-
-        Parameters
-        ----------
-        table
-            Materialized table-like object.
-
-        Returns
-        -------
-        ExecutionResult
-            Wrapped execution result.
-        """
-        return ExecutionResult(kind=ExecutionResultKind.TABLE, table=table)
-
-    @staticmethod
-    def from_reader(reader: RecordBatchReaderLike) -> ExecutionResult:
-        """Wrap a record batch reader.
-
-        Parameters
-        ----------
-        reader
-            Record batch reader to wrap.
-
-        Returns
-        -------
-        ExecutionResult
-            Wrapped execution result.
-        """
-        return ExecutionResult(kind=ExecutionResultKind.READER, reader=reader)
-
-    @staticmethod
-    def from_write(result: WriteResult) -> ExecutionResult:
-        """Wrap a write result.
-
-        Parameters
-        ----------
-        result
-            Write result to wrap.
-
-        Returns
-        -------
-        ExecutionResult
-            Wrapped execution result.
-        """
-        return ExecutionResult(kind=ExecutionResultKind.WRITE, write_result=result)
-
-    def require_dataframe(self) -> DataFrame:
-        """Return the DataFrame result or raise when missing.
-
-        Returns
-        -------
-        datafusion.DataFrame
-            DataFrame result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a DataFrame.
-        """
-        if self.dataframe is None:
-            msg = f"Execution result is not a dataframe: {self.kind}."
-            raise ValueError(msg)
-        return self.dataframe
-
-    def require_table(self) -> TableLike:
-        """Return the materialized table result or raise when missing.
-
-        Returns
-        -------
-        TableLike
-            Materialized table result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a table.
-        """
-        if self.table is None:
-            msg = f"Execution result is not a table: {self.kind}."
-            raise ValueError(msg)
-        return self.table
-
-    def require_reader(self) -> RecordBatchReaderLike:
-        """Return the record batch reader or raise when missing.
-
-        Returns
-        -------
-        RecordBatchReaderLike
-            Streaming reader for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a reader.
-        """
-        if self.reader is None:
-            msg = f"Execution result is not a reader: {self.kind}."
-            raise ValueError(msg)
-        return self.reader
-
-    def require_write(self) -> WriteResult:
-        """Return the write result or raise when missing.
-
-        Returns
-        -------
-        WriteResult
-            Write result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a write.
-        """
-        if self.write_result is None:
-            msg = f"Execution result is not a write result: {self.kind}."
-            raise ValueError(msg)
-        return self.write_result
+# NOTE: ExecutionResult and ExecutionResultKind were extracted to
+# datafusion_engine.plan.result_types to break the circular dependency.
+# They are imported and re-exported here for backward compatibility.
 
 
 @dataclass(frozen=True)
@@ -642,6 +480,9 @@ class DataFusionExecutionFacade:
             status="hit" if cached_entry is not None else "miss",
             source="substrait",
         )
+        # Lazy import to avoid circular dependency with execution.py
+        from datafusion_engine.plan.execution import replay_substrait_bytes
+
         try:
             df = replay_substrait_bytes(self.ctx, substrait_bytes)
         except (RuntimeError, TypeError, ValueError):

@@ -90,6 +90,7 @@ src = ["src","rust"]
 extend-exclude = ["docs/**", "tools/**"]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["PLR2004", "PLR6301", "PLC1901", "D103", "D100"]
 
 [tool.ruff.format]
 quote-style = "double"

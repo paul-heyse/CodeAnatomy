@@ -376,6 +376,15 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "log_counts": False,
         },
     ),
+    "file_line_index_v1": ExtractorConfigSpec(
+        extractor_name="file_line_index_v1",
+        defaults={
+            "repo_id": None,
+            "max_files": None,
+            "include_text": True,
+            "max_line_text_bytes": 10_000,
+        },
+    ),
 }
 
 _FLAG_DEFAULTS: dict[str, bool] = {
@@ -486,6 +495,8 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
             **base,
             "name": "file_line_index_v1",
             "fields": [
+                "file_id",
+                "path",
                 "line_no",
                 "line_start_byte",
                 "line_end_byte",

@@ -20,9 +20,28 @@ RELATION_VIEW_NAMES: Final[tuple[str, ...]] = (
     RELATION_OUTPUT_NAME,
 )
 
+# Semantic intermediate views (from semantics.naming canonical names)
+SCIP_OCCURRENCES_NORM_OUTPUT: Final[str] = "scip_occurrences_norm_v1"
+CST_REFS_NORM_OUTPUT: Final[str] = "cst_refs_norm_v1"
+CST_DEFS_NORM_OUTPUT: Final[str] = "cst_defs_norm_v1"
+CST_IMPORTS_NORM_OUTPUT: Final[str] = "cst_imports_norm_v1"
+CST_CALLS_NORM_OUTPUT: Final[str] = "cst_calls_norm_v1"
+
+SEMANTIC_INTERMEDIATE_VIEWS: Final[tuple[str, ...]] = (
+    SCIP_OCCURRENCES_NORM_OUTPUT,
+    CST_REFS_NORM_OUTPUT,
+    CST_DEFS_NORM_OUTPUT,
+    CST_IMPORTS_NORM_OUTPUT,
+    CST_CALLS_NORM_OUTPUT,
+)
+
 DEFAULT_REL_TASK_PRIORITY: Final[int] = 100
 
 __all__ = [
+    "CST_CALLS_NORM_OUTPUT",
+    "CST_DEFS_NORM_OUTPUT",
+    "CST_IMPORTS_NORM_OUTPUT",
+    "CST_REFS_NORM_OUTPUT",
     "DEFAULT_REL_TASK_PRIORITY",
     "RELATION_OUTPUT_NAME",
     "RELATION_VIEW_NAMES",
@@ -31,4 +50,6 @@ __all__ = [
     "REL_DEF_SYMBOL_OUTPUT",
     "REL_IMPORT_SYMBOL_OUTPUT",
     "REL_NAME_SYMBOL_OUTPUT",
+    "SCIP_OCCURRENCES_NORM_OUTPUT",
+    "SEMANTIC_INTERMEDIATE_VIEWS",
 ]

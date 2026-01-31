@@ -504,14 +504,14 @@ def build_cpg(ctx: SessionContext) -> None:
         "cst_imports_norm", "scip_occurrences",
         join_type="overlap", filter_sql="is_import = true", origin="cst_import",
     ))
-    ctx.register_view("rel_call_symbol", compiler.relate(
+    ctx.register_view("rel_callsite_symbol", compiler.relate(
         "cst_calls_norm", "scip_occurrences",
         join_type="overlap", origin="cst_call",
     ))
 
     # Stage 3: Build CPG outputs (Rule 8)
     ctx.register_view("cpg_edges", compiler.union_with_discriminator(
-        ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_call_symbol"],
+        ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_callsite_symbol"],
         discriminator="edge_kind",
     ))
     ctx.register_view("cpg_nodes", compiler.union_with_discriminator(

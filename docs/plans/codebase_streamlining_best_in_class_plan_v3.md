@@ -1472,7 +1472,7 @@ YAML
 - Remove `_relation_output_from_name()` (~10 lines) once call sites migrate
 - Remove `_relation_output_from_import()` (~10 lines) once call sites migrate
 - Remove `_relation_output_from_def()` (~10 lines) once call sites migrate
-- Remove `_relation_output_from_call_symbol()` (~10 lines) once call sites migrate
+- Remove `_relation_output_from_callsite_symbol()` (~10 lines) once call sites migrate
 - Remove `_relation_output_from_call_qname()` (~10 lines) once call sites migrate
 - **Estimated reduction: 180 lines → 80 lines of specs + 100 lines of generator = net 0, but maintainability improves; wrappers are optional**
 

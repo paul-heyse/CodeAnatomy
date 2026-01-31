@@ -5,11 +5,25 @@ outputs, using the declarative specs from cpg.relationship_specs.
 
 The public API functions delegate to the generic spec-based builders while
 maintaining backward compatibility with existing callers.
+
+.. deprecated::
+    This module is deprecated. Use :mod:`semantics.compiler.SemanticCompiler`
+    instead. Planned for removal in a future version.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
+
+# Deprecation: Remove this module in a future version once all callers
+# have migrated to semantics.compiler.SemanticCompiler.
+warnings.warn(
+    "relspec.relationship_datafusion is deprecated. "
+    "Use semantics.compiler.SemanticCompiler instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import pyarrow as pa
 from datafusion import col, lit

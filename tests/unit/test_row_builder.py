@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Unit tests for the extraction row builder module."""
 
 from __future__ import annotations

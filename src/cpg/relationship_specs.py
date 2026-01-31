@@ -3,13 +3,26 @@
 This module provides a DSL for defining relationship extraction specifications
 that capture the unique parameters for each relationship type while enabling
 a generic builder to construct the DataFusion DataFrames.
+
+.. deprecated::
+    This module is deprecated. Use :mod:`semantics.spec_registry.RELATIONSHIP_SPECS`
+    instead. Planned for removal in a future version.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
+
+# Deprecation: Remove this module in a future version once all callers
+# have migrated to semantics.spec_registry.RELATIONSHIP_SPECS.
+warnings.warn(
+    "cpg.relationship_specs is deprecated. Use semantics.spec_registry.RELATIONSHIP_SPECS instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from cpg.kind_catalog import (
     EDGE_KIND_PY_CALLS_QNAME,

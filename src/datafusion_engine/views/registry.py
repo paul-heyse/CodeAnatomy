@@ -28,6 +28,7 @@ from datafusion_engine.schema.registry import (
 )
 from datafusion_engine.udf.shims import (
     arrow_metadata,
+    col_to_byte,
     list_extract,
     map_entries,
     map_extract,
@@ -1742,6 +1743,7 @@ _VIEW_SELECT_EXPRS: dict[str, tuple[Expr, ...]] = {
         col("is_test").alias("is_test"),
         col("is_forward_definition").alias("is_forward_definition"),
     ),
+    "scip_occurrences_norm": (),
     "scip_signature_occurrences": (),
     "scip_symbol_information": (),
     "scip_symbol_relationships": (),
@@ -2558,6 +2560,88 @@ def _symtable_namespace_edges_df(ctx: SessionContext) -> DataFrame:
     )
 
 
+def _scip_occurrences_norm_df(ctx: SessionContext) -> DataFrame:
+    table_names = table_names_snapshot(ctx)
+    if "scip_occurrences" not in table_names:
+        msg = "Missing SCIP occurrences table 'scip_occurrences' for scip_occurrences_norm."
+        raise ValueError(msg)
+    if "file_line_index_v1" not in table_names:
+        msg = "Missing line index table 'file_line_index_v1' for scip_occurrences_norm."
+        raise ValueError(msg)
+    from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
+
+    snapshot = rust_udf_snapshot(ctx)
+    validate_required_udfs(snapshot, required=("col_to_byte",))
+
+    scip = _view_df(ctx, "scip_occurrences")
+    scip = scip.with_column("start_line_no", col("start_line") - col("line_base"))
+    scip = scip.with_column("end_line_no", col("end_line") - col("line_base"))
+
+    line_index = ctx.table("file_line_index_v1")
+    start_idx = line_index.select(
+        col("path").alias("start_path"),
+        col("line_no").alias("start_line_no"),
+        col("line_start_byte").alias("start_line_start_byte"),
+        col("line_text").alias("start_line_text"),
+    )
+    end_idx = line_index.select(
+        col("path").alias("end_path"),
+        col("line_no").alias("end_line_no"),
+        col("line_start_byte").alias("end_line_start_byte"),
+        col("line_text").alias("end_line_text"),
+    )
+
+    joined = scip.join(
+        start_idx,
+        join_keys=(
+            ["path", "start_line_no"],
+            ["start_path", "start_line_no"],
+        ),
+        how="left",
+        coalesce_duplicate_keys=True,
+    )
+    joined = joined.join(
+        end_idx,
+        join_keys=(
+            ["path", "end_line_no"],
+            ["end_path", "end_line_no"],
+        ),
+        how="left",
+        coalesce_duplicate_keys=True,
+    )
+
+    def _byte_offset(line_start: str, line_text: str, col_name: str) -> Expr:
+        base = _arrow_cast(col(line_start), "Int64")
+        char_col = _arrow_cast(col(col_name), "Int64")
+        offset = col_to_byte(col(line_text), char_col, col("col_unit"))
+        guard = (
+            col(line_start).is_null()
+            | col(line_text).is_null()
+            | col(col_name).is_null()
+            | col("col_unit").is_null()
+        )
+        return f.when(guard, _arrow_cast(lit(None), "Int64")).otherwise(base + offset)
+
+    df = joined.with_column(
+        "bstart",
+        _byte_offset("start_line_start_byte", "start_line_text", "start_char"),
+    )
+    df = df.with_column(
+        "bend",
+        _byte_offset("end_line_start_byte", "end_line_text", "end_char"),
+    )
+    return df.drop(
+        "start_line_no",
+        "end_line_no",
+        "start_path",
+        "end_path",
+        "start_line_start_byte",
+        "end_line_start_byte",
+        "start_line_text",
+        "end_line_text",
+    )
+
+
 def _empty_ts_ast_check_df(ctx: SessionContext) -> DataFrame:
     empty_schema = pa.schema(
         [
@@ -2870,6 +2954,7 @@ def _register_builder_map() -> MutableRegistry[str, Callable[[SessionContext], D
     builders.register("symtable_function_partitions", _symtable_function_partitions_df)
     builders.register("symtable_namespace_edges", _symtable_namespace_edges_df)
     builders.register("symtable_scope_edges", _symtable_scope_edges_df)
+    builders.register("scip_occurrences_norm", _scip_occurrences_norm_df)
     builders.register(
         "ts_ast_calls_check",
         partial(
@@ -2910,6 +2995,7 @@ _CUSTOM_VIEW_DEPENDENCIES: Final[ImmutableRegistry[str, tuple[str, ...]]] = (
     ImmutableRegistry.from_dict(
         {
             "python_imports": ("python_imports_v1", "ast_imports", "cst_imports", "ts_imports"),
+            "scip_occurrences_norm": ("scip_occurrences", "file_line_index_v1"),
             "symtable_namespace_edges": ("symtable_scopes", "symtable_symbols"),
             "ts_ast_calls_check": ("ts_calls", "ast_calls"),
             "ts_ast_defs_check": ("ts_defs", "ast_defs"),

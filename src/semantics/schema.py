@@ -12,8 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from semantics.column_types import ColumnType, TableType, infer_column_type, infer_table_type
 from semantics.config import SemanticConfig
-from semantics.types import ColumnType, TableType, infer_column_type, infer_table_type
 
 if TYPE_CHECKING:
     from datafusion import DataFrame
@@ -92,13 +92,14 @@ class SemanticSchema:
         resolved_config = config or SemanticConfig()
         overrides = resolved_config.overrides_for(table_name)
         column_types: dict[str, ColumnType] = {}
-
-        path_candidates: list[str] = []
-        span_start_candidates: list[str] = []
-        span_end_candidates: list[str] = []
-        entity_ids: list[str] = []
-        symbols: list[str] = []
-        texts: list[str] = []
+        candidates: dict[ColumnType, list[str]] = {
+            ColumnType.PATH: [],
+            ColumnType.SPAN_START: [],
+            ColumnType.SPAN_END: [],
+            ColumnType.ENTITY_ID: [],
+            ColumnType.SYMBOL: [],
+            ColumnType.TEXT: [],
+        }
 
         for fld in schema:
             col_name = fld.name
@@ -111,22 +112,21 @@ class SemanticSchema:
             column_types[col_name] = col_type
 
             # Collect candidates for semantic type resolution
-            if col_type == ColumnType.PATH:
-                path_candidates.append(col_name)
-            elif col_type == ColumnType.SPAN_START:
-                span_start_candidates.append(col_name)
-            elif col_type == ColumnType.SPAN_END:
-                span_end_candidates.append(col_name)
-            elif col_type == ColumnType.ENTITY_ID:
-                entity_ids.append(col_name)
-            elif col_type == ColumnType.SYMBOL:
-                symbols.append(col_name)
-            elif col_type == ColumnType.TEXT:
-                texts.append(col_name)
+            if col_type in candidates:
+                candidates[col_type].append(col_name)
 
-        path = path_candidates[0] if path_candidates else None
-        span_start = _pick_primary(span_start_candidates, prefer=("bstart", "byte_start"))
-        span_end = _pick_primary(span_end_candidates, prefer=("bend", "byte_end"))
+        path = candidates[ColumnType.PATH][0] if candidates[ColumnType.PATH] else None
+        span_start = _pick_primary(
+            candidates[ColumnType.SPAN_START],
+            prefer=("bstart", "byte_start"),
+        )
+        span_end = _pick_primary(
+            candidates[ColumnType.SPAN_END],
+            prefer=("bend", "byte_end"),
+        )
+        entity_ids = candidates[ColumnType.ENTITY_ID]
+        symbols = candidates[ColumnType.SYMBOL]
+        texts = candidates[ColumnType.TEXT]
 
         path = _apply_override(
             overrides,
@@ -223,7 +223,13 @@ class SemanticSchema:
         return len(self._entity_ids) > 0
 
     def _has_span_unit(self) -> bool:
-        """Check if schema has span unit metadata."""
+        """Check if schema has span unit metadata.
+
+        Returns
+        -------
+        bool
+            ``True`` when span unit metadata is present.
+        """
         return self._span_unit is not None
 
     def _has_symbol(self) -> bool:
@@ -308,7 +314,11 @@ class SemanticSchema:
         if not self._has_span_unit():
             msg = f"Table {table!r} does not declare a span unit."
             raise SemanticSchemaError(msg)
-        return self._span_unit
+        span_unit = self._span_unit
+        if span_unit is None:
+            msg = f"Table {table!r} does not declare a span unit."
+            raise SemanticSchemaError(msg)
+        return span_unit
 
     def _is_evidence(self) -> bool:
         """Check if schema qualifies as evidence table.
@@ -435,7 +445,13 @@ class SemanticSchema:
         return self._texts
 
     def _span_start_candidates(self) -> tuple[str, ...]:
-        """Return candidate span start columns in schema order."""
+        """Return candidate span start columns in schema order.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Span start column candidates.
+        """
         return tuple(
             name
             for name, col_type in self.column_types.items()
@@ -443,13 +459,25 @@ class SemanticSchema:
         )
 
     def _span_end_candidates(self) -> tuple[str, ...]:
-        """Return candidate span end columns in schema order."""
+        """Return candidate span end columns in schema order.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Span end column candidates.
+        """
         return tuple(
             name for name, col_type in self.column_types.items() if col_type == ColumnType.SPAN_END
         )
 
     def _has_ambiguous_span(self) -> bool:
-        """Return True when multiple span candidates exist."""
+        """Return True when multiple span candidates exist.
+
+        Returns
+        -------
+        bool
+            ``True`` when multiple span candidates exist.
+        """
         return len(self._span_start_candidates()) > 1 or len(self._span_end_candidates()) > 1
 
     def prefixed(self, prefix: str) -> SemanticSchema:

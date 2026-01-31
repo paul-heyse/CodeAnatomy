@@ -385,7 +385,7 @@ def build_rel_def_symbol(ctx: SessionContext) -> None:
 
 def build_cpg_edges(ctx: SessionContext) -> None:
     """Union all relationship tables into CPG edges."""
-    rel_tables = ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_call_symbol"]
+    rel_tables = ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_callsite_symbol"]
 
     # Load and tag each table
     dfs = []
@@ -412,7 +412,7 @@ def build_pipeline(ctx: SessionContext) -> None:
     build_rel_name_symbol(ctx)
     build_rel_def_symbol(ctx)
     build_rel_import_symbol(ctx)
-    build_rel_call_symbol(ctx)
+    build_rel_callsite_symbol(ctx)
 
     build_cpg_nodes(ctx)
     build_cpg_edges(ctx)

@@ -1,4 +1,26 @@
-"""Reusable Hamilton subDAGs for pipeline nodes."""
+"""Reusable Hamilton subDAGs for pipeline nodes.
+
+**EXECUTION AUTHORITY PATTERN**
+
+This module contains Hamilton subDAGs that **consume** semantic views registered
+by the view graph infrastructure. Hamilton does NOT re-register these views.
+
+The single source of truth for view registration is:
+- ``datafusion_engine.views.registry_specs._semantics_view_nodes()``
+
+Hamilton nodes here use ``source()`` to reference views that are already
+registered in the DataFusion session context via ``ensure_view_graph()``.
+This separation ensures:
+
+1. No duplicate view registration
+2. Clear ownership: View Graph owns registration, Hamilton owns execution
+3. Consistent schema contracts across both systems
+
+See Also
+--------
+datafusion_engine.views.registry_specs : View registration entry point.
+hamilton_pipeline.driver_factory.build_view_graph_context : View graph setup.
+"""
 
 from __future__ import annotations
 

@@ -187,10 +187,25 @@ class ViewGraphContext:
 def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
     """Build a view graph context from runtime configuration.
 
+    **EXECUTION AUTHORITY: VIEW GRAPH REGISTRATION**
+
+    This function ensures all semantic views are registered via the view graph
+    infrastructure BEFORE Hamilton execution begins. Hamilton nodes consume
+    these pre-registered views via ``source()`` inputs; they do NOT re-register.
+
+    The registration happens in ``ensure_view_graph()`` which delegates to
+    ``registry_specs.view_graph_nodes()`` - the single source of truth for
+    all view definitions including semantic views.
+
     Returns
     -------
     ViewGraphContext
         Resolved view graph context with runtime metadata.
+
+    See Also
+    --------
+    datafusion_engine.views.registry_specs._semantics_view_nodes : Semantic view registration.
+    hamilton_pipeline.modules.subdags : Hamilton consumer of semantic outputs.
     """
     runtime_profile_spec = resolve_runtime_profile(
         _runtime_profile_name(config),
@@ -202,6 +217,8 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     from datafusion_engine.views.registry_specs import view_graph_nodes
 
     session_runtime = profile.session_runtime()
+    # Single registration point: ensure_view_graph registers ALL views including
+    # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
     snapshot = ensure_view_graph(
         session_runtime.ctx,
         runtime_profile=profile,

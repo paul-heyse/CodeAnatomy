@@ -3,11 +3,24 @@
 This module provides the generic builder functions that use RelationshipSpec
 and QNameRelationshipSpec to construct DataFusion DataFrames, eliminating
 the need for copy-paste code in relationship_datafusion.py.
+
+.. deprecated::
+    This module is deprecated. Use :mod:`semantics.compiler.SemanticCompiler`
+    instead. Planned for removal in a future version.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
+
+# Deprecation: Remove this module in a future version once all callers
+# have migrated to semantics.compiler.SemanticCompiler.
+warnings.warn(
+    "cpg.relationship_builder is deprecated. Use semantics.compiler.SemanticCompiler instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from datafusion import col, lit
 from datafusion import functions as f

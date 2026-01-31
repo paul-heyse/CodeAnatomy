@@ -2,6 +2,9 @@
 
 This module provides FileContext, RepoFileRow, SpanSpec and related utilities
 that form the core identity and payload context for all extractors.
+
+The row building utilities delegate to the canonical implementations in
+``extract.row_builder`` for consistency across the extraction layer.
 """
 
 from __future__ import annotations
@@ -190,29 +193,34 @@ def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
 def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
     """Return the standard file identity columns for extractor rows.
 
+    Delegates to :class:`ExtractionRowBuilder` for canonical implementation.
+
     Returns
     -------
     dict[str, str | None]
         Row fragment with file_id, path, and file_sha256.
     """
-    return {
-        "file_id": file_ctx.file_id,
-        "path": file_ctx.path,
-        "file_sha256": file_ctx.file_sha256,
-    }
+    # Lazy import to avoid circular dependency
+    from extract.row_builder import ExtractionRowBuilder as _ExtractionRowBuilder
+
+    builder = _ExtractionRowBuilder.from_file_context(file_ctx)
+    return builder.add_identity()
 
 
 def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
     """Return map entries for nested Arrow map fields.
+
+    Delegates to :func:`make_attrs_list` for canonical implementation.
 
     Returns
     -------
     list[tuple[str, str]]
         List of key/value map entries.
     """
-    if not values:
-        return []
-    return [(str(key), str(val)) for key, val in values.items() if val is not None]
+    # Lazy import to avoid circular dependency
+    from extract.row_builder import make_attrs_list as _make_attrs_list
+
+    return _make_attrs_list(values)
 
 
 def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None:
@@ -244,23 +252,28 @@ def byte_span_dict(byte_start: int | None, byte_len: int | None) -> dict[str, in
 def span_dict(spec: SpanSpec) -> dict[str, object] | None:
     """Return a span dict for nested span structs.
 
+    Delegates to :func:`make_span_spec_dict` for canonical implementation.
+
     Returns
     -------
     dict[str, object] | None
         Span mapping or ``None`` when empty.
     """
-    start = pos_dict(spec.start_line0, spec.start_col)
-    end = pos_dict(spec.end_line0, spec.end_col)
-    byte_span = byte_span_dict(spec.byte_start, spec.byte_len)
-    if start is None and end is None and byte_span is None and spec.col_unit is None:
-        return None
-    return {
-        "start": start,
-        "end": end,
-        "end_exclusive": spec.end_exclusive,
-        "col_unit": spec.col_unit,
-        "byte_span": byte_span,
-    }
+    # Lazy import to avoid circular dependency
+    from extract.row_builder import SpanTemplateSpec as _SpanTemplateSpec
+    from extract.row_builder import make_span_spec_dict as _make_span_spec_dict
+
+    template_spec = _SpanTemplateSpec(
+        start_line0=spec.start_line0,
+        start_col=spec.start_col,
+        end_line0=spec.end_line0,
+        end_col=spec.end_col,
+        end_exclusive=spec.end_exclusive,
+        col_unit=spec.col_unit,
+        byte_start=spec.byte_start,
+        byte_len=spec.byte_len,
+    )
+    return _make_span_spec_dict(template_spec)
 
 
 def text_from_file_ctx(file_ctx: FileContext) -> str | None:

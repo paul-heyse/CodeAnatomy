@@ -141,6 +141,19 @@ class DedupeSpecSpec:
 
 
 @dataclass(frozen=True)
+class ContractRow:
+    """Lightweight contract configuration for dataset rows."""
+
+    dedupe: DedupeSpecSpec | None = None
+    canonical_sort: tuple[SortKeySpec, ...] = ()
+    version: int | None = None
+    constraints: tuple[str, ...] = ()
+    virtual_fields: tuple[str, ...] = ()
+    virtual_field_docs: dict[str, str] | None = None
+    validation: ArrowValidationOptions | None = None
+
+
+@dataclass(frozen=True)
 class TableSchemaContract:
     """Combine file and partition schema into a TableSchema contract.
 
@@ -1370,6 +1383,7 @@ __all__ = [
     "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractKwargs",
+    "ContractRow",
     "ContractSpec",
     "ContractSpecKwargs",
     "DataFusionScanOptions",

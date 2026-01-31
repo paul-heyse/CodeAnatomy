@@ -127,7 +127,7 @@ changed_settings = {
 #### Enable Substrait Validation
 
 ```python
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 profile = DataFusionRuntimeProfile(substrait_validation=True)
 # Plan bundle will include substrait validation payload
@@ -201,6 +201,8 @@ policy = DeltaStorePolicy(
     aws_region=None,
     storage_options={},
 )
+
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 profile = DataFusionRuntimeProfile(delta_store_policy=policy)
 ```
@@ -439,6 +441,8 @@ support = DeltaProtocolSupport(
 )
 
 # Set in runtime profile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
 profile = DataFusionRuntimeProfile(delta_protocol_support=support)
 ```
 

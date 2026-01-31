@@ -16,22 +16,17 @@ CodeAnatomy's runtime behavior is controlled through environment variables, conf
 
 ### DataFusionRuntimeProfile
 
-**File**: `src/datafusion_engine/runtime.py`
+**File**: `src/datafusion_engine/session/runtime.py`
 
-The `DataFusionRuntimeProfile` is the central configuration object for DataFusion execution sessions. It encapsulates all DataFusion SessionConfig settings, optimizer behavior, UDF policies, and Delta protocol support.
+The `DataFusionRuntimeProfile` is the central configuration class for DataFusion execution sessions. It encapsulates DataFusion SessionConfig settings, catalog configuration, external table registrations, optimizer behavior, and UDF policies. Unlike a simple dataclass, it is a rich configuration class with extensive fields for controlling session behavior.
 
-**Core Components**:
+**Key Configuration Categories**:
 
-```python
-@dataclass
-class DataFusionRuntimeProfile:
-    config_policy_name: str                           # Profile name identifier
-    config_policy: DataFusionConfigPolicy             # Session config settings
-    schema_hardening: SchemaHardeningProfile          # Schema stability settings
-    feature_gates: DataFusionFeatureGates             # Optimizer feature toggles
-    join_policy: DataFusionJoinPolicy                 # Join algorithm preferences
-    # ... additional fields
-```
+- **Execution Settings**: `target_partitions`, `batch_size`, `memory_limit_bytes`, `spill_dir`
+- **Catalog Configuration**: `default_catalog`, `default_schema`, `registry_catalogs`
+- **External Tables**: `ast_catalog_location`, `bytecode_catalog_location`, `extract_dataset_locations`
+- **Feature Toggles**: `enable_information_schema`, `enable_url_table`, `cache_enabled`
+- **Hook Points**: `function_factory_hook`, `expr_planner_hook`
 
 **Key Profile Presets**:
 
@@ -63,7 +58,7 @@ class RuntimeProfileSpec:
 
 ### DataFusionConfigPolicy
 
-**File**: `src/datafusion_engine/runtime.py`
+**File**: `src/datafusion_engine/session/runtime.py`
 
 Policy object containing DataFusion SessionConfig settings as key-value mappings.
 
@@ -91,7 +86,7 @@ Policy object containing DataFusion SessionConfig settings as key-value mappings
 
 ### SchemaHardeningProfile
 
-**File**: `src/datafusion_engine/runtime.py`
+**File**: `src/datafusion_engine/session/runtime.py`
 
 Schema-stability settings for deterministic schema evolution and explain outputs.
 
@@ -116,7 +111,7 @@ class SchemaHardeningProfile:
 
 ### DataFusionFeatureGates
 
-**File**: `src/datafusion_engine/runtime.py`
+**File**: `src/datafusion_engine/session/runtime.py`
 
 Optimizer feature toggles for DataFusion dynamic filter pushdown.
 
@@ -135,7 +130,7 @@ class DataFusionFeatureGates:
 
 ### DataFusionJoinPolicy
 
-**File**: `src/datafusion_engine/runtime.py`
+**File**: `src/datafusion_engine/session/runtime.py`
 
 Join algorithm preferences for DataFusion execution.
 

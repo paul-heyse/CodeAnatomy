@@ -72,16 +72,20 @@ flowchart TD
 **Crate Type**: `rlib` (Rust library)
 
 **Key Modules**:
-- `udf_custom.rs` (4983 lines) - 40+ custom scalar functions
-- `udf_registry.rs` (358 lines) - UDF registration and metadata
+- `udf_custom.rs` (4983 lines) - 28 custom scalar functions
+- `udf_registry.rs` (174 lines) - UDF registration specs and registry functions
 - `function_factory.rs` (923 lines) - SQL macro factory for `CREATE FUNCTION`
-- `delta_control_plane.rs` (515 lines) - Delta table loading, scanning
-- `delta_mutations.rs` (437 lines) - Delta write/merge/delete/update
+- `delta_control_plane.rs` (514 lines) - Delta table loading, scanning
+- `delta_mutations.rs` (423 lines) - Delta write/merge/delete/update
 - `delta_maintenance.rs` (430 lines) - Vacuum, optimize, checkpoint
 - `expr_planner.rs` (59 lines) - Custom expression planning (arrow operators)
-- `registry_snapshot.rs` (971 lines) - Registry serialization/snapshotting
-- `udaf_builtin.rs` (1906 lines) - Aggregate UDF wrappers
+- `registry_snapshot.rs` (974 lines) - Registry serialization/snapshotting
+- `udaf_builtin.rs` (1927 lines) - Aggregate UDF wrappers
 - `udf_async.rs` (254 lines) - Async UDF infrastructure (gated by `async-udf` feature)
+- `macros.rs` - Spec structs and registration macros
+- `planner_rules.rs` - Logical plan optimization rules
+- `physical_rules.rs` - Physical plan optimization rules
+- `function_rewrite.rs` - Expression rewriting infrastructure
 
 **Features**:
 - `default` - No additional features
@@ -95,9 +99,11 @@ flowchart TD
 
 **Crate Type**: `cdylib` (C dynamic library for Python import)
 
-**Structure**: Single file (`lib.rs`, 9 lines) that delegates to `datafusion_python::codeanatomy_ext::init_module`.
+**Structure**: Single file (`lib.rs`, 8 lines) that delegates to `datafusion_python::codeanatomy_ext::init_module`.
 
 **Build Artifact**: `datafusion_ext.so` (Linux) / `datafusion_ext.pyd` (Windows)
+
+**Crate Type**: `cdylib` + `rlib` (dual-mode for plugin and direct linking)
 
 **Usage**:
 ```python
@@ -185,7 +191,7 @@ pub struct DfPluginMod {
 - `WINDOW_UDF` - Plugin exports window UDFs
 - `TABLE_FUNCTION` - Plugin exports table functions (UDTFs)
 
-**ABI Version**: Major: 1, Minor: 0 (defined in `manifest.rs`)
+**ABI Version**: Major: 1, Minor: 1 (defined in `manifest.rs`)
 
 #### 5. `df_plugin_host` (Plugin Loader)
 
@@ -225,14 +231,14 @@ for udf in exports.udf_bundle.scalar.iter() {
 
 **Purpose**: Plugin implementation bundling all CodeAnatomy UDFs and Delta table providers.
 
-**Crate Type**: `cdylib`
+**Crate Type**: `cdylib` + `rlib`
 
 **Exports**:
 - **Table Providers**: `delta`, `delta_cdf`
-- **Scalar UDFs**: All 40+ custom functions from `datafusion_ext::udf_custom`
+- **Scalar UDFs**: All 28 custom functions from `datafusion_ext::udf_custom`
 - **Aggregate UDFs**: All built-in UDAFs from `datafusion_ext::udaf_builtin`
 - **Window UDFs**: All built-in UDWFs from `datafusion_ext::udwf_builtin`
-- **Table Functions**: `range` (from DataFusion) + custom UDTFs
+- **Table Functions**: `range_table` + custom UDTFs
 
 **Plugin Options** (JSON):
 ```json
@@ -303,80 +309,86 @@ pub fn stable_hash64_udf() -> ScalarUDF {
 
 ### UDF Catalog (`udf_registry.rs`)
 
-**UdfSpec Structure**:
+**UdfSpec Structure** (defined in `macros.rs`):
 ```rust
-pub struct UdfSpec {
+pub struct ScalarUdfSpec {
     pub name: &'static str,
-    pub kind: UdfKind,
-    pub builder: fn() -> UdfHandle,
+    pub builder: fn() -> ScalarUDF,
     pub aliases: &'static [&'static str],
 }
 
-pub enum UdfKind {
-    Scalar,
-    Aggregate,
-    Window,
-    Table,
-}
-
-pub enum UdfHandle {
-    Scalar(ScalarUDF),
-    Aggregate(AggregateUDF),
-    Window(WindowUDF),
-    Table(Arc<dyn TableFunctionImpl>),
+pub struct TableUdfSpec {
+    pub name: &'static str,
+    pub builder: fn(&SessionContext) -> Result<Arc<dyn TableFunctionImpl>>,
+    pub aliases: &'static [&'static str],
 }
 ```
 
 **Registration Functions**:
 ```rust
-pub fn all_udfs() -> Vec<UdfSpec>  // All UDFs (async disabled)
-pub fn all_udfs_with_async(enable_async: bool) -> Result<Vec<UdfSpec>>  // Conditional async
+pub fn scalar_udf_specs() -> Vec<ScalarUdfSpec>  // All scalar UDFs
+pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSpec>>  // Conditional async
+pub fn table_udf_specs() -> Vec<TableUdfSpec>  // Table functions
 pub fn builtin_udafs() -> Vec<AggregateUDF>  // Aggregate functions
 pub fn builtin_udwfs() -> Vec<WindowUDF>     // Window functions
+pub fn register_all(ctx: &SessionContext) -> Result<()>  // Register all UDFs
+pub fn register_all_with_policy(ctx: &SessionContext, enable_async: bool, ...) -> Result<()>
 ```
 
-**UDF Categories**:
+**Registration Macros**:
+```rust
+scalar_udfs![
+    "name" => builder_function;
+    "other" => other_builder, aliases: ["alias1", "alias2"];
+]
 
-1. **Hashing & ID Generation** (8 functions):
+table_udfs![
+    "range_table" => range_table_udtf;
+]
+```
+
+**UDF Categories** (28 total scalar UDFs):
+
+1. **Metadata & Tags** (3 functions):
+   - `arrow_metadata` - Extract Arrow field metadata
+   - `semantic_tag` - Extract semantic metadata tag
+   - `cpg_score` - Compute CPG confidence score
+
+2. **Hashing & ID Generation** (8 functions):
    - `stable_hash64`, `stable_hash128` - BLAKE2b-based deterministic hashing
    - `prefixed_hash64`, `prefixed_hash_parts64` - Prefixed hash with namespace
    - `stable_id`, `stable_id_parts` - Hex-encoded BLAKE2b IDs
    - `stable_hash_any` - Type-agnostic stable hashing
    - `span_id` - Composite ID from path + span
 
-2. **Span Arithmetic** (5 functions):
+3. **Span Arithmetic** (5 functions):
    - `span_make` - Construct span from (bstart, bend)
    - `span_len` - Compute span length
    - `span_overlaps` - Check if two spans overlap
    - `span_contains` - Check if span A contains span B
    - `interval_align_score` - Alignment quality metric
 
-3. **String Normalization** (3 functions):
+4. **String Normalization** (3 functions):
    - `utf8_normalize` - Unicode normalization (NFC, NFD, NFKC, NFKD)
    - `utf8_null_if_blank` - Convert empty/whitespace strings to NULL
    - `qname_normalize` - Qualified name canonicalization
 
-4. **Collection Utilities** (4 functions):
+5. **Collection Utilities** (4 functions):
    - `list_compact` - Remove NULLs from list
    - `list_unique_sorted` - Deduplicate and sort list
    - `map_get_default` - Map lookup with default value
    - `map_normalize` - Normalize map keys/values
 
-5. **Struct Utilities** (1 function):
+6. **Struct Utilities** (1 function):
    - `struct_pick` - Extract subset of struct fields
 
-6. **Delta CDF Utilities** (3 functions):
+7. **Delta CDF Utilities** (3 functions):
    - `cdf_change_rank` - Compute change sequence rank
    - `cdf_is_upsert` - Detect upsert operations
    - `cdf_is_delete` - Detect delete operations
 
-7. **Type Conversion** (2 functions):
+8. **Type Conversion** (1 function):
    - `col_to_byte` - Convert column value to bytes
-   - `semantic_tag` - Extract semantic metadata tag
-
-8. **Metadata** (2 functions):
-   - `arrow_metadata` - Extract Arrow field metadata
-   - `cpg_score` - Compute CPG confidence score
 
 ### UDF Built-in Wrappers (`udf_builtin.rs`)
 
@@ -1090,13 +1102,14 @@ fn install_function_factory(
 **Session Initialization**:
 ```python
 from datafusion import SessionContext
-from datafusion_ext import install_function_factory, install_expr_planners
+from datafusion_ext import install_sql_macro_factory, install_expr_planners
 
 ctx = SessionContext()
 
-# Install custom UDFs
-policy = build_udf_policy_ipc()  # Python-side policy builder
-install_function_factory(ctx, policy)
+# Install SQL macro factory for CREATE FUNCTION support
+install_sql_macro_factory(ctx)
+
+# Install expression planners (arrow operators, array containment)
 install_expr_planners(ctx, ["codeanatomy_domain"])
 
 # Now custom functions are available
@@ -1766,7 +1779,7 @@ def test_custom_udf_from_python():
 
 ## Appendix: Complete UDF Listing
 
-### Scalar UDFs (40+)
+### Scalar UDFs (28)
 
 | Name | Aliases | Purpose |
 |------|---------|---------|
@@ -1807,10 +1820,9 @@ All standard SQL aggregates: `SUM`, `COUNT`, `AVG`, `MIN`, `MAX`, `STDDEV`, `VAR
 
 All standard SQL window functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTILE`, etc.
 
-### Table Functions (2)
+### Table Functions (1)
 
-- `range(start, stop, step)` - Integer series generator
-- `unnest(array)` - Array flattening
+- `range_table(start, stop, step)` - Integer series generator (wraps DataFusion's `RangeFunc`)
 
 ---
 

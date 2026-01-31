@@ -12,7 +12,7 @@ from datafusion_engine.arrow.metadata_codec import (
     decode_metadata_map,
     decode_metadata_scalar_map,
 )
-from schema_spec.literals import parse_scalar_value
+from schema_spec.scalars import parse_scalar_value
 
 if TYPE_CHECKING:
     from arrow_utils.core.expr_types import ScalarValue

@@ -7,7 +7,31 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from schema_spec.dataset_handle import DatasetHandle
+    from schema_spec.evidence_metadata import (
+        EVIDENCE_METADATA_FIELDS,
+        evidence_metadata_bundle,
+        evidence_metadata_defaults,
+        evidence_metadata_field_names,
+        evidence_struct_type,
+    )
     from schema_spec.field_spec import FieldSpec
+    from schema_spec.nested_types import (
+        NestedTypeBuilder,
+        attrs_map_type,
+        byte_span_struct_builder,
+        byte_span_struct_type,
+        int32_list_type,
+        int64_list_type,
+        line_col_struct_builder,
+        line_col_struct_type,
+        list_of,
+        list_of_structs,
+        map_of,
+        nested_field,
+        span_struct_builder,
+        span_struct_type,
+        string_list_type,
+    )
     from schema_spec.registration import DatasetRegistration, register_dataset
     from schema_spec.specs import (
         DICT_STRING,
@@ -68,6 +92,32 @@ if TYPE_CHECKING:
     from schema_spec.view_specs import ViewSchemaMismatchError, ViewSpec
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
+    # Evidence metadata canonical fields and helpers
+    "EVIDENCE_METADATA_FIELDS": ("schema_spec.evidence_metadata", "EVIDENCE_METADATA_FIELDS"),
+    "evidence_metadata_bundle": ("schema_spec.evidence_metadata", "evidence_metadata_bundle"),
+    "evidence_metadata_defaults": ("schema_spec.evidence_metadata", "evidence_metadata_defaults"),
+    "evidence_metadata_field_names": (
+        "schema_spec.evidence_metadata",
+        "evidence_metadata_field_names",
+    ),
+    "evidence_struct_type": ("schema_spec.evidence_metadata", "evidence_struct_type"),
+    # Nested type builders
+    "NestedTypeBuilder": ("schema_spec.nested_types", "NestedTypeBuilder"),
+    "attrs_map_type": ("schema_spec.nested_types", "attrs_map_type"),
+    "byte_span_struct_builder": ("schema_spec.nested_types", "byte_span_struct_builder"),
+    "byte_span_struct_type": ("schema_spec.nested_types", "byte_span_struct_type"),
+    "int32_list_type": ("schema_spec.nested_types", "int32_list_type"),
+    "int64_list_type": ("schema_spec.nested_types", "int64_list_type"),
+    "line_col_struct_builder": ("schema_spec.nested_types", "line_col_struct_builder"),
+    "line_col_struct_type": ("schema_spec.nested_types", "line_col_struct_type"),
+    "list_of": ("schema_spec.nested_types", "list_of"),
+    "list_of_structs": ("schema_spec.nested_types", "list_of_structs"),
+    "map_of": ("schema_spec.nested_types", "map_of"),
+    "nested_field": ("schema_spec.nested_types", "nested_field"),
+    "span_struct_builder": ("schema_spec.nested_types", "span_struct_builder"),
+    "span_struct_type": ("schema_spec.nested_types", "span_struct_type"),
+    "string_list_type": ("schema_spec.nested_types", "string_list_type"),
+    # Schema spec exports
     "DICT_STRING": ("schema_spec.specs", "DICT_STRING"),
     "ENCODING_DICTIONARY": ("schema_spec.specs", "ENCODING_DICTIONARY"),
     "ENCODING_META": ("schema_spec.specs", "ENCODING_META"),
@@ -144,9 +194,12 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    # Schema spec exports
     "DICT_STRING",
     "ENCODING_DICTIONARY",
     "ENCODING_META",
+    # Evidence metadata canonical fields and helpers
+    "EVIDENCE_METADATA_FIELDS",
     "KEY_FIELDS_META",
     "PROVENANCE_COLS",
     "PROVENANCE_SOURCE_FIELDS",
@@ -170,6 +223,8 @@ __all__ = [
     "FieldBundle",
     "FieldSpec",
     "NestedFieldSpec",
+    # Nested type builders
+    "NestedTypeBuilder",
     "SortKeySpec",
     "TableSchemaContract",
     "TableSchemaSpec",
@@ -177,6 +232,9 @@ __all__ = [
     "ViewSchemaMismatchError",
     "ViewSpec",
     "VirtualFieldSpec",
+    "attrs_map_type",
+    "byte_span_struct_builder",
+    "byte_span_struct_type",
     "call_span_bundle",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
@@ -189,11 +247,23 @@ __all__ = [
     "dataset_table_logical_plan",
     "ddl_fingerprint_from_definition",
     "dict_field",
+    "evidence_metadata_bundle",
+    "evidence_metadata_defaults",
+    "evidence_metadata_field_names",
+    "evidence_struct_type",
     "file_identity_bundle",
+    "int32_list_type",
+    "int64_list_type",
+    "line_col_struct_builder",
+    "line_col_struct_type",
+    "list_of",
+    "list_of_structs",
     "list_view_type",
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
+    "map_of",
+    "nested_field",
     "provenance_bundle",
     "register_dataset",
     "resolve_schema_evolution_spec",
@@ -201,5 +271,8 @@ __all__ = [
     "schema_metadata_for_spec",
     "scip_range_bundle",
     "span_bundle",
+    "span_struct_builder",
+    "span_struct_type",
+    "string_list_type",
     "validate_arrow_table",
 ]

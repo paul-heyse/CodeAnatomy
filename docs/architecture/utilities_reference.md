@@ -12,6 +12,7 @@ The `src/utils/` module provides foundational utilities used throughout CodeAnat
 - `env_utils.py` - Environment variable parsing with type coercion
 - `storage_options.py` - Storage configuration normalization
 - `validation.py` - Type and collection validation helpers
+- `value_coercion.py` - Tolerant and strict value coercion with error handling
 - `uuid_factory.py` - Time-ordered UUID generation (UUIDv7)
 - `file_io.py` - Consistent file reading with encoding handling
 
@@ -1249,6 +1250,213 @@ run_id = uuid.uuid4()  # Random, non-sortable
 # After
 from utils import uuid7
 run_id = uuid7()  # Time-ordered, sortable
+```
+
+---
+
+## Value Coercion Utilities
+
+**File**: `/home/paul/CodeAnatomy/src/utils/value_coercion.py` (lines 1-284)
+
+### Purpose
+
+Provide tolerant and strict value coercion functions with explicit error handling. These utilities enable safe type conversion for configuration parsing, API boundary validation, and data normalization where silent failures or strict validation are required.
+
+### Design Principles
+
+**Tolerant Variants**: Functions prefixed with `coerce_*` return None on conversion failure instead of raising exceptions. This supports graceful degradation and default value patterns.
+
+**Strict Variants**: Functions prefixed with `raise_for_*` raise `CoercionError` on conversion failure with descriptive error messages. This supports fail-fast validation at API boundaries.
+
+**Minimal Coercion**: Only perform safe, well-defined conversions. No surprising type juggling or implicit conversions.
+
+### Core Coercion Functions
+
+#### Integer Coercion
+
+**`coerce_int(value: object) -> int | None`** (lines 29-50)
+
+Tolerant integer coercion returning None on failure:
+
+```python
+from utils.value_coercion import coerce_int
+
+result = coerce_int("42")     # 42
+result = coerce_int(42.7)     # 42
+result = coerce_int("invalid") # None
+result = coerce_int(None)     # None
+result = coerce_int(True)     # None (booleans explicitly rejected)
+```
+
+**`raise_for_int(value: object, *, context: str = "") -> int`** (lines 194-210)
+
+Strict integer coercion raising CoercionError on failure:
+
+```python
+from utils.value_coercion import raise_for_int, CoercionError
+
+value = raise_for_int("42")  # 42
+
+try:
+    value = raise_for_int("invalid", context="port number")
+except CoercionError as e:
+    print(e.target_type)  # "int"
+    print(e.value)        # "invalid"
+```
+
+#### Float Coercion
+
+**`coerce_float(value: object) -> float | None`** (lines 53-72)
+
+**`raise_for_float(value: object, *, context: str = "") -> float`** (lines 213-229)
+
+Similar pattern to integer coercion.
+
+#### Boolean Coercion
+
+**`coerce_bool(value: object) -> bool | None`** (lines 75-95)
+
+Flexible boolean coercion supporting common string representations:
+
+```python
+from utils.value_coercion import coerce_bool
+
+coerce_bool("true")   # True
+coerce_bool("1")      # True
+coerce_bool("yes")    # True
+coerce_bool("on")     # True
+coerce_bool("false")  # False
+coerce_bool("0")      # False
+coerce_bool("no")     # False
+coerce_bool("off")    # False
+coerce_bool("maybe")  # None
+```
+
+**`raise_for_bool(value: object, *, context: str = "") -> bool`** (lines 232-248)
+
+#### String Coercion
+
+**`coerce_str(value: object) -> str | None`** (lines 98-108)
+
+Returns None only when value is None, otherwise converts to string:
+
+```python
+from utils.value_coercion import coerce_str
+
+coerce_str("hello")  # "hello"
+coerce_str(42)       # "42"
+coerce_str(None)     # None
+```
+
+**`raise_for_str(value: object, *, context: str = "") -> str`** (lines 251-266)
+
+#### Collection Coercion
+
+**`coerce_str_list(value: object) -> list[str]`** (lines 111-123)
+
+Coerce value to list of non-empty strings:
+
+```python
+from utils.value_coercion import coerce_str_list
+
+coerce_str_list("single")              # ["single"]
+coerce_str_list(["a", "b", "c"])       # ["a", "b", "c"]
+coerce_str_list(["a", "", "b"])        # ["a", "b"]  # Empty strings filtered
+coerce_str_list([1, 2, 3])             # ["1", "2", "3"]
+```
+
+**`coerce_str_tuple(value: object) -> tuple[str, ...]`** (lines 126-134)
+
+Tuple variant of `coerce_str_list`.
+
+**`coerce_mapping_list(value: object) -> Sequence[Mapping[str, object]] | None`** (lines 137-149)
+
+Coerce sequence of mappings for structured configuration:
+
+```python
+from utils.value_coercion import coerce_mapping_list
+
+data = [{"key": "value"}, {"key2": "value2"}]
+result = coerce_mapping_list(data)  # Sequence[Mapping]
+```
+
+#### Arrow Coercion
+
+**`coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None`** (lines 152-191)
+
+Convert various Arrow types to RecordBatchReader:
+
+```python
+from utils.value_coercion import coerce_to_recordbatch_reader
+import pyarrow as pa
+
+# Accepts Table, RecordBatch, RecordBatchReader, Sequence[RecordBatch]
+table = pa.table({"col": [1, 2, 3]})
+reader = coerce_to_recordbatch_reader(table)  # RecordBatchReader
+```
+
+### Error Handling
+
+**`CoercionError`** (lines 17-26)
+
+Exception raised by strict coercion functions:
+
+```python
+class CoercionError(ValueError):
+    value: object          # Original value that failed conversion
+    target_type: str       # Target type name ("int", "float", "bool", "str")
+```
+
+### Usage Patterns
+
+**Configuration Parsing with Defaults**:
+
+```python
+from utils.value_coercion import coerce_int, coerce_bool
+
+# Tolerant parsing with fallback
+timeout = coerce_int(config.get("timeout")) or 30
+debug = coerce_bool(config.get("debug")) or False
+```
+
+**API Boundary Validation**:
+
+```python
+from utils.value_coercion import raise_for_int, raise_for_str, CoercionError
+
+def set_worker_count(value: object) -> None:
+    try:
+        count = raise_for_int(value, context="worker_count")
+        if count < 1:
+            raise ValueError("worker_count must be positive")
+        apply_config(worker_count=count)
+    except CoercionError as e:
+        raise ValueError(f"Invalid worker_count: {e}")
+```
+
+**Data Normalization Pipeline**:
+
+```python
+from utils.value_coercion import coerce_str_list
+
+# Normalize column names from various input formats
+columns = coerce_str_list(input_columns)
+validated_columns = [col for col in columns if col]  # Already non-empty
+```
+
+### Integration with Environment Parsing
+
+The `value_coercion` module complements `env_utils.py` for configuration handling:
+
+```python
+from utils.env_utils import env_value
+from utils.value_coercion import coerce_int
+
+# env_utils provides environment variable access
+raw_value = env_value("WORKER_COUNT")
+
+# value_coercion provides type conversion
+worker_count = coerce_int(raw_value) or 4
 ```
 
 ---

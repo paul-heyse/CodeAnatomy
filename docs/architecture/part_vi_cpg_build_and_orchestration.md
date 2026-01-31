@@ -4,7 +4,7 @@
 
 The CPG Build and Orchestration subsystem represents the final stage of CodeAnatomy's inference pipeline—transforming normalized evidence tables into a queryable Code Property Graph with nodes, edges, and properties, then materializing these outputs as Delta Lake tables. This phase integrates three architectural layers: (1) the CPG schema catalog defining node/edge kinds and property specifications, (2) the Hamilton orchestration framework coordinating task execution across modules, and (3) the public API providing typed entry points for graph construction.
 
-The design separates **specification** (what nodes/edges exist, what properties they carry) from **emission** (how to build DataFrames from source tables) and **orchestration** (how to schedule and execute tasks). The CPG schema serves as a contract between the inference pipeline and downstream consumers—all node kinds, edge kinds, and property types are registered in catalogs (`src/cpg/kind_catalog.py`, `src/cpg/prop_catalog.py`) with validation enforced at build time. The emission pipeline (`src/cpg/view_builders_df.py`, `src/cpg/emit_specs.py`) consumes normalized views from the DataFusion session context and produces standardized DataFrames with stable schemas. Hamilton (`src/hamilton_pipeline/`) orchestrates the full DAG, managing dependencies, caching, incremental execution, and diagnostics collection.
+The design separates **specification** (what nodes/edges exist, what properties they carry) from **emission** (how to build DataFrames from source tables) and **orchestration** (how to schedule and execute tasks). The CPG schema serves as a contract between the inference pipeline and downstream consumers—all node kinds, edge kinds, and property types are registered in catalogs (`src/cpg/kind_catalog.py`, `src/cpg/prop_catalog.py`) with validation enforced at build time. The emission pipeline (`src/cpg/view_builders_df.py`) consumes normalized views from the DataFusion session context and produces standardized DataFrames with stable schemas. Hamilton (`src/hamilton_pipeline/`) orchestrates the full DAG, managing dependencies, caching, incremental execution, and diagnostics collection.
 
 The public API (`src/graph/product_build.py`) provides the sole entry point for external callers: `build_graph_product(GraphProductBuildRequest) -> GraphProductBuildResult`. This function hides all Hamilton-specific details and returns typed outputs (`cpg_nodes`, `cpg_edges`, `cpg_props`) with metadata (schema version, engine versions, run identifiers, Delta paths). The result structure ensures API stability—internal refactorings to Hamilton modules or DataFusion views do not break downstream consumers.
 
@@ -12,33 +12,51 @@ The public API (`src/graph/product_build.py`) provides the sole entry point for 
 
 ## Execution Modes and Plan-Aware Orchestration
 
-Hamilton orchestration is explicitly configured via the public execution surface rather than hidden config flags. Callers select an `ExecutionMode` and optional `ExecutorConfig` in `GraphProductBuildRequest`, which are threaded into `hamilton_pipeline` driver construction. Parallel plan execution is the default for production builds, with deterministic serial execution reserved for reproducibility audits and debugging.
+Hamilton orchestration is explicitly configured via the public execution surface through `GraphProductBuildRequest`. Callers select an `ExecutionMode` and optional `ExecutorConfig` which are threaded into `hamilton_pipeline` driver construction. Parallel plan execution is the default for production builds, with deterministic serial execution reserved for reproducibility audits and debugging.
 
-**Execution Modes (File: `src/hamilton_pipeline/types/execution.py`)**
-- `deterministic_serial`: no dynamic execution; single executor for fully deterministic runs.
-- `plan_parallel`: dynamic execution enabled; scan-unit parallelism via Hamilton `Parallelizable/Collect`.
-- `plan_parallel_remote`: dynamic execution plus remote executor routing for scan/high-cost tasks.
+**Execution Modes (File: `src/hamilton_pipeline/types/execution.py`, Lines 21-26)**
+
+```python
+class ExecutionMode(StrEnum):
+    """Execution mode for Hamilton orchestration."""
+
+    DETERMINISTIC_SERIAL = "deterministic_serial"
+    PLAN_PARALLEL = "plan_parallel"
+    PLAN_PARALLEL_REMOTE = "plan_parallel_remote"
+```
+
+- `DETERMINISTIC_SERIAL`: No dynamic execution; single executor for fully deterministic runs
+- `PLAN_PARALLEL`: Dynamic execution enabled; scan-unit parallelism via Hamilton `Parallelizable/Collect`
+- `PLAN_PARALLEL_REMOTE`: Dynamic execution plus remote executor routing for scan/high-cost tasks
 
 **Executor Configuration (File: `src/hamilton_pipeline/types/execution.py`)**
+
 ```python
 @dataclass(frozen=True)
 class ExecutorConfig:
-    kind: Literal["threadpool", "multiprocessing", "dask", "ray"] = "multiprocessing"
+    """Configuration for Hamilton task executors."""
+
+    kind: ExecutorKind = ExecutorKind.MULTIPROCESSING
     max_tasks: int = 4
-    remote_kind: Literal["threadpool", "multiprocessing", "dask", "ray"] | None = None
+    remote_kind: ExecutorKind | None = None
     remote_max_tasks: int | None = None
     cost_threshold: float | None = None
+    ray_init_config: Mapping[str, object] | None = None
+    dask_scheduler: str | None = None
+    dask_client_kwargs: Mapping[str, object] | None = None
 ```
 
-Execution routing uses plan-aware tags (task cost, slack, critical-path membership) to steer high-cost or scan workloads to remote executors (`src/hamilton_pipeline/execution_manager.py`). Dynamic scan units are enabled when the execution mode is parallel, and the scan-unit result mapping is ordered deterministically for stable downstream behavior (`src/hamilton_pipeline/modules/task_execution.py`).
+Execution routing uses plan-aware tags (task cost, slack, critical-path membership) to steer high-cost or scan workloads to remote executors (`src/hamilton_pipeline/execution_manager.py`). Dynamic scan units are enabled when the execution mode is parallel, and the scan-unit result mapping is ordered deterministically for stable downstream behavior.
 
 **Graph Adapter Backends + Async Execution**
-- `GraphAdapterConfig` enables non-dynamic backends (threadpool, Dask, Ray) for CPU-bound workloads (`src/hamilton_pipeline/driver_factory.py`).
-- `execute_pipeline_async(...)` uses Hamilton’s async driver for IO-bound workloads; dynamic execution and materializers are intentionally disabled in this mode (`src/hamilton_pipeline/execution.py`).
+
+- `GraphAdapterConfig` enables non-dynamic backends (threadpool, Dask, Ray) for CPU-bound workloads (`src/hamilton_pipeline/driver_factory.py`)
+- `execute_pipeline_async(...)` uses Hamilton's async driver for IO-bound workloads; dynamic execution and materializers are intentionally disabled in this mode (`src/hamilton_pipeline/execution.py`)
 
 **Schedule Intelligence**
-- rustworkx analytics (dominators, betweenness centrality, bridges, articulations) are computed during plan compilation and persisted in plan artifacts (`src/relspec/execution_plan.py`, `src/serde_artifacts.py`).
-- Task tags include these analytics so the Hamilton UI and diagnostics can surface single‑point‑of‑failure nodes and centrality hotspots (`src/hamilton_pipeline/task_module_builder.py`).
+
+- rustworkx analytics (dominators, betweenness centrality, bridges, articulations) are computed during plan compilation and persisted in plan artifacts
+- Task tags include these analytics so the Hamilton UI and diagnostics can surface single-point-of-failure nodes and centrality hotspots (`src/hamilton_pipeline/task_module_builder.py`)
 
 ### Plan Schedule + Validation Artifacts
 
@@ -76,6 +94,7 @@ The CPG schema defines a fixed vocabulary of node and edge kinds that represent 
 **File:** `src/cpg/kind_catalog.py`
 
 **Node Kinds (Lines 25-48):**
+
 ```python
 NODE_KIND_PY_FILE = NodeKindId("PY_FILE")
 NODE_KIND_CST_REF = NodeKindId("CST_REF")
@@ -106,6 +125,7 @@ NODE_KIND_RT_MEMBER = NodeKindId("RT_MEMBER")
 Node kinds span multiple evidence layers: `CST_*` (LibCST), `SYM_*` (symtable), `PY_*` (inference-driven bindings and scopes), `SCIP_*` (SCIP indexing), `TS_*` (tree-sitter), `TYPE_*` (type expressions), `RT_*` (runtime introspection), and `DIAG` (diagnostics).
 
 **Edge Kinds (Lines 51-73):**
+
 ```python
 EDGE_KIND_PY_CALLS_QNAME = EdgeKindId("PY_CALLS_QNAME")
 EDGE_KIND_SCOPE_PARENT = EdgeKindId("SCOPE_PARENT")
@@ -139,6 +159,7 @@ Edge kinds represent structural relationships (SCOPE_PARENT, SCOPE_BINDS), symbo
 Each edge kind declares required property columns that must be present in the relation output view. This contract ensures that downstream CPG builders have access to necessary metadata for edge construction.
 
 **EdgeKindSpec Definition (Lines 76-83):**
+
 ```python
 @dataclass(frozen=True)
 class EdgeKindSpec:
@@ -150,6 +171,7 @@ class EdgeKindSpec:
 ```
 
 **Example Edge Requirements (Lines 85-160):**
+
 ```python
 EDGE_KIND_SPECS: tuple[EdgeKindSpec, ...] = (
     EdgeKindSpec(
@@ -186,7 +208,7 @@ def validate_edge_kind_requirements(schema: SchemaLike) -> None:
         raise ValueError(msg)
 ```
 
-This validation runs during driver construction (`src/hamilton_pipeline/driver_factory.py:173`), ensuring that the `relation_output` view schema satisfies all edge kind contracts before execution begins.
+This validation runs during driver construction (`src/hamilton_pipeline/driver_factory.py`), ensuring that the `relation_output` view schema satisfies all edge kind contracts before execution begins.
 
 ---
 
@@ -199,11 +221,13 @@ The property catalog defines all CPG property keys with their value types, descr
 **File:** `src/cpg/prop_catalog.py`
 
 **Property Primitive Types (Line 12):**
+
 ```python
 PropPrimitive = Literal["string", "int", "float", "bool", "json"]
 ```
 
 **PropSpec Definition (Lines 15-35):**
+
 ```python
 @dataclass(frozen=True)
 class PropSpec:
@@ -214,7 +238,7 @@ class PropSpec:
     enum_values: tuple[str, ...] | None = None
 ```
 
-**Property Catalog Excerpt (Lines 147-342):**
+**Property Catalog Excerpt:**
 
 The `PROP_SPECS` dictionary registers all known property keys. Examples:
 
@@ -233,7 +257,7 @@ PROP_SPECS: dict[str, PropSpec] = {
 }
 ```
 
-**Enum Constraints (Lines 93-144):**
+**Enum Constraints:**
 
 Many properties declare enum constraints to validate values at build time:
 
@@ -256,7 +280,8 @@ Some properties require transformations during emission—for example, convertin
 
 **File:** `src/cpg/specs.py`
 
-**Transform Registry (Lines 27-58):**
+**Transform Registry:**
+
 ```python
 TRANSFORM_EXPR_CONTEXT = "expr_context"
 TRANSFORM_FLAG_TO_BOOL = "flag_to_bool"
@@ -280,7 +305,8 @@ PROP_TRANSFORMS: dict[str, PropTransformSpec] = {
 }
 ```
 
-**PropFieldSpec with Transform (Lines 172-218):**
+**PropFieldSpec with Transform:**
+
 ```python
 @dataclass(frozen=True)
 class PropFieldSpec:
@@ -314,17 +340,72 @@ The `value_from()` method resolves literal values or source columns, applies opt
 
 ## CPG Emission Pipeline
 
+### Node Family Architecture
+
+The emission pipeline uses a **node family** abstraction to group node types with shared field patterns. This DRY approach eliminates repetition in schema definitions.
+
+**File:** `src/cpg/node_families.py`
+
+**Node Family Enumeration (Lines 21-37):**
+
+```python
+class NodeFamily(StrEnum):
+    """Define node family categories for CPG nodes."""
+
+    FILE = "file"
+    CST = "cst"
+    SYMTABLE = "symtable"
+    SCIP = "scip"
+    TREESITTER = "treesitter"
+    TYPE = "type"
+    DIAGNOSTIC = "diagnostic"
+    RUNTIME = "runtime"
+    BYTECODE = "bytecode"
+```
+
+**Node Family Defaults (Lines 300-378):**
+
+Each family defines default field bundles and span column names:
+
+```python
+NODE_FAMILY_DEFAULTS: dict[NodeFamily, NodeFamilyDefaults] = {
+    NodeFamily.FILE: NodeFamilyDefaults(
+        family=NodeFamily.FILE,
+        fields=_file_family_fields(),
+        path_cols=("path",),
+        bstart_cols=("bstart",),
+        bend_cols=("bend",),
+        file_id_cols=("file_id",),
+    ),
+    NodeFamily.CST: NodeFamilyDefaults(
+        family=NodeFamily.CST,
+        fields=_cst_family_fields(),
+        path_cols=("path",),
+        bstart_cols=("bstart",),
+        bend_cols=("bend",),
+        file_id_cols=("file_id",),
+    ),
+    # ... additional families
+}
+```
+
 ### Entity Family Specifications
 
 The emission pipeline is driven by **entity family specifications**—bundles that declare how to emit nodes and properties for a given entity type (e.g., "file", "ref", "callsite").
 
 **File:** `src/cpg/spec_registry.py`
 
-**EntityFamilySpec Definition (Lines 28-101):**
+**EntityFamilySpec Definition (Lines 29-159):**
+
 ```python
 @dataclass(frozen=True)
 class EntityFamilySpec:
-    """Spec for a node/prop family with shared identity columns."""
+    """Spec for a node/prop family with shared identity columns.
+
+    The ``node_family`` field provides sensible defaults for column names
+    (path_cols, bstart_cols, bend_cols, file_id_cols). Explicit values
+    override the family defaults.
+    """
 
     name: str
     node_kind: NodeKindId
@@ -334,10 +415,11 @@ class EntityFamilySpec:
     prop_table: str | None = None
     node_name: str | None = None
     prop_name: str | None = None
-    path_cols: tuple[str, ...] = ()
-    bstart_cols: tuple[str, ...] = ()
-    bend_cols: tuple[str, ...] = ()
-    file_id_cols: tuple[str, ...] = ()
+    node_family: NodeFamily | None = None
+    path_cols: tuple[str, ...] | None = None
+    bstart_cols: tuple[str, ...] | None = None
+    bend_cols: tuple[str, ...] | None = None
+    file_id_cols: tuple[str, ...] | None = None
     prop_include_if_id: str | None = None
 
     def to_node_plan(self) -> NodePlanSpec | None:
@@ -350,14 +432,18 @@ class EntityFamilySpec:
             emit=NodeEmitSpec(
                 node_kind=self.node_kind,
                 id_cols=self.id_cols,
-                path_cols=self.path_cols,
-                bstart_cols=self.bstart_cols,
-                bend_cols=self.bend_cols,
-                file_id_cols=self.file_id_cols,
+                path_cols=self.resolved_path_cols,
+                bstart_cols=self.resolved_bstart_cols,
+                bend_cols=self.resolved_bend_cols,
+                file_id_cols=self.resolved_file_id_cols,
             ),
         )
 
-    def to_prop_table(self, *, source_columns: Sequence[str] | None = None) -> PropTableSpec | None:
+    def to_prop_table(
+        self,
+        *,
+        source_columns: Sequence[str] | None = None
+    ) -> PropTableSpec | None:
         """Return a PropTableSpec for this family when configured."""
         table = self.prop_table or self.node_table
         if table is None:
@@ -377,7 +463,8 @@ class EntityFamilySpec:
         )
 ```
 
-**Example Family Specification (Lines 112-132):**
+**Example Family Specification (Lines 170-186):**
+
 ```python
 ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     EntityFamilySpec(
@@ -385,6 +472,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         node_kind=kind_catalog.NODE_KIND_PY_FILE,
         id_cols=("file_id",),
         node_table="repo_files_nodes",
+        node_family=NodeFamily.FILE,
         prop_source_map=_prop_source_map(
             kind_catalog.NODE_KIND_PY_FILE,
             {
@@ -395,12 +483,8 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             },
         ),
         prop_table="repo_files",
-        path_cols=("path",),
-        bstart_cols=("bstart",),
-        bend_cols=("bend",),
-        file_id_cols=("file_id",),
     ),
-    # ... additional families for ref, import_alias, callsite, etc.
+    # ... additional families
 )
 ```
 
@@ -408,55 +492,70 @@ This specification declares that:
 - Nodes of kind `PY_FILE` are identified by `file_id` column
 - Node rows are emitted from the `repo_files_nodes` table
 - Properties (`path`, `size_bytes`, `file_sha256`, `encoding`) are emitted from the `repo_files` table
-- Anchor columns (`path`, `bstart`, `bend`, `file_id`) are used for byte-span positioning
+- Anchor columns inherit from the FILE family defaults: `("path",)`, `("bstart",)`, `("bend",)`, `("file_id",)`
 
 ### DataFusion-Native View Builders
 
 The emission pipeline uses **DataFusion native view builders** to construct CPG output DataFrames from registered views.
 
-> **Note:** The legacy Ibis-based approach (`view_builders.py`) has been removed; only `view_builders_df.py` (DataFusion native) remains. All CPG emission now uses DataFusion-native operations exclusively.
-
 **File:** `src/cpg/view_builders_df.py`
 
-**Node Emission (Lines 110-161):**
+**Node Emission (Lines 242-306):**
+
 ```python
 def build_cpg_nodes_df(
-    session_runtime: SessionRuntime, *, task_identity: TaskIdentity | None = None
+    session_runtime: SessionRuntime,
+    *,
+    task_identity: TaskIdentity | None = None
 ) -> DataFrame:
     """Build CPG nodes DataFrame from view specs using DataFusion."""
-    ctx = session_runtime.ctx
-    specs = node_plan_specs()
-    task_name = task_identity.name if task_identity is not None else None
-    task_priority = task_identity.priority if task_identity is not None else None
+    with stage_span(
+        "cpg.nodes",
+        stage="cpg",
+        scope_name=SCOPE_CPG,
+        attributes={"codeanatomy.view_name": "cpg_nodes_v1"},
+    ):
+        ctx = session_runtime.ctx
+        specs = node_plan_specs()
+        task_name = task_identity.name if task_identity is not None else None
+        task_priority = task_identity.priority if task_identity is not None else None
 
-    frames: list[DataFrame] = []
-    for spec in specs:
-        try:
-            source_df = ctx.table(spec.table_ref)
-        except KeyError as exc:
-            msg = f"Missing required source table {spec.table_ref!r} for CPG nodes."
-            raise ValueError(msg) from exc
+        frames: list[DataFrame] = []
+        for spec in specs:
+            try:
+                source_df = ctx.table(spec.table_ref)
+            except KeyError as exc:
+                msg = f"Missing required source table {spec.table_ref!r} for CPG nodes."
+                raise ValueError(msg) from exc
 
-        node_df = _emit_nodes_df(
-            source_df,
-            spec=spec.emit,
-            task_name=task_name,
-            task_priority=task_priority,
+            node_df = _emit_nodes_df(
+                source_df,
+                spec=spec.emit,
+                task_name=task_name,
+                task_priority=task_priority,
+            )
+            frames.append(node_df)
+
+        if not frames:
+            msg = "CPG node builder did not produce any plans."
+            raise ValueError(msg)
+
+        combined = frames[0]
+        for frame in frames[1:]:
+            combined = combined.union(frame)
+
+        result = combined.select(*_NODE_OUTPUT_COLUMNS)
+        _require_semantic_types(
+            result,
+            view_name="cpg_nodes_v1",
+            expected={"node_id": "NodeId"},
+            runtime_profile=session_runtime.profile,
         )
-        frames.append(node_df)
-
-    if not frames:
-        msg = "CPG node builder did not produce any plans."
-        raise ValueError(msg)
-
-    combined = frames[0]
-    for frame in frames[1:]:
-        combined = combined.union(frame)
-
-    return combined.select(*_NODE_OUTPUT_COLUMNS)
+        return result
 ```
 
-**Node Emission Helper (Lines 164-209):**
+**Node Emission Helper (Lines 309-354):**
+
 ```python
 def _emit_nodes_df(
     df: DataFrame,
@@ -467,10 +566,13 @@ def _emit_nodes_df(
 ) -> DataFrame:
     """Emit CPG nodes from a DataFrame using DataFusion expressions."""
     id_cols, _ = _prepare_id_columns_df(df, spec.id_cols)
-    node_id_parts = [col(c) if c in df.schema().names else _null_expr("Utf8") for c in id_cols]
+    node_id_parts = [
+        col(c) if c in df.schema().names else _null_expr("Utf8")
+        for c in id_cols
+    ]
     node_id_parts.append(lit(str(spec.node_kind)))
 
-    node_id = _stable_id_from_parts("node", node_id_parts)
+    node_id = semantic_tag("NodeId", _stable_id_from_parts("node", node_id_parts))
     node_kind = lit(str(spec.node_kind))
     path = _coalesce_cols(df, spec.path_cols, pa.string())
     bstart = _coalesce_cols(df, spec.bstart_cols, pa.int64())
@@ -491,11 +593,122 @@ def _emit_nodes_df(
 
 **Key Design Decisions:**
 
-1. **Stable ID Generation (Lines 91-107):** Node IDs are built from identity columns plus node kind using a deterministic hash function (`stable_id_parts`), ensuring consistent identifiers across runs.
+1. **Stable ID Generation (Line 338):** Node IDs are built from identity columns plus node kind using a deterministic hash function (`stable_id_parts`), ensuring consistent identifiers across runs. IDs are tagged with semantic type "NodeId" for validation.
 
-2. **Graceful Column Coalescing (Lines 61-74):** The `_coalesce_cols()` function searches for columns in the provided list and returns the first available, falling back to typed null literals when all are missing. This implements the **graceful degradation** invariant.
+2. **Graceful Column Coalescing (Lines 193-206):** The `_coalesce_cols()` function searches for columns in the provided list and returns the first available, falling back to typed null literals when all are missing. This implements the **graceful degradation** invariant.
 
-3. **Union Aggregation (Lines 157-159):** Multiple entity families produce independent DataFrames that are combined via union operations, allowing heterogeneous node types to coexist in a single output.
+3. **Union Aggregation (Lines 295-297):** Multiple entity families produce independent DataFrames that are combined via union operations, allowing heterogeneous node types to coexist in a single output.
+
+4. **Semantic Type Validation (Lines 300-305):** CPG outputs validate semantic type metadata on critical columns (node_id, edge_id, src_node_id, dst_node_id) to ensure UDF contract compliance.
+
+### Relationship DataFrame Builders
+
+The codebase has introduced a **declarative relationship specification DSL** (`src/cpg/relationship_specs.py`) with generic builders (`src/cpg/relationship_builder.py`) to eliminate code duplication.
+
+**File:** `src/cpg/relationship_specs.py`
+
+**Relationship Specification (Lines 122-181):**
+
+```python
+@dataclass(frozen=True, slots=True)
+class RelationshipSpec:
+    """Declarative specification for a relationship DataFrame builder."""
+
+    name: str
+    edge_kind: EdgeKindId
+    origin: RelationshipOrigin
+    src_table: str
+    entity_id_col: ColumnSpec
+    symbol_col: ColumnSpec
+    resolution_method: str
+    output_view_name: str
+    bstart_col: ColumnSpec = field(default_factory=lambda: col_ref("bstart"))
+    bend_col: ColumnSpec = field(default_factory=lambda: col_ref("bend"))
+    path_col: str = "path"
+    edge_owner_file_id_col: str = "edge_owner_file_id"
+    edge_owner_file_id_fallback: str = "file_id"
+    symbol_roles_col: str | None = "symbol_roles"
+    confidence: float = 0.5
+    score: float = 0.5
+```
+
+**Example Specifications (Lines 271-344):**
+
+```python
+REL_NAME_SYMBOL_SPEC = RelationshipSpec(
+    name="name_symbol",
+    edge_kind=EDGE_KIND_PY_REFERENCES_SYMBOL,
+    origin=RelationshipOrigin.CST,
+    src_table="cst_refs",
+    entity_id_col=col_ref("ref_id"),
+    symbol_col=col_ref("ref_text"),
+    resolution_method="cst_ref_text",
+    output_view_name="rel_name_symbol_v1",
+    # ... additional parameters
+)
+
+REL_IMPORT_SYMBOL_SPEC = RelationshipSpec(
+    name="import_symbol",
+    edge_kind=EDGE_KIND_PY_IMPORTS_SYMBOL,
+    origin=RelationshipOrigin.CST,
+    src_table="cst_imports",
+    entity_id_col=coalesce_ref("import_alias_id", "import_id"),
+    symbol_col=coalesce_ref("name", "module"),
+    resolution_method="cst_import_name",
+    output_view_name="rel_import_symbol_v1",
+    # ... additional parameters
+)
+```
+
+**Generic Builder (File: `src/cpg/relationship_builder.py`, Lines 49-115):**
+
+```python
+def build_symbol_relation_df(
+    ctx: SessionContext,
+    spec: RelationshipSpec,
+    *,
+    task_name: str,
+    task_priority: int,
+) -> DataFrame:
+    """Build a DataFusion DataFrame for a symbol relationship from spec."""
+    source = ctx.table(spec.src_table)
+
+    entity_id = _column_expr(spec.entity_id_col)
+    symbol = _column_expr(spec.symbol_col)
+    bstart = _column_expr(spec.bstart_col)
+    bend = _column_expr(spec.bend_col)
+
+    edge_owner = f.coalesce(
+        col(spec.edge_owner_file_id_col),
+        col(spec.edge_owner_file_id_fallback),
+    )
+
+    select_exprs = [
+        entity_id.alias(spec.entity_id_alias),
+        symbol.alias("symbol"),
+    ]
+
+    if spec.symbol_roles_col is not None:
+        select_exprs.append(col(spec.symbol_roles_col).alias("symbol_roles"))
+
+    select_exprs.extend([
+        col(spec.path_col).alias("path"),
+        edge_owner.alias("edge_owner_file_id"),
+        bstart.alias("bstart"),
+        bend.alias("bend"),
+        lit(spec.resolution_method).alias("resolution_method"),
+        lit(str(spec.edge_kind)).alias("kind"),
+        lit(str(spec.origin)).alias("origin"),
+        lit(spec.confidence).alias("confidence"),
+        lit(spec.score).alias("score"),
+        lit(task_name).alias("task_name"),
+        lit(task_priority).alias("task_priority"),
+    ])
+
+    return source.select(*select_exprs)
+```
+
+This approach replaces the previous hand-written builders for each relationship type with a single generic implementation driven by declarative specs.
 
 ### CPG Output Schema
 
@@ -504,6 +717,7 @@ The emission pipeline produces three standardized output schemas:
 **File:** `src/cpg/emit_specs.py`
 
 **Node Output Columns (Lines 7-16):**
+
 ```python
 _NODE_OUTPUT_COLUMNS: tuple[str, ...] = (
     "node_id",
@@ -518,6 +732,7 @@ _NODE_OUTPUT_COLUMNS: tuple[str, ...] = (
 ```
 
 **Edge Output Columns (Lines 18-35):**
+
 ```python
 _EDGE_OUTPUT_COLUMNS: tuple[str, ...] = (
     "edge_id",
@@ -540,6 +755,7 @@ _EDGE_OUTPUT_COLUMNS: tuple[str, ...] = (
 ```
 
 **Property Output Columns (Lines 37-50):**
+
 ```python
 _PROP_OUTPUT_COLUMNS: tuple[str, ...] = (
     "entity_kind",
@@ -569,7 +785,8 @@ Hamilton orchestrates the full CPG build pipeline as a directed acyclic graph (D
 
 **File:** `src/hamilton_pipeline/execution.py`
 
-**Execution Entry Point (Lines 127-161):**
+**Execution Entry Point:**
+
 ```python
 def execute_pipeline(
     *,
@@ -587,7 +804,12 @@ def execute_pipeline(
     driver_instance = (
         options.pipeline_driver
         if options.pipeline_driver is not None
-        else build_driver(config=options.config)
+        else build_driver(
+            config=options.config,
+            execution_mode=options.execution_mode,
+            executor_config=options.executor_config,
+            graph_adapter_config=options.graph_adapter_config,
+        )
     )
     output_nodes = cast(
         "list[PipelineFinalVar]",
@@ -601,7 +823,8 @@ def execute_pipeline(
     return cast("Mapping[str, JsonDict | None]", results)
 ```
 
-**PipelineExecutionOptions (Lines 37-50):**
+**PipelineExecutionOptions:**
+
 ```python
 @dataclass(frozen=True)
 class PipelineExecutionOptions:
@@ -612,17 +835,22 @@ class PipelineExecutionOptions:
     scip_index_config: ScipIndexConfig | None = None
     scip_identity_overrides: ScipIdentityOverrides | None = None
     incremental_config: IncrementalConfig | None = None
-    incremental_impact_strategy: str | None = None
+    incremental_impact_strategy: ImpactStrategy | None = None
+    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
+    executor_config: ExecutorConfig | None = None
+    graph_adapter_config: GraphAdapterConfig | None = None
     outputs: Sequence[str] | None = None
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     pipeline_driver: hamilton_driver.Driver | None = None
     overrides: Mapping[str, object] | None = None
+    use_materialize: bool = True
 ```
 
 The options dataclass provides fine-grained control over:
 - Output and working directories
 - SCIP indexing configuration
 - Incremental execution settings
+- Execution mode and executor configuration
 - Requested output nodes
 - Hamilton config overrides
 - Pre-built driver instances (for testing or custom configurations)
@@ -633,7 +861,23 @@ The driver factory builds Hamilton drivers with plan-aware compilation—the exe
 
 **File:** `src/hamilton_pipeline/driver_factory.py`
 
-**Driver Build Process (Lines 674-777):**
+**View Graph Context (Lines 175-185):**
+
+```python
+@dataclass(frozen=True)
+class ViewGraphContext:
+    """Runtime context needed to compile the execution plan."""
+
+    profile: DataFusionRuntimeProfile
+    session_runtime: SessionRuntime
+    determinism_tier: DeterminismTier
+    snapshot: Mapping[str, object]
+    view_nodes: tuple[ViewNode, ...]
+    runtime_profile_spec: RuntimeProfileSpec
+```
+
+**Driver Build Process:**
+
 ```python
 def build_driver(
     *,
@@ -641,10 +885,13 @@ def build_driver(
     modules: Sequence[ModuleType] | None = None,
     view_ctx: ViewGraphContext | None = None,
     plan: ExecutionPlan | None = None,
+    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL,
+    executor_config: ExecutorConfig | None = None,
+    graph_adapter_config: GraphAdapterConfig | None = None,
 ) -> driver.Driver:
     """Build a Hamilton Driver for the pipeline."""
     modules = list(modules) if modules is not None else default_modules()
-    resolved_view_ctx = view_ctx or _view_graph_context(config)
+    resolved_view_ctx = view_ctx or build_view_graph_context(config)
     resolved_plan = plan or _compile_plan(resolved_view_ctx, config)
     if plan is None:
         resolved_plan = _plan_with_incremental_pruning(
@@ -666,12 +913,26 @@ def build_driver(
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
 
-    builder = driver.Builder().allow_module_overrides()
+    builder = DriverBuilder()
     builder = builder.with_modules(*modules).with_config(config_payload)
-    builder = _apply_dynamic_execution(builder, config=config_payload, plan=resolved_plan, diagnostics=diagnostics)
+    builder = _apply_dynamic_execution(
+        builder,
+        config=config_payload,
+        plan=resolved_plan,
+        diagnostics=diagnostics,
+        execution_mode=execution_mode,
+        executor_config=executor_config,
+    )
     builder = _apply_cache(builder, config=config_payload)
     builder = _apply_materializers(builder, config=config_payload)
-    builder = _apply_adapters(builder, config=config_payload, diagnostics=diagnostics, plan=resolved_plan, profile=resolved_view_ctx.profile)
+    builder = _apply_adapters(
+        builder,
+        config=config_payload,
+        diagnostics=diagnostics,
+        plan=resolved_plan,
+        profile=resolved_view_ctx.profile,
+        graph_adapter_config=graph_adapter_config,
+    )
     # ... additional hooks
     driver_instance = builder.build()
     return driver_instance
@@ -679,15 +940,15 @@ def build_driver(
 
 **Key Stages:**
 
-1. **View Graph Context Construction (Lines 157-185):** Initializes DataFusion session runtime, registers views, validates edge kind requirements, and extracts view nodes for planning.
+1. **View Graph Context Construction:** Initializes DataFusion session runtime, registers views, validates edge kind requirements via `validate_edge_kind_requirements()`, and extracts view nodes for planning
 
-2. **Execution Plan Compilation (Lines 202-224):** Compiles the execution plan from view dependencies, requested tasks, and incremental impact analysis.
+2. **Execution Plan Compilation:** Compiles the execution plan from view dependencies, requested tasks, and incremental impact analysis
 
-3. **Dynamic Module Generation (Lines 706-712):** Generates two synthetic modules:
+3. **Dynamic Module Generation:** Generates two synthetic modules:
    - `execution_plan` module exposing plan metadata
    - `generated_tasks` module containing per-task execution nodes
 
-4. **Driver Configuration (Lines 729-745):** Applies dynamic execution settings, caching, materializers, lifecycle adapters, and semantic registry hooks.
+4. **Driver Configuration:** Applies execution mode, executor config, caching, materializers, lifecycle adapters, and semantic registry hooks
 
 ### Task Module Builder
 
@@ -695,7 +956,8 @@ The task module builder generates a Hamilton module with one function node per t
 
 **File:** `src/hamilton_pipeline/task_module_builder.py`
 
-**Module Generation (Lines 30-98):**
+**Module Generation (Lines 104-150):**
+
 ```python
 def build_task_execution_module(
     *,
@@ -708,28 +970,50 @@ def build_task_execution_module(
     sys.modules[resolved.module_name] = module
     all_names: list[str] = []
     module.__dict__["__all__"] = all_names
-    dependency_map = plan.dependency_map
+    plan_context = _PlanTaskContext.from_plan(plan)
     outputs = {node.name: node for node in plan.view_nodes}
     scan_units_by_task = dict(plan.scan_task_units_by_name)
-    plan_fingerprints = dict(plan.plan_fingerprints)
-    plan_task_signatures = dict(plan.plan_task_signatures)
-    schedule_metadata = dict(plan.schedule_metadata)
+
     for scan_task_name in sorted(scan_units_by_task):
-        # ... scan task node generation
-        task_node = _build_task_node(TaskNodeContext(...))
+        scan_unit = scan_units_by_task[scan_task_name]
+        task_spec = TaskNodeSpec(
+            name=scan_task_name,
+            output=scan_task_name,
+            kind="scan",
+            priority=priority_for_task(scan_task_name),
+            cache_policy="none",
+        )
+        task_node = _build_task_node(
+            plan_context.build_context(
+                task=task_spec,
+                output_name=scan_task_name,
+                dependency_key=scan_task_name,
+                scan_unit_key=scan_unit.key,
+            )
+        )
         task_node.__module__ = resolved.module_name
         module.__dict__[scan_task_name] = task_node
         all_names.append(scan_task_name)
+
     for output_name, view_node in outputs.items():
-        # ... view task node generation
-        task_node = _build_task_node(TaskNodeContext(...))
+        spec = _task_spec_from_view_node(view_node)
+        task_node = _build_task_node(
+            plan_context.build_context(
+                task=spec,
+                output_name=output_name,
+                dependency_key=output_name,
+                scan_unit_key=None,
+            )
+        )
         task_node.__module__ = resolved.module_name
         module.__dict__[output_name] = task_node
         all_names.append(output_name)
+
     return module
 ```
 
-**Task Node Decoration (Lines 160-200):**
+**Task Node Decoration:**
+
 ```python
 def _decorate_task_node(
     *,
@@ -762,6 +1046,8 @@ def _decorate_task_node(
             "task_spec": value(task_spec),
         }
         node_fn = inject(**inject_kwargs)(node_fn)
+
+    # Tag application for schedule metadata
     schedule_tags: dict[str, str] = {}
     schedule_metadata = context.schedule_metadata
     if schedule_metadata is not None:
@@ -775,6 +1061,7 @@ def _decorate_task_node(
 ```
 
 **Hamilton Modifiers:**
+
 - `@cache(format="delta", behavior="default")` enables on-disk caching for persistent tasks
 - `@source(dep)` declares dependencies on other tasks
 - `@group(*sources)` collects multiple dependencies into a list
@@ -787,7 +1074,8 @@ The execution manager routes tasks to appropriate executors based on task kind�
 
 **File:** `src/hamilton_pipeline/execution_manager.py`
 
-**PlanExecutionManager (Lines 26-52):**
+**PlanExecutionManager (Lines 52-98):**
+
 ```python
 class PlanExecutionManager(executors.ExecutionManager):
     """Route scan tasks to remote execution and keep view tasks local."""
@@ -797,38 +1085,63 @@ class PlanExecutionManager(executors.ExecutionManager):
         *,
         local_executor: executors.TaskExecutor,
         remote_executor: executors.TaskExecutor,
+        cost_threshold: float | None = None,
+        diagnostics: DiagnosticsCollector | None = None,
     ) -> None:
         super().__init__([local_executor, remote_executor])
         self._local_executor = local_executor
         self._remote_executor = remote_executor
+        self._cost_threshold = cost_threshold
+        self._diagnostics = diagnostics
 
     def get_executor_for_task(
         self,
         task: executors.TaskImplementation,
     ) -> executors.TaskExecutor:
         """Return the executor for a task based on its tagged kind."""
-        if _task_kind(task) == _SCAN_TASK_KIND:
-            return self._remote_executor
-        return self._local_executor
+        tags = _task_tags(task)
+        use_remote = _task_kind(tags) == _SCAN_TASK_KIND or _is_high_cost(
+            tags,
+            threshold=self._cost_threshold,
+        )
+        executor = self._remote_executor if use_remote else self._local_executor
+        if self._diagnostics is not None:
+            payload = {
+                "run_id": getattr(task, "run_id", None),
+                "task_id": getattr(task, "task_id", None),
+                "task_name": tags.get("task_name"),
+                "task_kind": _task_kind(tags),
+                "task_cost": _task_cost(tags),
+                "cost_threshold": self._cost_threshold,
+                "executor": "remote" if use_remote else "local",
+                "event_time_unix_ms": int(time.time() * 1000),
+            }
+            self._diagnostics.record_events("hamilton_task_routing_v1", [payload])
+        return executor
 ```
 
-**Task Kind Extraction (Lines 12-23):**
+**Task Routing Logic (Lines 26-43):**
+
 ```python
-def _task_kind(task: executors.TaskImplementation) -> str | None:
-    nodes = getattr(task, "nodes", None)
-    if not isinstance(nodes, Sequence):
+def _task_kind(tags: Mapping[str, object]) -> str | None:
+    kind = tags.get("task_kind")
+    return kind if isinstance(kind, str) else None
+
+def _task_cost(tags: Mapping[str, object]) -> float | None:
+    value = tags.get("task_cost")
+    if isinstance(value, bool):
         return None
-    for node in nodes:
-        tags = getattr(node, "tags", None)
-        if not isinstance(tags, Mapping):
-            continue
-        kind = tags.get("task_kind")
-        if isinstance(kind, str):
-            return kind
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
     return None
 ```
 
-Scan tasks—which read large file sets from disk—benefit from parallelism, while view tasks—which perform DataFusion transformations—are lightweight and execute efficiently in the local process.
+Scan tasks—which read large file sets from disk—benefit from parallelism, while view tasks—which perform DataFusion transformations—are lightweight and execute efficiently in the local process. High-cost tasks (exceeding `cost_threshold`) are also routed to remote executors regardless of kind.
 
 ---
 
@@ -840,7 +1153,8 @@ The engine session bundles core execution surfaces into a single object for cons
 
 **File:** `src/engine/session.py`
 
-**EngineSession Definition (Lines 20-69):**
+**EngineSession Definition:**
+
 ```python
 @dataclass(frozen=True)
 class EngineSession:
@@ -875,7 +1189,8 @@ class EngineSession:
         )
 ```
 
-**Session Factory (File: `src/engine/session_factory.py`, Lines 22-92):**
+**Session Factory (File: `src/engine/session_factory.py`):**
+
 ```python
 def build_engine_session(
     *,
@@ -928,6 +1243,7 @@ def build_engine_session(
 ```
 
 The factory performs several critical initialization steps:
+
 1. Builds the `EngineRuntime` with DataFusion profile and diagnostics policy
 2. Records feature state snapshots for reproducibility
 3. Initializes the `DatasetCatalog` for dataset location resolution
@@ -940,7 +1256,8 @@ The materialization pipeline executes registered views and produces `PlanProduct
 
 **File:** `src/engine/materialize_pipeline.py`
 
-**View Product Builder (Lines 228-316):**
+**View Product Builder:**
+
 ```python
 def build_view_product(
     view_name: str,
@@ -976,7 +1293,9 @@ def build_view_product(
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     view_artifact = (
-        profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
+        profile.view_registry.entries.get(view_name)
+        if profile.view_registry is not None
+        else None
     )
     facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
     df = facade.execute_plan_bundle(
@@ -1011,7 +1330,8 @@ def build_view_product(
     )
 ```
 
-**PlanProduct Abstraction (File: `src/engine/plan_product.py`, Lines 19-71):**
+**PlanProduct Abstraction (File: `src/engine/plan_product.py`):**
+
 ```python
 @dataclass(frozen=True)
 class PlanProduct:
@@ -1057,7 +1377,8 @@ The request dataclass specifies all inputs and options for a CPG build.
 
 **File:** `src/graph/product_build.py`
 
-**Request Definition (Lines 78-106):**
+**Request Definition (Lines 91-123):**
+
 ```python
 @dataclass(frozen=True)
 class GraphProductBuildRequest:
@@ -1065,6 +1386,9 @@ class GraphProductBuildRequest:
 
     repo_root: PathLike
     product: GraphProduct = "cpg"
+    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
+    executor_config: ExecutorConfig | None = None
+    graph_adapter_config: GraphAdapterConfig | None = None
 
     output_dir: PathLike | None = None
     work_dir: PathLike | None = None
@@ -1087,12 +1411,16 @@ class GraphProductBuildRequest:
 
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     overrides: Mapping[str, object] | None = None
+    use_materialize: bool = True
 ```
 
 **Key Parameters:**
 
 - **repo_root**: Absolute path to the repository being analyzed (REQUIRED)
 - **product**: Graph product type (currently only "cpg" is supported)
+- **execution_mode**: Hamilton execution mode (DETERMINISTIC_SERIAL, PLAN_PARALLEL, PLAN_PARALLEL_REMOTE)
+- **executor_config**: Executor configuration for task routing and parallelism
+- **graph_adapter_config**: Graph adapter configuration for non-dynamic backends
 - **output_dir**: Delta Lake output directory (defaults to `{repo_root}/build`)
 - **work_dir**: Temporary working directory for intermediate artifacts
 - **runtime_profile_name**: Runtime profile name for engine configuration
@@ -1106,6 +1434,7 @@ class GraphProductBuildRequest:
 - **include_run_bundle**: Whether to emit run bundle directory with diagnostics
 - **config**: Arbitrary config overrides for Hamilton pipeline
 - **overrides**: Arbitrary override values for Hamilton execution
+- **use_materialize**: Whether to use Hamilton materializers
 
 ### GraphProductBuildResult
 
@@ -1113,7 +1442,8 @@ The result dataclass provides typed access to CPG outputs and metadata.
 
 **File:** `src/graph/product_build.py`
 
-**Result Definition (Lines 54-76):**
+**Result Definition (Lines 63-88):**
+
 ```python
 @dataclass(frozen=True)
 class GraphProductBuildResult:
@@ -1143,7 +1473,8 @@ class GraphProductBuildResult:
     pipeline_outputs: Mapping[str, JsonDict | None] = field(default_factory=dict)
 ```
 
-**FinalizeDeltaReport (Lines 37-42):**
+**FinalizeDeltaReport (Lines 46-52):**
+
 ```python
 @dataclass(frozen=True)
 class FinalizeDeltaReport:
@@ -1154,7 +1485,8 @@ class FinalizeDeltaReport:
     error_rows: int
 ```
 
-**FinalizeDeltaPaths (Lines 27-33):**
+**FinalizeDeltaPaths (Lines 36-43):**
+
 ```python
 @dataclass(frozen=True)
 class FinalizeDeltaPaths:
@@ -1167,6 +1499,7 @@ class FinalizeDeltaPaths:
 ```
 
 Each CPG output (`cpg_nodes`, `cpg_edges`, `cpg_props`) reports:
+
 - **paths.data**: Delta Lake table path for valid rows
 - **paths.errors**: Delta Lake table path for validation errors
 - **paths.stats**: JSON statistics file
@@ -1175,6 +1508,7 @@ Each CPG output (`cpg_nodes`, `cpg_edges`, `cpg_props`) reports:
 - **error_rows**: Validation error row count
 
 Adjacency/accelerator outputs (`cpg_props_map`, `cpg_edges_by_src`, `cpg_edges_by_dst`) report:
+
 - **path**: Delta Lake table path for the accelerator table
 - **rows**: Row count
 
@@ -1184,7 +1518,8 @@ The `build_graph_product()` function orchestrates the full CPG build pipeline.
 
 **File:** `src/graph/product_build.py`
 
-**Entry Point (Lines 108-145):**
+**Entry Point (Lines 125-198):**
+
 ```python
 def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildResult:
     """Build the requested graph product and return typed outputs."""
@@ -1198,6 +1533,10 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         overrides["determinism_override"] = request.determinism_override
     if request.writer_strategy is not None:
         overrides["writer_strategy"] = request.writer_strategy
+    run_id = overrides.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        run_id = uuid7_str()
+        overrides["run_id"] = run_id
 
     outputs = _outputs_for_request(request)
     options = PipelineExecutionOptions(
@@ -1207,28 +1546,64 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         scip_identity_overrides=request.scip_identity_overrides,
         incremental_config=request.incremental_config,
         incremental_impact_strategy=request.incremental_impact_strategy,
+        execution_mode=request.execution_mode,
+        executor_config=request.executor_config,
+        graph_adapter_config=request.graph_adapter_config,
         outputs=outputs,
         config=request.config,
         overrides=overrides or None,
+        use_materialize=request.use_materialize,
     )
 
-    raw = execute_pipeline(repo_root=repo_root_path, options=options)
-    return _parse_result(
-        request=request,
-        repo_root=repo_root_path,
-        pipeline_outputs=raw,
+    configure_otel(
+        service_name="codeanatomy",
+        options=OtelBootstrapOptions(
+            resource_overrides=_otel_resource_overrides(repo_root_path)
+        ),
     )
+    run_token = set_run_id(run_id)
+    try:
+        with root_span(
+            "graph_product.build",
+            attributes={
+                "codeanatomy.product": request.product,
+                "codeanatomy.execution_mode": request.execution_mode.value,
+                "codeanatomy.outputs": list(outputs),
+            },
+        ) as span:
+            try:
+                raw = execute_pipeline(repo_root=repo_root_path, options=options)
+            except Exception as exc:
+                record_exception(span, exc)
+                raise
+            result = _parse_result(
+                request=request,
+                repo_root=repo_root_path,
+                pipeline_outputs=raw,
+            )
+            set_span_attributes(
+                span,
+                {
+                    "codeanatomy.product_version": result.product_version,
+                    "codeanatomy.output_dir": str(result.output_dir),
+                },
+            )
+            return result
+    finally:
+        reset_run_id(run_token)
 ```
 
 **Execution Flow:**
 
-1. **Input Validation (Line 116):** Resolves `repo_root` to an absolute path
-2. **Override Assembly (Lines 119-125):** Merges runtime profile, determinism, and writer strategy overrides
-3. **Output Node Selection (Lines 127):** Determines which Hamilton output nodes to request based on `include_*` flags
-4. **Pipeline Execution (Line 140):** Invokes `execute_pipeline()` with resolved options
-5. **Result Parsing (Lines 141-145):** Parses Hamilton's raw output dictionary into typed `GraphProductBuildResult`
+1. **Input Validation (Line 133):** Resolves `repo_root` to an absolute path
+2. **Override Assembly (Lines 136-146):** Merges runtime profile, determinism, writer strategy, and run_id overrides
+3. **Output Node Selection (Line 148):** Determines which Hamilton output nodes to request based on `include_*` flags
+4. **Pipeline Execution (Line 165):** Invokes `execute_pipeline()` with resolved options
+5. **Result Parsing (Lines 184-188):** Parses Hamilton's raw output dictionary into typed `GraphProductBuildResult`
+6. **OpenTelemetry Integration (Lines 165-196):** Wraps execution in root span with proper context management
 
-**Output Node Mapping (Lines 148-167):**
+**Output Node Mapping (Lines 201-223):**
+
 ```python
 def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
     outputs: list[str] = [
@@ -1253,84 +1628,6 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
     return outputs
 ```
 
-**Result Parsing (Lines 261-318):**
-```python
-def _parse_result(
-    *,
-    request: GraphProductBuildRequest,
-    repo_root: Path,
-    pipeline_outputs: Mapping[str, JsonDict | None],
-) -> GraphProductBuildResult:
-    nodes_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_nodes_delta"))
-    output_dir = nodes_report.paths.data.parent
-
-    edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_delta"))
-    props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_delta"))
-    props_map_report = _parse_table(_require(pipeline_outputs, "write_cpg_props_map_delta"))
-    edges_by_src_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_src_delta"))
-    edges_by_dst_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_dst_delta"))
-
-    nodes_quality = None
-    if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_nodes_quality_delta")
-        if quality is not None:
-            nodes_quality = _parse_table(quality)
-
-    props_quality = None
-    if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_props_quality_delta")
-        if quality is not None:
-            props_quality = _parse_table(quality)
-
-    manifest_path = None
-    manifest_run_id = None
-    if request.include_manifest:
-        manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
-        if manifest is not None and manifest.get("path"):
-            manifest_path = Path(cast("str", manifest["path"]))
-        if manifest is not None and manifest.get("manifest"):
-            manifest_payload = cast("dict[str, object]", manifest["manifest"])
-            manifest_run_id = cast("str | None", manifest_payload.get("run_id"))
-
-    run_bundle_dir = None
-    run_id = None
-    if request.include_run_bundle:
-        bundle = _optional(pipeline_outputs, "write_run_bundle_dir")
-        if bundle is not None and bundle.get("bundle_dir"):
-            run_bundle_dir = Path(cast("str", bundle["bundle_dir"]))
-        if bundle is not None and bundle.get("run_id"):
-            run_id = cast("str", bundle["run_id"])
-    if run_id is None:
-        run_id = manifest_run_id
-    if run_id is None and run_bundle_dir is not None:
-        run_id = run_bundle_dir.name
-
-    extract_errors = None
-    if request.include_extract_errors:
-        extract_errors = _optional(pipeline_outputs, "write_extract_error_artifacts_delta")
-
-    return GraphProductBuildResult(
-        product=request.product,
-        product_version=_product_version(request.product),
-        engine_versions=_engine_versions(),
-        run_id=run_id,
-        repo_root=repo_root,
-        output_dir=output_dir,
-        cpg_nodes=nodes_report,
-        cpg_edges=edges_report,
-        cpg_props=props_report,
-        cpg_props_map=props_map_report,
-        cpg_edges_by_src=edges_by_src_report,
-        cpg_edges_by_dst=edges_by_dst_report,
-        cpg_nodes_quality=nodes_quality,
-        cpg_props_quality=props_quality,
-        extract_error_artifacts=extract_errors,
-        manifest_path=manifest_path,
-        run_bundle_dir=run_bundle_dir,
-        pipeline_outputs=pipeline_outputs,
-    )
-```
-
 The parser extracts typed metadata from Hamilton's JSON output dictionary, ensuring that downstream consumers receive structured data with compile-time type safety.
 
 ---
@@ -1342,7 +1639,7 @@ flowchart TD
     A[Public API: build_graph_product] --> B[GraphProductBuildRequest]
     B --> C[execute_pipeline]
     C --> D[build_driver]
-    D --> E[ViewGraphContext]
+    D --> E[build_view_graph_context]
     E --> F[compile_execution_plan]
     F --> G[build_execution_plan_module]
     G --> H[build_task_execution_module]
@@ -1373,14 +1670,14 @@ flowchart TD
 
 **Build Flow:**
 
-1. **Public API Layer:** `build_graph_product()` receives a typed request
+1. **Public API Layer:** `build_graph_product()` receives a typed request with execution mode and executor config
 2. **Pipeline Execution:** `execute_pipeline()` builds or reuses a Hamilton driver
-3. **Driver Construction:** `build_driver()` compiles the execution plan and generates task modules
-4. **View Graph Context:** Initializes DataFusion session, registers views, validates schemas
-5. **Execution Plan Compilation:** Infers dependencies, computes task schedule, prunes for incremental execution
-6. **Dynamic Module Generation:** Creates `execution_plan` and `generated_tasks` modules
-7. **Hamilton Execution:** Driver executes requested output nodes (CPG writes)
-8. **CPG Emission:** Task nodes invoke DataFusion view builders to produce node/edge/prop DataFrames
+3. **Driver Construction:** `build_driver()` compiles the execution plan and generates task modules with plan-aware tags
+4. **View Graph Context:** Initializes DataFusion session, registers views, validates schemas via `validate_edge_kind_requirements()`
+5. **Execution Plan Compilation:** Infers dependencies from DataFusion lineage, computes task schedule, prunes for incremental execution
+6. **Dynamic Module Generation:** Creates `execution_plan` and `generated_tasks` modules with schedule analytics tags
+7. **Hamilton Execution:** Driver executes requested output nodes (CPG writes) with task routing based on kind and cost
+8. **CPG Emission:** Task nodes invoke DataFusion view builders to produce node/edge/prop DataFrames with semantic type validation
 9. **Delta Lake Writes:** DataFrames are written to Delta Lake via write pipeline
 10. **Result Assembly:** Parses Hamilton outputs into typed `GraphProductBuildResult`
 11. **Return to Caller:** Public API returns structured result with paths and metadata
@@ -1395,7 +1692,7 @@ flowchart TD
 
 **Implementation:**
 
-1. **Column Coalescing (`src/cpg/view_builders_df.py:61-74`):** The `_coalesce_cols()` function returns typed null literals when all candidate columns are missing, ensuring that emission DataFrames always have valid schemas even when source tables lack expected columns.
+1. **Column Coalescing (`src/cpg/view_builders_df.py:193-206`):** The `_coalesce_cols()` function returns typed null literals when all candidate columns are missing, ensuring that emission DataFrames always have valid schemas even when source tables lack expected columns.
 
 2. **Optional Input Handling:** All CPG builders check for table existence before reading, gracefully producing empty DataFrames when optional sources are unavailable.
 
@@ -1407,10 +1704,10 @@ flowchart TD
 
 **Implementation:**
 
-- **SCHEMA_VERSION Constant (`src/cpg/schemas.py:5`):** A single integer version tracks schema changes
-- **Product Versioning (`src/graph/product_build.py:255-258`):** The `_product_version()` function embeds the schema version into the product version string (e.g., `cpg_ultimate_v1`)
-- **Column Order Enforcement (`src/cpg/emit_specs.py:7-50`):** Output column tuples define the exact column order for nodes, edges, and properties
-- **Validation at Build Time:** Edge kind requirements are validated before execution begins, ensuring that the relation output view satisfies all edge contracts
+- **SCHEMA_VERSION Constant (`src/cpg/schemas.py`):** A single integer version tracks schema changes
+- **Product Versioning (`src/graph/product_build.py`):** The `_product_version()` function embeds the schema version into the product version string (e.g., `cpg_ultimate_v1`)
+- **Column Order Enforcement (`src/cpg/emit_specs.py`):** Output column tuples define the exact column order for nodes, edges, and properties
+- **Validation at Build Time:** Edge kind requirements are validated via `validate_edge_kind_requirements()` before execution begins, ensuring that the relation output view satisfies all edge contracts
 
 ### Determinism Contracts
 
@@ -1418,40 +1715,45 @@ flowchart TD
 
 **Implementation:**
 
-1. **Stable ID Generation:** Node and edge IDs are computed via deterministic hash functions (`stable_id_parts`) that combine identity columns in a fixed order.
+1. **Stable ID Generation:** Node and edge IDs are computed via deterministic hash functions (`stable_id_parts`) that combine identity columns in a fixed order
 
 2. **Determinism Tiers:**
    - **CANONICAL (Tier 2):** Fully reproducible outputs with sorted frames and stable iteration order
    - **STABLE_SET (Tier 1):** Set-stable outputs (same rows, potentially different order)
    - **BEST_EFFORT (Tier 0):** Non-deterministic outputs allowed for performance
 
-3. **Profile Hashing (`src/engine/session_factory.py:60-65`):** Runtime profiles compute settings hashes that include determinism tier, ensuring cache invalidation when determinism requirements change.
+3. **Profile Hashing (`src/engine/session_factory.py`):** Runtime profiles compute settings hashes that include determinism tier, ensuring cache invalidation when determinism requirements change
+
+4. **Semantic Type Tagging:** Critical ID columns (node_id, edge_id, src_node_id, dst_node_id) are tagged with semantic types to enforce UDF contract compliance
 
 ---
 
 ## Critical Files and Modules
 
-### 1. `src/graph/product_build.py` (329 lines)
+### 1. `src/graph/product_build.py` (~350 lines)
 
 **Purpose:** Public API entry point for CPG construction.
 
 **Key Exports:**
-- `GraphProductBuildRequest`: Request dataclass
+
+- `GraphProductBuildRequest`: Request dataclass with execution mode and executor config
 - `GraphProductBuildResult`: Result dataclass
 - `build_graph_product()`: Main entry point
 
 **Design Pattern:** Facade pattern—hides Hamilton orchestration complexity behind a clean typed interface.
 
 **Critical Sections:**
-- Lines 78-106: Request specification with all options
-- Lines 54-76: Result specification with typed outputs
-- Lines 108-145: Build orchestration and result parsing
+
+- Lines 91-123: Request specification with execution mode, executor config, and all options
+- Lines 63-88: Result specification with typed outputs
+- Lines 125-198: Build orchestration with OpenTelemetry integration and result parsing
 
 ### 2. `src/cpg/kind_catalog.py` (276 lines)
 
 **Purpose:** Node and edge kind registry with validation contracts.
 
 **Key Exports:**
+
 - `NodeKindId`, `EdgeKindId`: Type-safe kind identifiers
 - `EDGE_KIND_SPECS`: Edge requirement specifications
 - `validate_edge_kind_requirements()`: Schema validation
@@ -1459,90 +1761,160 @@ flowchart TD
 **Design Pattern:** Registry pattern—centralized catalog of all CPG entity types.
 
 **Critical Sections:**
+
 - Lines 25-48: Node kind definitions
 - Lines 51-73: Edge kind definitions
 - Lines 85-160: Edge requirement specifications
-- Lines 174-196: Validation logic
+- Lines 174-196: Validation logic via `validate_edge_kind_requirements()`
 
 ### 3. `src/cpg/prop_catalog.py` (427 lines)
 
 **Purpose:** Property specification catalog with type and enum constraints.
 
 **Key Exports:**
+
 - `PropSpec`: Property specification with type and description
 - `PROP_SPECS`: Complete property catalog (200+ properties)
 - `PROP_ENUMS`: Enum constraints for categorical properties
 
 **Design Pattern:** Specification pattern—declarative property definitions with validation.
 
-**Critical Sections:**
-- Lines 15-35: PropSpec definition
-- Lines 93-144: Enum constraint definitions
-- Lines 147-342: Property catalog
+### 4. `src/cpg/node_families.py` (499 lines)
 
-### 4. `src/cpg/view_builders_df.py` (estimated 500+ lines)
+**Purpose:** Node family abstractions for DRY schema definitions.
+
+**Key Exports:**
+
+- `NodeFamily`: Enumeration of family categories
+- `NodeFamilyDefaults`: Default field bundles and span columns
+- `node_family_bundle()`: FieldBundle factory
+- `node_spec_with_family()`: TableSchemaSpec builder
+
+**Design Pattern:** Template pattern—families provide reusable field patterns.
+
+### 5. `src/cpg/spec_registry.py` (748 lines)
+
+**Purpose:** Entity family specifications driving CPG emission.
+
+**Key Exports:**
+
+- `EntityFamilySpec`: Node/prop family specification with node family defaults
+- `ENTITY_FAMILY_SPECS`: Complete registry of ~30 families
+- `node_plan_specs()`: Extract node plan specs
+- `prop_table_specs()`: Extract property table specs
+
+**Design Pattern:** Registry pattern with delegation to node families.
+
+### 6. `src/cpg/relationship_specs.py` (434 lines)
+
+**Purpose:** Declarative relationship specifications with column specs.
+
+**Key Exports:**
+
+- `RelationshipSpec`: Symbol relationship specification
+- `QNameRelationshipSpec`: QName relationship specification
+- `ColumnSpec`: ColumnRef or CoalesceRef union type
+- `SYMBOL_RELATIONSHIP_SPECS`: Tuple of symbol relationship specs
+- `QNAME_RELATIONSHIP_SPECS`: Tuple of qname relationship specs
+
+**Design Pattern:** Specification pattern with builder delegation.
+
+### 7. `src/cpg/relationship_builder.py` (~200 lines)
+
+**Purpose:** Generic DataFusion builders driven by relationship specs.
+
+**Key Exports:**
+
+- `build_symbol_relation_df()`: Generic symbol relationship builder
+- `build_qname_relation_df()`: Generic qname relationship builder
+
+**Design Pattern:** Builder pattern with specification-driven construction.
+
+### 8. `src/cpg/view_builders_df.py` (971 lines)
 
 **Purpose:** DataFusion-native CPG emission builders.
 
 **Key Exports:**
-- `build_cpg_nodes_df()`: Node DataFrame builder
-- `build_cpg_edges_df()`: Edge DataFrame builder
+
+- `build_cpg_nodes_df()`: Node DataFrame builder with semantic validation
+- `build_cpg_edges_df()`: Edge DataFrame builder with semantic validation
 - `build_cpg_props_df()`: Property DataFrame builder
+- `build_cpg_props_map_df()`: Property map aggregation builder
+- `build_cpg_edges_by_src_df()`: Source adjacency builder
+- `build_cpg_edges_by_dst_df()`: Destination adjacency builder
 
 **Design Pattern:** Builder pattern—procedural DataFrame construction from view specs.
 
 **Critical Sections:**
-- Lines 110-161: Node emission orchestration
-- Lines 164-209: Node emission helper with stable ID generation
-- Lines 61-74: Column coalescing with graceful degradation
 
-### 5. `src/hamilton_pipeline/driver_factory.py` (829 lines)
+- Lines 242-306: Node emission orchestration with semantic validation
+- Lines 309-354: Node emission helper with stable ID generation and semantic tagging
+- Lines 193-206: Column coalescing with graceful degradation
+- Lines 99-191: Semantic type validation infrastructure
+
+### 9. `src/hamilton_pipeline/driver_factory.py` (~900 lines)
 
 **Purpose:** Hamilton driver construction with plan-aware compilation.
 
 **Key Exports:**
-- `build_driver()`: Main driver factory
-- `ViewGraphContext`: View graph compilation context
-- `DriverFactory`: Cached driver factory
+
+- `build_driver()`: Main driver factory with execution mode and executor config
+- `build_view_graph_context()`: View graph compilation context
+- `ViewGraphContext`: Context dataclass
 
 **Design Pattern:** Factory pattern with caching—expensive driver builds are cached by plan signature.
 
 **Critical Sections:**
-- Lines 674-777: Driver build orchestration
-- Lines 157-185: View graph context construction
-- Lines 202-224: Execution plan compilation
-- Lines 304-335: Incremental execution pruning
 
-### 6. `src/hamilton_pipeline/task_module_builder.py` (200+ lines)
+- Lines 175-185: ViewGraphContext definition
+- Lines 187-200: Context construction with edge kind validation
+- Driver build orchestration with execution mode and executor config application
+- Dynamic module generation for plan-aware task nodes
+
+### 10. `src/hamilton_pipeline/task_module_builder.py` (~250 lines)
 
 **Purpose:** Dynamic Hamilton module generation for task execution nodes.
 
 **Key Exports:**
+
 - `build_task_execution_module()`: Module builder
 - `TaskNodeSpec`: Task metadata specification
+- `_PlanTaskContext`: Plan context with schedule analytics
 
 **Design Pattern:** Code generation pattern—synthesizes Python modules at runtime.
 
 **Critical Sections:**
-- Lines 30-98: Module generation loop
-- Lines 115-136: Task node function builder
-- Lines 160-200: Hamilton modifier decoration
 
-### 7. `src/engine/materialize_pipeline.py` (506 lines)
+- Lines 47-64: Plan context construction from execution plan
+- Lines 104-150: Module generation loop with task node decoration
+- Task node decoration with Hamilton modifiers and schedule analytics tags
+
+### 11. `src/hamilton_pipeline/execution_manager.py` (102 lines)
+
+**Purpose:** Plan-aware execution manager routing tasks to executors.
+
+**Key Exports:**
+
+- `PlanExecutionManager`: Execution manager with cost-based routing
+
+**Design Pattern:** Strategy pattern—selects executor based on task kind and cost.
+
+**Critical Sections:**
+
+- Lines 52-98: Execution manager with cost threshold and diagnostics
+- Lines 26-43: Task kind and cost extraction from tags
+
+### 12. `src/engine/materialize_pipeline.py` (~550 lines)
 
 **Purpose:** View materialization with streaming and table outputs.
 
 **Key Exports:**
+
 - `build_view_product()`: View execution wrapper
 - `resolve_cache_policy()`: Cache decision logic
 - `write_extract_outputs()`: Delta Lake write helper
 
 **Design Pattern:** Strategy pattern—selects streaming or table outputs based on policy.
-
-**Critical Sections:**
-- Lines 228-316: View product builder
-- Lines 89-155: Cache policy resolution
-- Lines 432-498: Extract output writer
 
 ---
 
@@ -1550,12 +1922,21 @@ flowchart TD
 
 ```python
 from graph import GraphProductBuildRequest, build_graph_product
+from hamilton_pipeline.types import ExecutionMode, ExecutorConfig, ExecutorKind
 
-# Build CPG for a repository
+# Build CPG for a repository with parallel execution
 request = GraphProductBuildRequest(
     repo_root="/path/to/repository",
     output_dir="/path/to/output",  # Optional, defaults to {repo_root}/build
     runtime_profile_name="default",  # Optional, controls engine configuration
+    execution_mode=ExecutionMode.PLAN_PARALLEL,  # Parallel plan execution
+    executor_config=ExecutorConfig(
+        kind=ExecutorKind.MULTIPROCESSING,
+        max_tasks=4,
+        remote_kind=ExecutorKind.MULTIPROCESSING,
+        remote_max_tasks=8,
+        cost_threshold=100.0,  # Route high-cost tasks to remote executor
+    ),
     include_quality=True,  # Emit quality metrics tables
     include_manifest=True,  # Emit run manifest
     include_run_bundle=True,  # Emit diagnostics bundle
@@ -1598,18 +1979,24 @@ The public API (`build_graph_product`) serves as a facade that hides Hamilton or
 
 ### Registry Pattern
 
-Node kinds, edge kinds, and property specifications are maintained in centralized registries (`kind_catalog.py`, `prop_catalog.py`). This enables:
+Node kinds, edge kinds, property specifications, entity families, and relationship specs are maintained in centralized registries. This enables:
+
 - Compile-time validation of spec consistency
 - Centralized documentation of all CPG entity types
 - Easy extension with new node/edge/property types
+- DRY field definitions via node families
 
 ### Builder Pattern
 
 CPG emission uses builder functions (`build_cpg_nodes_df`, `build_cpg_edges_df`, `build_cpg_props_df`) that construct DataFrames from view specs. Each builder:
+
 - Accepts a `SessionRuntime` with registered views
 - Iterates over entity family specifications
 - Emits standardized DataFrames with stable schemas
 - Handles missing columns gracefully via coalescing
+- Validates semantic types on critical ID columns
+
+Relationship builders use generic implementations (`build_symbol_relation_df`, `build_qname_relation_df`) driven by declarative specs.
 
 ### Factory Pattern with Caching
 
@@ -1617,10 +2004,26 @@ The driver factory (`build_driver`, `DriverFactory`) caches built Hamilton drive
 
 ### Strategy Pattern
 
-The materialization pipeline uses strategy selection to choose between streaming (for memory efficiency) and table (for random access) outputs based on the `ExecutionSurfacePolicy`.
+The materialization pipeline uses strategy selection to choose between streaming (for memory efficiency) and table (for random access) outputs based on the `ExecutionSurfacePolicy`. The execution manager uses strategy selection to route tasks to executors based on task kind and cost.
+
+### Template Pattern
+
+Node families provide reusable field templates that are inherited by specific node types, eliminating schema definition duplication across ~30 entity families.
 
 ---
 
 ## Summary
 
-The CPG Build and Orchestration subsystem completes CodeAnatomy's inference pipeline by transforming normalized evidence tables into a queryable Code Property Graph. The architecture separates schema specification (kinds, properties, transforms) from emission logic (DataFusion view builders) and orchestration (Hamilton DAG execution). The public API provides a clean entry point with typed inputs and outputs, ensuring API stability across internal refactorings. Key architectural invariants—graceful degradation, schema version stability, and determinism contracts—ensure that CPG outputs are reliable, reproducible, and suitable for downstream analysis tasks.
+The CPG Build and Orchestration subsystem completes CodeAnatomy's inference pipeline by transforming normalized evidence tables into a queryable Code Property Graph. The architecture separates schema specification (kinds, properties, transforms, families) from emission logic (DataFusion view builders with semantic validation) and orchestration (Hamilton DAG execution with plan-aware routing). The public API provides a clean entry point with typed inputs/outputs and explicit execution mode configuration, ensuring API stability across internal refactorings.
+
+Key architectural innovations include:
+
+- **Node Family Abstraction**: DRY schema definitions via reusable field bundles
+- **Declarative Relationship Specs**: Generic builders eliminate code duplication
+- **Semantic Type Validation**: UDF contract enforcement on critical ID columns
+- **Plan-Aware Orchestration**: Execution mode, executor config, and cost-based task routing exposed via public API
+- **Graceful Degradation**: Missing columns produce typed nulls, not exceptions
+- **Schema Version Stability**: Edge kind requirements validated at build time
+- **Determinism Contracts**: Stable IDs, semantic tagging, and reproducible outputs across tiers
+
+The design ensures that CPG outputs are reliable, reproducible, and suitable for downstream analysis tasks while maintaining flexibility for performance optimization through parallel execution modes and distributed executors.

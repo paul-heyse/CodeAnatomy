@@ -46,7 +46,7 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
 
 ## GraphProductBuildRequest
 
-**Definition:** `src/graph/product_build.py` (lines 92-123)
+**Definition:** `src/graph/product_build.py` (line 92)
 
 The request object bundles all execution parameters for a graph build.
 
@@ -364,7 +364,7 @@ GraphProductBuildRequest(
 
 ## GraphProductBuildResult
 
-**Definition:** `src/graph/product_build.py` (lines 64-89)
+**Definition:** `src/graph/product_build.py` (line 64)
 
 The result object contains all output paths, metadata, and metrics from a successful graph build.
 
@@ -586,7 +586,7 @@ for node_name, metadata in result.pipeline_outputs.items():
 
 ### FinalizeDeltaReport
 
-**Definition:** `src/graph/product_build.py` (lines 47-53)
+**Definition:** `src/graph/product_build.py` (line 47)
 
 Report structure for finalized Delta table outputs with error tracking.
 
@@ -609,7 +609,7 @@ print(f"Error rows: {report.error_rows}")
 
 ### FinalizeDeltaPaths
 
-**Definition:** `src/graph/product_build.py` (lines 37-44)
+**Definition:** `src/graph/product_build.py` (line 37)
 
 Bundle of paths returned by finalized Delta writes.
 
@@ -634,7 +634,7 @@ alignment_path = paths.alignment # Schema alignment log
 
 ### TableDeltaReport
 
-**Definition:** `src/graph/product_build.py` (lines 56-61)
+**Definition:** `src/graph/product_build.py` (line 56)
 
 Simplified report structure for single-table Delta outputs.
 
@@ -655,7 +655,7 @@ print(f"Row count: {report.rows}")
 
 ### ExecutionMode
 
-**Definition:** `src/hamilton_pipeline/types/` (lines 184-189)
+**Definition:** `src/hamilton_pipeline/types/execution.py` (line 21)
 
 Enum controlling Hamilton orchestration strategy.
 
@@ -714,7 +714,7 @@ GraphProductBuildRequest(
 
 ### ExecutorConfig
 
-**Definition:** `src/hamilton_pipeline/types/` (lines 193-204)
+**Definition:** `src/hamilton_pipeline/types/execution.py` (line 30)
 
 Configuration for plan-aware parallel execution.
 
@@ -767,7 +767,7 @@ ExecutorConfig(
 
 ### GraphAdapterConfig
 
-**Definition:** `src/hamilton_pipeline/types/` (lines 207-212)
+**Definition:** `src/hamilton_pipeline/types/execution.py` (line 44)
 
 Configuration for non-dynamic graph execution backends (Dask, Ray).
 
@@ -805,7 +805,7 @@ GraphAdapterConfig(
 
 ### DeterminismTier
 
-**Definition:** `src/core_types.py` (lines 33-41)
+**Definition:** `src/core_types.py` (line 33)
 
 Determinism budget controlling output ordering and stability guarantees.
 
@@ -864,7 +864,7 @@ GraphProductBuildRequest(
 
 ### IncrementalConfig
 
-**Definition:** `src/incremental/types.py` (lines 11-23)
+**Definition:** `src/incremental/types.py` (line 14)
 
 Configuration for incremental processing mode.
 
@@ -921,7 +921,7 @@ IncrementalConfig(
 
 ### ScipIndexConfig
 
-**Definition:** `src/hamilton_pipeline/types/` (lines 20-44)
+**Definition:** `src/hamilton_pipeline/types/repo_config.py` (line 36, aliasing ScipIndexSettings at line 10)
 
 Configuration for SCIP (SCIP Code Intelligence Protocol) indexing.
 
@@ -987,7 +987,7 @@ ScipIndexConfig(
 
 ### ScipIdentityOverrides
 
-**Definition:** `src/hamilton_pipeline/types/` (lines 249-255)
+**Definition:** `src/hamilton_pipeline/types/repo_config.py` (line 77)
 
 Override SCIP project identity fields.
 
@@ -1363,6 +1363,279 @@ except Exception as exc:
                     event = json.loads(line)
                     print(f"[{event['timestamp']}] {event['message']}")
 ```
+
+## Command-Line Interface
+
+**Primary Module:** `src/cli/app.py`
+
+CodeAnatomy provides a command-line interface built on Cyclopts for graph building and maintenance operations.
+
+### CLI Entry Point
+
+The CLI is invoked via the `codeanatomy` command (or `python -m cli`).
+
+**Basic Usage:**
+```bash
+codeanatomy build /path/to/repo
+codeanatomy build /path/to/repo --output-dir ./cpg_output
+codeanatomy --help
+```
+
+### Available Commands
+
+| Command | Description | Module |
+|---------|-------------|--------|
+| `build` | Build the Code Property Graph for a repository | `src/cli/commands/build.py` |
+| `plan` | Show computed execution plan without running | `src/cli/commands/plan.py` |
+| `diag` | Generate diagnostic report for pipeline outputs | `src/cli/commands/diag.py` |
+| `config` | Configuration management subcommands | `src/cli/commands/config.py` |
+| `delta` | Delta Lake maintenance operations | `src/cli/commands/delta.py` |
+| `version` | Show version and engine information | `src/cli/commands/version.py` |
+
+### Global Options
+
+All commands support these global session options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--config` | `str` | `None` | Path to configuration file (overrides default search). |
+| `--run-id` | `str` | (UUID7) | Explicit run identifier. |
+| `--log-level` | `Literal` | `INFO` | Logging verbosity: DEBUG, INFO, WARNING, ERROR. |
+
+**Environment Variables:**
+- `CODEANATOMY_LOG_LEVEL` - Sets default log level
+
+### Build Command
+
+**Signature:**
+```bash
+codeanatomy build REPO_ROOT [OPTIONS]
+```
+
+**Positional Arguments:**
+- `REPO_ROOT` - Repository root directory to analyze (must exist)
+
+**Option Groups:**
+
+#### Output Options
+- `--output-dir`, `-o` - Directory for CPG outputs (default: `<repo_root>/build`)
+- `--work-dir` - Working directory for intermediate artifacts
+- `--include-quality` / `--no-include-quality` - Include quality metrics (default: True)
+- `--include-errors` / `--no-include-errors` - Include extraction error artifacts (default: True)
+- `--include-manifest` / `--no-include-manifest` - Include run manifest (default: True)
+- `--include-run-bundle` / `--no-include-run-bundle` - Include run bundle directory (default: True)
+
+#### Execution Options
+- `--execution-mode` - Pipeline execution strategy: `deterministic_serial`, `plan_parallel`, `plan_parallel_remote` (default: `plan_parallel`)
+- `--executor-kind` - Primary executor backend: `threadpool`, `multiprocessing`, `dask`, `ray`
+- `--executor-max-tasks` - Maximum concurrent tasks for primary executor
+- `--executor-remote-kind` - Remote executor backend for high-cost tasks
+- `--executor-remote-max-tasks` - Maximum concurrent tasks for remote executor
+- `--executor-cost-threshold` - Cost threshold for routing tasks to remote executor
+- `--determinism-tier` - Determinism level: `canonical`/`tier2`, `stable_set`/`tier1`/`stable`, `best_effort`/`tier0`/`fast`
+- `--runtime-profile` - Named runtime profile from configuration (env: `CODEANATOMY_RUNTIME_PROFILE`)
+- `--writer-strategy` - Writer strategy for materialization: `arrow`, `datafusion`
+
+#### SCIP Configuration Options
+- `--disable-scip` - Disable SCIP indexing (not recommended)
+- `--scip-output-dir` - SCIP output directory (default: `build/scip`)
+- `--scip-index-path-override` - Override the index.scip path
+- `--scip-python-bin` - scip-python executable (default: `scip-python`)
+- `--scip-target-only` - Optional target file/module to index
+- `--scip-timeout-s` - Timeout in seconds for scip-python
+- `--scip-env-json` - Path to SCIP environment JSON
+- `--node-max-old-space-mb` - Node.js memory cap (MB) for scip-python
+- `--scip-extra-arg` - Extra arguments for scip-python (repeatable)
+- `--scip-project-name` - Override SCIP project name
+- `--scip-project-version` - Override SCIP project version
+- `--scip-project-namespace` - Override SCIP project namespace
+
+#### Incremental Processing Options
+- `--incremental` - Enable incremental processing
+- `--incremental-state-dir` - Directory for incremental state (env: `CODEANATOMY_STATE_DIR`)
+- `--incremental-repo-id` - Repository identifier for state (env: `CODEANATOMY_REPO_ID`)
+- `--incremental-impact-strategy` - Impact strategy: `hybrid`, `symbol_closure`, `import_closure` (env: `CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY`)
+- `--git-base-ref` - Git base ref for incremental diff (env: `CODEANATOMY_GIT_BASE_REF`)
+- `--git-head-ref` - Git head ref for incremental diff (env: `CODEANATOMY_GIT_HEAD_REF`)
+- `--git-changed-only` - Process only changed files without closure (env: `CODEANATOMY_GIT_CHANGED_ONLY`)
+
+#### Repository Scope Options
+- `--include-glob` - Glob patterns for files to include (repeatable)
+- `--exclude-glob` - Glob patterns for files to exclude (repeatable)
+- `--include-untracked` / `--no-include-untracked` - Include untracked files (default: True)
+- `--include-submodules` / `--no-include-submodules` - Include files from git submodules (default: False)
+- `--include-worktrees` / `--no-include-worktrees` - Include files from git worktrees (default: False)
+- `--follow-symlinks` / `--no-follow-symlinks` - Follow symbolic links when scanning (default: False)
+- `--external-interface-depth` - Depth for external interface extraction: `metadata`, `full` (default: `metadata`)
+
+#### Graph Adapter Options
+- `--graph-adapter-kind` - Hamilton graph adapter backend: `threadpool`, `dask`, `ray`
+- `--graph-adapter-option` - Graph adapter option key=value (repeatable)
+- `--graph-adapter-option-json` - Graph adapter option key=json (repeatable, JSON values)
+
+#### Advanced Options
+- `--enable-tree-sitter` / `--no-enable-tree-sitter` - Enable tree-sitter extraction (default: True)
+- `--plan-allow-partial` - Allow partial execution plans
+- `--plan-requested-task` - Explicit task names to request (repeatable)
+- `--plan-impacted-task` - Explicit task names to mark as impacted (repeatable)
+- `--enable-metric-scheduling` - Enable metric-based scheduling
+- `--enable-plan-diagnostics` - Enable plan diagnostics emission
+- `--enable-plan-task-submission-hook` - Enable plan task submission hook
+- `--enable-plan-task-grouping-hook` - Enable plan task grouping hook
+- `--enforce-plan-task-submission` - Enforce plan task submission policy
+
+### Configuration Files
+
+The CLI automatically searches for configuration files in this order:
+1. `codeanatomy.toml` (current directory and parent directories)
+2. `pyproject.toml` under `[tool.codeanatomy]` section
+
+Use `--config <path>` to override the automatic search.
+
+**Configuration File Format:**
+```toml
+# codeanatomy.toml
+[scip]
+enabled = true
+output_dir = "build/scip"
+scip_python_bin = "scip-python"
+node_max_old_space_mb = 8192
+
+[incremental]
+enabled = true
+state_dir = ".codeanatomy/state"
+impact_strategy = "hybrid"
+```
+
+### CLI to API Mapping
+
+The `build` command internally constructs a `GraphProductBuildRequest` and calls `build_graph_product()`:
+
+```python
+# CLI equivalent
+codeanatomy build /path/to/repo --output-dir ./cpg --execution-mode plan_parallel
+
+# Python API equivalent
+from graph import GraphProductBuildRequest, build_graph_product
+from hamilton_pipeline.types import ExecutionMode
+
+result = build_graph_product(
+    GraphProductBuildRequest(
+        repo_root="/path/to/repo",
+        output_dir="./cpg",
+        execution_mode=ExecutionMode.PLAN_PARALLEL
+    )
+)
+```
+
+### CLI Examples
+
+**Minimal Build:**
+```bash
+codeanatomy build /path/to/repo
+```
+
+**Custom Output Directory:**
+```bash
+codeanatomy build /path/to/repo --output-dir /mnt/storage/cpg_outputs
+```
+
+**Parallel Execution with Custom Workers:**
+```bash
+codeanatomy build /path/to/repo \
+  --execution-mode plan_parallel \
+  --executor-kind multiprocessing \
+  --executor-max-tasks 16
+```
+
+**Incremental Build:**
+```bash
+codeanatomy build /path/to/repo \
+  --incremental \
+  --incremental-state-dir .codeanatomy/state \
+  --git-base-ref main \
+  --git-head-ref HEAD
+```
+
+**Disable SCIP (Fast Build):**
+```bash
+codeanatomy build /path/to/repo --disable-scip
+```
+
+**With Custom SCIP Configuration:**
+```bash
+codeanatomy build /path/to/repo \
+  --scip-python-bin /opt/scip-python/bin/scip-python \
+  --node-max-old-space-mb 16384
+```
+
+**Filter Repository Scope:**
+```bash
+codeanatomy build /path/to/repo \
+  --include-glob "src/**/*.py" \
+  --exclude-glob "tests/**" \
+  --exclude-glob "**/__pycache__/**"
+```
+
+**Debugging with Serial Execution:**
+```bash
+codeanatomy build /path/to/repo \
+  --execution-mode deterministic_serial \
+  --determinism-tier canonical \
+  --log-level DEBUG
+```
+
+### Delta Lake Subcommands
+
+**vacuum** - Garbage collect unused files
+```bash
+codeanatomy delta vacuum <table-path> --retention-hours 168
+```
+
+**checkpoint** - Create Delta Lake checkpoint
+```bash
+codeanatomy delta checkpoint <table-path>
+```
+
+**cleanup-log** - Remove old transaction log entries
+```bash
+codeanatomy delta cleanup-log <table-path>
+```
+
+**export** - Export Delta table to Parquet
+```bash
+codeanatomy delta export <table-path> --output-dir ./export
+```
+
+**restore** - Restore table to specific version or timestamp
+```bash
+codeanatomy delta restore <table-path> --version 5
+codeanatomy delta restore <table-path> --timestamp "2024-01-15T10:30:00"
+```
+
+### Config Subcommands
+
+**show** - Display effective configuration
+```bash
+codeanatomy config show
+```
+
+**validate** - Validate configuration file
+```bash
+codeanatomy config validate --config codeanatomy.toml
+```
+
+**init** - Generate initial configuration file
+```bash
+codeanatomy config init
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error (exception raised) |
 
 ## Cross-References
 

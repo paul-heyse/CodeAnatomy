@@ -1,14 +1,19 @@
 """DataFusion-native builders for relationship plans.
 
 This module provides DataFusion expression/DataFrame builders for relationship
-outputs, replacing the deprecated SQLGlot AST builders in relationship_sql.py.
+outputs, using the declarative specs from cpg.relationship_specs.
+
+The public API functions delegate to the generic spec-based builders while
+maintaining backward compatibility with existing callers.
 """
 
 from __future__ import annotations
 
-from datafusion import SessionContext, col, lit
+from typing import TYPE_CHECKING
+
+import pyarrow as pa
+from datafusion import col, lit
 from datafusion import functions as f
-from datafusion.dataframe import DataFrame
 
 from cpg.kind_catalog import (
     EDGE_KIND_PY_CALLS_QNAME,
@@ -17,7 +22,21 @@ from cpg.kind_catalog import (
     EDGE_KIND_PY_IMPORTS_SYMBOL,
     EDGE_KIND_PY_REFERENCES_SYMBOL,
 )
-from datafusion_engine.udf.shims import stable_id_parts
+from cpg.relationship_builder import (
+    build_qname_relation_df,
+    build_symbol_relation_df,
+)
+from cpg.relationship_specs import (
+    REL_CALLSITE_QNAME_SPEC,
+    REL_CALLSITE_SYMBOL_SPEC,
+    REL_DEF_SYMBOL_SPEC,
+    REL_IMPORT_SYMBOL_SPEC,
+    REL_NAME_SYMBOL_SPEC,
+)
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
 
 def build_rel_name_symbol_df(
@@ -42,20 +61,11 @@ def build_rel_name_symbol_df(
     DataFrame
         DataFusion DataFrame for name symbol relations.
     """
-    source = ctx.table("cst_refs")
-    return source.select(
-        col("ref_id").alias("ref_id"),
-        col("ref_text").alias("symbol"),
-        col("symbol_roles").alias("symbol_roles"),
-        col("path").alias("path"),
-        f.coalesce(col("edge_owner_file_id"), col("file_id")).alias("edge_owner_file_id"),
-        col("bstart").alias("bstart"),
-        col("bend").alias("bend"),
-        lit("cst_ref_text").alias("resolution_method"),
-        lit(0.5).alias("confidence"),
-        lit(0.5).alias("score"),
-        lit(task_name).alias("task_name"),
-        lit(task_priority).alias("task_priority"),
+    return build_symbol_relation_df(
+        ctx,
+        REL_NAME_SYMBOL_SPEC,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 
@@ -81,21 +91,11 @@ def build_rel_import_symbol_df(
     DataFrame
         DataFusion DataFrame for import symbol relations.
     """
-    source = ctx.table("cst_imports")
-    symbol = f.coalesce(col("name"), col("module"))
-    return source.select(
-        f.coalesce(col("import_alias_id"), col("import_id")).alias("import_alias_id"),
-        symbol.alias("symbol"),
-        col("symbol_roles").alias("symbol_roles"),
-        col("path").alias("path"),
-        f.coalesce(col("edge_owner_file_id"), col("file_id")).alias("edge_owner_file_id"),
-        f.coalesce(col("alias_bstart"), col("stmt_bstart")).alias("bstart"),
-        f.coalesce(col("alias_bend"), col("stmt_bend")).alias("bend"),
-        lit("cst_import_name").alias("resolution_method"),
-        lit(0.5).alias("confidence"),
-        lit(0.5).alias("score"),
-        lit(task_name).alias("task_name"),
-        lit(task_priority).alias("task_priority"),
+    return build_symbol_relation_df(
+        ctx,
+        REL_IMPORT_SYMBOL_SPEC,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 
@@ -121,20 +121,11 @@ def build_rel_def_symbol_df(
     DataFrame
         DataFusion DataFrame for definition symbol relations.
     """
-    source = ctx.table("cst_defs")
-    return source.select(
-        col("def_id").alias("def_id"),
-        col("name").alias("symbol"),
-        col("symbol_roles").alias("symbol_roles"),
-        col("path").alias("path"),
-        f.coalesce(col("edge_owner_file_id"), col("file_id")).alias("edge_owner_file_id"),
-        f.coalesce(col("name_bstart"), col("def_bstart")).alias("bstart"),
-        f.coalesce(col("name_bend"), col("def_bend")).alias("bend"),
-        lit("cst_def_name").alias("resolution_method"),
-        lit(0.6).alias("confidence"),
-        lit(0.6).alias("score"),
-        lit(task_name).alias("task_name"),
-        lit(task_priority).alias("task_priority"),
+    return build_symbol_relation_df(
+        ctx,
+        REL_DEF_SYMBOL_SPEC,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 
@@ -160,21 +151,11 @@ def build_rel_callsite_symbol_df(
     DataFrame
         DataFusion DataFrame for callsite symbol relations.
     """
-    source = ctx.table("cst_callsites")
-    symbol = f.coalesce(col("callee_text"), col("callee_dotted"))
-    return source.select(
-        col("call_id").alias("call_id"),
-        symbol.alias("symbol"),
-        col("symbol_roles").alias("symbol_roles"),
-        col("path").alias("path"),
-        f.coalesce(col("edge_owner_file_id"), col("file_id")).alias("edge_owner_file_id"),
-        col("call_bstart").alias("call_bstart"),
-        col("call_bend").alias("call_bend"),
-        lit("cst_callsite").alias("resolution_method"),
-        lit(0.6).alias("confidence"),
-        lit(0.6).alias("score"),
-        lit(task_name).alias("task_name"),
-        lit(task_priority).alias("task_priority"),
+    return build_symbol_relation_df(
+        ctx,
+        REL_CALLSITE_SYMBOL_SPEC,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 
@@ -200,23 +181,11 @@ def build_rel_callsite_qname_df(
     DataFrame
         DataFusion DataFrame for callsite qname relations.
     """
-    source = ctx.table("callsite_qname_candidates_v1")
-    qname = col("qname")
-    null_utf8 = f.arrow_cast(lit(None), lit("Utf8"))
-    qname_id = f.when(qname.is_not_null(), stable_id_parts("qname", qname)).otherwise(null_utf8)
-    return source.select(
-        col("call_id").alias("call_id"),
-        qname_id.alias("qname_id"),
-        col("qname_source").alias("qname_source"),
-        col("path").alias("path"),
-        col("edge_owner_file_id").alias("edge_owner_file_id"),
-        col("call_bstart").alias("call_bstart"),
-        col("call_bend").alias("call_bend"),
-        lit(0.5).alias("confidence"),
-        lit(0.5).alias("score"),
-        col("ambiguity_group_id").alias("ambiguity_group_id"),
-        lit(task_name).alias("task_name"),
-        lit(task_priority).alias("task_priority"),
+    return build_qname_relation_df(
+        ctx,
+        REL_CALLSITE_QNAME_SPEC,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 
@@ -384,8 +353,6 @@ def _relation_output_base(  # noqa: PLR0913
     DataFrame
         Unified relation output DataFrame.
     """
-    import pyarrow as pa
-
     qname_source = col(qname_source_col) if qname_source_col else lit(None).cast(pa.string())
     ambiguity_group_id = (
         col(ambiguity_group_col) if ambiguity_group_col else lit(None).cast(pa.string())

@@ -78,7 +78,29 @@ if TYPE_CHECKING:
     )
     from extract.git.blobs import RepoBlobOptions, scan_repo_blobs
     from extract.infrastructure.result_types import ExtractResult
+    from extract.row_builder import (
+        ExtractionBatchBuilder,
+        ExtractionRowBuilder,
+        SchemaTemplateOptions,
+        SpanTemplateSpec,
+        build_extraction_rows,
+        extraction_schema_template,
+        make_attrs_list,
+        make_span_dict,
+        make_span_spec_dict,
+    )
     from extract.scanning.repo_scan import RepoScanOptions, scan_repo
+    from extract.schema_derivation import (
+        EXTRACTION_SCHEMA_TEMPLATES,
+        DerivationOptions,
+        DerivedSchemaInfo,
+        ExtractionSchemaBuilder,
+        ExtractionSchemaTemplate,
+        build_schema_from_template,
+        derive_extraction_schema,
+        extraction_schema_to_arrow,
+        validate_extraction_schema,
+    )
 
 # Map of export names to (module_path, attribute_name) for lazy loading
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -130,6 +152,26 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "run_scip_python_index": ("extract.extractors.scip.extract", "run_scip_python_index"),
     "scan_repo": ("extract.scanning.repo_scan", "scan_repo"),
     "scan_repo_blobs": ("extract.git.blobs", "scan_repo_blobs"),
+    # Row builder exports
+    "ExtractionBatchBuilder": ("extract.row_builder", "ExtractionBatchBuilder"),
+    "ExtractionRowBuilder": ("extract.row_builder", "ExtractionRowBuilder"),
+    "SchemaTemplateOptions": ("extract.row_builder", "SchemaTemplateOptions"),
+    "SpanTemplateSpec": ("extract.row_builder", "SpanTemplateSpec"),
+    "build_extraction_rows": ("extract.row_builder", "build_extraction_rows"),
+    "extraction_schema_template": ("extract.row_builder", "extraction_schema_template"),
+    "make_attrs_list": ("extract.row_builder", "make_attrs_list"),
+    "make_span_dict": ("extract.row_builder", "make_span_dict"),
+    "make_span_spec_dict": ("extract.row_builder", "make_span_spec_dict"),
+    # Schema derivation exports
+    "EXTRACTION_SCHEMA_TEMPLATES": ("extract.schema_derivation", "EXTRACTION_SCHEMA_TEMPLATES"),
+    "DerivationOptions": ("extract.schema_derivation", "DerivationOptions"),
+    "DerivedSchemaInfo": ("extract.schema_derivation", "DerivedSchemaInfo"),
+    "ExtractionSchemaBuilder": ("extract.schema_derivation", "ExtractionSchemaBuilder"),
+    "ExtractionSchemaTemplate": ("extract.schema_derivation", "ExtractionSchemaTemplate"),
+    "build_schema_from_template": ("extract.schema_derivation", "build_schema_from_template"),
+    "derive_extraction_schema": ("extract.schema_derivation", "derive_extraction_schema"),
+    "extraction_schema_to_arrow": ("extract.schema_derivation", "extraction_schema_to_arrow"),
+    "validate_extraction_schema": ("extract.schema_derivation", "validate_extraction_schema"),
 }
 
 
@@ -148,21 +190,33 @@ def __dir__() -> list[str]:
 
 
 __all__ = (
+    "EXTRACTION_SCHEMA_TEMPLATES",
     "AstExtractOptions",
     "BytecodeExtractOptions",
     "CstExtractOptions",
+    "DerivationOptions",
+    "DerivedSchemaInfo",
     "ExternalInterfaceExtractOptions",
     "ExtractResult",
+    "ExtractionBatchBuilder",
+    "ExtractionRowBuilder",
+    "ExtractionSchemaBuilder",
+    "ExtractionSchemaTemplate",
     "PythonImportsExtractOptions",
     "RepoBlobOptions",
     "RepoScanOptions",
     "SCIPIndexOptions",
     "SCIPParseOptions",
+    "SchemaTemplateOptions",
     "ScipIdentity",
     "ScipIndexPaths",
+    "SpanTemplateSpec",
     "SymtableExtractOptions",
     "TreeSitterExtractOptions",
+    "build_extraction_rows",
+    "build_schema_from_template",
     "build_scip_index_options",
+    "derive_extraction_schema",
     "ensure_scip_build_dir",
     "extract_ast",
     "extract_ast_tables",
@@ -179,9 +233,15 @@ __all__ = (
     "extract_symtables_table",
     "extract_ts",
     "extract_ts_tables",
+    "extraction_schema_template",
+    "extraction_schema_to_arrow",
+    "make_attrs_list",
+    "make_span_dict",
+    "make_span_spec_dict",
     "parse_index_scip",
     "resolve_scip_identity",
     "run_scip_python_index",
     "scan_repo",
     "scan_repo_blobs",
+    "validate_extraction_schema",
 )

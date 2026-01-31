@@ -8,7 +8,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 1. **Multi-Source Evidence Fusion**: Different parsing technologies capture complementary aspects of code structure (syntax, semantics, types, runtime behavior). CodeAnatomy combines them into a unified graph model.
 
-2. **Inference-Driven Dependencies**: Task dependencies are automatically inferred from DataFusion query plans via SQLGlot lineage analysis. No manual `inputs=` declarations required.
+2. **Inference-Driven Dependencies**: Task dependencies are automatically inferred from DataFusion query plans via native lineage extraction. No manual `inputs=` declarations required.
 
 3. **Deterministic, Contract-Validated Transformations**: All pipeline stages produce reproducible outputs via plan fingerprinting, schema contracts, and Delta Lake versioning.
 
@@ -65,7 +65,7 @@ CodeAnatomy enforces five architectural invariants across all subsystems:
 
 2. **Determinism Contract**: All Acero/DataFusion plans must be reproducible. Plans include `policy_hash` and `ddl_fingerprint`. Plan bundles capture Substrait bytes, environment snapshots, UDF hashes, and Delta input pins.
 
-3. **Inference-Driven**: Dependencies are auto-inferred from SQLGlot/DataFusion lineage. Don't specify intermediate schemas—only strict boundaries (relationship outputs, final CPG).
+3. **Inference-Driven**: Dependencies are auto-inferred from DataFusion lineage. Don't specify intermediate schemas—only strict boundaries (relationship outputs, final CPG).
 
 4. **Graceful Degradation**: Missing optional inputs produce correct-schema empty outputs, not exceptions. Views attempt enhanced data (SCIP) but fall back to base data (CST) if unavailable.
 
@@ -76,48 +76,137 @@ CodeAnatomy enforces five architectural invariants across all subsystems:
 | Component | Technology | Version | Purpose |
 |-----------|------------|---------|---------|
 | Query Engine | Apache DataFusion | 51.0.0+ | SQL execution, plan optimization, lineage extraction |
-| Graph Engine | rustworkx | 0.17+ | Task DAG construction, scheduling |
-| Pipeline Orchestration | Hamilton | 1.89+ | DAG execution, caching, materialization |
-| Data Format | PyArrow | 18.1.0+ | Columnar data interchange |
-| Storage | Delta Lake (deltalake) | 1.3+ | Versioned table storage with CDF |
-| Python Parsing | LibCST, ast, symtable | - | CST/AST/symbol extraction |
+| Graph Engine | rustworkx | 0.17.1+ | Task DAG construction, scheduling |
+| Pipeline Orchestration | Hamilton | 1.89.0+ | DAG execution, caching, materialization |
+| Data Format | PyArrow | Latest | Columnar data interchange |
+| Storage | Delta Lake (deltalake) | 1.3.2+ | Versioned table storage with CDF |
+| Serialization | msgspec | 0.20.0+ | Fast binary serialization |
+| Python Parsing | LibCST, ast, symtable | Latest | CST/AST/symbol extraction |
 | Python Bytecode | dis module | 3.13 | Instruction/CFG extraction |
-| Tree Parsing | tree-sitter | - | Error-tolerant parsing |
+| Tree Parsing | tree-sitter | Latest | Error-tolerant parsing |
 | Cross-Repo Symbols | SCIP | - | Semantic code intelligence |
-| Runtime | Python | 3.13.11 | Pinned Python version |
-| Package Manager | uv | - | Fast dependency resolution |
+| Git Integration | pygit2 | 1.19.1+ | Git repository access |
+| Observability | OpenTelemetry | 0.60b1+ | Metrics, tracing, logging |
+| Runtime | Python | 3.13.11 | Pinned Python version (exact) |
+| Package Manager | uv | Latest | Fast dependency resolution |
 
 ### 1.5 Core Module Map
 
 ```
 src/
 ├── extract/           # Stage 1: Multi-source extraction
-│   ├── repo_scan.py       # Repository file discovery
-│   ├── ast_extract.py     # AST parsing
-│   ├── cst_extract.py     # LibCST parsing with metadata
-│   ├── symtable_extract.py # Symbol table extraction
-│   ├── bytecode_extract.py # Bytecode/CFG/DFG
-│   ├── scip_extract.py    # SCIP index processing
-│   └── tree_sitter_extract.py # Tree-sitter integration
+│   ├── extractors/          # Evidence layer implementations
+│   │   ├── ast_extract.py       # AST parsing
+│   │   ├── cst_extract.py       # LibCST parsing with metadata
+│   │   ├── symtable_extract.py  # Symbol table extraction
+│   │   ├── bytecode_extract.py  # Bytecode/CFG/DFG
+│   │   ├── imports_extract.py   # Python imports extraction
+│   │   ├── external_scope.py    # External interface extraction
+│   │   ├── scip/                # SCIP index processing
+│   │   └── tree_sitter/         # Tree-sitter integration
+│   ├── coordination/        # Execution context and materialization
+│   │   ├── context.py           # Extraction execution context
+│   │   ├── evidence_plan.py     # Evidence planning
+│   │   ├── materialization.py   # Evidence materialization
+│   │   └── schema_ops.py        # Schema operations
+│   ├── scanning/            # Repository scanning and scope filtering
+│   │   ├── repo_scan.py         # Repository file discovery
+│   │   └── repo_scope.py        # Repository scope filtering
+│   ├── git/                 # Git repository integration
+│   │   ├── blobs.py             # Repository blob operations
+│   │   ├── pygit2_scan.py       # pygit2-based scanning
+│   │   └── history.py           # Git history processing
+│   ├── python/              # Python-specific scope and environment
+│   │   ├── scope.py             # Python scope analysis
+│   │   └── env_profile.py       # Python environment profiling
+│   ├── infrastructure/      # Caching, parallelization, utilities
+│   │   ├── parallel.py          # Parallel execution
+│   │   ├── cache_utils.py       # Caching utilities
+│   │   └── result_types.py      # Result type definitions
+│   ├── row_builder.py       # Row building utilities
+│   └── schema_derivation.py # Schema derivation from templates
 │
 ├── normalize/         # Stage 2: Normalization
 │   ├── df_view_builders.py  # DataFusion view definitions
-│   └── dataset_builders.py  # Schema construction
+│   ├── dataset_builders.py  # Schema construction
+│   ├── dataset_specs.py     # Dataset specifications
+│   ├── dataset_templates.py # Dataset templates
+│   ├── dataset_bundles.py   # Dataset bundle creation
+│   └── evidence_specs.py    # Evidence specifications
 │
 ├── relspec/           # Stage 3: Task catalog + scheduling
 │   ├── inferred_deps.py     # Dependency inference
 │   ├── rustworkx_graph.py   # Task graph construction
 │   ├── rustworkx_schedule.py # Generation-based scheduling
-│   └── evidence.py          # Evidence catalog
+│   ├── evidence.py          # Evidence catalog
+│   ├── view_defs.py         # View definitions
+│   ├── execution_plan.py    # Execution planning
+│   ├── relationship_datafusion.py # Relationship DataFusion integration
+│   └── graph_edge_validation.py # Graph edge validation
 │
 ├── datafusion_engine/ # DataFusion integration (consolidated query engine)
-│   ├── plan_bundle.py       # Plan bundle artifacts
-│   ├── execution_facade.py  # Execution API
-│   ├── lineage_datafusion.py # Plan lineage extraction
-│   ├── schema_contracts.py  # Schema validation
-│   ├── scan_planner.py      # Delta scan planning
-│   ├── udf_catalog.py       # UDF metadata + builtin resolution
-│   └── udf_runtime.py       # UDF snapshot caching + validation
+│   ├── plan/                # Plan management
+│   │   ├── bundle.py            # Plan bundle artifacts
+│   │   ├── execution.py         # Plan execution helpers
+│   │   ├── pipeline.py          # Plan pipeline
+│   │   ├── cache.py             # Plan caching
+│   │   ├── artifact_store.py    # Plan artifact storage
+│   │   ├── result_types.py      # Execution result types
+│   │   └── udf_analysis.py      # UDF analysis
+│   ├── session/             # Session management
+│   │   ├── facade.py            # Execution facade (unified API)
+│   │   ├── factory.py           # Session factory
+│   │   ├── runtime.py           # Session runtime
+│   │   ├── schema_profile.py    # Schema profiling
+│   │   └── streaming.py         # Streaming execution
+│   ├── schema/              # Schema operations
+│   │   ├── contracts.py         # Schema validation
+│   │   ├── inference.py         # Schema inference
+│   │   ├── contract_population.py # Contract population
+│   │   ├── registry.py          # Schema registry
+│   │   ├── finalize.py          # Schema finalization
+│   │   └── alignment.py         # Schema alignment
+│   ├── lineage/             # Lineage extraction
+│   │   ├── datafusion.py        # Plan lineage extraction
+│   │   ├── scan.py              # Scan lineage
+│   │   └── diagnostics.py       # Lineage diagnostics
+│   ├── views/               # View management
+│   │   ├── registry.py          # View registry
+│   │   ├── view_spec.py         # View specifications
+│   │   ├── view_specs_catalog.py # View specs catalog
+│   │   ├── dsl.py               # View DSL
+│   │   ├── dsl_views.py         # DSL-based views
+│   │   └── bundle_extraction.py # Bundle extraction
+│   ├── udf/                 # UDF management
+│   │   ├── catalog.py           # UDF metadata + builtin resolution
+│   │   ├── runtime.py           # UDF snapshot caching + validation
+│   │   ├── factory.py           # UDF factory
+│   │   └── signature.py         # UDF signatures
+│   ├── delta/               # Delta Lake integration
+│   │   ├── protocol.py          # Delta protocol
+│   │   ├── scan_config.py       # Scan configuration
+│   │   └── control_plane.py     # Delta control plane
+│   ├── arrow/               # Arrow utilities
+│   │   ├── schema.py            # Arrow schema operations
+│   │   ├── encoding.py          # Arrow encoding
+│   │   └── nested.py            # Nested type handling
+│   ├── expr/                # Expression handling
+│   │   ├── planner.py           # Expression planning
+│   │   ├── spec.py              # Expression specifications
+│   │   └── domain_planner.py    # Domain-specific planning
+│   ├── catalog/             # Catalog management
+│   │   ├── provider.py          # Catalog provider
+│   │   └── provider_registry.py # Provider registry
+│   ├── tables/              # Table management
+│   │   ├── spec.py              # Table specifications
+│   │   └── metadata.py          # Table metadata
+│   ├── dataset/             # Dataset operations
+│   │   ├── registry.py          # Dataset registry
+│   │   └── resolution.py        # Dataset resolution
+│   └── io/                  # I/O operations
+│       ├── ingest.py            # Data ingestion
+│       ├── write.py             # Data writing
+│       └── adapter.py           # I/O adapter
 │
 ├── obs/               # Observability layer
 │   ├── diagnostics.py       # DiagnosticsCollector + event recording
@@ -125,28 +214,67 @@ src/
 │   ├── scan_telemetry.py    # Scan telemetry capture
 │   ├── datafusion_runs.py   # DataFusion run tracking
 │   └── otel/                # OpenTelemetry bootstrap + metrics/logs/tracing
+│       ├── bootstrap.py         # OTel initialization
+│       ├── config.py            # OTel configuration
+│       ├── metrics.py           # Metrics collection
+│       ├── tracing.py           # Tracing instrumentation
+│       └── logs.py              # Logging integration
 │
 ├── cpg/               # Stage 4: CPG schema + emission
 │   ├── kind_catalog.py      # Node/edge kinds
 │   ├── prop_catalog.py      # Property specs
-│   └── view_builders_df.py  # CPG emission
+│   ├── view_builders_df.py  # CPG emission
+│   ├── relationship_specs.py # Relationship specifications
+│   ├── relationship_contracts.py # Relationship contracts
+│   ├── relationship_builder.py # Relationship building
+│   ├── node_families.py     # Node family definitions
+│   └── spec_registry.py     # Spec registry
 │
 ├── hamilton_pipeline/ # Orchestration
 │   ├── execution.py         # Pipeline execution
 │   ├── driver_factory.py    # Hamilton driver
-│   └── task_module_builder.py # Dynamic module generation
+│   ├── driver_builder.py    # Driver builder
+│   ├── task_module_builder.py # Dynamic module generation
+│   ├── execution_manager.py # Execution management
+│   └── materializers.py     # Materializers
 │
 ├── engine/            # Runtime management
 │   ├── session.py           # Engine session
-│   └── materialize_pipeline.py # Materialization
+│   ├── session_factory.py   # Session factory
+│   ├── runtime.py           # Runtime management
+│   ├── runtime_profile.py   # Runtime profiles
+│   ├── materialize_pipeline.py # Materialization
+│   └── plan_policy.py       # Plan policies
 │
 ├── storage/           # Delta Lake integration
+│   ├── io.py                # I/O operations
+│   ├── dataset_sources.py   # Dataset sources
 │   └── deltalake/           # Read/write operations
+│       ├── delta.py             # Delta operations
+│       ├── file_pruning.py      # File pruning
+│       ├── file_index.py        # File indexing
+│       └── scan_profile.py      # Scan profiling
 │
 ├── incremental/       # Incremental processing
 │   ├── invalidations.py     # Change detection
-│   ├── cdf_*.py             # Change Data Feed
-│   └── state_store.py       # State management
+│   ├── cdf_cursors.py       # Change Data Feed cursors
+│   ├── cdf_filters.py       # CDF filtering
+│   ├── cdf_runtime.py       # CDF runtime
+│   ├── state_store.py       # State management
+│   ├── fingerprint_changes.py # Fingerprint change tracking
+│   ├── plan_fingerprints.py # Plan fingerprint management
+│   └── delta_updates.py     # Delta update processing
+│
+├── schema_spec/       # Schema specifications (cross-cutting)
+│   ├── specs.py             # Core schema specs (TableSchemaSpec, FieldBundle)
+│   ├── system.py            # System specs (DatasetSpec, ContractSpec, policies)
+│   ├── relationship_specs.py # Relationship specs
+│   ├── bundles.py           # Schema bundles
+│   ├── evidence_metadata.py # Evidence metadata
+│   ├── file_identity.py     # File identity
+│   ├── nested_types.py      # Nested type handling
+│   ├── span_fields.py       # Span field definitions
+│   └── view_specs.py        # View specifications
 │
 ├── utils/             # Cross-cutting utilities
 │   ├── hashing.py           # Deterministic hashing functions
@@ -155,10 +283,36 @@ src/
 │   ├── storage_options.py   # Storage config normalization
 │   ├── validation.py        # Type validation helpers
 │   ├── uuid_factory.py      # Time-ordered UUID generation
-│   └── file_io.py           # File reading utilities
+│   ├── file_io.py           # File reading utilities
+│   └── value_coercion.py    # Value coercion utilities
 │
-└── graph/             # Public API
-    └── product_build.py     # Entry point
+├── graph/             # Public API
+│   └── product_build.py     # Entry point
+│
+├── cli/               # CLI interface
+│   ├── app.py               # CLI application
+│   ├── groups.py            # Command groups
+│   └── context.py           # CLI context
+│
+├── cache/             # Caching infrastructure
+│   └── diskcache_factory.py # Disk cache factory
+│
+├── core/              # Core types and configuration
+│   └── config_base.py       # Configuration base classes
+│
+├── validation/        # Validation utilities
+│   └── violations.py        # Validation violations
+│
+├── arrow_utils/       # Arrow utilities
+│
+├── test_support/      # Test support utilities
+│
+└── Top-level modules:
+    ├── core_types.py        # Core type definitions
+    ├── serde_msgspec.py     # msgspec serialization
+    ├── serde_msgspec_ext.py # msgspec extensions
+    ├── serde_schema_registry.py # Schema registry
+    └── serde_artifacts.py   # Artifact serialization
 
 rust/                  # Rust components
 ├── datafusion_ext/    # Core DataFusion extensions (UDFs, Delta integration)
@@ -272,12 +426,20 @@ The Extraction Stage transforms Python source files into structured evidence tab
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/extract/helpers.py` | ~600 | Core patterns (FileContext, SpanSpec, ExtractExecutionContext) |
-| `src/extract/repo_scan.py` | ~620 | Repository file discovery with git integration |
-| `src/extract/ast_extract.py` | ~1200 | AST extraction with node/edge/docstring capture |
-| `src/extract/cst_extract.py` | ~1700 | LibCST with metadata providers (qualified names, scopes) |
-| `src/extract/symtable_extract.py` | ~770 | Symbol table with scope walk |
-| `src/extract/bytecode_extract.py` | ~1700 | Bytecode, CFG, DFG extraction |
-| `src/extract/parallel.py` | ~100 | Parallel execution utilities |
+| `src/extract/scanning/repo_scan.py` | ~500+ | Repository file discovery with git integration |
+| `src/extract/extractors/ast_extract.py` | ~1200 | AST extraction with node/edge/docstring capture |
+| `src/extract/extractors/cst_extract.py` | ~1700 | LibCST with metadata providers (qualified names, scopes) |
+| `src/extract/extractors/symtable_extract.py` | ~770 | Symbol table with scope walk |
+| `src/extract/extractors/bytecode_extract.py` | ~1700 | Bytecode, CFG, DFG extraction |
+| `src/extract/extractors/imports_extract.py` | ~500+ | Python imports extraction |
+| `src/extract/extractors/external_scope.py` | ~400+ | External interface extraction |
+| `src/extract/extractors/scip/extract.py` | ~800+ | SCIP index processing |
+| `src/extract/extractors/tree_sitter/extract.py` | ~600+ | Tree-sitter error-tolerant parsing |
+| `src/extract/infrastructure/parallel.py` | ~100 | Parallel execution utilities |
+| `src/extract/coordination/context.py` | ~400+ | Extraction execution context |
+| `src/extract/coordination/materialization.py` | ~300+ | Evidence materialization |
+| `src/extract/row_builder.py` | ~500+ | Row building utilities |
+| `src/extract/schema_derivation.py` | ~600+ | Schema derivation from templates |
 
 ### Output Evidence Tables
 
@@ -312,28 +474,38 @@ The DataFusion Engine provides query planning and execution infrastructure built
 @dataclass(frozen=True)
 class DataFusionPlanBundle:
     df: DataFrame
-    logical_plan: object
-    optimized_logical_plan: object
-    execution_plan: object | None
-    substrait_bytes: bytes | None
+    logical_plan: object  # DataFusionLogicalPlan
+    optimized_logical_plan: object  # DataFusionLogicalPlan
+    execution_plan: object | None  # DataFusionExecutionPlan | None
+    substrait_bytes: bytes
     plan_fingerprint: str
     artifacts: PlanArtifacts
-    delta_inputs: tuple[DeltaInputPin, ...]
-    required_udfs: tuple[str, ...]
-    required_rewrite_tags: tuple[str, ...]
+    delta_inputs: tuple[DeltaInputPin, ...] = ()
+    scan_units: tuple[ScanUnit, ...] = ()
+    plan_identity_hash: str | None = None
+    required_udfs: tuple[str, ...] = ()
+    required_rewrite_tags: tuple[str, ...] = ()
+    plan_details: Mapping[str, object] = field(default_factory=dict)
 ```
 
 ### Critical Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/datafusion_engine/plan_bundle.py` | ~1900 | Plan bundle with fingerprinting |
-| `src/datafusion_engine/execution_facade.py` | ~770 | Unified execution API |
-| `src/datafusion_engine/planning_pipeline.py` | ~285 | Two-pass Delta planning |
-| `src/datafusion_engine/lineage_datafusion.py` | ~300 | Plan tree lineage extraction |
-| `src/datafusion_engine/schema_contracts.py` | ~615 | Schema validation |
-| `src/datafusion_engine/udf_catalog.py` | ~300 | UDF registration |
-| `src/datafusion_engine/scan_planner.py` | ~800 | Delta-aware scan planning |
+| `src/datafusion_engine/plan/bundle.py` | ~1900 | Plan bundle with fingerprinting |
+| `src/datafusion_engine/session/facade.py` | ~770+ | Unified execution API |
+| `src/datafusion_engine/plan/execution.py` | ~400+ | Plan bundle execution helpers |
+| `src/datafusion_engine/plan/pipeline.py` | ~285+ | Two-pass Delta planning |
+| `src/datafusion_engine/lineage/datafusion.py` | ~300 | Plan tree lineage extraction |
+| `src/datafusion_engine/lineage/scan.py` | ~200+ | Scan lineage tracking |
+| `src/datafusion_engine/schema/contracts.py` | ~615 | Schema validation |
+| `src/datafusion_engine/schema/inference.py` | ~500+ | Schema inference |
+| `src/datafusion_engine/schema/contract_population.py` | ~400+ | Contract population |
+| `src/datafusion_engine/udf/catalog.py` | ~300 | UDF registration |
+| `src/datafusion_engine/udf/runtime.py` | ~400+ | UDF snapshot caching + validation |
+| `src/datafusion_engine/delta/scan_config.py` | ~300+ | Delta scan configuration |
+| `src/datafusion_engine/views/registry.py` | ~500+ | View registry |
+| `src/datafusion_engine/views/view_specs_catalog.py` | ~400+ | View specifications catalog |
 
 ---
 
@@ -360,11 +532,13 @@ class InferredDeps:
     task_name: str
     output: str
     inputs: tuple[str, ...]
-    required_columns: Mapping[str, tuple[str, ...]]
-    required_types: Mapping[str, tuple[tuple[str, str], ...]]
-    plan_fingerprint: str
-    required_udfs: tuple[str, ...]
-    scans: tuple[ScanLineage, ...]
+    required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    required_types: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
+    plan_fingerprint: str = ""
+    required_udfs: tuple[str, ...] = ()
+    required_rewrite_tags: tuple[str, ...] = ()
+    scans: tuple[ScanLineage, ...] = ()
 
 @dataclass(frozen=True)
 class TaskSchedule:
@@ -379,11 +553,15 @@ class TaskSchedule:
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/normalize/df_view_builders.py` | ~650 | DataFusion view definitions |
-| `src/relspec/inferred_deps.py` | ~250 | Dependency inference from plans |
+| `src/normalize/dataset_builders.py` | ~400+ | Schema construction |
+| `src/normalize/dataset_specs.py` | ~300+ | Dataset specifications |
+| `src/relspec/inferred_deps.py` | ~250+ | Dependency inference from plans |
 | `src/relspec/rustworkx_graph.py` | ~1200 | Bipartite task graph |
 | `src/relspec/rustworkx_schedule.py` | ~320 | Generation scheduling |
 | `src/relspec/evidence.py` | ~160 | Evidence catalog |
 | `src/relspec/graph_edge_validation.py` | ~350 | Column-level validation |
+| `src/relspec/relationship_datafusion.py` | ~600+ | Relationship DataFusion integration |
+| `src/relspec/view_defs.py` | ~400+ | View definitions |
 
 ---
 
@@ -428,12 +606,15 @@ class InvalidationSnapshot:
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/datafusion_engine/scan_planner.py` | ~810 | Scan planning with pruning |
-| `src/datafusion_engine/delta_protocol.py` | ~150 | Protocol compatibility |
+| `src/datafusion_engine/delta/scan_config.py` | ~300+ | Delta scan configuration |
+| `src/datafusion_engine/delta/protocol.py` | ~150+ | Protocol compatibility |
 | `src/incremental/invalidations.py` | ~400 | Change detection |
 | `src/incremental/cdf_cursors.py` | ~150 | CDF version tracking |
 | `src/incremental/state_store.py` | ~180 | State layout |
+| `src/incremental/fingerprint_changes.py` | ~300+ | Fingerprint change tracking |
+| `src/incremental/plan_fingerprints.py` | ~250+ | Plan fingerprint management |
 | `src/storage/deltalake/file_pruning.py` | ~450 | File-level pruning |
+| `src/storage/deltalake/delta.py` | ~400+ | Delta operations |
 
 ---
 

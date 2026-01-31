@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
-from schema_spec.bundles import base_bundle_catalog
 from schema_spec.field_spec import FieldSpec
-from schema_spec.specs import FieldBundle
+from schema_spec.specs import FieldBundle, file_identity_bundle, span_bundle
 
-_BUNDLE_CATALOG: dict[str, FieldBundle] = base_bundle_catalog(include_sha256=False)
+_BUNDLE_CATALOG: dict[str, FieldBundle] = {
+    "file_identity": file_identity_bundle(include_sha256=False),
+    "span": span_bundle(),
+}
 _BUNDLE_CATALOG["span"] = FieldBundle(
     name="span",
     fields=(FieldSpec(name="span", dtype=SPAN_STORAGE),),

@@ -15,13 +15,47 @@ The DataFusion Engine provides the primary query planning and execution infrastr
 
 > **Module Consolidation Note:** The DataFusion engine consolidates functionality that was previously spread across separate modules. Lineage extraction, SQL analysis, and expression building are now DataFusion-native operations. The engine provides unified query planning, UDF registration, schema validation, and plan fingerprinting through a single cohesive interface.
 
+## Module Map
+
+The DataFusion engine is organized into the following subdirectories (120 Python files total):
+
+- **`plan/`**: Plan bundling, execution, caching, profiling, artifact storage (11 files, ~6000 lines)
+- **`session/`**: Session runtime, facade, factory, helpers, streaming (5 files, ~1000 lines)
+- **`views/`**: View graph, registry, specs, DSL, artifacts (11 files, ~7500 lines)
+- **`lineage/`**: Lineage extraction, scan planning, diagnostics (3 files, ~2100 lines)
+- **`schema/`**: Contracts, introspection, registry, inference, validation, finalization (8 files, ~8500 lines)
+- **`udf/`**: UDF catalog, runtime, platform, factory, signature, parity, shims (7 files, ~1500 lines)
+- **`dataset/`**: Registry, resolution (2 files, ~500 lines)
+- **`catalog/`**: Introspection, provider, provider registry (3 files, ~1000 lines)
+- **`delta/`**: Protocol, control plane, store policy, maintenance, scan config, contracts, payload, observability (9 files, ~1500 lines)
+- **`arrow/`**: Schema, build, semantic, interop, coercion, encoding, metadata, ABI, nested, chunking, dictionary, field builders (16 files, ~3000 lines)
+- **`compile/`**: Compilation options (1 file, ~200 lines)
+- **`sql/`**: SQL options, guard (2 files, ~300 lines)
+- **`expr/`**: Expression planner, domain planner, query spec, span, spec (5 files, ~800 lines)
+- **`io/`**: IO adapter, write pipeline, ingest (3 files, ~600 lines)
+- **`encoding/`**: Encoding policy (1 file, ~100 lines)
+- **`tables/`**: Table spec, metadata (2 files, ~200 lines)
+- **`extract/`**: Extract templates, metadata, bundles, extractors (4 files, ~600 lines)
+- **`symtable/`**: Symtable views (1 file, ~200 lines)
+- **Root-level**: Hashing, identity, kernels, errors, `__init__.py` (5 files, ~44,000 lines)
+
+**Key Design Principles**:
+1. **Plan Bundles**: All planning and scheduling flows through `DataFusionPlanBundle` artifacts
+2. **Facade Pattern**: `DataFusionExecutionFacade` provides unified API for compilation, execution, registration, writes
+3. **Two-Pass Planning**: Delta pin planning separates lineage extraction from scan resolution
+4. **Substrait-First**: Execution prioritizes Substrait replay for determinism, falls back to proto cache and original DataFrame
+5. **View Graph**: Dependency-aware view registration with topological sorting and schema validation
+6. **UDF Platform**: Unified installation of Rust UDFs, ExprPlanners, FunctionFactory before planning
+7. **Schema Contracts**: Declarative schema validation with evolution policies
+8. **Lineage Extraction**: Column-level lineage from optimized logical plans drives dependency inference
+
 ## Core Architecture Components
 
 ### Plan Bundle - The Central Artifact
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/plan_bundle.py` (lines 1-1906)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/plan/bundle.py` (2123 lines)
 
-The `DataFusionPlanBundle` dataclass (lines 134-218) is the canonical plan artifact that all scheduling and execution paths consume. It encapsulates the complete planning lifecycle:
+The `DataFusionPlanBundle` dataclass is the canonical plan artifact that all scheduling and execution paths consume. It encapsulates the complete planning lifecycle:
 
 ```python
 @dataclass(frozen=True)
@@ -119,7 +153,7 @@ This separation enables artifact persistence to Delta tables (see Plan Artifact 
 
 ### Session Runtime
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/runtime.py` (not shown in extracts, but referenced throughout)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/session/runtime.py`
 
 The `SessionRuntime` class manages the lifecycle of a DataFusion `SessionContext` with profile-driven configuration. It encapsulates:
 
@@ -150,63 +184,76 @@ The runtime profile is initialized during facade construction and remains immuta
 
 ### Execution Facade
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/execution_facade.py` (lines 1-768)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/session/facade.py` (843 lines)
 
-The `DataFusionExecutionFacade` (lines 268-760) provides the unified API for compilation, execution, registration, and writes. It coordinates all DataFusion operations through a consistent interface.
+The `DataFusionExecutionFacade` provides the unified API for compilation, execution, registration, and writes. It coordinates all DataFusion operations through a consistent interface.
 
 **Key Methods**:
 
-1. **`compile_to_bundle()`** (lines 379-425): Compiles a DataFrame builder function to a `DataFusionPlanBundle`. This is the canonical compilation path:
+1. **`compile_to_bundle()`** (lines 225-310): Compiles a DataFrame builder function to a `DataFusionPlanBundle`. This is the canonical compilation path:
    - Invokes builder with SessionContext to generate DataFrame
    - Calls `build_plan_bundle()` with session runtime and scan units
    - Returns plan bundle ready for execution or scheduling
 
-2. **`execute_plan_bundle()`** (lines 427-492): Executes a plan bundle with Substrait-first replay:
+2. **`execute_plan_bundle()`** (lines 312-414): Executes a plan bundle with Substrait-first replay:
    - Validates UDF compatibility between planning and execution contexts
    - Attempts Substrait replay via `replay_substrait_bytes()`
    - Falls back to original DataFrame on replay failure
    - Records execution artifacts (duration, status, errors)
    - Returns `ExecutionResult` wrapper
 
-3. **`register_dataset()`** (lines 660-699): Registers a dataset location via the registry bridge:
+3. **`register_dataset()`** (lines 735-774): Registers a dataset location via the registry bridge:
    - Validates runtime profile availability
-   - Delegates to `register_dataset_df()` from `dataset_registration.py`
+   - Delegates to `register_dataset_df()` from `dataset.registration` module
    - Returns DataFusion DataFrame representing the registered dataset
 
-4. **`write()` / `write_view()`** (lines 591-633): Delegates to `WritePipeline` for write operations:
+4. **`write()` / `write_view()`** (lines 600-708): Delegates to `WritePipeline` for write operations:
    - Constructs pipeline with session context and SQL options
    - Executes write request (table, view, streaming)
    - Returns `ExecutionResult` wrapping write metadata
 
-**Error Handling Pattern** (lines 454-492): The facade captures exceptions during execution and records them as artifacts via `_record_execution_artifact()`. This enables post-mortem analysis of planning vs execution failures.
+5. **`ensure_view_graph()`** (lines 710-733): Ensures view graph is registered:
+   - Optionally includes registry views before pipeline views
+   - Returns Rust UDF snapshot used for view registration
 
-**Substrait-First Execution** (lines 532-553): The `_substrait_first_df()` method prioritizes Substrait replay for determinism:
+6. **`build_plan_bundle()`** (lines 791-834): Builds plan bundle from DataFrame:
+   - Creates canonical plan artifact for scheduling and lineage
+   - Returns `DataFusionPlanBundle` with fingerprinting
+
+**Error Handling Pattern** (lines 416-452): The facade captures exceptions during execution and records them as artifacts via `_record_execution_artifact()`. This enables post-mortem analysis of planning vs execution failures.
+
+**Substrait-First Execution** (lines 454-496): The `_substrait_first_df()` method prioritizes Substrait replay for determinism:
 ```python
-if bundle.substrait_bytes is None:
-    return bundle.df, True  # Fallback to original DataFrame
+if not substrait_bytes:
+    msg = "Plan bundle is missing Substrait bytes."
+    raise ValueError(msg)
+cached_entry = self._plan_cache_entry(bundle)
 try:
-    df = replay_substrait_bytes(self.ctx, bundle.substrait_bytes)
+    df = replay_substrait_bytes(self.ctx, substrait_bytes)
 except (RuntimeError, TypeError, ValueError):
+    cached_df = self._rehydrate_from_proto(bundle)
+    if cached_df is not None:
+        return cached_df, True
     return bundle.df, True  # Fallback on replay error
 else:
     return df, False  # Successful Substrait replay
 ```
 
-This pattern ensures that plans are executed from their serialized Substrait representation rather than the ephemeral DataFrame object, eliminating in-memory plan drift.
+This pattern ensures that plans are executed from their serialized Substrait representation rather than the ephemeral DataFrame object, eliminating in-memory plan drift. The facade also supports plan proto caching for fallback when Substrait replay fails.
 
 ### Planning Pipeline - Delta Pin Two-Pass Planner
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/planning_pipeline.py` (lines 1-285)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/plan/pipeline.py`
 
-The `plan_with_delta_pins()` function (lines 55-126) implements a two-pass planning strategy that pins Delta input versions before final plan compilation:
+The `plan_with_delta_pins()` function implements a two-pass planning strategy that pins Delta input versions before final plan compilation:
 
-**Pass 1 - Baseline Planning** (lines 78-87):
-1. Register UDF platform and view graph
+**Pass 1 - Baseline Planning**:
+1. Register UDF platform and view graph via `ensure_view_graph()`
 2. Plan view nodes without scan units to extract lineage
 3. Infer dependencies from view nodes via `infer_deps_from_view_nodes()`
 4. Extract scan lineage (dataset references, projected columns, filters)
 
-**Pass 2 - Pinned Planning** (lines 88-111):
+**Pass 2 - Pinned Planning**:
 1. Plan scan units with Delta version resolution via `plan_scan_units()`
 2. Apply scan unit overrides (Delta version pins, file pruning)
 3. Re-register view graph with pinned scan providers
@@ -214,21 +261,21 @@ The `plan_with_delta_pins()` function (lines 55-126) implements a two-pass plann
 
 **Why Two Passes?** Delta scan planning requires lineage information (which tables, which columns) to determine file pruning and version selection. The first pass extracts this lineage from unresolved plans. The second pass re-plans with Delta providers that enforce version pins and file-level pruning, ensuring deterministic scan inputs.
 
-**Scan Planning** (lines 129-162): The `_scan_planning()` function:
+**Scan Planning**: The `_scan_planning()` function:
 - Groups scans by task name from inferred dependencies
 - Calls `plan_scan_units()` to resolve Delta versions and prune files
 - Builds scan task name mappings (stable digest-based names)
 - Creates scan task units for scheduling (scan units become schedulable tasks)
 
-**Lineage Extraction** (lines 269-281): After pinned planning, `_lineage_by_view()` extracts column-level lineage from optimized logical plans via `extract_lineage()`. This feeds into scheduling edge validation.
+**Lineage Extraction**: After pinned planning, `_lineage_by_view()` extracts column-level lineage from optimized logical plans via `extract_lineage()`. This feeds into scheduling edge validation.
 
 ### Lineage Extraction
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/lineage_datafusion.py` (lines 1-300)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/lineage/datafusion.py` (534 lines)
 
-The `extract_lineage()` function (lines 111-152) walks the DataFusion logical plan tree and extracts structured lineage information:
+The `extract_lineage()` function walks the DataFusion logical plan tree and extracts structured lineage information:
 
-**LineageReport Components** (lines 80-109):
+**LineageReport Components**:
 - **scans**: `ScanLineage` entries with dataset name, projected columns, pushed filters
 - **joins**: `JoinLineage` entries with join type, left/right keys
 - **exprs**: `ExprInfo` entries with expression kind, referenced columns, referenced UDFs
@@ -236,8 +283,9 @@ The `extract_lineage()` function (lines 111-152) walks the DataFusion logical pl
 - **required_rewrite_tags**: Tuple of rewrite rule tags required for execution
 - **required_columns_by_dataset**: Mapping of dataset → columns for dependency analysis
 - **filters/aggregations/window_functions**: Extracted from expression metadata
+- **referenced_tables**: Property that returns sorted unique table names from scans
 
-**Extraction Mechanism** (lines 127-132):
+**Extraction Mechanism**:
 ```python
 for node in walk_logical_complete(plan):
     variant = _plan_variant(node)
@@ -247,34 +295,34 @@ for node in walk_logical_complete(plan):
     exprs.extend(_extract_expr_infos(tag=tag, variant=variant, udf_name_map=udf_name_map))
 ```
 
-The plan walk (via `walk_logical_complete()` from `plan_walk.py`) visits every node in the logical plan tree. Each node is converted to its variant (e.g., `TableScan`, `Join`, `Projection`) for pattern matching.
+The plan walk (via `walk_logical_complete()` from `plan.walk` module) visits every node in the logical plan tree. Each node is converted to its variant (e.g., `TableScan`, `Join`, `Projection`) for pattern matching.
 
-**Scan Lineage** (lines 233-248): For `TableScan` variants:
+**Scan Lineage**: For `TableScan` variants:
 - Extract `table_name` or `fqn` (fully qualified name)
 - Extract `projection` as column names
 - Extract `filters` as pushed-down predicates
 - Return `ScanLineage(dataset_name, projected_columns, pushed_filters)`
 
-**Join Lineage** (lines 251-267): For `Join` variants:
+**Join Lineage**: For `Join` variants:
 - Extract `join_type` (inner, left, right, full, cross)
 - Extract `on` pairs as (left_expr, right_expr) tuples
 - Extract qualified column names from expressions
 - Return `JoinLineage(join_type, left_keys, right_keys)`
 
-**Expression Info** (lines 278-292): For plan nodes with expression attributes:
+**Expression Info**: For plan nodes with expression attributes:
 - Extract expressions from node attributes (e.g., `Projection.projections`, `Filter.predicate`)
 - Recursively walk expression trees to find column references and UDF calls
 - Return `ExprInfo(kind, referenced_columns, referenced_udfs, text)`
 
-**UDF Dependency Resolution** (lines 134-135): The lineage report includes `required_udfs` extracted from expression UDF references, and `required_rewrite_tags` resolved from the UDF snapshot's rewrite tag index. This enables scheduling to validate UDF availability before execution.
+**UDF Dependency Resolution**: The lineage report includes `required_udfs` extracted from expression UDF references, and `required_rewrite_tags` resolved from the UDF snapshot's rewrite tag index. This enables scheduling to validate UDF availability before execution.
 
 ### Schema Contracts
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/schema_contracts.py` (lines 1-615)
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/schema/contracts.py` (1005 lines)
 
 Schema contracts provide declarative schema validation and evolution policies. They enable compile-time detection of schema drift and DDL generation.
 
-**SchemaContract** (lines 167-398): Core contract abstraction:
+**SchemaContract**: Core contract abstraction:
 ```python
 @dataclass(frozen=True)
 class SchemaContract:
@@ -287,12 +335,12 @@ class SchemaContract:
     enforce_columns: bool
 ```
 
-**Evolution Policies** (lines 99-104):
+**Evolution Policies**:
 - `STRICT`: No schema changes allowed (fails on missing/extra columns)
 - `ADDITIVE`: New columns allowed, removals fail
 - `RELAXED`: Any compatible change allowed
 
-**Validation Mechanism** (lines 250-334): The `validate_against_introspection()` method:
+**Validation Mechanism**: The `validate_against_introspection()` method:
 1. Checks table existence in introspection snapshot
 2. Retrieves actual column definitions from catalog
 3. Compares expected vs actual for each column:
@@ -301,20 +349,23 @@ class SchemaContract:
    - Nullability mismatches → `NULLABILITY_MISMATCH` violation
 4. Under `STRICT` policy, extra columns → `EXTRA_COLUMN` violation
 
-**Arrow Schema Interop** (lines 198-248):
+**Arrow Schema Interop**:
 - `from_arrow_schema()`: Creates contract from PyArrow schema, stamping ABI fingerprint in metadata
 - `to_arrow_schema()`: Converts contract to PyArrow schema with preserved metadata
 - `schema_from_catalog()`: Retrieves Arrow schema from DataFusion catalog for comparison
 
-**Schema ABI Fingerprinting** (lines 23, 225-228): The `SCHEMA_ABI_FINGERPRINT_META` metadata key stores a stable digest of the schema structure via `schema_fingerprint()`. This enables change detection across schema versions and validates that execution-time schemas match planning-time expectations.
+**Schema ABI Fingerprinting**: The `SCHEMA_ABI_FINGERPRINT_META` metadata key stores a stable digest of the schema structure via `schema_fingerprint()`. This enables change detection across schema versions and validates that execution-time schemas match planning-time expectations.
 
 ### UDF System
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/udf_catalog.py` (lines 1-300+)
+**Files**:
+- `/home/paul/CodeAnatomy/src/datafusion_engine/udf/catalog.py`
+- `/home/paul/CodeAnatomy/src/datafusion_engine/udf/runtime.py`
+- `/home/paul/CodeAnatomy/src/datafusion_engine/udf/platform.py`
 
 The UDF catalog manages Rust UDF registration and metadata extraction via the `datafusion_ext` Rust extension module.
 
-**DataFusionUdfSpec** (lines 40-70): Specification for UDF registration:
+**DataFusionUdfSpec**: Specification for UDF registration:
 ```python
 @dataclass(frozen=True)
 class DataFusionUdfSpec:
@@ -329,17 +380,15 @@ class DataFusionUdfSpec:
     rewrite_tags: tuple[str, ...]   # Schema transformation tags
 ```
 
-**Function Catalog** (lines 212-276): Runtime function catalog built from `information_schema`:
+**Function Catalog**: Runtime function catalog built from `information_schema`:
 - `from_information_schema()`: Constructs catalog from routines/parameters snapshots
 - `function_names`: Frozenset of all registered function names
 - `functions_by_category`: Mapping of category → function names
 - `function_signatures`: Mapping of name → `FunctionSignature` with input/return types
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/udf_runtime.py` (lines 1-300+)
+**UDF Runtime** manages snapshot caching and validation.
 
-UDF runtime manages snapshot caching and validation.
-
-**Snapshot Structure** (lines 24-33): Required snapshot keys:
+**Snapshot Structure**: Required snapshot keys:
 ```python
 _REQUIRED_SNAPSHOT_KEYS = (
     "scalar", "aggregate", "window", "table",  # UDF categories
@@ -348,22 +397,22 @@ _REQUIRED_SNAPSHOT_KEYS = (
 )
 ```
 
-**Snapshot Validation** (lines 132-158): The `validate_rust_udf_snapshot()` function:
+**Snapshot Validation**: The `validate_rust_udf_snapshot()` function:
 1. Checks for required keys in snapshot mapping
 2. Validates sequence fields (scalar, aggregate, window, table)
 3. Validates mapping fields (aliases, parameter_names, signature_inputs, return_types)
 4. Ensures signature metadata exists for all registered UDFs
 
-**Required UDF Validation** (lines 161-196): The `validate_required_udfs()` function:
-1. Extracts UDF names from snapshot via `_snapshot_names()`
+**Required UDF Validation**: The `validate_required_udfs()` function:
+1. Extracts UDF names from snapshot via `udf_names_from_snapshot()`
 2. Checks that all required UDFs exist in the snapshot
-3. Resolves aliases to canonical names via `_alias_to_canonical()`
+3. Resolves aliases to canonical names via alias index
 4. Validates signature metadata presence for required UDFs
 5. Validates return type metadata presence for required UDFs
 
-**Snapshot Hash** (lines 297+): The `rust_udf_snapshot_hash()` function computes a stable SHA-256 digest of the normalized snapshot. This hash is used in plan fingerprinting to detect UDF registry changes.
+**Snapshot Hash**: The `rust_udf_snapshot_hash()` function computes a stable SHA-256 digest of the normalized snapshot. This hash is used in plan fingerprinting to detect UDF registry changes.
 
-**Caching Strategy** (lines 15-22, 223-253): The runtime maintains weak references to SessionContext instances and caches snapshots per context:
+**Caching Strategy**: The runtime maintains weak references to SessionContext instances and caches snapshots per context:
 ```python
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
@@ -374,13 +423,13 @@ This ensures validation runs once per context and snapshots persist for the sess
 
 ### Rust UDF Platform
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/udf_platform.py`
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/udf/platform.py`
 
 The Rust UDF Platform provides a unified installation mechanism for planning-critical extensions. Planner extensions (Rust UDFs, ExprPlanners, FunctionFactory, and RelationPlanners) are installed before any plan-bundle construction to ensure deterministic query planning.
 
 > **Cross-reference**: For comprehensive documentation of the Rust UDF implementation, architecture, and 40+ custom functions, see [Part VIII: Rust Architecture](part_viii_rust_architecture.md), specifically the "Custom UDF System" section.
 
-**RustUdfPlatformOptions** (lines 79-93):
+**RustUdfPlatformOptions**:
 ```python
 @dataclass(frozen=True)
 class RustUdfPlatformOptions:
@@ -424,7 +473,7 @@ install_rust_udf_platform(ctx, options=options)
 - **ExprPlanners**: Custom expression rewrite rules (e.g., domain-specific transformations)
 - **TableProviderCapsule**: PyCapsule-based integration for custom table providers
 
-**RustUdfPlatform Snapshot** (lines 64-76):
+**RustUdfPlatform Snapshot**:
 ```python
 @dataclass(frozen=True)
 class RustUdfPlatform:
@@ -442,6 +491,196 @@ class RustUdfPlatform:
 ```
 
 All DataFusion execution facades automatically install the platform in `__post_init__` to ensure extensions are available before plan operations. The platform snapshot is captured in plan bundles for reproducibility.
+
+### Views Subsystem
+
+The views subsystem provides declarative view management with dependency-aware registration, schema validation, and artifact recording.
+
+#### View Graph Architecture
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/graph.py` (645 lines)
+
+The view graph system enables dependency-driven view registration with topological sorting and cache materialization.
+
+**ViewNode Abstraction**:
+
+```python
+@dataclass(frozen=True)
+class ViewNode:
+    name: str
+    deps: tuple[str, ...]  # Explicit dependency names
+    builder: Callable[[SessionContext], DataFrame]
+    contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
+    required_udfs: tuple[str, ...] = ()
+    plan_bundle: DataFusionPlanBundle | None = None
+    cache_policy: Literal["none", "memory", "delta_staging", "delta_output"] = "none"
+```
+
+**Key Features**:
+- **Explicit Dependencies**: Dependencies are declared explicitly in `deps` tuple (can be auto-inferred from plan bundles)
+- **Schema Contracts**: Optional contract builders for schema validation
+- **UDF Requirements**: Required UDFs declared for validation
+- **Plan Bundles**: Optional plan bundle for lineage extraction
+- **Cache Policies**: Materialization strategies (none, memory, delta_staging, delta_output)
+
+**Registration Flow** (`register_view_graph()`):
+
+1. **Validation**: Validate Rust UDF snapshot structure
+2. **Materialization**: Materialize nodes with dependencies from plan bundles via `_materialize_nodes()`
+3. **Topological Sort**: Order views via rustworkx or Kahn's algorithm via `_topo_sort_nodes()`
+4. **Per-View Registration**:
+   - Validate dependencies exist (in context or earlier views)
+   - Validate required UDFs exist in snapshot
+   - Build DataFrame via `builder(ctx)`
+   - Apply cache policy (memory, delta_staging, delta_output)
+   - Register view with SessionContext
+   - Validate schema contract (if provided)
+   - Record view artifact to runtime profile
+
+**Cache Policies**:
+- **`"none"`**: Register as ephemeral view (no caching)
+- **`"memory"`**: Call `df.cache()` before registration (DataFusion in-memory cache)
+- **`"delta_staging"`**: Write to temp Delta table, register as Delta scan
+- **`"delta_output"`**: Write to configured dataset location, register as Delta scan
+
+Delta cache policies enable view materialization with versioned storage and CDF support.
+
+**Topological Sorting**:
+
+The system uses rustworkx when available for deterministic lexicographical topological sort, falling back to Kahn's algorithm:
+
+```python
+def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:
+    node_map = {node.name: node for node in nodes}
+    ordered = _topo_sort_nodes_rx(node_map, nodes)  # Try rustworkx
+    if ordered is not None:
+        return ordered
+    return _topo_sort_nodes_kahn(node_map, nodes)  # Fallback to Kahn
+```
+
+**Cycle Detection**: If Kahn's algorithm doesn't visit all nodes, a dependency cycle exists, raising `ValueError` with cycle participants.
+
+**Schema Contract Validation**:
+
+Views can declare schema contracts that are validated post-registration:
+
+```python
+contract = SchemaContract(
+    table_name="cpg_nodes",
+    columns=(
+        ColumnContract(name="node_id", dtype=pa.utf8(), nullable=False),
+        ColumnContract(name="node_type", dtype=pa.utf8(), nullable=False),
+    ),
+    evolution_policy=EvolutionPolicy.STRICT,
+)
+```
+
+Validation detects:
+- Missing columns
+- Type mismatches
+- Nullability violations
+- Extra columns (under `STRICT` policy)
+- Schema metadata mismatches (including ABI fingerprints)
+
+Violations raise `SchemaContractViolationError` with detailed diagnostic information.
+
+#### View Specification DSL
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/view_spec.py` (672 lines)
+
+The view specification DSL provides a declarative approach to defining view projections, replacing hand-coded expression tuples with concise specifications.
+
+**ViewProjectionSpec**:
+
+```python
+from datafusion_engine.views.view_spec import ViewProjectionSpec, ColumnTransform
+
+spec = ViewProjectionSpec(
+    name="ast_calls",
+    base_table="ast_files_v1",
+    include_file_identity=True,
+    passthrough_cols=("ast_id", "parent_ast_id"),
+    include_span_struct=True,
+)
+
+# Generate expressions from spec
+exprs = spec.to_exprs(base_schema)
+```
+
+**Column Transform Types** (`ColumnTransformKind`):
+- `PASSTHROUGH`: Direct column pass-through with alias
+- `RENAME`: Rename column
+- `CAST`: Type casting via `arrow_cast()`
+- `STRUCT_FIELD`: Extract struct field
+- `NESTED_STRUCT_FIELD`: Extract nested struct field
+- `MAP_EXTRACT`: Extract map value by key
+- `METADATA_EXTRACT`: Extract Arrow metadata by key
+- `COALESCE`: Coalesce multiple columns
+- `LITERAL`: Literal value
+- `EXPRESSION`: Custom expression
+
+**Benefits of DSL**:
+- Uniform interface for view projection definitions
+- Composable with view registry for dependency management
+- Reduces boilerplate for common transformation patterns
+- Type-safe transformation specifications
+- Enables generic builders for expression generation
+
+#### Registry Views
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/registry.py` (3256 lines)
+
+The registry views module provides pre-defined view builders for AST, CST, symtable, and tree-sitter evidence layers.
+
+**Registry View Categories**:
+- **AST Core Views**: Core AST views (required)
+- **AST Optional Views**: Optional AST enrichment views
+- **CST Views**: LibCST view definitions
+- **Symtable Views**: Symtable analysis views (class methods, function partitions, scope edges, namespace edges)
+- **Tree-sitter Views**: Tree-sitter AST views and CST alignment checks
+- **Python Imports**: Python import extraction views
+- **Map Utilities**: Map entries, keys, values views for nested structures
+- **Span Unnesting**: CST span unnesting views
+
+**View Builder Patterns**:
+
+```python
+def _symtable_class_methods_df(ctx: SessionContext) -> DataFrame:
+    """Build symtable_class_methods view."""
+    return ctx.sql("""
+        SELECT
+            file_id,
+            stable_id(file_id, class_name, method_name) AS class_method_id,
+            class_name,
+            method_name
+        FROM symtable_classes_v1
+        CROSS JOIN UNNEST(methods) AS t(method_name)
+    """)
+```
+
+**Registry Integration** (`ensure_view_graph()`):
+
+```python
+def ensure_view_graph(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    include_registry_views: bool = True,
+) -> Mapping[str, object]:
+    """Ensure the view graph is registered for the current context."""
+    # Install UDF platform
+    # Register registry views if requested
+    # Return UDF snapshot for downstream use
+```
+
+**View Spec Catalog**:
+
+**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/view_specs_catalog.py` (1207 lines)
+
+Centralized catalog of view projection specifications for all registry views. Provides:
+- Comprehensive view spec definitions
+- Spec validation and composition
+- Metadata for view dependencies and contracts
 
 #### Python ↔ Rust UDF Boundary
 
@@ -634,96 +873,406 @@ This prevents accidental mutation and enables safe sharing across threads and pr
 ## Critical Files Reference
 
 ### Plan Bundle System
-- **`plan_bundle.py`** (2140 lines): Core plan artifact with fingerprinting logic
-  - `build_plan_bundle()` (lines 290-362): Main entrypoint for plan compilation
-  - `DataFusionPlanBundle` (lines 108-194): Canonical plan artifact dataclass
-  - `PlanFingerprintInputs` (lines 1472-1486): Fingerprint input specification
-  - `_hash_plan()` (lines 1488-1543): Fingerprint computation from Substrait + environment
-  - `_plan_artifacts_from_components()` (lines 915-985): Assembles serializable artifacts
-  - `_delta_inputs_from_scan_units()` (lines 196-256): Derives Delta pins from scan lineage
-  - `_to_substrait_bytes()` (lines 1309-1335): Substrait serialization for plan portability
+- **`plan/bundle.py`** (2123 lines): Core plan artifact with fingerprinting logic
+  - `build_plan_bundle()`: Main entrypoint for plan compilation
+  - `DataFusionPlanBundle`: Canonical plan artifact dataclass
+  - `PlanBundleOptions`: Options for building plan bundles
+  - `_delta_inputs_from_scan_units()`: Derives Delta pins from scan lineage
+  - Substrait serialization for plan portability and fingerprinting
+
+- **`plan/execution.py`** (182 lines): Plan execution helpers
+  - `execute_plan_bundle()`: Execute plan bundle with scan overrides
+  - `replay_substrait_bytes()`: Substrait replay (stub in current build)
+  - `validate_substrait_plan()`: Substrait validation (stub in current build)
+  - `datafusion_to_async_batches()`: Async batch streaming
+  - `datafusion_write_options()`: Write options from policy
+
+- **`plan/result_types.py`**: Execution result types
+  - `ExecutionResult`: Unified execution result wrapper
+  - `ExecutionResultKind`: Result kind enumeration
+  - `PlanExecutionResult`: Detailed execution result with artifacts
+  - `PlanExecutionOptions`: Execution options with scan overrides
+  - `PlanEmissionOptions`: Artifact emission control
+
+- **`plan/cache.py`**: Plan proto caching
+  - `PlanCacheEntry`: Cache entry for plan protos
+  - `PlanProtoCache`: Proto cache protocol
+
+- **`plan/profiler.py`**: Plan profiling and explain capture
+  - `ExplainCapture`: Explain output capture
+  - `capture_explain()`: Capture explain output from DataFrame
+
+- **`plan/walk.py`**: Plan tree walking utilities
+  - `walk_logical_complete()`: Walk logical plan tree
+  - Plan and expression tree traversal helpers
+
+- **`plan/artifact_store.py`** (1392 lines): Delta-backed artifact store
+  - `PlanArtifactRow`: Serializable artifact row
+  - `persist_execution_artifact()`: Persist execution artifacts
+  - Event-time partitioned Delta tables for artifact persistence
 
 ### Execution Infrastructure
-- **`execution_facade.py`** (768 lines): Unified API for compilation and execution
-  - `compile_to_bundle()` (lines 379-425): DataFrame builder → plan bundle
-  - `execute_plan_bundle()` (lines 427-492): Substrait-first execution with fallback
-  - `_ensure_udf_compatibility()` (lines 59-84): Pre-execution UDF validation
+- **`session/facade.py`** (843 lines): Unified API for compilation and execution
+  - `DataFusionExecutionFacade`: Main facade class
+  - `compile_to_bundle()`: DataFrame builder → plan bundle
+  - `execute_plan_bundle()`: Substrait-first execution with fallback
+  - `register_dataset()`: Dataset registration via registry bridge
+  - `write()` / `write_view()`: Write operations via WritePipeline
+  - `ensure_view_graph()`: View graph registration
+  - `build_plan_bundle()`: Build plan bundle from DataFrame
+  - `_ensure_udf_compatibility()`: Pre-execution UDF validation
+  - `_substrait_first_df()`: Substrait-first execution with proto cache fallback
+  - `_record_execution_artifact()`: Execution artifact persistence
 
-- **`runtime.py`** (referenced but not shown): Session lifecycle management
-  - `DataFusionRuntimeProfile`: Configuration container
+- **`session/runtime.py`**: Session lifecycle management
+  - `DataFusionRuntimeProfile`: Configuration container with profile presets
   - `SessionRuntime`: Session + profile + cached snapshots
   - Profile presets: `default`, `dev`, `prod`, `cst_autoload`, `symtable`
+  - Session factory and configuration management
+  - UDF platform hooks and diagnostics sinks
+
+- **`session/factory.py`**: Session context factory
+  - `SessionFactory`: Factory for creating session contexts
+  - Configuration-driven session construction
+
+- **`session/helpers.py`**: Session helper utilities
+  - `register_temp_table()`: Temporary table registration
+  - `deregister_table()`: Table deregistration
+
+- **`session/streaming.py`**: Streaming execution support
 
 ### Planning Pipeline
-- **`planning_pipeline.py`** (285 lines): Two-pass Delta pin planning
-  - `plan_with_delta_pins()` (lines 55-126): Main orchestration function
-  - `_scan_planning()` (lines 129-162): Scan unit resolution and task generation
-  - `_plan_view_nodes()` (lines 165-191): View-level planning with scan units
+- **`plan/pipeline.py`**: Two-pass Delta pin planning
+  - `plan_with_delta_pins()`: Main orchestration function
+  - `PlanningPipelineResult`: Pipeline result dataclass
+  - `_scan_planning()`: Scan unit resolution and task generation
+  - `_plan_view_nodes()`: View-level planning with scan units
+  - `_lineage_by_view()`: Extract lineage from pinned plans
 
 ### Lineage and Dependency Analysis
-- **`lineage_datafusion.py`** (300+ lines): Plan tree lineage extraction
-  - `extract_lineage()` (lines 111-152): Main extraction function
-  - `_extract_scan_lineage()` (lines 233-248): Table scan → dataset references
-  - `_extract_join_lineage()` (lines 251-267): Join → key pairs
-  - `_required_columns_by_dataset()` (referenced): Column-level dependency map
+- **`lineage/datafusion.py`** (534 lines): Plan tree lineage extraction
+  - `extract_lineage()`: Main extraction function
+  - `LineageReport`: Complete lineage report dataclass
+  - `ScanLineage`: Scan lineage information
+  - `JoinLineage`: Join lineage information
+  - `ExprInfo`: Expression lineage information
+  - `_extract_scan_lineage()`: Table scan → dataset references
+  - `_extract_join_lineage()`: Join → key pairs
+  - `_required_columns_by_dataset()`: Column-level dependency map
+
+- **`lineage/scan.py`** (730 lines): Scan planning and Delta integration
+  - `ScanUnit`: Deterministic scan unit with Delta pins
+  - `plan_scan_unit()`: Single scan unit resolution
+  - `plan_scan_units()`: Batch scan unit planning
+  - Delta file pruning and candidate selection
+
+- **`lineage/diagnostics.py`** (870 lines): Diagnostics collection and recording
+  - `DiagnosticsRecorder`: Diagnostics recording interface
+  - `record_artifact()`: Record diagnostic artifact
+  - `record_events()`: Record diagnostic events
+  - `recorder_for_profile()`: Create recorder from profile
 
 ### Schema and Contracts
-- **`schema_contracts.py`** (615 lines): Declarative schema validation
-  - `SchemaContract` (lines 167-398): Contract with evolution policies
-  - `validate_against_introspection()` (lines 250-334): Snapshot validation
-  - `schema_contract_from_dataset_spec()` (lines 527-566): Spec → contract bridge
+- **`schema/contracts.py`** (1005 lines): Declarative schema validation
+  - `SchemaContract`: Contract with evolution policies
+  - `ColumnContract`: Column-level contract
+  - `EvolutionPolicy`: Schema evolution policies (STRICT, ADDITIVE, RELAXED)
+  - `validate_against_introspection()`: Snapshot validation
+  - `schema_contract_from_dataset_spec()`: Spec → contract bridge
+
+- **`schema/introspection.py`** (1256 lines): Schema introspection
+  - `SchemaIntrospector`: Information schema query interface
+  - `catalogs_snapshot()`: Catalog snapshot
+  - `constraint_rows()`: Constraint introspection
+  - `table_constraint_rows()`: Table constraint introspection
+
+- **`schema/registry.py`** (3904 lines): Schema registry and validation
+  - View name constants (AST, CST, Tree-sitter)
+  - `nested_view_specs()`: Nested view specifications
+  - `validate_nested_types()`: Nested type validation
+  - `validate_semantic_types()`: Semantic type validation
+  - `validate_required_engine_functions()`: Engine function validation
+
+- **`schema/inference.py`** (708 lines): Schema inference
+  - `infer_schema_from_dataframe()`: Schema inference from DataFrame
+  - Schema inference utilities
+
+- **`schema/validation.py`** (729 lines): Schema validation
+  - Schema validation helpers and utilities
+
+- **`schema/finalize.py`** (935 lines): Schema finalization
+  - Schema finalization and canonicalization
+
+- **`schema/contract_population.py`** (619 lines): Contract population
+  - Contract population from evidence tables
 
 ### UDF Platform
-- **`udf_catalog.py`** (300+ lines): UDF metadata and builtin resolution
-  - `DataFusionUdfSpec` (lines 40-70): UDF registration spec
-  - `FunctionCatalog` (lines 212-276): Runtime function catalog
+- **`udf/catalog.py`**: UDF metadata and builtin resolution
+  - `DataFusionUdfSpec`: UDF registration spec
+  - `FunctionCatalog`: Runtime function catalog
+  - `get_default_udf_catalog()`: Default UDF catalog
+  - `get_strict_udf_catalog()`: Strict UDF catalog
+  - `rewrite_tag_index()`: Rewrite tag index from snapshot
 
-- **`udf_runtime.py`** (300+ lines): Snapshot caching and validation
-  - `rust_udf_snapshot()` (lines 223-253): Cached snapshot retrieval
-  - `validate_rust_udf_snapshot()` (lines 132-158): Structural validation
-  - `validate_required_udfs()` (lines 161-196): Dependency validation
-  - `rust_udf_snapshot_hash()` (referenced): Stable digest computation
+- **`udf/runtime.py`**: Snapshot caching and validation
+  - `rust_udf_snapshot()`: Cached snapshot retrieval
+  - `validate_rust_udf_snapshot()`: Structural validation
+  - `validate_required_udfs()`: Dependency validation
+  - `rust_udf_snapshot_hash()`: Stable digest computation
+  - `udf_names_from_snapshot()`: Extract UDF names from snapshot
 
-- **`udf_platform.py`** (referenced): Rust UDF platform installation
+- **`udf/platform.py`**: Rust UDF platform installation
   - `RustUdfPlatformOptions`: Platform configuration options
+  - `RustUdfPlatform`: Platform snapshot
   - `install_rust_udf_platform()`: Unified UDF/ExprPlanner/FunctionFactory installation
   - See [Part VIII: Rust Architecture](part_viii_rust_architecture.md) for Rust implementation details
 
-### View Registration
-- **`view_registry.py`** (704 lines): Dependency-aware view registration
-  - `ViewNode` (lines 46-74): Declarative view definition with auto-inferred dependencies
-  - `register_view_graph()` (lines 121-200): Topologically-sorted view registration
-  - `_deps_from_plan_bundle()` (lines 417-431): Automatic dependency extraction from lineage
-  - `_topo_sort_nodes()` (lines 639-695): rustworkx/Kahn topological sort
+- **`udf/factory.py`**: Function factory integration
+  - `install_function_factory()`: Function factory installation
+  - `function_factory_payloads()`: Factory payload extraction
+
+- **`udf/signature.py`**: UDF signature handling
+  - Signature metadata and type conversion
+
+- **`udf/parity.py`**: UDF parity validation
+  - Information schema parity checks
+
+- **`udf/shims.py`**: Python shims for Rust UDFs
+  - Python-side UDF wrappers for testing
+
+### View Registration and Graph Management
+- **`views/graph.py`** (645 lines): Dependency-aware view registration
+  - `ViewNode`: Declarative view definition with explicit dependencies
+  - `register_view_graph()`: Topologically-sorted view registration
+  - `ViewGraphOptions`: Registration configuration
+  - `ViewGraphRuntimeOptions`: Runtime options for registration
+  - `SchemaContractViolationError`: Contract violation error
+  - `_materialize_nodes()`: Materialize view nodes with dependencies from bundles
+  - `_topo_sort_nodes()`: rustworkx/Kahn topological sort
   - Cache policies: `none`, `memory`, `delta_staging`, `delta_output`
 
-- **`view_graph_registry.py`** (referenced): Graph-level view orchestration
-  - Graph construction and parallel registration
-  - Incremental update support
+- **`views/registry.py`** (3256 lines): Registry view specifications and registration
+  - `registry_view_specs()`: View specifications for registry views
+  - `register_all_views()`: Register all registry views
+  - `registry_view_nodes()`: Registry view nodes for graph registration
+  - `ensure_view_graph()`: Ensure view graph is registered
+  - View builders for AST, CST, symtable, and tree-sitter views
+  - Map entries/keys/values view builders
+  - Python imports view builders
 
-### Scan Planning and Delta Integration
-- **`scan_planner.py`** (805 lines): Delta-aware scan planning
-  - `ScanUnit` (lines 103-125): Deterministic scan unit with Delta pins
-  - `plan_scan_unit()` (lines 155-229): Single scan unit resolution with Delta version pinning
-  - `plan_scan_units()` (lines 305-336): Batch scan unit planning for task graph
-  - `_scan_unit_key()` (lines 79-99): Stable key generation with version pins
-  - `_delta_scan_candidates()` (lines 339-392): File pruning and candidate selection
-  - `_policy_from_lineage()` (lines 694-708): Convert lineage filters to pruning policy
+- **`views/view_spec.py`** (672 lines): Declarative view projection specifications
+  - `ViewProjectionSpec`: DSL for view projections
+  - `ColumnTransform`: Column transformation specification
+  - `ColumnTransformKind`: Transformation type enumeration
+  - Generic builder for expression generation from specs
 
-- **`dataset_resolution.py`**: Scan configuration and dataset resolution
+- **`views/view_specs_catalog.py`** (1207 lines): View specification catalog
+  - Centralized catalog of view projection specifications
+  - View spec definitions for all registry views
+
+- **`views/registry_specs.py`** (566 lines): Registry spec builders
+  - View spec builders for registry views
+  - Spec composition and validation
+
+- **`views/dsl.py`** (625 lines): View DSL implementation
+  - DSL for building views from specifications
+  - Expression builders and helpers
+
+- **`views/dsl_views.py`**: DSL-driven view definitions
+  - Views built using the DSL
+
+- **`views/bundle_extraction.py`**: Bundle extraction utilities
+  - `arrow_schema_from_df()`: Extract Arrow schema from DataFrame
+  - `extract_lineage_from_bundle()`: Extract lineage from plan bundle
+  - `resolve_required_udfs_from_bundle()`: Resolve required UDFs from bundle
+
+- **`views/artifacts.py`**: View artifact recording
+  - `ViewArtifactRequest`: View artifact request
+  - `ViewArtifactLineage`: View lineage artifact
+  - `build_view_artifact_from_bundle()`: Build view artifact from bundle
+
+### Dataset Management
+- **`dataset/registry.py`**: Dataset catalog and location management
+  - `DatasetCatalog`: Dataset catalog registry
+  - `DatasetLocation`: Dataset location specification
+
+- **`dataset/resolution.py`**: Scan configuration and dataset resolution
   - `apply_scan_unit_overrides()`: Re-register table providers with pinned scans
+  - Dataset resolution utilities
 
-### Registry and Dataset Management
-- **`dataset_registration.py`**: Dataset registration
-  - `register_dataset_df()`: Dataset registration with schema discovery
-  - Registration utilities for listing tables, object stores, and DDL
-  - Schema discovery and validation via DataFusion catalog
+### Catalog and Introspection
+- **`catalog/introspection.py`** (683 lines): Catalog introspection
+  - `IntrospectionCache`: Introspection cache protocol
+  - Catalog metadata extraction and caching
 
-### Plan Artifact Persistence
-- **`plan_artifact_store.py`** (200+ lines shown): Delta-backed artifact store
-  - `PlanArtifactRow` (lines 51-150): Serializable artifact row
-  - Event-time partitioned Delta tables for artifact persistence
-  - Determinism validation via artifact replay
+- **`catalog/provider.py`**: Table provider integration
+  - Custom table provider implementations
+
+- **`catalog/provider_registry.py`**: Provider registry
+  - Registry for table providers
+
+### Delta Lake Integration
+- **`delta/protocol.py`**: Delta protocol support
+  - `DeltaProtocolSupport`: Protocol compatibility levels
+  - `DeltaProtocolSnapshot`: Protocol snapshot
+
+- **`delta/control_plane.py`**: Delta control plane
+  - Delta table operations and management
+
+- **`delta/store_policy.py`**: Delta store policy
+  - `DeltaStorePolicy`: Store policy configuration
+  - `apply_delta_store_policy()`: Apply policy to session
+  - `delta_store_policy_hash()`: Policy fingerprinting
+
+- **`delta/maintenance.py`**: Delta maintenance operations
+  - Vacuum, optimize, and compaction operations
+
+- **`delta/scan_config.py`**: Delta scan configuration
+  - Scan configuration for Delta tables
+
+- **`delta/contracts.py`**: Delta contracts
+  - Contract validation for Delta tables
+
+- **`delta/payload.py`**: Delta payload utilities
+  - Payload serialization and deserialization
+
+- **`delta/observability.py`**: Delta observability
+  - Diagnostics and metrics for Delta operations
+
+### Arrow Utilities
+- **`arrow/schema.py`**: Arrow schema utilities
+  - Schema construction and manipulation
+  - `map_entry_type()`: Map entry type construction
+  - `version_field()`: Version field construction
+  - `versioned_entries_schema()`: Versioned entries schema
+
+- **`arrow/build.py`**: Arrow builders
+  - Record batch and table builders
+
+- **`arrow/semantic.py`**: Semantic type utilities
+  - Semantic type handling and validation
+
+- **`arrow/interop.py`**: Arrow interop
+  - `RecordBatchReaderLike`: Reader protocol
+  - `SchemaLike`: Schema protocol
+  - `TableLike`: Table protocol
+
+- **`arrow/coercion.py`**: Type coercion
+  - `to_arrow_table()`: Coerce to Arrow table
+
+- **`arrow/encoding.py`**: Encoding utilities
+  - Arrow encoding helpers
+
+- **`arrow/metadata.py`**: Metadata handling
+  - `schema_constraints_from_metadata()`: Extract constraints from metadata
+
+- **`arrow/abi.py`**: Arrow ABI utilities
+  - ABI compatibility helpers
+
+- **`arrow/nested.py`**: Nested type utilities
+  - Nested struct and list handling
+
+- **`arrow/chunking.py`**: Chunking utilities
+  - Record batch chunking
+
+- **`arrow/dictionary.py`**: Dictionary encoding
+  - Dictionary encoding utilities
+
+- **`arrow/encoding_metadata.py`**: Encoding metadata
+  - Metadata for Arrow encoding
+
+- **`arrow/metadata_codec.py`**: Metadata codec
+  - Metadata encoding and decoding
+
+- **`arrow/field_builders.py`**: Field builders
+  - Field construction utilities
+
+### Compilation and Execution Options
+- **`compile/options.py`**: Compilation options
+  - `DataFusionCompileOptions`: Compilation configuration
+  - `DataFusionSqlPolicy`: SQL policy enumeration
+  - `DataFusionCacheEvent`: Cache event tracking
+  - `DataFusionSubstraitFallbackEvent`: Substrait fallback tracking
+  - `resolve_sql_policy()`: Resolve SQL policy from environment
+
+### SQL and Expressions
+- **`sql/options.py`**: SQL options
+  - `sql_options_for_profile()`: SQL options from profile
+  - `statement_sql_options_for_profile()`: Statement SQL options
+
+- **`sql/guard.py`**: SQL guard
+  - SQL injection prevention and validation
+
+- **`expr/planner.py`**: Expression planner
+  - Custom expression rewrite rules
+  - `install_expr_planners()`: Install expression planners
+  - `expr_planner_payloads()`: Extract planner payloads
+
+- **`expr/domain_planner.py`**: Domain planner
+  - Domain-specific query transformations
+
+- **`expr/query_spec.py`**: Query specification
+  - Query specification builders
+
+- **`expr/span.py`**: Span expressions
+  - Byte span expression utilities
+
+- **`expr/spec.py`**: Expression specifications
+  - Expression spec builders
+
+### IO and Encoding
+- **`io/adapter.py`**: IO adapter
+  - `DataFusionIOAdapter`: IO operations adapter
+
+- **`io/write.py`**: Write pipeline
+  - `WritePipeline`: Write pipeline orchestration
+  - `WriteRequest`: Write request specification
+  - `WriteViewRequest`: View write request
+
+- **`io/ingest.py`**: Ingest utilities
+  - Data ingestion helpers
+
+- **`encoding/policy.py`**: Encoding policy
+  - Encoding policy configuration
+
+### Table Specifications
+- **`tables/spec.py`**: Table specifications
+  - Table spec definitions
+
+- **`tables/metadata.py`**: Table metadata
+  - `table_provider_metadata()`: Extract table provider metadata
+
+### Hashing and Identity
+- **`hashing.py`** (12441 lines): Hashing utilities
+  - DataFusion-specific hashing helpers
+  - Thin re-export wrapper for DataFusion callers
+
+- **`identity.py`** (1973 lines): Identity hashing
+  - `schema_identity_hash()`: Schema identity fingerprinting
+
+- **`kernels.py`** (31171 lines): DataFusion kernels
+  - Custom compute kernels
+
+### Extract Integration
+- **`extract/templates.py`**: Extract templates
+  - DataFrame builder patterns for extraction artifacts
+
+- **`extract/metadata.py`**: Extract metadata
+  - Metadata extraction helpers
+
+- **`extract/bundles.py`**: Extract bundles
+  - Bundle construction for extraction
+
+- **`extract/extractors.py`**: Extractors
+  - Extractor implementations
+
+### Symtable Views
+- **`symtable/views.py`**: Symtable view builders
+  - Symtable-specific view definitions
+
+### Error Handling
+- **`errors.py`** (662 lines): Error types
+  - DataFusion-specific error types and handling
 
 ### Scan Overrides
 

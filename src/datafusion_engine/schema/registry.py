@@ -271,6 +271,14 @@ SCIP_OCCURRENCES_SCHEMA = pa.schema(
     ]
 )
 
+SCIP_OCCURRENCES_NORM_SCHEMA = pa.schema(
+    [
+        *SCIP_OCCURRENCES_SCHEMA,
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+    ]
+)
+
 SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
     [
         ("document_id", pa.string()),
@@ -1170,6 +1178,10 @@ SCIP_DOCUMENT_TEXTS_SCHEMA = _schema_with_metadata(
     "scip_document_texts_v1", SCIP_DOCUMENT_TEXTS_SCHEMA
 )
 SCIP_OCCURRENCES_SCHEMA = _schema_with_metadata("scip_occurrences_v1", SCIP_OCCURRENCES_SCHEMA)
+SCIP_OCCURRENCES_NORM_SCHEMA = _schema_with_metadata(
+    "scip_occurrences_norm_v1",
+    SCIP_OCCURRENCES_NORM_SCHEMA,
+)
 SCIP_SYMBOL_INFORMATION_SCHEMA = _schema_with_metadata(
     "scip_symbol_information_v1",
     SCIP_SYMBOL_INFORMATION_SCHEMA,
@@ -3846,6 +3858,7 @@ __all__ = [
     "SCIP_INDEX_SCHEMA",
     "SCIP_INDEX_STATS_SCHEMA",
     "SCIP_METADATA_SCHEMA",
+    "SCIP_OCCURRENCES_NORM_SCHEMA",
     "SCIP_OCCURRENCES_SCHEMA",
     "SCIP_SIGNATURE_OCCURRENCES_SCHEMA",
     "SCIP_SYMBOL_INFORMATION_SCHEMA",

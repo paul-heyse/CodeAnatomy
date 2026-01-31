@@ -1,0 +1,282 @@
+"""Schema compatibility adapters for semantic outputs.
+
+This module provides projection adapters that transform semantic relationship
+outputs to match the legacy schema contracts expected by downstream consumers.
+The adapters bridge the gap between the minimal semantic output schema and
+the full relspec relationship schema.
+
+Semantic output schema (from compiler.relate()):
+    entity_id, symbol, path, bstart, bend, origin
+
+Legacy relationship schema (rel_name_symbol_v1 etc.):
+    ref_id, symbol, symbol_roles, path, edge_owner_file_id, bstart, bend,
+    resolution_method, confidence, score, task_name, task_priority
+
+The adapter adds required columns with appropriate defaults while mapping
+column names to match downstream expectations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+import pyarrow as pa
+
+if TYPE_CHECKING:
+    from datafusion import DataFrame
+    from datafusion.expr import Expr
+
+
+# Default values for relationship metadata columns
+DEFAULT_CONFIDENCE: float = 0.5
+DEFAULT_SCORE: float = 0.5
+DEFAULT_TASK_PRIORITY: int = 100
+
+
+@dataclass(frozen=True)
+class RelationshipProjectionOptions:
+    """Options for projecting semantic outputs to legacy schema.
+
+    Attributes
+    ----------
+    entity_id_alias
+        Output column name for entity ID (e.g., "ref_id", "def_id").
+    edge_kind
+        Edge kind label for the relationship.
+    task_name
+        Task name for provenance metadata.
+    task_priority
+        Task priority for ordering (lower = higher priority).
+    confidence
+        Default confidence score when not provided.
+    score
+        Default score when not provided.
+    include_extended_columns
+        Include columns required by relation_output union
+        (binding_kind, def_site_kind, use_kind, reason, diag_source, severity).
+    """
+
+    entity_id_alias: str
+    edge_kind: str
+    task_name: str
+    task_priority: int = DEFAULT_TASK_PRIORITY
+    confidence: float = DEFAULT_CONFIDENCE
+    score: float = DEFAULT_SCORE
+    include_extended_columns: bool = False
+
+
+def legacy_relationship_projection(
+    df: DataFrame,
+    options: RelationshipProjectionOptions,
+) -> DataFrame:
+    """Project semantic relationship output to legacy schema.
+
+    Transform semantic output (entity_id, symbol, path, bstart, bend, origin)
+    to legacy schema (ref_id, symbol, symbol_roles, path, edge_owner_file_id,
+    bstart, bend, resolution_method, confidence, score, task_name, task_priority).
+
+    Parameters
+    ----------
+    df
+        DataFrame with semantic relationship output schema.
+    options
+        Projection options specifying column mappings and defaults.
+
+    Returns
+    -------
+    DataFrame
+        DataFrame projected to legacy relationship schema.
+    """
+    from datafusion import col, lit
+
+    return df.select(
+        col("entity_id").alias(options.entity_id_alias),
+        col("symbol"),
+        lit(None).cast(pa.int32()).alias("symbol_roles"),
+        col("path"),
+        col("path").alias("edge_owner_file_id"),
+        col("bstart"),
+        col("bend"),
+        col("origin").alias("resolution_method"),
+        lit(options.confidence).cast(pa.float64()).alias("confidence"),
+        lit(options.score).cast(pa.float64()).alias("score"),
+        lit(options.task_name).alias("task_name"),
+        lit(options.task_priority).cast(pa.int32()).alias("task_priority"),
+    )
+
+
+def legacy_relationship_projection_extended(
+    df: DataFrame,
+    options: RelationshipProjectionOptions,
+) -> DataFrame:
+    """Project semantic relationship output to extended legacy schema.
+
+    Include additional columns required by the relation_output union view:
+    binding_kind, def_site_kind, use_kind, reason, diag_source, severity.
+
+    Parameters
+    ----------
+    df
+        DataFrame with semantic relationship output schema.
+    options
+        Projection options specifying column mappings and defaults.
+
+    Returns
+    -------
+    DataFrame
+        DataFrame projected to extended legacy relationship schema.
+    """
+    from datafusion import col, lit
+
+    return df.select(
+        col("entity_id").alias(options.entity_id_alias),
+        col("symbol"),
+        lit(None).cast(pa.int32()).alias("symbol_roles"),
+        col("path"),
+        col("path").alias("edge_owner_file_id"),
+        col("path").alias("file_id"),
+        col("bstart"),
+        col("bend"),
+        col("origin").alias("resolution_method"),
+        lit(options.confidence).cast(pa.float64()).alias("confidence"),
+        lit(options.score).cast(pa.float64()).alias("score"),
+        lit(options.edge_kind).alias("edge_kind"),
+        lit(options.task_name).alias("task_name"),
+        lit(options.task_priority).cast(pa.int32()).alias("task_priority"),
+        # Extended columns for relation_output compatibility
+        lit(None).cast(pa.string()).alias("binding_kind"),
+        lit(None).cast(pa.string()).alias("def_site_kind"),
+        lit(None).cast(pa.string()).alias("use_kind"),
+        lit(None).cast(pa.string()).alias("reason"),
+        lit(None).cast(pa.string()).alias("diag_source"),
+        lit(None).cast(pa.string()).alias("severity"),
+    )
+
+
+def project_semantic_to_legacy(
+    df: DataFrame,
+    options: RelationshipProjectionOptions,
+) -> DataFrame:
+    """Project semantic relationship output using options struct.
+
+    Dispatches to the appropriate projection function based on the
+    include_extended_columns option.
+
+    Parameters
+    ----------
+    df
+        DataFrame with semantic relationship output schema.
+    options
+        Projection options specifying column mappings and defaults.
+
+    Returns
+    -------
+    DataFrame
+        DataFrame projected to legacy relationship schema.
+    """
+    if options.include_extended_columns:
+        return legacy_relationship_projection_extended(df, options)
+    return legacy_relationship_projection(df, options)
+
+
+def _select_with_optional(
+    df: DataFrame,
+    required_exprs: list[Expr],
+    optional_cols: dict[str, pa.DataType],
+) -> DataFrame:
+    """Select required expressions plus optional columns (null if missing).
+
+    Parameters
+    ----------
+    df
+        Source DataFrame.
+    required_exprs
+        Required select expressions.
+    optional_cols
+        Mapping of optional column names to their PyArrow data types.
+        If the column exists in df, it is selected; otherwise a null literal
+        with the specified type is used.
+
+    Returns
+    -------
+    DataFrame
+        DataFrame with required and optional columns.
+    """
+    from datafusion import col, lit
+
+    schema_names = _df_column_names(df)
+    name_set = set(schema_names)
+
+    all_exprs = list(required_exprs)
+    for col_name, dtype in optional_cols.items():
+        if col_name in name_set:
+            all_exprs.append(col(col_name).alias(col_name))
+        else:
+            all_exprs.append(lit(None).cast(dtype).alias(col_name))
+
+    return df.select(*all_exprs)
+
+
+def _df_column_names(df: DataFrame) -> tuple[str, ...]:
+    """Return column names from a DataFrame schema.
+
+    Parameters
+    ----------
+    df
+        DataFrame to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Column names in schema order.
+    """
+    schema = df.schema()
+    if hasattr(schema, "names"):
+        return tuple(schema.names)
+    return tuple(field.name for field in schema)
+
+
+# Standard projection options for each relationship type
+REL_NAME_SYMBOL_OPTIONS = RelationshipProjectionOptions(
+    entity_id_alias="ref_id",
+    edge_kind="py_references_symbol",
+    task_name="rel.name_symbol",
+)
+
+REL_DEF_SYMBOL_OPTIONS = RelationshipProjectionOptions(
+    entity_id_alias="def_id",
+    edge_kind="py_defines_symbol",
+    task_name="rel.def_symbol",
+    confidence=0.6,
+    score=0.6,
+)
+
+REL_IMPORT_SYMBOL_OPTIONS = RelationshipProjectionOptions(
+    entity_id_alias="import_alias_id",
+    edge_kind="py_imports_symbol",
+    task_name="rel.import_symbol",
+)
+
+REL_CALLSITE_SYMBOL_OPTIONS = RelationshipProjectionOptions(
+    entity_id_alias="call_id",
+    edge_kind="py_calls_symbol",
+    task_name="rel.callsite_symbol",
+    confidence=0.6,
+    score=0.6,
+)
+
+
+__all__ = [
+    "DEFAULT_CONFIDENCE",
+    "DEFAULT_SCORE",
+    "DEFAULT_TASK_PRIORITY",
+    "REL_CALLSITE_SYMBOL_OPTIONS",
+    "REL_DEF_SYMBOL_OPTIONS",
+    "REL_IMPORT_SYMBOL_OPTIONS",
+    "REL_NAME_SYMBOL_OPTIONS",
+    "RelationshipProjectionOptions",
+    "legacy_relationship_projection",
+    "legacy_relationship_projection_extended",
+    "project_semantic_to_legacy",
+]

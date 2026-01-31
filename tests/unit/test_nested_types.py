@@ -1,4 +1,3 @@
-# ruff: noqa: PLR2004, PLR6301
 """Unit tests for schema_spec.nested_types module."""
 
 from __future__ import annotations

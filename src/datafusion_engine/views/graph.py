@@ -205,6 +205,7 @@ def register_view_graph(
         )
     _record_view_udf_parity(context, nodes=ordered)
     _record_udf_audit(context)
+    _record_udf_catalog(context)
     _persist_plan_artifacts(
         context,
         ordered,
@@ -455,6 +456,27 @@ def _record_udf_audit(context: ViewGraphContext) -> None:
 
     payload = udf_audit_payload(context.snapshot)
     record_artifact(profile, "udf_audit_v1", payload)
+
+
+def _record_udf_catalog(context: ViewGraphContext) -> None:
+    runtime_profile = context.runtime.runtime_profile
+    if runtime_profile is None:
+        return
+    introspector = SchemaIntrospector(context.ctx)
+    try:
+        catalog = introspector.function_catalog_snapshot(include_parameters=True)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        record_artifact(
+            runtime_profile,
+            "udf_catalog_v1",
+            {"error": str(exc)},
+        )
+        return
+    record_artifact(
+        runtime_profile,
+        "udf_catalog_v1",
+        {"functions": catalog},
+    )
 
 
 def _record_cache_artifact(
@@ -954,7 +976,7 @@ def _normalize_cache_policy(policy: str) -> CachePolicy:
     if policy == "memory":
         return "delta_staging"
     if policy in {"none", "delta_staging", "delta_output"}:
-        return policy
+        return cast("CachePolicy", policy)
     return "none"
 
 

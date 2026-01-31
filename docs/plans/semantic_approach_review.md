@@ -557,3 +557,777 @@ If you want, I can also sketch the *two* small edges you’d likely want to emit
 * `cst_def__owns__cst_docstring` / `cst_def__owns__cst_decorator` using `(owner_def_id -> docstring_id/decorator_id)`
 
 …but the spec above is the missing piece that makes those edges **deterministic and referentially consistent**.
+
+
+
+# add on review for added reliability #
+
+Yes — a *lot* of the “extra” fields you’ve captured in `registry.py` are relevant to ambiguity resolution and **join quality**, but the key is to treat them as **evidence & diagnostics**, not as “more equality columns to join on”.
+
+A clean way to think about it:
+
+* **Hard keys (identity)**: what *must* match for a join to be valid.
+* **Soft evidence (ranking/selection)**: what helps you choose the *best* match when there are multiple candidates.
+* **Quality signals (confidence modifiers)**: what tells you to *downweight* (or even suppress) matches because the upstream evidence is shaky.
+
+That separation keeps your semantics layer robust even as schemas evolve.
+
+---
+
+## 1) What you already have in `registry.py` that *directly* improves join quality
+
+### A) File identity = your most important hard key
+
+Across your extract families you consistently carry **`path`, `file_id`, `file_sha256`** (and often `repo`). For example, `LIBCST_FILES_SCHEMA` includes `repo`, `path`, `file_id`, `file_sha256` and then the nested lists (`defs`, `callsites`, etc.). Likewise, AST files carry the same identity fields.
+
+**How to leverage for join quality:**
+
+* Use `(repo, file_id)` or `(file_id)` as your **primary** file join key if `file_id` is stable in your pipeline.
+* Use `file_sha256` as a **join validity check** / anti-footgun:
+
+  * If two sources disagree on `file_sha256` for the “same” `(repo, path, file_id)`, that’s almost always “different file content” → your match confidence should drop sharply or be treated as invalid.
+
+This is one of the highest ROI pieces of “extra” metadata.
+
+---
+
+### B) Span coordinate metadata = the #1 cause of false ambiguity if you ignore it
+
+Your schemas explicitly track span semantics: `line_base`, `col_unit`, `end_exclusive` are embedded as schema metadata (AST) and are also present in some tables/records (e.g., SCIP occurrences).
+
+You even have symtable spans explicitly set to `utf32` via `span_metadata(col_unit="utf32")`.
+
+**Why this matters for joins:**
+Most of your “best” cross-source joins are **interval/overlap joins** (span alignment). If one source uses UTF-32 columns and another uses byte offsets, or one is end-inclusive vs end-exclusive, you’ll create phantom overlaps/misses → which looks like “ambiguity” but is really a coordinate bug.
+
+**Actionable recommendation:**
+Create a canonical “span normalization” step per evidence source that outputs:
+
+* `bstart`, `bend` in **byte offsets**
+* and a `span_key` you can compare deterministically
+
+…and always base interval joins on the normalized byte spans.
+
+This is explicitly called out in your relationship guide’s ambiguity taxonomy (span ambiguity and coordinate mismatch).
+
+---
+
+### C) Structural “container / owner” fields are *excellent* ambiguity reducers
+
+Your CST extract is already shaped to make ownership joins cheap and reliable.
+
+Examples:
+
+* `CST_DEF_T` includes `def_id` (nullable), plus **`container_def_*` spans** and the definition spans (`def_bstart/def_bend`, `name_bstart/name_bend`) and qualified naming (`qnames`, `def_fqns`).
+* `CST_DOCSTRING_T` includes `owner_def_id` (nullable) and **`owner_def_bstart/owner_def_bend`**.
+* `CST_DECORATOR_T` similarly includes `owner_def_id` and owner spans.
+
+**How to use it:**
+
+* Prefer joining via `owner_def_id -> def_id` when present (strong ID-based match).
+* Fallback to span containment or exact span equality within the file when IDs are missing:
+
+  * `(file_id, owner_def_bstart, owner_def_bend)` ↔ `(file_id, def_bstart, def_bend)`
+* Use `container_def_*` spans as a *secondary* check when multiple defs share identical spans in odd cases (generated code, macros, etc.).
+
+This is exactly the kind of “extra data” that turns ambiguous joins into deterministic joins.
+
+---
+
+### D) SCIP fields are “superior evidence” for symbol identity — but only after span normalization
+
+Your `SCIP_OCCURRENCES_SCHEMA` includes:
+
+* `symbol` + `symbol_roles`
+* syntax info (`syntax_kind`, `syntax_kind_name`)
+* range data both raw and normalized (`start_line/start_char/end_line/end_char`, etc.)
+* and flags like `is_definition`, `is_import`, `is_write`, `is_read`, `is_generated`, `is_test`
+
+This aligns with the relationship guide’s “superior evidence” ordering where **SCIP symbol identity** is preferred when aligned successfully.
+
+**How to use it for join quality:**
+
+* Treat `symbol` + `symbol_roles` as the *authoritative semantic payload* once you have reliable span alignment.
+* Use the role bits and syntax kind as **ranking features** when multiple occurrences overlap the same CST span.
+
+Also: your `SCIP_METADATA_SCHEMA` includes `project_root` (plus tool + project identifiers). That is extremely useful for path normalization if any extractor emits paths relative to different roots.
+
+---
+
+### E) You already have semantic-type validation infrastructure — that’s a big deal for “mapping/view creation among variables”
+
+`validate_semantic_types()` walks tables/columns and checks expected semantic types derived from `semantic_type_for_field_name(...)`.
+
+**How this helps your “inferential mapping” question:**
+If your semantic compiler is trying to infer “these two datasets should join on X”, semantic types are the right mechanism to reduce guesswork:
+
+* “file identity” columns join with “file identity”
+* “byte span” columns join with “byte span”
+* etc.
+
+This is exactly the kind of metadata that should guide *automatic wiring* without relying on naming conventions alone.
+
+---
+
+## 2) How to incorporate “extra fields” without making joins brittle
+
+### Principle: Don’t add more hard join conditions to “force” correctness
+
+That often *reduces* robustness:
+
+* tool versions change
+* text fields differ
+* optional fields appear/disappear
+* encodings differ
+
+Instead:
+
+1. **Generate candidates** with a small set of hard constraints
+2. **Score/rank candidates** using richer evidence
+3. **Either keep ambiguity** or select a winner deterministically
+4. **Emit a join-quality contract** in the output
+
+Your relationship guide is explicit that ambiguous relationships should include:
+
+* `confidence` (0..1)
+* optional `score`
+* `ambiguity_group_id`
+* `origin/provider/rule_name` for explainability
+
+…and that winner selection must be deterministic with explicit sort keys (row order isn’t guaranteed).
+
+So: the “extra data” belongs primarily in (2) and (4).
+
+---
+
+## 3) Concrete examples of “extra metadata → better join quality”
+
+### Example A: CST name refs ↔ SCIP occurrences (span-aligned symbol resolution)
+
+Your relationship guide already describes this pattern:
+
+* Join type: interval-align join within a file (candidate if occurrence span intersects/contained by name_ref span)
+* Ranking: contained first, smallest span, role match, deterministic tie-break by `(occ_bstart, occ_bend, symbol)`
+
+**What extra SCIP fields buy you:**
+
+* `symbol_roles` lets you match CST context (load/store/import) → better ranking
+* `is_generated` / `is_test` lets you downweight questionable or non-source-of-truth matches (quality signal)
+* `syntax_kind` can be used as a tie-breaker when overlap patterns are identical
+
+**Bottom line:** Keep all that metadata available, but use it in scoring/confidence, not as equality join keys.
+
+---
+
+### Example B: CST docstrings/decorators/type_exprs ↔ CST defs (ownership joins)
+
+Because `owner_def_id` is nullable in docstrings/decorators and `def_id` is nullable in defs, you *must* have a robust fallback.
+
+That’s why the owner spans (`owner_def_bstart/owner_def_bend`) and container spans (`container_def_*`) are so valuable: they allow stable fallbacks without needing an ID to exist.
+
+This is a perfect case where “extra columns” are not bloat — they are your ambiguity killer.
+
+---
+
+### Example C: Call resolution quality (callee shape + qname candidates + signature text)
+
+Your `CST_CALLSITE_T` includes:
+
+* `callee_shape`, `callee_text`, `arg_count`
+* `callee_dotted`, `callee_qnames`, `callee_fqns`
+* plus an `inferred_type` hint
+
+And SCIP symbol info can carry signature text and kind/name fields (e.g., `signature_text`, `kind_name`).
+
+Those are great *soft* features to rank call resolution candidates:
+
+* does the candidate symbol look callable?
+* does the signature “fit” the observed arg counts?
+* do qname/fqn candidates match the symbol’s package/module?
+
+Again: don’t hard-join on these; score with them.
+
+---
+
+## 4) So should you keep “every available output” in the schema?
+
+Keeping everything in the *base* extract tables is defensible **if** you also do this:
+
+* Build **normalized “core” views** that project only what each relationship needs (identity + normalized span + a small set of evidence features).
+* Keep the richer payload available for debugging/explanations, but avoid dragging it through every join plan.
+
+This matches your broader architecture goal: static declarations + compiler selects just what’s needed.
+
+---
+
+## 5) A practical recipe for “join quality” in your semantic compiler
+
+When you define a relationship/mapping, make the compiler produce:
+
+1. **Candidate dataset** (many rows per left entity)
+
+* hard constraints: `file_id` match, span overlap, etc.
+
+2. **Scored dataset**
+
+* `score`: computed from features (containment, span_len, role match, sha match, diagnostics presence…)
+
+3. **Selected or ambiguity-preserving output**
+
+* either:
+
+  * keep all candidates and group by `ambiguity_group_id`, *or*
+  * select top-1 per group after explicit sort/tie-break
+
+4. **Diagnostics output**
+
+* coverage stats, ambiguity rates, mismatched `file_sha256`, parse error presence, etc.
+
+Your relationship guide already “wants” this shape: represent ambiguity explicitly + deterministic winner selection.
+
+---
+
+## Direct answer to your question (“should we leverage the additional data for join quality?”)
+
+**Yes — absolutely — but mostly as scoring/validation signals, not as additional hard join keys.**
+
+If you only pick a handful of “highest signal” extras to actively use, I’d prioritize:
+
+1. **`file_sha256`** as a join validity signal (prevents silent bad joins)
+2. **Span metadata / coordinate normalization** (`line_base`, `col_unit`, `end_exclusive`) to eliminate fake ambiguity
+3. **SCIP `symbol` + `symbol_roles`** as the semantic payload + role compatibility scoring
+4. **CST owner/container spans + nullable IDs** for ownership fallback joins
+5. **Semantic type metadata** to drive automatic mapping decisions safely
+
+Everything else can remain available as “explainability payload” unless/until it proves predictive for scoring.
+
+---
+
+If you want, I can take your earlier `SemanticTableSpec` shape and show a minimal extension that lets you declare (per table/relationship) **hard keys vs soft evidence vs quality signals**, and then map those directly into DataFusion expressions for candidate generation + ranking (aligning with the `confidence/score/ambiguity_group_id` contract in your relationship guide).
+
+Yes — a lot of the “extra” fields in `registry.py` *can* be relevant for resolving ambiguity and measuring “quality of joins,” but only if you separate them into three roles and wire them in deterministically:
+
+* **Hard keys**: *must* match (or you don’t even generate a candidate).
+* **Soft evidence**: helps **rank** candidates *within an ambiguity group*.
+* **Quality signals**: penalize/boost confidence based on **provider reliability** (parse errors, coordinate encoding mismatches, timeouts, etc.).
+
+That separation maps cleanly onto your relationship contract (`confidence`, optional `score`, `ambiguity_group_id`, plus `origin/provider/rule_name`). Your relationship guide explicitly calls out representing ambiguity with these fields and (importantly) needing deterministic ordering when selecting a “best” row.
+
+Below is the “minimal extension” I’d make to your earlier `SemanticTableSpec`/relationship shape so you can **declare** those three categories and then **compile them into DataFusion expressions** for candidate generation + ranking.
+
+---
+
+## 1) Minimal spec extension: add `signals` (hard / evidence / quality) + deterministic ranking
+
+### Python dataclasses (minimal churn)
+
+This is intentionally additive: if your compiler ignores `signals`, nothing breaks.
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal, Sequence, Optional
+
+# Use SQL-expression strings to keep the spec serializable (YAML-friendly),
+# while still compiling into DataFusion expression trees (per your guide's “expression compilation” stance).
+
+ExprStr = str
+
+@dataclass(frozen=True)
+class HardPredicate:
+    """
+    A boolean predicate that must be true to consider a pair a valid candidate.
+    Evaluated during join (ON) and/or post-join filter.
+    """
+    expr: ExprStr
+
+
+@dataclass(frozen=True)
+class Feature:
+    """
+    A numeric feature used for scoring.
+    - evidence: helps pick best among plausible matches
+    - quality: boosts/penalizes confidence/score based on provider health/metadata
+    """
+    name: str
+    expr: ExprStr                 # yields numeric (or boolean castable to numeric)
+    weight: float
+    kind: Literal["evidence", "quality"] = "evidence"
+
+
+@dataclass(frozen=True)
+class SignalsSpec:
+    hard: Sequence[HardPredicate] = ()
+    features: Sequence[Feature] = ()
+
+    # Optional: base priority lets you encode “evidence tiers”
+    # (e.g., SCIP > symtable > bytecode > heuristics) as a big constant in score.
+    base_score: float = 0.0
+    base_confidence: float = 0.5
+
+
+@dataclass(frozen=True)
+class RankSpec:
+    """
+    How to group ambiguous candidates and deterministically choose winners.
+    """
+    # Key used for window partitioning (often the left entity id).
+    ambiguity_key_expr: ExprStr
+
+    # How to compute ambiguity_group_id column (defaults to stable_hash64(key)).
+    ambiguity_group_id_expr: Optional[ExprStr] = None
+
+    # Deterministic ordering — critical because join output row order is not guaranteed.
+    order_by: Sequence[str] = ("score DESC",)
+
+    # "all" keeps all candidates; "best" filters to top-k by order_by.
+    keep: Literal["all", "best"] = "all"
+    top_k: int = 1
+
+
+@dataclass(frozen=True)
+class RelationshipSpec:
+    name: str
+    left_view: str
+    right_view: str
+
+    # Equi-join keys are your main “hard keys” (fast & selective).
+    left_on: Sequence[str] = ()
+    right_on: Sequence[str] = ()
+    how: Literal["inner", "left", "right", "full"] = "inner"
+
+    # Additional “hard” predicates (span overlaps, containment, etc.)
+    signals: SignalsSpec = field(default_factory=SignalsSpec)
+
+    # Required relationship-guide contract fields
+    origin: str = "semantic_compiler"
+    provider: str = "unknown_provider"
+    rule_name: Optional[str] = None  # default to spec.name
+
+    # Ranking + ambiguity grouping
+    rank: Optional[RankSpec] = None
+
+    # Mapping into final output columns
+    select_exprs: Sequence[ExprStr] = ()
+```
+
+Key idea: you generate candidates by **(1)** equi-join keys, **(2)** apply `signals.hard` filters, **(3)** compute feature columns, **(4)** compute `score`/`confidence`/`ambiguity_group_id`, and **(5)** optionally apply deterministic winner selection via `row_number()`.
+
+Your engine already expects functions like `stable_hash64` and `row_number` to exist. 
+
+---
+
+### YAML representation (same model, just serializable)
+
+```yaml
+relationships:
+  - name: rel_cst_docstring_owner
+    left_view: cst_docstrings_norm
+    right_view: cst_defs_norm
+    how: inner
+    left_on: [file_id]
+    right_on: [file_id]
+
+    provider: libcst
+    origin: semantic_compiler
+    rule_name: rel_cst_docstring_owner
+
+    signals:
+      base_score: 1000
+      base_confidence: 0.98
+      hard:
+        - expr: "owner_def_id IS NOT NULL AND owner_def_id = def_id"
+      features:
+        - name: exact_owner_id_match
+          kind: evidence
+          weight: 100
+          expr: "CASE WHEN owner_def_id = def_id THEN 1 ELSE 0 END"
+        - name: owner_kind_matches
+          kind: evidence
+          weight: 5
+          expr: "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END"
+
+    rank:
+      ambiguity_key_expr: "def_id"
+      ambiguity_group_id_expr: "stable_hash64(def_id)"
+      order_by:
+        - "score DESC"
+        - "bend - bstart ASC"
+        - "bstart ASC"
+      keep: best
+      top_k: 1
+
+    select_exprs:
+      - "def_id as entity_id"
+      - "docstring as docstring"
+      - "confidence"
+      - "score"
+      - "ambiguity_group_id"
+      - "origin"
+      - "provider"
+      - "rule_name"
+```
+
+---
+
+## 2) Compiling the spec into DataFusion DataFrame expressions
+
+DataFusion’s Python DataFrame API supports **expression joins** (including non-equality predicates) via `join_on`, plus `select_exprs` (SQL-expression strings) for computed columns.
+
+### Generic compilation pattern (pseudo-code)
+
+```python
+def compile_relationship(ctx, spec: RelationshipSpec):
+    l = ctx.table(spec.left_view)
+    r = ctx.table(spec.right_view)
+
+    # 1) Start with equi-join keys if provided (fast, selective)
+    if spec.left_on and spec.right_on:
+        df = l.join(r, join_keys=(list(spec.left_on), list(spec.right_on)), how=spec.how)
+    else:
+        # fallback: cross join + filter (avoid unless you must)
+        df = l.cross_join(r)
+
+    # 2) Apply hard predicates (span overlaps, owner-id match, etc.)
+    for hp in spec.signals.hard:
+        df = df.filter(hp.expr)
+
+    # 3) Add feature columns
+    feature_cols = []
+    for f in spec.signals.features:
+        feature_cols.append(f"{f.expr} AS feat__{f.kind}__{f.name}")
+    if feature_cols:
+        df = df.select_exprs("*", *feature_cols)
+
+    # 4) Score and confidence
+    # score = base_score + sum(weight * feature)
+    score_terms = [str(spec.signals.base_score)]
+    for f in spec.signals.features:
+        score_terms.append(f"({f.weight}) * feat__{f.kind}__{f.name}")
+    score_expr = " + ".join(score_terms) + " AS score"
+
+    # confidence = clamp01(base_confidence + small_scaled_score - quality_penalties)
+    # Keep it simple + monotone; you can refine later.
+    conf_expr = (
+        f"LEAST(1.0, GREATEST(0.0, "
+        f"{spec.signals.base_confidence} + (score / 10000.0)"
+        f")) AS confidence"
+    )
+
+    rule_name = spec.rule_name or spec.name
+    df = df.select_exprs(
+        *spec.select_exprs,
+        score_expr,
+        conf_expr,
+        f"'{spec.origin}' AS origin",
+        f"'{spec.provider}' AS provider",
+        f"'{rule_name}' AS rule_name",
+    )
+
+    # 5) Ambiguity grouping + deterministic winner selection
+    if spec.rank:
+        group_key = spec.rank.ambiguity_key_expr
+        group_id = spec.rank.ambiguity_group_id_expr or f"stable_hash64({group_key})"
+        df = df.select_exprs(
+            "*",
+            f"{group_id} AS ambiguity_group_id",
+            "row_number() OVER ("
+            f"PARTITION BY {group_key} "
+            f"ORDER BY {', '.join(spec.rank.order_by)}"
+            ") AS _rn",
+        )
+        if spec.rank.keep == "best":
+            df = df.filter(f"_rn <= {spec.rank.top_k}").drop("_rn")
+
+    return df
+```
+
+The critical bit is the `row_number() OVER (PARTITION BY ... ORDER BY ...)` with explicit, deterministic tie-breakers — your guide calls out that you can’t rely on join output order.
+
+---
+
+## 3) Concrete example: resolving `owner_*_id` + `owner_*_bstart/bend` (CST docstrings/decorators)
+
+From your CST extraction schema:
+
+* `cst_docstrings` carries `owner_def_id` (nullable) plus `owner_def_bstart/owner_def_bend`, and the docstring’s own `(bstart,bend)`. 
+* `cst_decorators` is similar (nullable `owner_def_id`, plus owner span and decorator span/text). 
+* `cst_defs` (not shown in that snippet, but present in your CST view set) is the natural “owner” table.
+
+### Why this is a perfect “hard-vs-soft” split
+
+* **Hard key (best)**: `owner_def_id = def_id` when `owner_def_id IS NOT NULL`.
+* **Fallback candidate gen**: match by **file identity + owner span** (because span match can collide in weird parses, but still useful).
+* **Quality signal**: presence of parse errors in that file, weird coordinate encoding, etc. (see next section).
+
+### Two-rule approach (keeps logic simple and deterministic)
+
+#### Rule A: owner_def_id join (high confidence)
+
+```yaml
+- name: rel_cst_docstring_owner_by_id
+  left_view: cst_docstrings_norm
+  right_view: cst_defs_norm
+  left_on: [file_id]
+  right_on: [file_id]
+  how: inner
+  provider: libcst
+  origin: semantic_compiler
+
+  signals:
+    base_score: 1000
+    base_confidence: 0.98
+    hard:
+      - expr: "owner_def_id IS NOT NULL AND owner_def_id = def_id"
+    features:
+      - name: owner_kind_matches
+        kind: evidence
+        weight: 5
+        expr: "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END"
+
+  rank:
+    ambiguity_key_expr: "def_id"
+    order_by: ["score DESC", "bstart ASC", "bend ASC"]
+    keep: best
+    top_k: 1
+
+  select_exprs:
+    - "def_id AS src"
+    - "stable_hash64(def_id) AS dst"        # or a docstring entity id if you model it
+    - "'has_docstring' AS kind"
+    - "docstring AS payload"
+```
+
+#### Rule B: owner span join fallback (lower confidence)
+
+```yaml
+- name: rel_cst_docstring_owner_by_span
+  left_view: cst_docstrings_norm
+  right_view: cst_defs_norm
+  left_on: [file_id]
+  right_on: [file_id]
+  how: inner
+  provider: libcst
+  origin: semantic_compiler
+
+  signals:
+    base_score: 500
+    base_confidence: 0.75
+    hard:
+      - expr: "owner_def_id IS NULL"
+      - expr: "owner_def_bstart = def_bstart AND owner_def_bend = def_bend"
+    features:
+      - name: owner_kind_matches
+        kind: evidence
+        weight: 5
+        expr: "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END"
+
+  rank:
+    ambiguity_key_expr: "def_id"
+    order_by: ["score DESC", "bstart ASC", "bend ASC"]
+    keep: best
+    top_k: 1
+
+  select_exprs:
+    - "def_id AS src"
+    - "stable_hash64(def_id) AS dst"
+    - "'has_docstring' AS kind"
+    - "docstring AS payload"
+```
+
+This is deterministic, explainable, and matches your schema realities (nullable foreign keys + spans). 
+
+---
+
+## 4) Concrete example: CST name refs ↔ SCIP occurrences (candidate generation + ranking)
+
+You already have rich CST ref data per row:
+
+* `cst_refs` includes `ref_id` (nullable), `ref_text`, `expr_ctx`, `scope_type`, `parent_kind`, `inferred_type`, and `(bstart,bend)` byte offsets. 
+
+SCIP occurrences carry:
+
+* `symbol`, `symbol_roles`, and coordinate encoding fields (`line_base`, `col_unit`, `end_exclusive`), plus start/end line/char. 
+
+And your relationship guide explicitly warns that span/coordinate ambiguity exists and mismatches can yield false overlaps unless you normalize and/or penalize.
+
+### Practical pattern
+
+1. **Normalize SCIP coordinates to byte spans** (a table/view step). Your engine already requires `col_to_byte`, which strongly suggests you intended this conversion. 
+2. Candidate generation:
+
+   * hard: same `path` or `file_id` (whichever you standardize)
+   * hard: span overlap in byte space
+3. Ranking features:
+
+   * prefer contained overlaps (occurrence span inside ref span)
+   * prefer minimal span difference
+   * match read/write semantics:
+
+     * CST `expr_ctx` vs SCIP `is_read`/`is_write` (SCIP includes booleans). 
+
+### Example RelationshipSpec (assuming you have `scip_occurrences_norm` with byte spans)
+
+```yaml
+- name: rel_cst_ref_to_scip_symbol
+  left_view: cst_refs_norm
+  right_view: scip_occurrences_norm
+  left_on: [path]     # or file_id if you have it for SCIP; pick ONE canonical file identity
+  right_on: [path]
+  how: inner
+  provider: scip
+  origin: semantic_compiler
+
+  signals:
+    base_score: 2000
+    base_confidence: 0.95
+    hard:
+      - expr: "cst_bstart < scip_bend AND scip_bstart < cst_bend"   # overlap
+
+    features:
+      - name: contained
+        kind: evidence
+        weight: 50
+        expr: "CASE WHEN scip_bstart >= cst_bstart AND scip_bend <= cst_bend THEN 1 ELSE 0 END"
+
+      - name: span_len_delta_penalty
+        kind: evidence
+        weight: -0.01
+        expr: "ABS((scip_bend - scip_bstart) - (cst_bend - cst_bstart))"
+
+      - name: ctx_matches_read
+        kind: evidence
+        weight: 10
+        expr: "CASE WHEN (cst_expr_ctx = 'Load' AND scip_is_read) THEN 1 ELSE 0 END"
+
+      - name: ctx_matches_write
+        kind: evidence
+        weight: 10
+        expr: "CASE WHEN (cst_expr_ctx = 'Store' AND scip_is_write) THEN 1 ELSE 0 END"
+
+      - name: coord_encoding_penalty
+        kind: quality
+        weight: -100
+        expr: "CASE WHEN (scip_col_unit IS NULL OR scip_line_base IS NULL) THEN 1 ELSE 0 END"
+
+  rank:
+    ambiguity_key_expr: "cst_ref_id"                    # group by the ref we’re trying to resolve
+    ambiguity_group_id_expr: "stable_hash64(cst_ref_id)"
+    order_by:
+      - "score DESC"
+      - "scip_bstart ASC"
+      - "scip_bend ASC"
+      - "scip_symbol ASC"
+    keep: all   # or best if you want only the top edge per ref
+
+  select_exprs:
+    - "cst_ref_id as src"
+    - "stable_hash64(scip_symbol) as dst"               # or your canonical symbol entity id
+    - "'refers_to' as kind"
+```
+
+This uses your contract: it emits `score`, `confidence`, `ambiguity_group_id`, and groups candidates by the “thing being resolved.”
+
+---
+
+## 5) Where the “extra” registry fields become genuinely useful (quality signals)
+
+You’ve captured a lot that’s *not* join keys, but *is* join-quality evidence:
+
+### File/provider health signals (strongly recommended)
+
+* **LibCST parse errors**: `cst_parse_errors` has `error_type`, `message`, plus coordinate metadata (`line_base`, `col_unit`, `end_exclusive`). Use this as a penalty for relationships derived from CST in that file. 
+* **LibCST parse manifest**: `parser_backend`, `parsed_python_version`, `libcst_version` can help detect “mixed environments” and cluster issues. 
+* **Tree-sitter stats**: `error_count`, `parse_timed_out`, `match_limit_exceeded` are excellent “do-not-trust-this-file-too-much” signals. 
+* **SCIP diagnostics**: presence/severity counts can downweight SCIP-based edges in files with indexing problems. 
+* **Coordinate encoding metadata**: SCIP’s `line_base`, `col_unit`, `end_exclusive` are exactly the kind of stuff that can explain overlap ambiguity if you’re converting to byte offsets. 
+
+This aligns with your relationship guide’s warning about coordinate ambiguity and mismatches.
+
+### Implementing file-level quality as a reusable view
+
+Create a single `file_quality` view and join it into any cross-provider relationship:
+
+```sql
+-- Pseudocode SQL; translate to DataFusion DataFrame if you prefer
+WITH
+cst_err AS (
+  SELECT file_id, CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_cst_parse_errors
+  FROM cst_parse_errors
+  GROUP BY file_id
+),
+ts AS (
+  SELECT file_id,
+         CASE WHEN stats.parse_timed_out THEN 1 ELSE 0 END AS ts_timed_out,
+         stats.error_count AS ts_error_count,
+         CASE WHEN stats.match_limit_exceeded THEN 1 ELSE 0 END AS ts_match_limit_exceeded
+  FROM ts_stats
+),
+scip_diag AS (
+  SELECT document_id AS file_id, CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_scip_diagnostics
+  FROM scip_diagnostics
+  GROUP BY document_id
+)
+SELECT
+  f.file_id,
+  COALESCE(cst_err.has_cst_parse_errors, 0) AS has_cst_parse_errors,
+  COALESCE(ts.ts_timed_out, 0) AS ts_timed_out,
+  COALESCE(ts.ts_error_count, 0) AS ts_error_count,
+  COALESCE(ts.ts_match_limit_exceeded, 0) AS ts_match_limit_exceeded,
+  COALESCE(scip_diag.has_scip_diagnostics, 0) AS has_scip_diagnostics
+FROM file_index f
+LEFT JOIN cst_err ON f.file_id = cst_err.file_id
+LEFT JOIN ts ON f.file_id = ts.file_id
+LEFT JOIN scip_diag ON f.file_id = scip_diag.file_id
+```
+
+Then in relationship scoring, add a `quality` feature like:
+
+```yaml
+- name: file_health_penalty
+  kind: quality
+  weight: -200
+  expr: "has_cst_parse_errors + ts_timed_out + ts_match_limit_exceeded + has_scip_diagnostics"
+```
+
+---
+
+## 6) Encoding “evidence tiers” directly in the spec
+
+Your relationship guide explicitly recommends a precedence order (SCIP strongest, then symtable, then bytecode, etc.).
+
+You can implement that with **no fancy modeling**:
+
+* Each rule gets a big `base_score` constant (e.g., SCIP edges start at 2000, symtable 1500, bytecode 1200, heuristics 500).
+* Your “union of rules” produces a superset.
+* A final deterministic “keep best per ambiguity key” picks the winner.
+
+That also matches the guide’s A1 strategy (generate candidates → rank → pick best deterministically).
+
+---
+
+## 7) The one thing I’d be careful about
+
+Don’t let “extra fields” silently become *implicit keys*.
+
+A safe rule of thumb:
+
+* If a field is an **identifier** (`*_id`, `symbol`, stable hashes): treat as **hard key** only when you *know* it’s canonical for the entity.
+* If a field is **textual / contextual** (`ref_text`, `callee_text`, `scope_type`, `parser_backend`): treat as **soft evidence**.
+* If a field is **health/diagnostic** (`parse_errors`, `error_count`, `timed_out`, `col_unit`): treat as **quality signal** that scales confidence, not as a join gate (unless you intentionally want to drop those files).
+
+---
+
+### If you want one extra (tiny) enhancement
+
+Because your registry already encodes semantic expectations and function requirements (including `stable_hash64`, `row_number`, and coordinate conversion hooks like `col_to_byte`) , you can make your compiler *safer* by:
+
+* requiring any relationship with span logic to declare which coordinate space it’s using (byte vs line/char),
+* and auto-adding a **quality penalty** if the required coordinate metadata is missing (SCIP’s `col_unit`, `line_base`, etc.). 
+
+That keeps ambiguity handling robust without turning schema richness into complexity.
+
+---
+
+If you tell me the *exact names* of the normalized views you plan to expose in `src/semantics` (e.g., whether you already have `cst_defs_norm`, `scip_occurrences_norm` with byte spans, and what your canonical file identity column is for SCIP), I can tailor the two concrete YAML rule examples above into drop-in specs that match your actual view names and column prefixes—without changing the underlying model.

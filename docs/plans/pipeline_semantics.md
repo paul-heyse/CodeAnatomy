@@ -587,7 +587,7 @@ def build_cpg(ctx: SessionContext):
         origin="cst_import",
     ))
 
-    ctx.register_view("rel_call_symbol", compiler.relate(
+    ctx.register_view("rel_callsite_symbol", compiler.relate(
         "cst_calls_norm", "scip_occurrences",
         join_type="overlap",
         origin="cst_call",
@@ -595,7 +595,7 @@ def build_cpg(ctx: SessionContext):
 
     # Build CPG outputs (Rule 8)
     ctx.register_view("cpg_edges", compiler.union_with_discriminator(
-        ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_call_symbol"],
+        ["rel_name_symbol", "rel_def_symbol", "rel_import_symbol", "rel_callsite_symbol"],
         discriminator="edge_kind",
     ))
 

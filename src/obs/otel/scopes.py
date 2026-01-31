@@ -15,6 +15,7 @@ SCOPE_HAMILTON = ScopeName.HAMILTON
 SCOPE_CPG = ScopeName.CPG
 SCOPE_OBS = ScopeName.OBS
 SCOPE_DIAGNOSTICS = ScopeName.DIAGNOSTICS
+SCOPE_SEMANTICS = ScopeName.SEMANTICS
 
 _LAYER_SCOPE_MAP = {
     "inputs": SCOPE_EXTRACT,
@@ -57,5 +58,6 @@ __all__ = [
     "SCOPE_PLANNING",
     "SCOPE_ROOT",
     "SCOPE_SCHEDULING",
+    "SCOPE_SEMANTICS",
     "scope_for_layer",
 ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 from diskcache import memoize_stampede, throttle
 
@@ -440,7 +440,9 @@ def scan_repo_tables(
     )
     plans = scan_repo_plans(repo_root, options=normalized_options, session=session)
     outputs: dict[str, TableLike | RecordBatchReaderLike] = {}
+    repo_files_table: TableLike | None = None
     for name, plan in plans.items():
+        plan_prefer_reader = prefer_reader and name != "repo_files_v1"
         outputs[name] = materialize_extract_plan(
             name,
             plan,
@@ -448,9 +450,24 @@ def scan_repo_tables(
             determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
-                prefer_reader=prefer_reader,
+                prefer_reader=plan_prefer_reader,
                 apply_post_kernels=True,
             ),
+        )
+        if name == "repo_files_v1":
+            repo_files_table = cast("TableLike", outputs[name])
+    if repo_files_table is not None and "file_line_index_v1" not in outputs:
+        from extract.extractors.file_index.line_index import LineIndexOptions, scan_file_line_index
+
+        line_index_options = LineIndexOptions(
+            repo_id=normalized_options.repo_id,
+            max_files=normalized_options.max_files,
+        )
+        outputs["file_line_index_v1"] = scan_file_line_index(
+            repo_files_table,
+            options=line_index_options,
+            context=exec_context,
+            prefer_reader=prefer_reader,
         )
     return outputs
 
@@ -565,6 +582,23 @@ def scan_repo_plans(
             options=ExtractPlanOptions(normalize=normalize),
         ),
     }
+    if bundle.repo_rows:
+        from datafusion_engine.arrow.build import table_from_rows
+        from extract.extractors.file_index.line_index import (
+            LineIndexOptions,
+            scan_file_line_index_plan,
+        )
+
+        repo_table = table_from_rows(bundle.repo_rows)
+        line_index_options = LineIndexOptions(
+            repo_id=options.repo_id,
+            max_files=options.max_files,
+        )
+        plans["file_line_index_v1"] = scan_file_line_index_plan(
+            repo_table,
+            options=line_index_options,
+            session=session,
+        )
     return plans
 
 

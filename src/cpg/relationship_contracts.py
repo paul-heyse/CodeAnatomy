@@ -17,6 +17,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+# NOTE: relationship_specs is deprecated but these types are needed for contract generation.
+# The spec types (RelationshipSpec, QNameRelationshipSpec) define the interface for
+# deriving contract data. Once semantics.spec_registry exports compatible types,
+# this import can be updated. Consider re-exporting these types from semantics.specs
+# or creating a shared types module to avoid importing deprecated modules.
 from cpg.relationship_specs import (
     ALL_RELATIONSHIP_SPECS,
     QNameRelationshipSpec,

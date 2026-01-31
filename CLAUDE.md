@@ -85,6 +85,43 @@ Dependencies are automatically inferred from DataFusion plan lineage. No manual 
 - Rule/spec registry based scheduling has been removed
 - Do not add manual `inputs=` declarations or rule definitions
 
+## Semantic Pipeline Architecture
+
+The semantic module (`src/semantics/`) provides centralized, rule-based CPG relationship building.
+
+**Data Flow:**
+```
+Extraction → Input Registry → SemanticCompiler → View Graph → Hamilton DAG → CPG Outputs
+```
+
+**Key Modules:**
+- `semantics/compiler.py` - Core `SemanticCompiler` class for normalize/relate/union operations
+- `semantics/pipeline.py` - `build_cpg()` entry point that orchestrates the full pipeline
+- `semantics/input_registry.py` - Maps extraction outputs to semantic inputs with validation
+- `semantics/spec_registry.py` - Declarative normalization + relationship specs and spec index
+- `semantics/naming.py` - Canonical output naming policy (all `_v1` suffixes)
+- `semantics/catalog/` - View catalog with metadata and fingerprints
+- `semantics/joins/` - Schema-driven join strategy inference
+- `semantics/types/` - Semantic type system and annotated schemas
+- `semantics/adapters.py` - Legacy schema compatibility adapters
+
+**Configuration:**
+- `SemanticConfig` in `semantics/config.py` controls pipeline behavior
+- `CpgBuildOptions` in `semantics/pipeline.py` for build-time options
+
+**Observability:**
+- All operations instrumented with OpenTelemetry spans (`SCOPE_SEMANTICS`)
+- Metrics collection via `semantics/metrics.py`
+- Plan fingerprints via `semantics/plans/`
+
+**Execution Authority:**
+- View graph (`datafusion_engine/views/registry_specs.py`) is the sole registration authority
+- Hamilton DAG only consumes pre-registered semantic views
+- No duplicate registration allowed
+
+**Generated Docs:**
+- `docs/architecture/semantic_pipeline_graph.md` (auto-generated Mermaid graph)
+
 ## Key Architectural Invariants
 
 - **Byte Spans Are Canonical**: All normalizations anchor to byte offsets (`bstart`, `bend`)

@@ -23,7 +23,7 @@ Usage
 ...     "rel_name_symbol",
 ...     compiler.relate(
 ...         "refs_norm",
-...         "scip_occurrences",
+...         "scip_occurrences_norm",
 ...         join_type="overlap",
 ...         origin="cst_ref",
 ...     ),
@@ -37,8 +37,11 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
+from obs.otel.scopes import SCOPE_SEMANTICS
+from obs.otel.tracing import stage_span
 from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
+from semantics.joins import JoinStrategy, JoinStrategyType
 from semantics.schema import SemanticSchema, SemanticSchemaError
 
 if TYPE_CHECKING:
@@ -46,6 +49,7 @@ if TYPE_CHECKING:
     from datafusion.expr import Expr
 
     from semantics.specs import SemanticTableSpec
+    from semantics.types import AnnotatedSchema
 
 
 CANONICAL_NODE_SCHEMA: tuple[tuple[str, pa.DataType], ...] = (
@@ -67,6 +71,16 @@ CANONICAL_EDGE_SCHEMA: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
+@dataclass(frozen=True)
+class TextNormalizationOptions:
+    """Options for text normalization."""
+
+    form: str = "NFC"
+    casefold: bool = False
+    collapse_ws: bool = False
+    output_suffix: str = "_norm"
+
+
 @dataclass
 class TableInfo:
     """Analyzed table with semantic information.
@@ -79,11 +93,14 @@ class TableInfo:
         DataFrame handle.
     sem
         Semantic schema analysis.
+    annotated
+        Annotated schema with semantic type metadata.
     """
 
     name: str
     df: DataFrame
     sem: SemanticSchema
+    annotated: AnnotatedSchema
 
     @classmethod
     def analyze(
@@ -109,11 +126,44 @@ class TableInfo:
         TableInfo
             Analyzed table.
         """
+        from semantics.types import AnnotatedSchema
+
         return cls(
             name=name,
             df=df,
             sem=SemanticSchema.from_df(df, table_name=name, config=config),
+            annotated=AnnotatedSchema.from_dataframe(df),
         )
+
+
+@dataclass(frozen=True)
+class UnionSpec:
+    """Specification for canonical union operations."""
+
+    table_names: list[str]
+    discriminator: str
+    schema: tuple[tuple[str, pa.DataType], ...]
+
+
+@dataclass(frozen=True)
+class RelationOptions:
+    """Options for relationship inference and filtering."""
+
+    join_type: Literal["overlap", "contains"] | None = None
+    strategy_hint: JoinStrategyType | None = None
+    filter_sql: str | None = None
+    origin: str = "cst"
+    use_cdf: bool = False
+
+
+@dataclass(frozen=True)
+class JoinInputs:
+    """Inputs required for strategy-driven joins."""
+
+    left_df: DataFrame
+    right_df: DataFrame
+    left_sem: SemanticSchema
+    right_sem: SemanticSchema
 
 
 class SemanticCompiler:
@@ -193,7 +243,7 @@ class SemanticCompiler:
 
         if not columns:
             return expr
-        condition = None
+        condition: Expr | None = None
         for name in columns:
             if not name:
                 continue
@@ -219,30 +269,68 @@ class SemanticCompiler:
                 exprs.append(lit(None).cast(dtype).alias(name))
         return df.select(*exprs)
 
-    def _union_canonical(
+    def _join_with_strategy(
         self,
-        table_names: list[str],
+        inputs: JoinInputs,
         *,
-        discriminator: str,
-        schema: tuple[tuple[str, pa.DataType], ...],
-    ) -> DataFrame:
+        strategy: JoinStrategy,
+        filter_sql: str | None,
+    ) -> tuple[DataFrame, SemanticSchema, SemanticSchema]:
+        left_prefix = "left__"
+        right_prefix = "right__"
+        left_pref = self._prefix_df(inputs.left_df, left_prefix)
+        right_pref = self._prefix_df(inputs.right_df, right_prefix)
+        left_sem_pref = inputs.left_sem.prefixed(left_prefix)
+        right_sem_pref = inputs.right_sem.prefixed(right_prefix)
+
+        if strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP:
+            joined = join_by_span_overlap(left_pref, right_pref, left_sem_pref, right_sem_pref)
+            filter_expr = filter_sql
+        elif strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS:
+            joined = join_by_span_contains(left_pref, right_pref, left_sem_pref, right_sem_pref)
+            filter_expr = filter_sql
+        else:
+            left_keys = tuple(f"{left_prefix}{key}" for key in strategy.left_keys)
+            right_keys = tuple(f"{right_prefix}{key}" for key in strategy.right_keys)
+            if not left_keys or not right_keys:
+                msg = f"Join strategy {strategy.strategy_type} missing join keys."
+                raise SemanticSchemaError(msg)
+            joined = left_pref.join(
+                right_pref,
+                left_on=list(left_keys),
+                right_on=list(right_keys),
+                how="inner",
+            )
+            if strategy.filter_expr and filter_sql:
+                filter_expr = f"({strategy.filter_expr}) AND ({filter_sql})"
+            elif strategy.filter_expr:
+                filter_expr = strategy.filter_expr
+            else:
+                filter_expr = filter_sql
+
+        if filter_expr:
+            joined = joined.filter(filter_expr)
+
+        return joined, left_sem_pref, right_sem_pref
+
+    def _union_canonical(self, spec: UnionSpec) -> DataFrame:
         from datafusion import col, lit
 
-        if not table_names:
+        if not spec.table_names:
             msg = "Union requires at least one table."
             raise SemanticSchemaError(msg)
 
         dfs: list[DataFrame] = []
-        for name in table_names:
+        for name in spec.table_names:
             info = self.get(name)
-            projected = self._project_to_schema(info.df, schema)
-            dfs.append(projected.with_column(discriminator, lit(name)))
+            projected = self._project_to_schema(info.df, spec.schema)
+            dfs.append(projected.with_column(spec.discriminator, lit(name)))
 
         result = dfs[0]
         for df in dfs[1:]:
             result = result.union(df)
 
-        ordered = [name for name, _dtype in schema] + [discriminator]
+        ordered = [name for name, _dtype in spec.schema] + [spec.discriminator]
         return result.select(*[col(name).alias(name) for name in ordered])
 
     @staticmethod
@@ -302,88 +390,105 @@ class SemanticCompiler:
     # -------------------------------------------------------------------------
 
     def normalize_from_spec(self, spec: SemanticTableSpec) -> DataFrame:
-        """Apply normalization rules using an explicit table spec."""
-        from datafusion import col
+        """Apply normalization rules using an explicit table spec.
 
-        from datafusion_engine.udf.shims import span_make, stable_id_parts
+        Returns
+        -------
+        DataFrame
+            Normalized DataFrame with canonical columns.
 
-        self._require_udfs(("stable_id_parts", "span_make"))
-        info = self.get(spec.table)
-        df = info.df
-        names = set(self._schema_names(df))
+        """
+        with stage_span(
+            "semantics.normalize_from_spec",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table": spec.table,
+                "codeanatomy.namespace": spec.entity_id.namespace,
+                "codeanatomy.foreign_key_count": len(spec.foreign_keys),
+            },
+        ):
+            from datafusion import col
 
-        required: set[str] = {
-            spec.path_col,
-            spec.primary_span.start_col,
-            spec.primary_span.end_col,
-            spec.entity_id.path_col,
-            spec.entity_id.start_col,
-            spec.entity_id.end_col,
-        }
-        for key in spec.foreign_keys:
-            required.update({key.path_col, key.start_col, key.end_col})
-            required.update(key.guard_null_if)
-        required.update(spec.text_cols)
-        required_tuple = tuple(name for name in required if name)
-        self._ensure_columns_present(names, required_tuple, table_name=spec.table)
+            from datafusion_engine.udf.shims import span_make, stable_id_parts
 
-        if spec.path_col != "path":
-            df = df.with_column("path", col(spec.path_col))
+            self._require_udfs(("stable_id_parts", "span_make"))
+            info = self.get(spec.table)
+            df = info.df
+            names = set(self._schema_names(df))
 
-        df = df.with_column(spec.primary_span.canonical_start, col(spec.primary_span.start_col))
-        df = df.with_column(spec.primary_span.canonical_end, col(spec.primary_span.end_col))
-        df = df.with_column(
-            spec.primary_span.canonical_span,
-            span_make(
-                col(spec.primary_span.canonical_start),
-                col(spec.primary_span.canonical_end),
-            ),
-        )
-        if spec.primary_span.canonical_start != "bstart":
-            df = df.with_column("bstart", col(spec.primary_span.canonical_start))
-        if spec.primary_span.canonical_end != "bend":
-            df = df.with_column("bend", col(spec.primary_span.canonical_end))
+            required: set[str] = {
+                spec.path_col,
+                spec.primary_span.start_col,
+                spec.primary_span.end_col,
+                spec.entity_id.path_col,
+                spec.entity_id.start_col,
+                spec.entity_id.end_col,
+            }
+            for key in spec.foreign_keys:
+                required.update({key.path_col, key.start_col, key.end_col})
+                required.update(key.guard_null_if)
+            required.update(spec.text_cols)
+            required_tuple = tuple(name for name in required if name)
+            self._ensure_columns_present(names, required_tuple, table_name=spec.table)
 
-        id_expr = stable_id_parts(
-            spec.entity_id.namespace,
-            col(spec.entity_id.path_col),
-            col(spec.entity_id.start_col),
-            col(spec.entity_id.end_col),
-        )
-        if spec.entity_id.null_if_any_null:
-            id_expr = self._null_guard(
-                id_expr,
-                columns=(
-                    spec.entity_id.path_col,
-                    spec.entity_id.start_col,
-                    spec.entity_id.end_col,
+            if spec.path_col != "path":
+                df = df.with_column("path", col(spec.path_col))
+
+            df = df.with_column(spec.primary_span.canonical_start, col(spec.primary_span.start_col))
+            df = df.with_column(spec.primary_span.canonical_end, col(spec.primary_span.end_col))
+            df = df.with_column(
+                spec.primary_span.canonical_span,
+                span_make(
+                    col(spec.primary_span.canonical_start),
+                    col(spec.primary_span.canonical_end),
                 ),
             )
-        df = df.with_column(spec.entity_id.out_col, id_expr)
-        if spec.entity_id.canonical_entity_id is not None:
-            df = df.with_column(spec.entity_id.canonical_entity_id, col(spec.entity_id.out_col))
+            if spec.primary_span.canonical_start != "bstart":
+                df = df.with_column("bstart", col(spec.primary_span.canonical_start))
+            if spec.primary_span.canonical_end != "bend":
+                df = df.with_column("bend", col(spec.primary_span.canonical_end))
 
-        for foreign_key in spec.foreign_keys:
-            fk_expr = stable_id_parts(
-                foreign_key.target_namespace,
-                col(foreign_key.path_col),
-                col(foreign_key.start_col),
-                col(foreign_key.end_col),
+            id_expr = stable_id_parts(
+                spec.entity_id.namespace,
+                col(spec.entity_id.path_col),
+                col(spec.entity_id.start_col),
+                col(spec.entity_id.end_col),
             )
-            guard_cols: list[str] = []
-            if foreign_key.null_if_any_null:
-                guard_cols.extend(
-                    [
-                        foreign_key.path_col,
-                        foreign_key.start_col,
-                        foreign_key.end_col,
-                    ]
+            if spec.entity_id.null_if_any_null:
+                id_expr = self._null_guard(
+                    id_expr,
+                    columns=(
+                        spec.entity_id.path_col,
+                        spec.entity_id.start_col,
+                        spec.entity_id.end_col,
+                    ),
                 )
-            guard_cols.extend(foreign_key.guard_null_if)
-            fk_expr = self._null_guard(fk_expr, columns=tuple(guard_cols))
-            df = df.with_column(foreign_key.out_col, fk_expr)
+            df = df.with_column(spec.entity_id.out_col, id_expr)
+            if spec.entity_id.canonical_entity_id is not None:
+                df = df.with_column(spec.entity_id.canonical_entity_id, col(spec.entity_id.out_col))
 
-        return df
+            for foreign_key in spec.foreign_keys:
+                fk_expr = stable_id_parts(
+                    foreign_key.target_namespace,
+                    col(foreign_key.path_col),
+                    col(foreign_key.start_col),
+                    col(foreign_key.end_col),
+                )
+                guard_cols: list[str] = []
+                if foreign_key.null_if_any_null:
+                    guard_cols.extend(
+                        [
+                            foreign_key.path_col,
+                            foreign_key.start_col,
+                            foreign_key.end_col,
+                        ]
+                    )
+                guard_cols.extend(foreign_key.guard_null_if)
+                fk_expr = self._null_guard(fk_expr, columns=tuple(guard_cols))
+                df = df.with_column(foreign_key.out_col, fk_expr)
+
+            return df
 
     def normalize(self, table_name: str, *, prefix: str) -> DataFrame:
         """Apply normalization rules to an evidence table.
@@ -402,33 +507,58 @@ class SemanticCompiler:
         -------
         DataFrame
             Normalized DataFrame with entity_id and span columns.
+
+        Raises
+        ------
+        SemanticSchemaError
+            Raised when schema inference is ambiguous or incompatible.
         """
-        from datafusion import col
+        with stage_span(
+            "semantics.normalize",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_name": table_name,
+                "codeanatomy.prefix": prefix,
+            },
+        ):
+            from datafusion import col
 
-        spec = self._spec_for_table(table_name)
-        if spec is not None:
-            return self.normalize_from_spec(spec)
+            from semantics.column_types import ColumnType
 
-        info = self.get(table_name)
-        sem = info.sem
-        if sem._has_ambiguous_span():
-            msg = (
-                f"Table {table_name!r} has ambiguous span columns: "
-                f"start={sem._span_start_candidates()!r}, end={sem._span_end_candidates()!r}. "
-                "Provide a SemanticTableSpec to select the primary span."
+            spec = self._spec_for_table(table_name)
+            if spec is not None:
+                return self.normalize_from_spec(spec)
+
+            info = self.get(table_name)
+            sem = info.sem
+            span_start_candidates = tuple(
+                name
+                for name, col_type in sem.column_types.items()
+                if col_type == ColumnType.SPAN_START
             )
-            raise SemanticSchemaError(msg)
-        sem.require_evidence(table=table_name)
-        self._require_udfs(("stable_id_parts", "span_make"))
+            span_end_candidates = tuple(
+                name
+                for name, col_type in sem.column_types.items()
+                if col_type == ColumnType.SPAN_END
+            )
+            if len(span_start_candidates) > 1 or len(span_end_candidates) > 1:
+                msg = (
+                    f"Table {table_name!r} has ambiguous span columns: "
+                    f"start={span_start_candidates!r}, end={span_end_candidates!r}. "
+                    "Provide a SemanticTableSpec to select the primary span."
+                )
+                raise SemanticSchemaError(msg)
+            sem.require_evidence(table=table_name)
+            self._require_udfs(("stable_id_parts", "span_make"))
 
-        df = info.df.with_column(f"{prefix}_id", sem.entity_id_expr(prefix))
-        df = df.with_column("entity_id", col(f"{prefix}_id"))
-        if sem.span_start_name() != "bstart":
-            df = df.with_column("bstart", sem.span_start_col())
-        if sem.span_end_name() != "bend":
-            df = df.with_column("bend", sem.span_end_col())
-        df = df.with_column("span", sem.span_expr())
-        return df
+            df = info.df.with_column(f"{prefix}_id", sem.entity_id_expr(prefix))
+            df = df.with_column("entity_id", col(f"{prefix}_id"))
+            if sem.span_start_name() != "bstart":
+                df = df.with_column("bstart", sem.span_start_col())
+            if sem.span_end_name() != "bend":
+                df = df.with_column("bend", sem.span_end_col())
+            return df.with_column("span", sem.span_expr())
 
     # -------------------------------------------------------------------------
     # Rule 3: Text normalization
@@ -439,10 +569,7 @@ class SemanticCompiler:
         table_name: str,
         *,
         columns: list[str] | None = None,
-        form: str = "NFC",
-        casefold: bool = False,
-        collapse_ws: bool = False,
-        output_suffix: str = "_norm",
+        options: TextNormalizationOptions | None = None,
     ) -> DataFrame:
         """Apply text normalization to text columns.
 
@@ -454,65 +581,77 @@ class SemanticCompiler:
             Table name.
         columns
             Specific columns to normalize. If None, normalizes all TEXT columns.
-        form
-            Unicode normalization form.
-        casefold
-            Whether to casefold text.
-        collapse_ws
-            Whether to collapse whitespace.
-        output_suffix
-            Suffix for normalized columns.
+        options
+            Normalization options for form, casefolding, and output naming.
 
         Returns
         -------
         DataFrame
             DataFrame with normalized text columns.
+
+        Raises
+        ------
+        ValueError
+            Raised when output suffix is empty.
+        SemanticSchemaError
+            Raised when required text columns are missing or collide.
         """
-        from datafusion import col
+        resolved = options or TextNormalizationOptions()
+        with stage_span(
+            "semantics.normalize_text",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_name": table_name,
+                "codeanatomy.column_count": len(columns) if columns else 0,
+                "codeanatomy.form": resolved.form,
+            },
+        ):
+            from datafusion import col
 
-        from datafusion_engine.udf.shims import utf8_normalize
+            from datafusion_engine.udf.shims import utf8_normalize
 
-        info = self.get(table_name)
-        self._require_udfs(("utf8_normalize",))
-        df = info.df
+            info = self.get(table_name)
+            self._require_udfs(("utf8_normalize",))
+            df = info.df
 
-        if output_suffix == "":
-            msg = "Text normalization output_suffix must be non-empty."
-            raise ValueError(msg)
+            if not resolved.output_suffix:
+                msg = "Text normalization output_suffix must be non-empty."
+                raise ValueError(msg)
 
-        spec = self._spec_for_table(table_name)
-        if columns is None:
-            if spec is not None and spec.text_cols:
-                target_cols = list(spec.text_cols)
+            spec = self._spec_for_table(table_name)
+            if columns is None:
+                if spec is not None and spec.text_cols:
+                    target_cols = list(spec.text_cols)
+                else:
+                    target_cols = list(info.sem.text_names())
             else:
-                target_cols = list(info.sem.text_names())
-        else:
-            target_cols = list(columns)
+                target_cols = list(columns)
 
-        if not target_cols:
+            if not target_cols:
+                return df
+
+            names = set(self._schema_names(df))
+            for col_name in target_cols:
+                if col_name not in names:
+                    msg = f"Table {table_name!r} missing text column {col_name!r}."
+                    raise SemanticSchemaError(msg)
+                output_name = f"{col_name}{resolved.output_suffix}"
+                if output_name in names:
+                    msg = f"Table {table_name!r} already has column {output_name!r}."
+                    raise SemanticSchemaError(msg)
+                df = df.with_column(
+                    output_name,
+                    utf8_normalize(
+                        col(col_name),
+                        form=resolved.form,
+                        casefold=resolved.casefold,
+                        collapse_ws=resolved.collapse_ws,
+                    ),
+                )
+                names.add(output_name)
+
             return df
-
-        names = set(self._schema_names(df))
-        for col_name in target_cols:
-            if col_name not in names:
-                msg = f"Table {table_name!r} missing text column {col_name!r}."
-                raise SemanticSchemaError(msg)
-            output_name = f"{col_name}{output_suffix}"
-            if output_name in names:
-                msg = f"Table {table_name!r} already has column {output_name!r}."
-                raise SemanticSchemaError(msg)
-            df = df.with_column(
-                output_name,
-                utf8_normalize(
-                    col(col_name),
-                    form=form,
-                    casefold=casefold,
-                    collapse_ws=collapse_ws,
-                ),
-            )
-            names.add(output_name)
-
-        return df
 
     # -------------------------------------------------------------------------
     # Rules 5, 6, 7: Relationship building
@@ -523,9 +662,7 @@ class SemanticCompiler:
         left_table: str,
         right_table: str,
         *,
-        join_type: Literal["overlap", "contains"] = "overlap",
-        filter_sql: str | None = None,
-        origin: str,
+        options: RelationOptions,
     ) -> DataFrame:
         """Build a relationship between two tables.
 
@@ -539,12 +676,8 @@ class SemanticCompiler:
             Entity table (must have entity_id).
         right_table
             Symbol table (must have symbol).
-        join_type
-            "overlap" for span_overlaps, "contains" for span_contains.
-        filter_sql
-            Optional SQL filter expression.
-        origin
-            Origin label for the relationship.
+        options
+            Relationship inference options and filters.
 
         Returns
         -------
@@ -552,46 +685,126 @@ class SemanticCompiler:
             Relationship table with schema:
             (entity_id, symbol, path, bstart, bend, origin)
         """
-        from datafusion import lit
+        with stage_span(
+            f"semantics.relate.{options.join_type or 'infer'}",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.left_table": left_table,
+                "codeanatomy.right_table": right_table,
+                "codeanatomy.join_type": options.join_type,
+                "codeanatomy.origin": options.origin,
+                "codeanatomy.has_filter": options.filter_sql is not None,
+                "codeanatomy.use_cdf": options.use_cdf,
+            },
+        ):
+            from datafusion import lit
 
-        left_info = self.get(left_table)
-        right_info = self.get(right_table)
-        left_info.sem.require_entity(table=left_table)
-        right_info.sem.require_symbol_source(table=right_table)
-        self._require_span_unit_compatibility(
-            left_info.sem,
-            right_info.sem,
-            left_table=left_table,
-            right_table=right_table,
-        )
-        self._require_udfs(("span_overlaps", "span_contains"))
+            from semantics.joins import require_join_strategy
 
-        left_prefix = "left__"
-        right_prefix = "right__"
-        left_df = self._prefix_df(left_info.df, left_prefix)
-        right_df = self._prefix_df(right_info.df, right_prefix)
-        left_sem = left_info.sem.prefixed(left_prefix)
-        right_sem = right_info.sem.prefixed(right_prefix)
+            left_info = self.get(left_table)
+            right_info = self.get(right_table)
+            left_info.sem.require_entity(table=left_table)
+            right_info.sem.require_symbol_source(table=right_table)
+            hint = options.strategy_hint
+            if hint is None and options.join_type is not None:
+                hint = (
+                    JoinStrategyType.SPAN_CONTAINS
+                    if options.join_type == "contains"
+                    else JoinStrategyType.SPAN_OVERLAP
+                )
+            strategy = require_join_strategy(
+                left_info.annotated,
+                right_info.annotated,
+                hint=hint,
+                left_name=left_table,
+                right_name=right_table,
+            )
 
-        # Apply Rule 5 or 6: span-based join
-        if join_type == "overlap":
-            joined = join_by_span_overlap(left_df, right_df, left_sem, right_sem)
-        else:
-            joined = join_by_span_contains(left_df, right_df, left_sem, right_sem)
+            if strategy.strategy_type in {
+                JoinStrategyType.SPAN_OVERLAP,
+                JoinStrategyType.SPAN_CONTAINS,
+            }:
+                self._require_span_unit_compatibility(
+                    left_info.sem,
+                    right_info.sem,
+                    left_table=left_table,
+                    right_table=right_table,
+                )
+                self._require_udfs(("span_overlaps", "span_contains"))
 
-        # Apply optional filter
-        if filter_sql:
-            joined = joined.filter(filter_sql)
+            if options.use_cdf:
+                from semantics.incremental import (
+                    CDFJoinSpec,
+                    build_incremental_join,
+                    incremental_join_enabled,
+                )
 
-        # Rule 7: Project to relation schema
-        return joined.select(
-            left_sem.entity_id_col().alias("entity_id"),
-            right_sem.symbol_col().alias("symbol"),
-            left_sem.path_col().alias("path"),
-            left_sem.span_start_col().alias("bstart"),
-            left_sem.span_end_col().alias("bend"),
-            lit(origin).alias("origin"),
-        ).distinct()
+                if incremental_join_enabled(left_info.df, right_info.df):
+                    key_columns = strategy.left_keys or strategy.right_keys
+                    if not key_columns:
+                        key_columns = ("entity_id",)
+                    cdf_spec = CDFJoinSpec(
+                        left_table=left_table,
+                        right_table=right_table,
+                        output_name=f"{left_table}__{right_table}__cdf",
+                        key_columns=key_columns,
+                    )
+
+                    def _join_builder(left_df: DataFrame, right_df: DataFrame) -> DataFrame:
+                        joined, _left_sem, _right_sem = self._join_with_strategy(
+                            JoinInputs(
+                                left_df=left_df,
+                                right_df=right_df,
+                                left_sem=left_info.sem,
+                                right_sem=right_info.sem,
+                            ),
+                            strategy=strategy,
+                            filter_sql=options.filter_sql,
+                        )
+                        return joined
+
+                    joined = build_incremental_join(
+                        self.ctx,
+                        cdf_spec,
+                        left_df=left_info.df,
+                        right_df=right_info.df,
+                        join_builder=_join_builder,
+                    )
+                    left_sem = left_info.sem.prefixed("left__")
+                    right_sem = right_info.sem.prefixed("right__")
+                else:
+                    joined, left_sem, right_sem = self._join_with_strategy(
+                        JoinInputs(
+                            left_df=left_info.df,
+                            right_df=right_info.df,
+                            left_sem=left_info.sem,
+                            right_sem=right_info.sem,
+                        ),
+                        strategy=strategy,
+                        filter_sql=options.filter_sql,
+                    )
+            else:
+                joined, left_sem, right_sem = self._join_with_strategy(
+                    JoinInputs(
+                        left_df=left_info.df,
+                        right_df=right_info.df,
+                        left_sem=left_info.sem,
+                        right_sem=right_info.sem,
+                    ),
+                    strategy=strategy,
+                    filter_sql=options.filter_sql,
+                )
+
+            # Rule 7: Project to relation schema
+            return joined.select(
+                left_sem.entity_id_col().alias("entity_id"),
+                right_sem.symbol_col().alias("symbol"),
+                left_sem.path_col().alias("path"),
+                left_sem.span_start_col().alias("bstart"),
+                left_sem.span_end_col().alias("bend"),
+                lit(options.origin).alias("origin"),
+            ).distinct()
 
     # -------------------------------------------------------------------------
     # Rule 8: Union with discriminator
@@ -668,12 +881,29 @@ class SemanticCompiler:
         *,
         discriminator: str = "node_kind",
     ) -> DataFrame:
-        """Union node tables after canonical projection."""
-        return self._union_canonical(
-            table_names,
-            discriminator=discriminator,
-            schema=CANONICAL_NODE_SCHEMA,
-        )
+        """Union node tables after canonical projection.
+
+        Returns
+        -------
+        DataFrame
+            Unioned node DataFrame.
+        """
+        with stage_span(
+            "semantics.union_nodes",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_count": len(table_names),
+                "codeanatomy.tables": ",".join(table_names),
+            },
+        ):
+            return self._union_canonical(
+                UnionSpec(
+                    table_names=table_names,
+                    discriminator=discriminator,
+                    schema=CANONICAL_NODE_SCHEMA,
+                )
+            )
 
     def union_edges(
         self,
@@ -681,12 +911,29 @@ class SemanticCompiler:
         *,
         discriminator: str = "edge_kind",
     ) -> DataFrame:
-        """Union edge tables after canonical projection."""
-        return self._union_canonical(
-            table_names,
-            discriminator=discriminator,
-            schema=CANONICAL_EDGE_SCHEMA,
-        )
+        """Union edge tables after canonical projection.
+
+        Returns
+        -------
+        DataFrame
+            Unioned edge DataFrame.
+        """
+        with stage_span(
+            "semantics.union_edges",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_count": len(table_names),
+                "codeanatomy.tables": ",".join(table_names),
+            },
+        ):
+            return self._union_canonical(
+                UnionSpec(
+                    table_names=table_names,
+                    discriminator=discriminator,
+                    schema=CANONICAL_EDGE_SCHEMA,
+                )
+            )
 
     # -------------------------------------------------------------------------
     # Rule 9: Aggregation
@@ -717,17 +964,27 @@ class SemanticCompiler:
         DataFrame
             Aggregated DataFrame.
         """
-        from datafusion import col, functions
+        with stage_span(
+            "semantics.aggregate",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_name": table_name,
+                "codeanatomy.group_by_count": len(group_by),
+                "codeanatomy.aggregate_count": len(aggregate),
+            },
+        ):
+            from datafusion import col, functions
 
-        info = self.get(table_name)
-        df = info.df
+            info = self.get(table_name)
+            df = info.df
 
-        # Build aggregation expressions
-        agg_exprs = []
-        for output_name, input_col in aggregate.items():
-            agg_exprs.append(functions.array_agg(col(input_col)).alias(output_name))
+            # Build aggregation expressions
+            agg_exprs = []
+            for output_name, input_col in aggregate.items():
+                agg_exprs.append(functions.array_agg(col(input_col)).alias(output_name))
 
-        return df.aggregate([col(c) for c in group_by], agg_exprs)
+            return df.aggregate([col(c) for c in group_by], agg_exprs)
 
     # -------------------------------------------------------------------------
     # Rule 10: Deduplication
@@ -761,21 +1018,32 @@ class SemanticCompiler:
         DataFrame
             Deduplicated DataFrame.
         """
-        from datafusion import col, functions, lit
+        with stage_span(
+            "semantics.dedupe",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.table_name": table_name,
+                "codeanatomy.key_column_count": len(key_columns),
+                "codeanatomy.score_column": score_column,
+                "codeanatomy.descending": descending,
+            },
+        ):
+            from datafusion import col, functions, lit
 
-        info = self.get(table_name)
+            info = self.get(table_name)
 
-        # Use window function to rank, then filter to rank 1
-        partition_by = [col(c) for c in key_columns]
+            # Use window function to rank, then filter to rank 1
+            partition_by = [col(c) for c in key_columns]
 
-        # Create sort expression for ordering (desc if keeping highest score)
-        order_expr = col(score_column).sort(ascending=not descending)
+            # Create sort expression for ordering (desc if keeping highest score)
+            order_expr = col(score_column).sort(ascending=not descending)
 
-        # row_number() partitioned and ordered - use single SortExpr
-        row_num = functions.row_number(partition_by=partition_by, order_by=order_expr)
+            # row_number() partitioned and ordered - use single SortExpr
+            row_num = functions.row_number(partition_by=partition_by, order_by=order_expr)
 
-        ranked = info.df.with_column("_rank", row_num)
-        return ranked.filter(col("_rank") == lit(1)).drop("_rank")
+            ranked = info.df.with_column("_rank", row_num)
+            return ranked.filter(col("_rank") == lit(1)).drop("_rank")
 
 
 __all__ = ["SemanticCompiler", "TableInfo"]

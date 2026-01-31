@@ -102,10 +102,22 @@ def repo_files_fingerprint() -> str:
     return cached_schema_identity_hash("repo_files_v1")
 
 
+def file_line_index_fingerprint() -> str:
+    """Return cached schema fingerprint for line index dataset.
+
+    Returns
+    -------
+    str
+        Cached schema fingerprint.
+    """
+    return cached_schema_identity_hash("file_line_index_v1")
+
+
 __all__ = [
     "ast_files_fingerprint",
     "bytecode_files_fingerprint",
     "cached_schema_identity_hash",
+    "file_line_index_fingerprint",
     "libcst_files_fingerprint",
     "repo_file_blobs_fingerprint",
     "repo_files_fingerprint",

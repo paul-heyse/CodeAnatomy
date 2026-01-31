@@ -1,4 +1,3 @@
-# ruff: noqa: PLR2004, PLR6301
 """Unit tests for the relationship specs declarative DSL."""
 
 from __future__ import annotations

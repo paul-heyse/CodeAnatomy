@@ -1,4 +1,3 @@
-# ruff: noqa: PLR2004, PLR6301
 """Unit tests for extraction schema derivation."""
 
 from __future__ import annotations

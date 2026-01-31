@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from semantics.types import TYPE_PATTERNS, ColumnType
+from semantics.column_types import TYPE_PATTERNS, ColumnType
 
 if TYPE_CHECKING:
     from semantics.specs import SemanticTableSpec

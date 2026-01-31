@@ -49,6 +49,7 @@ class ScopeName(StrEnum):
     CPG = "codeanatomy.cpg"
     OBS = "codeanatomy.obs"
     DIAGNOSTICS = "codeanatomy.diagnostics"
+    SEMANTICS = "codeanatomy.semantics"
 
 
 class ResourceAttribute(StrEnum):

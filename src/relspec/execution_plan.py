@@ -48,12 +48,8 @@ from relspec.rustworkx_schedule import (
 from relspec.schedule_events import TaskScheduleMetadata
 from relspec.view_defs import (
     DEFAULT_REL_TASK_PRIORITY,
-    REL_CALLSITE_QNAME_OUTPUT,
-    REL_CALLSITE_SYMBOL_OUTPUT,
-    REL_DEF_SYMBOL_OUTPUT,
-    REL_IMPORT_SYMBOL_OUTPUT,
-    REL_NAME_SYMBOL_OUTPUT,
-    RELATION_OUTPUT_NAME,
+    RELATION_VIEW_NAMES,
+    SEMANTIC_INTERMEDIATE_VIEWS,
 )
 from serde_msgspec import to_builtins
 from utils.hashing import hash_msgpack_canonical, hash_settings
@@ -76,12 +72,8 @@ else:
 
 _RELSPEC_OUTPUTS: frozenset[str] = frozenset(
     {
-        REL_NAME_SYMBOL_OUTPUT,
-        REL_IMPORT_SYMBOL_OUTPUT,
-        REL_DEF_SYMBOL_OUTPUT,
-        REL_CALLSITE_SYMBOL_OUTPUT,
-        REL_CALLSITE_QNAME_OUTPUT,
-        RELATION_OUTPUT_NAME,
+        *RELATION_VIEW_NAMES,
+        *SEMANTIC_INTERMEDIATE_VIEWS,
     }
 )
 

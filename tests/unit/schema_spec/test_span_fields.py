@@ -1,4 +1,3 @@
-# ruff: noqa: PLR2004, PLR6301
 """Tests for span field templating."""
 
 from __future__ import annotations

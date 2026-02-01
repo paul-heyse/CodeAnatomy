@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 from io import StringIO
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
 
 from cli.app import app
+from tests.cli_golden._support.goldens import assert_text_snapshot
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-
-_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _capture_help(tokens: Sequence[str] | None) -> str:
@@ -24,21 +21,31 @@ def _capture_help(tokens: Sequence[str] | None) -> str:
     return buffer.getvalue()
 
 
-def _assert_matches(fixture_name: str, actual: str) -> None:
-    expected = (_FIXTURES / fixture_name).read_text(encoding="utf-8")
-    assert actual == expected
-
-
-def test_help_root() -> None:
+def test_help_root(*, update_golden: bool) -> None:
     """Ensure root help output matches the golden snapshot."""
-    _assert_matches("help_root.txt", _capture_help(None))
+    assert_text_snapshot("help_root.txt", _capture_help(None), update=update_golden)
 
 
-def test_help_build() -> None:
+def test_help_build(*, update_golden: bool) -> None:
     """Ensure build help output matches the golden snapshot."""
-    _assert_matches("help_build.txt", _capture_help(["build"]))
+    assert_text_snapshot("help_build.txt", _capture_help(["build"]), update=update_golden)
 
 
-def test_help_delta() -> None:
+def test_help_delta(*, update_golden: bool) -> None:
     """Ensure delta help output matches the golden snapshot."""
-    _assert_matches("help_delta.txt", _capture_help(["delta"]))
+    assert_text_snapshot("help_delta.txt", _capture_help(["delta"]), update=update_golden)
+
+
+def test_help_plan(*, update_golden: bool) -> None:
+    """Ensure plan help output matches the golden snapshot."""
+    assert_text_snapshot("help_plan.txt", _capture_help(["plan"]), update=update_golden)
+
+
+def test_help_config(*, update_golden: bool) -> None:
+    """Ensure config help output matches the golden snapshot."""
+    assert_text_snapshot("help_config.txt", _capture_help(["config"]), update=update_golden)
+
+
+def test_help_diag(*, update_golden: bool) -> None:
+    """Ensure diag help output matches the golden snapshot."""
+    assert_text_snapshot("help_diag.txt", _capture_help(["diag"]), update=update_golden)

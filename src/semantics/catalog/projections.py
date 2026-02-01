@@ -171,9 +171,7 @@ def semantic_projection_options(
     from semantics.quality import QualityRelationshipSpec
 
     quality_names = {
-        spec.name
-        for spec in config.relationship_specs
-        if isinstance(spec, QualityRelationshipSpec)
+        spec.name for spec in config.relationship_specs if isinstance(spec, QualityRelationshipSpec)
     }
 
     projection_map: dict[str, RelationshipProjectionOptions] = {

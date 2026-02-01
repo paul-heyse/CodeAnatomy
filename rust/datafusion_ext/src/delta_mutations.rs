@@ -17,7 +17,7 @@ use deltalake::table::Constraint;
 
 use crate::delta_control_plane::load_delta_table;
 use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
-use crate::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
+use crate::{DeltaCommitOptions, DeltaFeatureGate};
 
 #[derive(Debug, Clone)]
 pub struct DeltaMutationReport {

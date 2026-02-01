@@ -1,0 +1,15 @@
+plan_signature: plan-123
+reduced_plan_signature: plan-123-reduced
+task_count: 3
+graph:
+  critical_path_length: 3
+  critical_path_tasks: a, b, c
+schedule: <included>
+validation: <included>
+inferred_deps:
+  b: a
+  c: b
+task_graph:
+  node_count: 3
+  sample_nodes: a, b, c
+  edge_count: 2

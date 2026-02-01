@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+
+from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -143,4 +146,156 @@ def _find_in_parents(filename: str) -> Path | None:
         path = path.parent
 
 
-__all__ = ["load_effective_config", "normalize_config_contents"]
+def load_effective_config_with_sources(
+    config_file: str | None,
+) -> ConfigWithSources:
+    """Load config contents with source tracking.
+
+    Parameters
+    ----------
+    config_file
+        Optional explicit config file path.
+
+    Returns
+    -------
+    ConfigWithSources
+        Configuration with source tracking for each value.
+    """
+    values: dict[str, ConfigValue] = {}
+    _load_config_values(values, config_file)
+    _apply_env_overrides(values)
+
+    return ConfigWithSources(values=values)
+
+
+def _load_config_values(values: dict[str, ConfigValue], config_file: str | None) -> None:
+    if config_file:
+        _load_explicit_config(values, Path(config_file))
+        return
+    _load_default_configs(values)
+
+
+def _load_explicit_config(values: dict[str, ConfigValue], path: Path) -> None:
+    if not path.exists():
+        return
+    raw = _read_toml(path)
+    _apply_config_values(values, raw, location=str(path), skip_existing=False)
+
+
+def _load_default_configs(values: dict[str, ConfigValue]) -> None:
+    codeanatomy_path = _find_in_parents("codeanatomy.toml")
+    if codeanatomy_path is not None:
+        raw = _read_toml(codeanatomy_path)
+        _apply_config_values(values, raw, location=str(codeanatomy_path), skip_existing=False)
+
+    pyproject_path = _find_in_parents("pyproject.toml")
+    if pyproject_path is None:
+        return
+    pyproject = _read_toml(pyproject_path)
+    tool_section = pyproject.get("tool")
+    if not isinstance(tool_section, dict):
+        return
+    nested = tool_section.get("codeanatomy")
+    if not isinstance(nested, dict):
+        return
+    _apply_config_values(values, nested, location=str(pyproject_path), skip_existing=True)
+
+
+def _read_toml(path: Path) -> dict[str, JsonValue]:
+    with path.open("rb") as handle:
+        return cast("dict[str, JsonValue]", tomllib.load(handle))
+
+
+def _apply_config_values(
+    values: dict[str, ConfigValue],
+    raw: Mapping[str, JsonValue],
+    *,
+    location: str,
+    skip_existing: bool,
+) -> None:
+    normalized = normalize_config_contents(raw)
+    for key, value in normalized.items():
+        if skip_existing and key in values:
+            continue
+        values[key] = ConfigValue(
+            key=key,
+            value=value,
+            source=ConfigSource.CONFIG_FILE,
+            location=location,
+        )
+
+
+def _apply_env_overrides(values: dict[str, ConfigValue]) -> None:
+    env_mappings = _get_env_var_mappings()
+    for key, env_var in env_mappings.items():
+        env_value = os.environ.get(env_var)
+        if env_value is None:
+            continue
+        values[key] = ConfigValue(
+            key=key,
+            value=_parse_env_value(env_value),
+            source=ConfigSource.ENV,
+            location=env_var,
+        )
+
+
+def _get_env_var_mappings() -> dict[str, str]:
+    """Get mapping of config keys to environment variable names.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of config key to environment variable name.
+    """
+    return {
+        "log_level": "CODEANATOMY_LOG_LEVEL",
+        "runtime_profile_name": "CODEANATOMY_RUNTIME_PROFILE",
+        "output_dir": "CODEANATOMY_OUTPUT_DIR",
+        "work_dir": "CODEANATOMY_WORK_DIR",
+        "execution_mode": "CODEANATOMY_EXECUTION_MODE",
+        "determinism_override": "CODEANATOMY_DETERMINISM_TIER",
+        "incremental_state_dir": "CODEANATOMY_STATE_DIR",
+        "incremental_repo_id": "CODEANATOMY_REPO_ID",
+        "incremental_impact_strategy": "CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY",
+        "incremental_git_base_ref": "CODEANATOMY_GIT_BASE_REF",
+        "incremental_git_head_ref": "CODEANATOMY_GIT_HEAD_REF",
+        "incremental_git_changed_only": "CODEANATOMY_GIT_CHANGED_ONLY",
+        "disable_scip": "CODEANATOMY_DISABLE_SCIP",
+        "scip_output_dir": "CODEANATOMY_SCIP_OUTPUT_DIR",
+    }
+
+
+def _parse_env_value(value: str) -> JsonValue:
+    """Parse environment variable value to appropriate type.
+
+    Parameters
+    ----------
+    value
+        String value from environment.
+
+    Returns
+    -------
+    JsonValue
+        Parsed value (bool, int, or string).
+    """
+    lower = value.lower()
+    if lower in {"true", "1", "yes", "on"}:
+        return True
+    if lower in {"false", "0", "no", "off"}:
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+__all__ = [
+    "load_effective_config",
+    "load_effective_config_with_sources",
+    "normalize_config_contents",
+]

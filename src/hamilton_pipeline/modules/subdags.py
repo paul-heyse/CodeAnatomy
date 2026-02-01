@@ -24,11 +24,12 @@ hamilton_pipeline.driver_factory.build_view_graph_context : View graph setup.
 
 from __future__ import annotations
 
-from hamilton.function_modifiers import parameterized_subdag, source, tag_outputs, value
+from hamilton.function_modifiers import parameterized_subdag, schema, source, tag_outputs, value
 
+from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from hamilton_pipeline.modules import cpg_finalize as cpg_finalize_module
 from hamilton_pipeline.modules import cpg_outputs as cpg_outputs_module
-from hamilton_pipeline.tag_policy import TagPolicy, tag_outputs_by_name, tag_outputs_payloads
+from hamilton_pipeline.tag_policy import apply_tag, semantic_tag_policy, tag_outputs_by_name
 from relspec.runtime_artifacts import TableLike
 
 
@@ -72,77 +73,27 @@ def cpg_final_tables(final_table: TableLike) -> TableLike:
     return final_table
 
 
-_CPG_OUTPUT_POLICIES = {
-    "cpg_nodes": TagPolicy(
-        layer="semantic",
-        kind="table",
-        artifact="cpg_nodes",
-        semantic_id="cpg.nodes.v1",
-        entity="node",
-        grain="per_node",
-        version="1",
-        stability="design",
-        schema_ref="semantic.cpg_nodes_v1",
-        materialization="delta",
-        materialized_name="semantic.cpg_nodes_v1",
-        entity_keys=("repo", "commit", "node_id"),
-        join_keys=("repo", "commit", "node_id"),
-    ),
-    "cpg_edges": TagPolicy(
-        layer="semantic",
-        kind="table",
-        artifact="cpg_edges",
-        semantic_id="cpg.edges.v1",
-        entity="edge",
-        grain="per_edge",
-        version="1",
-        stability="design",
-        schema_ref="semantic.cpg_edges_v1",
-        materialization="delta",
-        materialized_name="semantic.cpg_edges_v1",
-        entity_keys=("repo", "commit", "edge_id"),
-        join_keys=("repo", "commit", "edge_id"),
-    ),
-    "cpg_props": TagPolicy(
-        layer="semantic",
-        kind="table",
-        artifact="cpg_props",
-        semantic_id="cpg.props.v1",
-        entity="prop",
-        grain="per_prop",
-        version="1",
-        stability="design",
-        schema_ref="semantic.cpg_props_v1",
-        materialization="delta",
-        materialized_name="semantic.cpg_props_v1",
-        entity_keys=("repo", "commit", "node_id", "key"),
-        join_keys=("repo", "commit", "node_id"),
-    ),
-}
-
-
 @parameterized_subdag(
     cpg_outputs_module,
-    cpg_nodes={
+    cpg_nodes_raw={
         "inputs": {
             "table": source("cpg_nodes_final"),
             "dataset_name": value("cpg_nodes_v1"),
         }
     },
-    cpg_edges={
+    cpg_edges_raw={
         "inputs": {
             "table": source("cpg_edges_final"),
             "dataset_name": value("cpg_edges_v1"),
         }
     },
-    cpg_props={
+    cpg_props_raw={
         "inputs": {
             "table": source("cpg_props_final"),
             "dataset_name": value("cpg_props_v1"),
         }
     },
 )
-@tag_outputs(**tag_outputs_payloads(_CPG_OUTPUT_POLICIES))
 def cpg_output_tables(table: TableLike) -> TableLike:
     """Return parameterized CPG outputs with shared validation.
 
@@ -154,4 +105,104 @@ def cpg_output_tables(table: TableLike) -> TableLike:
     return table
 
 
-__all__ = ["cpg_final_tables", "cpg_output_tables"]
+_CPG_NODES_SCHEMA = tuple((col, "string") for col in _NODE_OUTPUT_COLUMNS)
+_CPG_EDGES_SCHEMA = tuple((col, "string") for col in _EDGE_OUTPUT_COLUMNS)
+_CPG_PROPS_SCHEMA = tuple((col, "string") for col in _PROP_OUTPUT_COLUMNS)
+_CPG_PROPS_MAP_SCHEMA = (
+    ("entity_kind", "string"),
+    ("entity_id", "string"),
+    ("node_kind", "string"),
+    ("props", "string"),
+)
+_CPG_EDGES_BY_SRC_SCHEMA = (("src_node_id", "string"), ("edges", "string"))
+_CPG_EDGES_BY_DST_SCHEMA = (("dst_node_id", "string"), ("edges", "string"))
+
+
+@schema.output(*_CPG_NODES_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_nodes"))
+def cpg_nodes(cpg_nodes_raw: TableLike) -> TableLike:
+    """Return the canonical CPG nodes output table.
+
+    Returns
+    -------
+    TableLike
+        CPG nodes output table.
+    """
+    return cpg_nodes_raw
+
+
+@schema.output(*_CPG_EDGES_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_edges"))
+def cpg_edges(cpg_edges_raw: TableLike) -> TableLike:
+    """Return the canonical CPG edges output table.
+
+    Returns
+    -------
+    TableLike
+        CPG edges output table.
+    """
+    return cpg_edges_raw
+
+
+@schema.output(*_CPG_PROPS_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_props"))
+def cpg_props(cpg_props_raw: TableLike) -> TableLike:
+    """Return the canonical CPG properties output table.
+
+    Returns
+    -------
+    TableLike
+        CPG properties output table.
+    """
+    return cpg_props_raw
+
+
+@schema.output(*_CPG_PROPS_MAP_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_props_map"))
+def cpg_props_map(cpg_props_map_v1: TableLike) -> TableLike:
+    """Return the canonical CPG property map table.
+
+    Returns
+    -------
+    TableLike
+        CPG property map table.
+    """
+    return cpg_props_map_v1
+
+
+@schema.output(*_CPG_EDGES_BY_SRC_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_edges_by_src"))
+def cpg_edges_by_src(cpg_edges_by_src_v1: TableLike) -> TableLike:
+    """Return CPG edges grouped by source node.
+
+    Returns
+    -------
+    TableLike
+        CPG edges-by-source table.
+    """
+    return cpg_edges_by_src_v1
+
+
+@schema.output(*_CPG_EDGES_BY_DST_SCHEMA)
+@apply_tag(semantic_tag_policy("cpg_edges_by_dst"))
+def cpg_edges_by_dst(cpg_edges_by_dst_v1: TableLike) -> TableLike:
+    """Return CPG edges grouped by destination node.
+
+    Returns
+    -------
+    TableLike
+        CPG edges-by-destination table.
+    """
+    return cpg_edges_by_dst_v1
+
+
+__all__ = [
+    "cpg_edges",
+    "cpg_edges_by_dst",
+    "cpg_edges_by_src",
+    "cpg_final_tables",
+    "cpg_nodes",
+    "cpg_output_tables",
+    "cpg_props",
+    "cpg_props_map",
+]

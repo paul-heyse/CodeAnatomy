@@ -79,25 +79,61 @@ Use `codeanatomy config show` to inspect the normalized payload:
 codeanatomy config show
 ```
 
-## Environment variable precedence
+To include value origins (CLI/env/config/default), use:
 
-The CLI intentionally maps only the existing environment variables from `inputs.py`:
+```bash
+codeanatomy config show --with-sources
+```
+
+## Environment variables
+
+The CLI uses explicit `CODEANATOMY_` environment variables for high-value parameters.
+Use `codeanatomy config show --with-sources`
+to see where each configuration value is coming from.
+
+### High-value overrides
 
 | Environment Variable | Purpose | CLI Flag |
 |---|---|---|
+| `CODEANATOMY_LOG_LEVEL` | Logging verbosity | `--log-level` |
 | `CODEANATOMY_RUNTIME_PROFILE` | Runtime profile selection | `--runtime-profile` |
-| `CODEANATOMY_DETERMINISM_TIER` | Determinism tier | `--determinism-tier` (overrides) |
-| `CODEANATOMY_FORCE_TIER2` | Force canonical tier | `--determinism-tier canonical` |
-| `CODEANATOMY_PIPELINE_MODE` | Incremental/streaming mode | `--incremental` (overrides) |
+| `CODEANATOMY_OUTPUT_DIR` | Output directory | `--output-dir` |
+| `CODEANATOMY_WORK_DIR` | Working directory | `--work-dir` |
+| `CODEANATOMY_EXECUTION_MODE` | Execution mode | `--execution-mode` |
+| `CODEANATOMY_DETERMINISM_TIER` | Determinism tier | `--determinism-tier` |
+| `CODEANATOMY_DISABLE_SCIP` | Disable SCIP indexing | `--disable-scip` |
+| `CODEANATOMY_SCIP_OUTPUT_DIR` | SCIP output directory | `--scip-output-dir` |
+| `CODEANATOMY_INCLUDE_GLOBS` | Include globs | `--include-globs` |
+| `CODEANATOMY_EXCLUDE_GLOBS` | Exclude globs | `--exclude-globs` |
 | `CODEANATOMY_STATE_DIR` | Incremental state directory | `--incremental-state-dir` |
 | `CODEANATOMY_REPO_ID` | Repository identifier | `--incremental-repo-id` |
 | `CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY` | Impact strategy | `--incremental-impact-strategy` |
 | `CODEANATOMY_GIT_BASE_REF` | Git base ref | `--git-base-ref` |
 | `CODEANATOMY_GIT_HEAD_REF` | Git head ref | `--git-head-ref` |
 | `CODEANATOMY_GIT_CHANGED_ONLY` | Changed-only mode | `--git-changed-only` |
-| `CODEANATOMY_LOG_LEVEL` | Logging verbosity | `--log-level` |
+| `CODEANATOMY_PLAN_OUTPUT_FORMAT` | Plan output format | `--output-format` |
+| `CODEANATOMY_PLAN_OUTPUT_FILE` | Plan output file | `--output-file` |
+
+### Observability
+
+| Environment Variable | Purpose | CLI Flag |
+|---|---|---|
+| `CODEANATOMY_ENABLE_TRACES` | Enable OpenTelemetry traces | `--enable-traces` |
+| `CODEANATOMY_ENABLE_METRICS` | Enable OpenTelemetry metrics | `--enable-metrics` |
+| `CODEANATOMY_ENABLE_LOGS` | Enable OpenTelemetry logs | `--enable-logs` |
+| `CODEANATOMY_OTEL_TEST_MODE` | In-memory OTel exporters (tests) | `--otel-test-mode` |
+
+### Legacy/advanced environment toggles
+
+The pipeline still honors a few legacy toggles defined in the runtime layers:
+
+- `CODEANATOMY_FORCE_TIER2` (forces canonical determinism)
+- `CODEANATOMY_PIPELINE_MODE` (incremental/streaming mode)
 
 ## Advanced SCIP config-only fields
+
+When `--disable-scip` is enabled, CLI-only SCIP parameters are ignored and the
+CLI will warn if any disabled SCIP options are still provided.
 
 The following SCIP settings are **config-only** (set in `[scip]`):
 

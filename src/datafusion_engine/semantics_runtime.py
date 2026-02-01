@@ -42,11 +42,15 @@ def semantic_runtime_from_profile(
     """
     # Extract output locations from profile using canonical view names
     from relspec.view_defs import RELATION_OUTPUT_NAME
+    from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
     from semantics.naming import SEMANTIC_VIEW_NAMES
 
     view_names = list(SEMANTIC_VIEW_NAMES)
     if RELATION_OUTPUT_NAME not in view_names:
         view_names.append(RELATION_OUTPUT_NAME)
+    for name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
+        if name not in view_names:
+            view_names.append(name)
     output_locations = {
         name: str(location.path)
         for name in view_names

@@ -16,6 +16,7 @@ _MODULE_NAMES: tuple[str, ...] = (
     "subdags",
     "task_execution",
     "column_features",
+    "semantic_lineage",
     "outputs",
 )
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
         io_contracts,
         outputs,
         params,
+        semantic_lineage,
         subdags,
         task_execution,
     )
@@ -88,6 +90,7 @@ __all__ = [
     "load_all_modules",
     "outputs",
     "params",
+    "semantic_lineage",
     "subdags",
     "task_execution",
 ]

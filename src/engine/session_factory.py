@@ -36,6 +36,7 @@ def build_engine_session(  # noqa: PLR0913
     diagnostics_policy: DiagnosticsPolicy | None = None,
     semantic_config: SemanticRuntimeConfig | None = None,
     build_options: SemanticBuildOptions | None = None,
+    otel_options: OtelBootstrapOptions | None = None,
 ) -> EngineSession:
     """Build an EngineSession bound to the provided runtime spec.
 
@@ -54,6 +55,8 @@ def build_engine_session(  # noqa: PLR0913
         over values inferred from the runtime profile.
     build_options
         Optional semantic build options (reserved for future use).
+    otel_options
+        Optional OpenTelemetry bootstrap overrides.
 
     Returns
     -------
@@ -61,11 +64,12 @@ def build_engine_session(  # noqa: PLR0913
         Engine session wired to the runtime surfaces.
     """
     _ = build_options  # Reserved for future use
+    effective_otel = otel_options or OtelBootstrapOptions()
+    resource_overrides = dict(effective_otel.resource_overrides or {})
+    resource_overrides["codeanatomy.runtime_profile"] = runtime_spec.name
     configure_otel(
         service_name="codeanatomy",
-        options=OtelBootstrapOptions(
-            resource_overrides={"codeanatomy.runtime_profile": runtime_spec.name},
-        ),
+        options=replace(effective_otel, resource_overrides=resource_overrides),
     )
     engine_runtime = build_engine_runtime(
         runtime_profile=runtime_spec.datafusion,

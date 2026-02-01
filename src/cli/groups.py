@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from cyclopts import Group, Parameter, validators
 
+from cli.validators import ConditionalDisabled
+
 session_group = Group(
     "Session",
     help="Session and run context options.",
@@ -20,12 +22,6 @@ execution_group = Group(
     "Execution",
     help="Control pipeline execution strategy and parallelism.",
     sort_key=2,
-)
-
-scip_group = Group(
-    "SCIP Configuration",
-    help="Configure SCIP semantic index extraction.",
-    sort_key=3,
 )
 
 incremental_group = Group(
@@ -52,6 +48,12 @@ advanced_group = Group(
     sort_key=7,
 )
 
+observability_group = Group(
+    "Observability",
+    help="Configure OpenTelemetry tracing, metrics, and logging.",
+    sort_key=8,
+)
+
 admin_group = Group(
     "Admin",
     help="Administrative commands and help.",
@@ -65,12 +67,33 @@ restore_target_group = Group(
     default_parameter=Parameter(show_default=False),
 )
 
+scip_group = Group(
+    "SCIP Configuration",
+    help="Configure SCIP semantic index extraction.",
+    sort_key=3,
+    validator=ConditionalDisabled(
+        condition_param="disable_scip",
+        condition_value=True,
+        disabled_params=(
+            "scip_output_dir",
+            "scip_index_path_override",
+            "scip_env_json",
+            "scip_python_bin",
+            "scip_target_only",
+            "scip_timeout_s",
+            "node_max_old_space_mb",
+            "scip_extra_args",
+        ),
+    ),
+)
+
 __all__ = [
     "admin_group",
     "advanced_group",
     "execution_group",
     "graph_adapter_group",
     "incremental_group",
+    "observability_group",
     "output_group",
     "repo_scope_group",
     "restore_target_group",

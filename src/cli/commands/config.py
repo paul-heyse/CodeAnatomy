@@ -9,7 +9,11 @@ from typing import Annotated
 
 from cyclopts import Parameter
 
-from cli.config_loader import load_effective_config, normalize_config_contents
+from cli.config_loader import (
+    load_effective_config,
+    load_effective_config_with_sources,
+    normalize_config_contents,
+)
 from cli.context import RunContext
 from cli.groups import admin_group
 from cli.validation import validate_config_mutual_exclusion
@@ -48,6 +52,13 @@ extra_args = []
 
 def show_config(
     *,
+    with_sources: Annotated[
+        bool,
+        Parameter(
+            name="--with-sources",
+            help="Show the source of each configuration value.",
+        ),
+    ] = False,
     run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Show the effective configuration payload.
@@ -57,6 +68,12 @@ def show_config(
     int
         Exit status code.
     """
+    if with_sources:
+        config_with_sources = load_effective_config_with_sources(None)
+        payload = json.dumps(config_with_sources.to_display_dict(), indent=2, sort_keys=True)
+        sys.stdout.write(payload + "\n")
+        return 0
+
     if run_context is None:
         config_contents = load_effective_config(None)
         normalized = normalize_config_contents(config_contents)

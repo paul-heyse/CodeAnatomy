@@ -101,6 +101,7 @@ class BuildOptions:
         Parameter(
             name=["--output-dir", "-o"],
             help="Directory for CPG outputs. Defaults to <repo_root>/build.",
+            env_var="CODEANATOMY_OUTPUT_DIR",
             group=output_group,
         ),
     ] = None
@@ -109,6 +110,7 @@ class BuildOptions:
         Parameter(
             name="--work-dir",
             help="Working directory for intermediate artifacts.",
+            env_var="CODEANATOMY_WORK_DIR",
             group=output_group,
         ),
     ] = None
@@ -152,6 +154,7 @@ class BuildOptions:
                 "Pipeline execution strategy: deterministic_serial, plan_parallel, "
                 "plan_parallel_remote."
             ),
+            env_var="CODEANATOMY_EXECUTION_MODE",
             group=execution_group,
         ),
     ] = ExecutionMode.PLAN_PARALLEL
@@ -206,6 +209,7 @@ class BuildOptions:
                 "Determinism level: canonical/tier2, stable_set/tier1/stable, "
                 "best_effort/tier0/fast."
             ),
+            env_var="CODEANATOMY_DETERMINISM_TIER",
             group=execution_group,
         ),
     ] = None
@@ -230,7 +234,11 @@ class BuildOptions:
         bool,
         Parameter(
             name="--disable-scip",
-            help="Disable SCIP indexing (not recommended; produces less useful outputs).",
+            help=(
+                "Disable SCIP indexing (not recommended; produces less useful outputs). "
+                "When enabled, SCIP-specific options are ignored and a warning is emitted."
+            ),
+            env_var="CODEANATOMY_DISABLE_SCIP",
             group=scip_group,
         ),
     ] = False
@@ -242,6 +250,7 @@ class BuildOptions:
                 "SCIP output directory (relative to repo root unless absolute). "
                 "Default: build/scip."
             ),
+            env_var="CODEANATOMY_SCIP_OUTPUT_DIR",
             group=scip_group,
         ),
     ] = None
@@ -394,6 +403,7 @@ class BuildOptions:
         Parameter(
             name="--include-glob",
             help="Glob patterns for files to include (repeatable).",
+            env_var="CODEANATOMY_INCLUDE_GLOBS",
             group=repo_scope_group,
         ),
     ] = ()
@@ -402,6 +412,7 @@ class BuildOptions:
         Parameter(
             name="--exclude-glob",
             help="Glob patterns for files to exclude (repeatable).",
+            env_var="CODEANATOMY_EXCLUDE_GLOBS",
             group=repo_scope_group,
         ),
     ] = ()
@@ -611,6 +622,7 @@ def build_command(
 
     config_contents = dict(run_context.config_contents) if run_context else {}
     config_contents["repo_root"] = str(resolved_repo_root)
+    otel_options = run_context.otel_options if run_context else None
 
     resolved_tier = resolve_determinism_alias(options.determinism_tier)
 
@@ -734,6 +746,7 @@ def build_command(
         include_run_bundle=options.include_run_bundle,
         config=config_contents,
         overrides=overrides or None,
+        otel_options=otel_options,
     )
 
     result = build_graph_product(request)

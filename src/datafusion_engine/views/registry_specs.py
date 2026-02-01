@@ -653,7 +653,6 @@ def _register_semantic_view(
     return node, metrics, fingerprint_payload, stats.as_dict()
 
 
-
 def _record_semantic_artifacts(
     runtime_profile: DataFusionRuntimeProfile,
     *,

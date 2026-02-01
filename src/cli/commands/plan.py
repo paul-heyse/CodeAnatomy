@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from hamilton_pipeline.plan_artifacts import PlanArtifactBundle
     from relspec.execution_plan import ExecutionPlan
 
+_TASKS_PREVIEW_LIMIT = 10
+
 
 @dataclass(frozen=True)
 class PlanOptions:
@@ -33,17 +35,32 @@ class PlanOptions:
         bool,
         Parameter(help="Display computed execution schedule."),
     ] = False
+    show_inferred_deps: Annotated[
+        bool,
+        Parameter(help="Display inferred task dependencies."),
+    ] = False
+    show_task_graph: Annotated[
+        bool,
+        Parameter(help="Display task graph structure with edges."),
+    ] = False
     validate: Annotated[
         bool,
         Parameter(help="Validate plan consistency and report issues."),
     ] = False
     output_format: Annotated[
         Literal["text", "json", "dot"],
-        Parameter(help="Output format for plan display."),
+        Parameter(
+            help="Output format for plan display.",
+            env_var="CODEANATOMY_PLAN_OUTPUT_FORMAT",
+        ),
     ] = "text"
     output_file: Annotated[
         Path | None,
-        Parameter(name="-o", help="Write plan to file instead of stdout."),
+        Parameter(
+            name="-o",
+            help="Write plan to file instead of stdout.",
+            env_var="CODEANATOMY_PLAN_OUTPUT_FILE",
+        ),
     ] = None
     execution_mode: Annotated[
         ExecutionMode,
@@ -62,6 +79,8 @@ _DEFAULT_PLAN_OPTIONS = PlanOptions()
 class _PlanPayloadOptions:
     show_graph: bool
     show_schedule: bool
+    show_inferred_deps: bool
+    show_task_graph: bool
     validate: bool
     output_format: Literal["text", "json", "dot"]
 
@@ -108,6 +127,8 @@ def plan_command(
         options=_PlanPayloadOptions(
             show_graph=options.show_graph,
             show_schedule=options.show_schedule,
+            show_inferred_deps=options.show_inferred_deps,
+            show_task_graph=options.show_task_graph,
             validate=options.validate,
             output_format=options.output_format,
         ),
@@ -126,26 +147,12 @@ def _build_payload(
     if options.output_format == "dot":
         return plan.diagnostics.dot
 
-    payload: dict[str, object] = {
-        "plan_signature": plan.plan_signature,
-        "reduced_plan_signature": plan.reduced_task_dependency_signature,
-        "task_count": len(plan.active_tasks),
-    }
-
-    if options.show_graph:
-        payload["graph"] = {
-            "dot": plan.diagnostics.dot,
-            "critical_path": list(plan.critical_path_task_names),
-            "critical_path_length": plan.critical_path_length_weighted,
-        }
-
-    if options.show_schedule:
-        schedule_payload = to_builtins(plan_bundle.schedule_envelope)
-        payload["schedule"] = schedule_payload
-
-    if options.validate:
-        validation_payload = to_builtins(plan_bundle.validation_envelope)
-        payload["validation"] = validation_payload
+    payload = _build_payload_base(plan)
+    _maybe_add_graph(payload, plan, options)
+    _maybe_add_schedule(payload, plan_bundle, options)
+    _maybe_add_validation(payload, plan_bundle, options)
+    _maybe_add_inferred_deps(payload, plan, options)
+    _maybe_add_task_graph(payload, plan, options)
 
     if options.output_format == "json":
         return payload
@@ -153,24 +160,141 @@ def _build_payload(
     return _format_text(payload)
 
 
+def _build_payload_base(plan: ExecutionPlan) -> dict[str, object]:
+    return {
+        "plan_signature": plan.plan_signature,
+        "reduced_plan_signature": plan.reduced_task_dependency_signature,
+        "task_count": len(plan.active_tasks),
+    }
+
+
+def _maybe_add_graph(
+    payload: dict[str, object],
+    plan: ExecutionPlan,
+    options: _PlanPayloadOptions,
+) -> None:
+    if not options.show_graph:
+        return
+    payload["graph"] = {
+        "dot": plan.diagnostics.dot,
+        "critical_path": list(plan.critical_path_task_names),
+        "critical_path_length": plan.critical_path_length_weighted,
+    }
+
+
+def _maybe_add_schedule(
+    payload: dict[str, object],
+    plan_bundle: PlanArtifactBundle,
+    options: _PlanPayloadOptions,
+) -> None:
+    if not options.show_schedule:
+        return
+    payload["schedule"] = to_builtins(plan_bundle.schedule_envelope)
+
+
+def _maybe_add_validation(
+    payload: dict[str, object],
+    plan_bundle: PlanArtifactBundle,
+    options: _PlanPayloadOptions,
+) -> None:
+    if not options.validate:
+        return
+    payload["validation"] = to_builtins(plan_bundle.validation_envelope)
+
+
+def _maybe_add_inferred_deps(
+    payload: dict[str, object],
+    plan: ExecutionPlan,
+    options: _PlanPayloadOptions,
+) -> None:
+    if not options.show_inferred_deps:
+        return
+    inferred_deps: dict[str, list[str]] = {}
+    for task_name in plan.active_tasks:
+        deps = plan.dependency_map.get(task_name, ())
+        if deps:
+            inferred_deps[task_name] = list(deps)
+    payload["inferred_deps"] = inferred_deps
+
+
+def _maybe_add_task_graph(
+    payload: dict[str, object],
+    plan: ExecutionPlan,
+    options: _PlanPayloadOptions,
+) -> None:
+    if not options.show_task_graph:
+        return
+    nodes = sorted(plan.active_tasks)
+    edges: list[list[str]] = []
+    for task_name in nodes:
+        deps = plan.dependency_map.get(task_name, ())
+        edges.extend([[dep, task_name] for dep in deps])
+    payload["task_graph"] = {
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
 def _format_text(payload: dict[str, object]) -> str:
-    lines = [
+    lines = _format_base_lines(payload)
+    _append_graph_lines(lines, payload)
+    _append_validation_lines(lines, payload)
+    _append_inferred_deps_lines(lines, payload)
+    _append_task_graph_lines(lines, payload)
+    return "\n".join(lines)
+
+
+def _format_base_lines(payload: dict[str, object]) -> list[str]:
+    return [
         f"plan_signature: {payload.get('plan_signature')}",
         f"reduced_plan_signature: {payload.get('reduced_plan_signature')}",
         f"task_count: {payload.get('task_count')}",
     ]
+
+
+def _append_graph_lines(lines: list[str], payload: dict[str, object]) -> None:
     graph = payload.get("graph")
-    if isinstance(graph, dict):
-        lines.append("graph:")
-        lines.append(f"  critical_path_length: {graph.get('critical_path_length')}")
-        critical_path = graph.get("critical_path")
-        if isinstance(critical_path, list):
-            lines.append(f"  critical_path_tasks: {', '.join(critical_path)}")
+    if not isinstance(graph, dict):
+        return
+    lines.append("graph:")
+    lines.append(f"  critical_path_length: {graph.get('critical_path_length')}")
+    critical_path = graph.get("critical_path")
+    if isinstance(critical_path, list):
+        lines.append(f"  critical_path_tasks: {', '.join(critical_path)}")
+
+
+def _append_validation_lines(lines: list[str], payload: dict[str, object]) -> None:
     if "schedule" in payload:
         lines.append("schedule: <included>")
     if "validation" in payload:
         lines.append("validation: <included>")
-    return "\n".join(lines)
+
+
+def _append_inferred_deps_lines(lines: list[str], payload: dict[str, object]) -> None:
+    inferred_deps = payload.get("inferred_deps")
+    if not isinstance(inferred_deps, dict) or not inferred_deps:
+        return
+    lines.append("inferred_deps:")
+    for task_name, deps in sorted(inferred_deps.items()):
+        if isinstance(deps, list):
+            lines.append(f"  {task_name}: {', '.join(deps)}")
+
+
+def _append_task_graph_lines(lines: list[str], payload: dict[str, object]) -> None:
+    task_graph = payload.get("task_graph")
+    if not isinstance(task_graph, dict):
+        return
+    lines.append("task_graph:")
+    nodes = task_graph.get("nodes")
+    edges = task_graph.get("edges")
+    if isinstance(nodes, list):
+        lines.append(f"  node_count: {len(nodes)}")
+        if nodes:
+            preview = ", ".join(nodes[:_TASKS_PREVIEW_LIMIT])
+            suffix = "..." if len(nodes) > _TASKS_PREVIEW_LIMIT else ""
+            lines.append(f"  sample_nodes: {preview}{suffix}")
+    if isinstance(edges, list):
+        lines.append(f"  edge_count: {len(edges)}")
 
 
 def _write_payload(payload: object, output_file: Path | None, output_format: str) -> None:

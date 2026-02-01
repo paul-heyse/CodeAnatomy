@@ -40,6 +40,7 @@ from utils.env_utils import env_bool, env_value
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetCatalog
+    from obs.otel import OtelBootstrapOptions
     from semantics.runtime import SemanticRuntimeConfig
 
 
@@ -275,12 +276,69 @@ def diagnostics_collector() -> DiagnosticsCollector:
 
 @cache(behavior="ignore")
 @apply_tag(TagPolicy(layer="inputs", kind="runtime"))
-def engine_session(
+def engine_session_runtime_inputs(
     runtime_profile_spec: RuntimeProfileSpec,
-    diagnostics_collector: DiagnosticsCollector,
     execution_surface_policy: MaterializationPolicy,
-    pipeline_policy: PipelinePolicy,
     semantic_runtime_config: SemanticRuntimeConfig,
+) -> EngineSessionRuntimeInputs:
+    """Build runtime-focused inputs for the engine session.
+
+    Returns
+    -------
+    EngineSessionRuntimeInputs
+        Grouped runtime inputs for EngineSession construction.
+    """
+    return EngineSessionRuntimeInputs(
+        runtime_profile_spec=runtime_profile_spec,
+        execution_surface_policy=execution_surface_policy,
+        semantic_runtime_config=semantic_runtime_config,
+    )
+
+
+@cache(behavior="ignore")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
+def engine_session_observability_inputs(
+    diagnostics_collector: DiagnosticsCollector,
+    pipeline_policy: PipelinePolicy,
+    otel_options: OtelBootstrapOptions | None = None,
+) -> EngineSessionObservabilityInputs:
+    """Build observability-focused inputs for the engine session.
+
+    Returns
+    -------
+    EngineSessionObservabilityInputs
+        Grouped observability inputs for EngineSession construction.
+    """
+    return EngineSessionObservabilityInputs(
+        diagnostics_collector=diagnostics_collector,
+        pipeline_policy=pipeline_policy,
+        otel_options=otel_options,
+    )
+
+
+@dataclass(frozen=True)
+class EngineSessionRuntimeInputs:
+    """Runtime inputs for EngineSession construction."""
+
+    runtime_profile_spec: RuntimeProfileSpec
+    execution_surface_policy: MaterializationPolicy
+    semantic_runtime_config: SemanticRuntimeConfig
+
+
+@dataclass(frozen=True)
+class EngineSessionObservabilityInputs:
+    """Observability inputs for EngineSession construction."""
+
+    diagnostics_collector: DiagnosticsCollector
+    pipeline_policy: PipelinePolicy
+    otel_options: OtelBootstrapOptions | None
+
+
+@cache(behavior="ignore")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
+def engine_session(
+    runtime_inputs: EngineSessionRuntimeInputs,
+    observability_inputs: EngineSessionObservabilityInputs,
 ) -> EngineSession:
     """Build an engine session for downstream execution surfaces.
 
@@ -290,11 +348,12 @@ def engine_session(
         Session containing runtime surfaces and diagnostics wiring.
     """
     return build_engine_session(
-        runtime_spec=runtime_profile_spec,
-        diagnostics=diagnostics_collector,
-        surface_policy=execution_surface_policy,
-        diagnostics_policy=pipeline_policy.diagnostics,
-        semantic_config=semantic_runtime_config,
+        runtime_spec=runtime_inputs.runtime_profile_spec,
+        diagnostics=observability_inputs.diagnostics_collector,
+        surface_policy=runtime_inputs.execution_surface_policy,
+        diagnostics_policy=observability_inputs.pipeline_policy.diagnostics,
+        semantic_config=runtime_inputs.semantic_runtime_config,
+        otel_options=observability_inputs.otel_options,
     )
 
 

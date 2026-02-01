@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from hamilton.function_modifiers import cache, pipe_input, step
+from hamilton.function_modifiers import cache, pipe_input, pipe_output, source, step
 
 from hamilton_pipeline.validators import NonEmptyTableValidator, SchemaContractValidator
 from relspec.runtime_artifacts import TableLike
@@ -20,7 +20,7 @@ def _stage_ready(table: TableLike) -> TableLike:
     return table
 
 
-def _validate_output(table: TableLike, *, dataset_name: str) -> None:
+def _validate_output(table: TableLike, *, dataset_name: str) -> TableLike:
     validators = (
         SchemaContractValidator(dataset_name=dataset_name, importance="fail"),
         NonEmptyTableValidator(),
@@ -37,6 +37,7 @@ def _validate_output(table: TableLike, *, dataset_name: str) -> None:
             dataset_name,
             result.message,
         )
+    return table
 
 
 @pipe_input(
@@ -44,6 +45,11 @@ def _validate_output(table: TableLike, *, dataset_name: str) -> None:
     step(_stage_ready),
     on_input="table",
     namespace="cpg_output",
+)
+@pipe_output(
+    step(_validate_output, dataset_name=source("dataset_name"))
+    .named("validate_output", namespace="cpg_output")
+    .when(enable_output_validation=True)
 )
 @cache(format="delta", behavior="default")
 def cpg_output(
@@ -58,7 +64,7 @@ def cpg_output(
     TableLike
         Validated output table.
     """
-    _validate_output(table, dataset_name=dataset_name)
+    _ = dataset_name
     return table
 
 

@@ -47,3 +47,4 @@ urlencoding = "2"
 [features]
 default = []
 async-udf = []
+python = []

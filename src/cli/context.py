@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from core_types import JsonValue
+    from obs.otel import OtelBootstrapOptions
 
 
 @dataclass(frozen=True)
@@ -27,12 +28,15 @@ class RunContext:
         Normalized configuration contents forwarded to the pipeline.
     span
         Optional root span for telemetry.
+    otel_options
+        Optional OpenTelemetry bootstrap options.
     """
 
     run_id: str
     log_level: str
     config_contents: Mapping[str, JsonValue] = field(default_factory=dict)
     span: Span | None = None
+    otel_options: OtelBootstrapOptions | None = None
 
 
 __all__ = ["RunContext"]

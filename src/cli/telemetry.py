@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -10,8 +11,10 @@ from cyclopts.exceptions import CycloptsError
 from opentelemetry import trace
 
 from cli.context import RunContext
+from cli.exit_codes import ExitCode
 from obs.otel.run_context import reset_run_id, set_run_id
 
+_LOGGER = logging.getLogger(__name__)
 tracer = trace.get_tracer("codeanatomy.cli")
 
 
@@ -89,16 +92,35 @@ def invoke_with_telemetry(
         )
     except CycloptsError as exc:
         parse_ms = (time.perf_counter() - t0) * 1000.0
+        exit_code = ExitCode.from_exception(exc)
         return (
-            2,
+            exit_code,
             CliInvokeEvent(
                 ok=False,
                 command=command_name,
                 parse_ms=parse_ms,
                 exec_ms=0.0,
-                exit_code=2,
+                exit_code=exit_code,
                 error_class=f"cyclopts.{exc.__class__.__name__}",
                 error_stage=_classify_error_stage(exc),
+                error_message=str(exc),
+            ),
+        )
+    except Exception as exc:
+        # General exception handler for command execution errors
+        exec_ms = (time.perf_counter() - t0) * 1000.0
+        exit_code = ExitCode.from_exception(exc)
+        _LOGGER.exception("Command execution failed.")
+        return (
+            exit_code,
+            CliInvokeEvent(
+                ok=False,
+                command=command_name,
+                parse_ms=0.0,
+                exec_ms=exec_ms,
+                exit_code=exit_code,
+                error_class=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
+                error_stage="execution",
                 error_message=str(exc),
             ),
         )

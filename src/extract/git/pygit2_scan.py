@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, cast
 
 import pygit2
 
-from extract.scanning.repo_scope import RepoScope
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+
+    from extract.scanning.repo_scope import RepoScope
 
 
 def repo_status_paths(scope: RepoScope) -> Mapping[str, int]:

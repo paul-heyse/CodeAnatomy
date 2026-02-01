@@ -78,15 +78,12 @@ def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
     if not _table_exists(ctx, "cst_parse_errors"):
         return None
 
-    return (
-        ctx.table("cst_parse_errors")
-        .aggregate(
-            [col("file_id")],
-            [
-                (f.count(lit(1)) > lit(0)).cast("int32").alias("has_cst_parse_errors"),
-                f.count(lit(1)).alias("cst_error_count"),
-            ],
-        )
+    return ctx.table("cst_parse_errors").aggregate(
+        [col("file_id")],
+        [
+            (f.count(lit(1)) > lit(0)).cast("int32").alias("has_cst_parse_errors"),
+            f.count(lit(1)).alias("cst_error_count"),
+        ],
     )
 
 
@@ -109,28 +106,25 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
 
     # Access nested struct fields via [] indexing syntax
     stats = col("stats")
-    return (
-        ctx.table("tree_sitter_files_v1")
-        .select(
-            col("file_id"),
-            # Cast booleans to int for easier aggregation
-            f.coalesce(
-                stats["parse_timed_out"].cast("int32"),
-                lit(0),
-            ).alias("ts_timed_out"),
-            f.coalesce(
-                stats["error_count"],
-                lit(0),
-            ).alias("ts_error_count"),
-            f.coalesce(
-                stats["missing_count"],
-                lit(0),
-            ).alias("ts_missing_count"),
-            f.coalesce(
-                stats["match_limit_exceeded"].cast("int32"),
-                lit(0),
-            ).alias("ts_match_limit_exceeded"),
-        )
+    return ctx.table("tree_sitter_files_v1").select(
+        col("file_id"),
+        # Cast booleans to int for easier aggregation
+        f.coalesce(
+            stats["parse_timed_out"].cast("int32"),
+            lit(0),
+        ).alias("ts_timed_out"),
+        f.coalesce(
+            stats["error_count"],
+            lit(0),
+        ).alias("ts_error_count"),
+        f.coalesce(
+            stats["missing_count"],
+            lit(0),
+        ).alias("ts_missing_count"),
+        f.coalesce(
+            stats["match_limit_exceeded"].cast("int32"),
+            lit(0),
+        ).alias("ts_match_limit_exceeded"),
     )
 
 
@@ -183,17 +177,14 @@ def _build_scip_encoding_signals(ctx: SessionContext) -> DataFrame | None:
     if not _table_exists(ctx, "scip_documents"):
         return None
 
-    return (
-        ctx.table("scip_documents")
-        .select(
-            col("document_id").alias("file_id"),
-            f.when(
-                col("position_encoding") == lit("UnspecifiedPositionEncoding"),
-                lit(1),
-            )
-            .otherwise(lit(0))
-            .alias("scip_encoding_unspecified"),
+    return ctx.table("scip_documents").select(
+        col("document_id").alias("file_id"),
+        f.when(
+            col("position_encoding") == lit("UnspecifiedPositionEncoding"),
+            lit(1),
         )
+        .otherwise(lit(0))
+        .alias("scip_encoding_unspecified"),
     )
 
 
@@ -236,7 +227,8 @@ def _compute_quality_score(weights: dict[str, int]) -> Expr:
         - _coalesce_col("ts_error_count") * lit(weights.get("ts_error_count", 0))
         - _coalesce_col("ts_match_limit_exceeded") * lit(weights.get("ts_match_limit_exceeded", 0))
         - _coalesce_col("has_scip_diagnostics") * lit(weights.get("has_scip_diagnostics", 0))
-        - _coalesce_col("scip_encoding_unspecified") * lit(weights.get("scip_encoding_unspecified", 0))
+        - _coalesce_col("scip_encoding_unspecified")
+        * lit(weights.get("scip_encoding_unspecified", 0))
     )
 
 
@@ -304,9 +296,7 @@ def build_file_quality_view(
 
     # Start with base file table and check for file_sha256
     base = ctx.table(base_table)
-    base_columns: list[str] = (
-        list(base.schema().names) if hasattr(base.schema(), "names") else []
-    )
+    base_columns: list[str] = list(base.schema().names) if hasattr(base.schema(), "names") else []
     has_sha256 = "file_sha256" in base_columns
 
     # Build base selection

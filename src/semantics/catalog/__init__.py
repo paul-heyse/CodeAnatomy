@@ -72,6 +72,14 @@ from semantics.catalog.spec_builder import (
     build_dataset_spec,
     build_input_schema,
 )
+from semantics.catalog.tags import (
+    SemanticColumnTagSpec,
+    SemanticTagSpec,
+    column_name_prefix,
+    prefixed_column_names,
+    tag_spec_for_column,
+    tag_spec_for_dataset,
+)
 from semantics.catalog.view_builders import (
     VIEW_BUILDERS,
     VIEW_BUNDLE_BUILDERS,
@@ -91,9 +99,12 @@ __all__ = [
     "DatasetCategory",
     "PlanBundleBuilder",
     "SemanticCatalog",
+    "SemanticColumnTagSpec",
     "SemanticDatasetRow",
+    "SemanticTagSpec",
     "build_dataset_spec",
     "build_input_schema",
+    "column_name_prefix",
     "dataset_alias",
     "dataset_contract",
     "dataset_contract_schema",
@@ -112,7 +123,10 @@ __all__ = [
     "get_cdf_enabled_dataset_rows",
     "get_diagnostic_dataset_rows",
     "get_semantic_dataset_rows",
+    "prefixed_column_names",
     "supports_incremental",
+    "tag_spec_for_column",
+    "tag_spec_for_dataset",
     "view_builder",
     "view_builders",
 ]

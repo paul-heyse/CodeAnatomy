@@ -11,22 +11,50 @@ The entire pipeline in ~50 lines:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
+from datafusion_engine.identity import schema_identity_hash
+from datafusion_engine.io.write import WritePipeline
+from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+from obs.diagnostics import (
+    SemanticQualityArtifact,
+    record_semantic_quality_artifact,
+    record_semantic_quality_events,
+)
+from obs.metrics import record_quality_issue_counts
+from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from semantics.diagnostics import (
+    DEFAULT_MAX_ISSUE_ROWS,
+    SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
+    dataframe_row_count,
+    semantic_diagnostic_view_builders,
+    semantic_quality_issue_batches,
+)
+from semantics.incremental.metadata import (
+    SemanticDiagnosticsSnapshot,
+    write_semantic_diagnostics_snapshots,
+)
+from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.state_store import StateStore
 from semantics.quality import QualityRelationshipSpec
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
 from semantics.specs import RelationshipSpec
+from utils.env_utils import env_value
+from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.io.write import WritePipeline
+    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
@@ -644,6 +672,12 @@ def build_cpg(
                 runtime_config=runtime_config,
                 schema_policy=resolved.schema_policy,
             )
+        _emit_semantic_quality_diagnostics(
+            ctx,
+            runtime_profile=runtime_profile,
+            runtime_config=runtime_config,
+            schema_policy=resolved.schema_policy,
+        )
 
 
 def _semantic_output_view_names() -> list[str]:
@@ -710,9 +744,7 @@ def _semantic_output_locations(
     from semantics.catalog.dataset_specs import dataset_spec
 
     storage_options = (
-        dict(runtime_config.storage_options)
-        if runtime_config.storage_options is not None
-        else {}
+        dict(runtime_config.storage_options) if runtime_config.storage_options is not None else {}
     )
     output_locations: dict[str, DatasetLocation] = {}
     for name in view_names:
@@ -818,6 +850,10 @@ def _write_semantic_output(
         "semantic_schema_hash": schema_hash,
         "semantic_view": view_name,
     }
+    from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
+
+    if view_name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
+        commit_metadata["snapshot_kind"] = view_name
     format_options: dict[str, object] = {
         "delta_commit_metadata": commit_metadata,
         "delta_write_policy": spec.delta_write_policy,
@@ -867,6 +903,187 @@ def _materialize_semantic_outputs(
             output_location=output_locations[view_name],
             write_context=write_context,
         )
+
+
+@dataclass
+class _SemanticDiagnosticsContext:
+    ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
+    schema_policy: SchemaEvolutionPolicy
+    diagnostics_sink: DiagnosticsSink | None
+    output_locations: dict[str, DatasetLocation]
+    write_context: SemanticOutputWriteContext | None
+    state_store: StateStore | None
+    storage_options: Mapping[str, str] | None
+    incremental_runtime: IncrementalRuntime | None = None
+
+    def ensure_incremental_runtime(self) -> IncrementalRuntime | None:
+        if self.incremental_runtime is not None:
+            return self.incremental_runtime
+        try:
+            self.incremental_runtime = IncrementalRuntime.build(profile=self.runtime_profile)
+        except ValueError:
+            self.incremental_runtime = None
+        return self.incremental_runtime
+
+    def write_snapshot(self, view_name: str, df: DataFrame) -> str | None:
+        if view_name in self.output_locations and self.write_context is not None:
+            _write_semantic_output(
+                view_name=view_name,
+                output_location=self.output_locations[view_name],
+                write_context=self.write_context,
+            )
+            return str(self.output_locations[view_name].path)
+        if self.state_store is None:
+            return None
+        runtime = self.ensure_incremental_runtime()
+        if runtime is None:
+            return None
+        snapshot = SemanticDiagnosticsSnapshot(
+            name=view_name,
+            table=df.to_arrow_table(),
+            destination=self.state_store.semantic_diagnostics_path(view_name),
+        )
+        updated = write_semantic_diagnostics_snapshots(
+            runtime=runtime,
+            snapshots={view_name: snapshot},
+            storage_options=self.storage_options,
+        )
+        return updated.get(view_name)
+
+
+@contextmanager
+def _run_context_guard() -> Iterator[None]:
+    token = None
+    if get_run_id() is None:
+        token = set_run_id(uuid7_str())
+    try:
+        yield
+    finally:
+        if token is not None:
+            reset_run_id(token)
+
+
+def _resolve_semantic_diagnostics_state_store() -> StateStore | None:
+    state_dir_value = env_value("CODEANATOMY_STATE_DIR")
+    if not state_dir_value:
+        return None
+    store = StateStore(root=Path(state_dir_value).expanduser())
+    store.ensure_dirs()
+    return store
+
+
+def _build_semantic_diagnostics_context(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
+    schema_policy: SchemaEvolutionPolicy,
+) -> _SemanticDiagnosticsContext | None:
+    diagnostics_sink = runtime_profile.diagnostics_sink
+    output_locations = _semantic_output_locations(
+        view_names=SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
+        runtime_config=runtime_config,
+    )
+    state_store = _resolve_semantic_diagnostics_state_store()
+    if diagnostics_sink is None and not output_locations and state_store is None:
+        return None
+    write_context = None
+    if output_locations:
+        pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
+        write_context = SemanticOutputWriteContext(
+            ctx=ctx,
+            pipeline=pipeline,
+            runtime_profile=runtime_profile,
+            runtime_config=runtime_config,
+            schema_policy=schema_policy,
+        )
+    storage_options = (
+        dict(runtime_config.storage_options) if runtime_config.storage_options is not None else None
+    )
+    return _SemanticDiagnosticsContext(
+        ctx=ctx,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        schema_policy=schema_policy,
+        diagnostics_sink=diagnostics_sink,
+        output_locations=output_locations,
+        write_context=write_context,
+        state_store=state_store,
+        storage_options=storage_options,
+    )
+
+
+def _emit_semantic_quality_view(
+    context: _SemanticDiagnosticsContext,
+    *,
+    view_name: str,
+    builder: Callable[[SessionContext], DataFrame],
+) -> None:
+    try:
+        df = builder(context.ctx)
+    except ValueError:
+        return
+    schema_hash = schema_identity_hash(arrow_schema_from_df(df))
+    row_count = dataframe_row_count(df)
+    artifact_uri = context.write_snapshot(view_name, df)
+    if context.diagnostics_sink is None:
+        return
+    record_semantic_quality_artifact(
+        context.diagnostics_sink,
+        artifact=SemanticQualityArtifact(
+            name=view_name,
+            row_count=row_count,
+            schema_hash=schema_hash,
+            artifact_uri=artifact_uri,
+            run_id=get_run_id(),
+        ),
+    )
+    for batch in semantic_quality_issue_batches(
+        view_name=view_name,
+        df=df,
+        max_rows=DEFAULT_MAX_ISSUE_ROWS,
+    ):
+        record_quality_issue_counts(
+            issue_kind=batch.issue_kind,
+            count=len(batch.rows),
+        )
+        record_semantic_quality_events(
+            context.diagnostics_sink,
+            name="semantic_quality_issues_v1",
+            rows=batch.rows,
+        )
+
+
+def _emit_semantic_quality_views(context: _SemanticDiagnosticsContext) -> None:
+    builders = semantic_diagnostic_view_builders()
+    for view_name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
+        builder = builders.get(view_name)
+        if builder is None:
+            continue
+        _emit_semantic_quality_view(context, view_name=view_name, builder=builder)
+
+
+def _emit_semantic_quality_diagnostics(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
+    schema_policy: SchemaEvolutionPolicy,
+) -> None:
+    if not runtime_profile.emit_semantic_quality_diagnostics:
+        return
+    context = _build_semantic_diagnostics_context(
+        ctx,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        schema_policy=schema_policy,
+    )
+    if context is None:
+        return
+    with _run_context_guard():
+        _emit_semantic_quality_views(context)
 
 
 def build_cpg_from_inferred_deps(

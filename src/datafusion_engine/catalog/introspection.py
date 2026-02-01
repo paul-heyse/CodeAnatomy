@@ -477,7 +477,7 @@ def _cache_snapshot_from_table(
 ) -> CacheStateSnapshot | None:
     try:
         table = _cache_snapshot_table(ctx, table_name=table_name)
-    except (RuntimeError, TypeError, ValueError):
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return None
     rows = table.to_pylist()
     if not rows:

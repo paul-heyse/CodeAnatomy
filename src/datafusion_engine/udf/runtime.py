@@ -55,7 +55,10 @@ RustUdfSnapshot = Mapping[str, object]
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    snapshot = _datafusion_internal().registry_snapshot(ctx)
+    try:
+        snapshot = _datafusion_internal().registry_snapshot(ctx)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return _empty_registry_snapshot()
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
@@ -109,15 +112,59 @@ def _install_rust_udfs(
     async_udf_timeout_ms: int | None,
     async_udf_batch_size: int | None,
 ) -> None:
-    installer = getattr(_datafusion_internal(), "register_codeanatomy_udfs", None)
+    try:
+        internal = _datafusion_internal()
+    except ImportError:
+        return
+    installer = getattr(internal, "register_codeanatomy_udfs", None)
     if not callable(installer):
-        msg = "datafusion._internal.register_codeanatomy_udfs is unavailable."
-        raise TypeError(msg)
-    installer(ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
+        return
+    try:
+        installer(ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
+    except TypeError:
+        return
 
 
 def _datafusion_internal() -> ModuleType:
     return importlib.import_module("datafusion._internal")
+
+
+def udf_backend_available() -> bool:
+    """Return whether the native CodeAnatomy UDF backend is available.
+
+    Returns
+    -------
+    bool
+        True when native UDF hooks can be registered.
+    """
+    try:
+        internal = _datafusion_internal()
+    except ImportError:
+        return False
+    installer = getattr(internal, "register_codeanatomy_udfs", None)
+    snapshotter = getattr(internal, "registry_snapshot", None)
+    return callable(installer) and callable(snapshotter)
+
+
+def _empty_registry_snapshot() -> dict[str, object]:
+    return {
+        "scalar": [],
+        "aggregate": [],
+        "window": [],
+        "table": [],
+        "pycapsule_udfs": [],
+        "aliases": {},
+        "parameter_names": {},
+        "volatility": {},
+        "rewrite_tags": {},
+        "signature_inputs": {},
+        "return_types": {},
+        "simplify": {},
+        "coerce_types": {},
+        "short_circuits": {},
+        "config_defaults": {},
+        "custom_udfs": [],
+    }
 
 
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
@@ -509,7 +556,10 @@ def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
 
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    snapshot = _datafusion_internal().udf_docs_snapshot(ctx)
+    try:
+        snapshot = _datafusion_internal().udf_docs_snapshot(ctx)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return {}
     if not isinstance(snapshot, Mapping):
         msg = "datafusion._internal.udf_docs_snapshot returned a non-mapping payload."
         raise TypeError(msg)

@@ -56,12 +56,12 @@ pub fn table_udf_specs() -> Vec<TableUdfSpec> {
 }
 
 pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSpec>> {
-    let mut specs = scalar_udf_specs();
     if !enable_async {
-        return Ok(specs);
+        return Ok(scalar_udf_specs());
     }
     #[cfg(feature = "async-udf")]
     {
+        let mut specs = scalar_udf_specs();
         specs.push(ScalarUdfSpec {
             name: udf_async::ASYNC_ECHO_NAME,
             builder: udf_async::async_echo_udf,

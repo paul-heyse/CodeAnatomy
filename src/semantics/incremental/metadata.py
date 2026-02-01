@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
@@ -27,6 +27,9 @@ from serde_msgspec import to_builtins
 from storage.deltalake import (
     StorageOptions,
 )
+
+if TYPE_CHECKING:
+    from datafusion_engine.arrow.interop import TableLike
 
 _CDF_CURSOR_SCHEMA = pa.schema(
     [
@@ -155,6 +158,58 @@ class ArtifactWriteContext:
             log_storage_options=self.log_storage_options,
         )
         return storage, log_storage
+
+
+@dataclass(frozen=True)
+class SemanticDiagnosticsSnapshot:
+    """Snapshot payload for semantic diagnostics persistence."""
+
+    name: str
+    table: TableLike | pa.Table | None
+    destination: Path
+
+
+def write_semantic_diagnostics_snapshots(
+    *,
+    runtime: IncrementalRuntime,
+    snapshots: Mapping[str, SemanticDiagnosticsSnapshot],
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+) -> dict[str, str]:
+    """Persist semantic diagnostics snapshots to Delta.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of snapshot names to Delta table paths.
+    """
+    updated: dict[str, str] = {}
+    context = ArtifactWriteContext(
+        runtime=runtime,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    for name, snapshot in snapshots.items():
+        table = snapshot.table
+        if table is None:
+            table = empty_table(pa.schema([]))
+        snapshot.destination.parent.mkdir(parents=True, exist_ok=True)
+        storage, log_storage = context.resolve_storage(table_uri=str(snapshot.destination))
+        write_delta_table_via_pipeline(
+            runtime=runtime,
+            table=table,
+            request=IncrementalDeltaWriteRequest(
+                destination=str(snapshot.destination),
+                mode=WriteMode.OVERWRITE,
+                schema_mode="overwrite",
+                commit_metadata={"snapshot_kind": name},
+                storage_options=storage,
+                log_storage_options=log_storage,
+                operation_id=f"semantic_diagnostics::{name}",
+            ),
+        )
+        updated[name] = str(snapshot.destination)
+    return updated
 
 
 def write_incremental_artifacts(
@@ -291,7 +346,9 @@ def _artifacts_to_table(artifacts: Sequence[Mapping[str, object]]) -> pa.Table:
 
 
 __all__ = [
+    "SemanticDiagnosticsSnapshot",
     "write_cdf_cursor_snapshot",
     "write_incremental_artifacts",
     "write_incremental_metadata",
+    "write_semantic_diagnostics_snapshots",
 ]

@@ -7,8 +7,6 @@ entity-specific columns varying.
 
 The generator eliminates repetitive make_contract_spec() calls by defining
 relationship metadata declaratively and generating contracts programmatically.
-This module integrates with the relationship specs in cpg/relationship_specs.py
-for a unified, data-driven relationship system.
 """
 
 from __future__ import annotations
@@ -17,16 +15,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-# NOTE: relationship_specs is deprecated but these types are needed for contract generation.
-# The spec types (RelationshipSpec, QNameRelationshipSpec) define the interface for
-# deriving contract data. Once semantics.spec_registry exports compatible types,
-# this import can be updated. Consider re-exporting these types from semantics.specs
-# or creating a shared types module to avoid importing deprecated modules.
-from cpg.relationship_specs import (
-    ALL_RELATIONSHIP_SPECS,
-    QNameRelationshipSpec,
-    RelationshipSpec,
-)
 from schema_spec.system import (
     ContractCatalogSpec,
     ContractSpec,
@@ -66,14 +54,6 @@ STANDARD_SYMBOL_DEDUPE_COLUMNS: tuple[str, ...] = (
     "bend",
 )
 
-# Standard relationship columns for qname relationships.
-STANDARD_QNAME_DEDUPE_COLUMNS: tuple[str, ...] = (
-    "qname_id",
-    "path",
-    "bstart",
-    "bend",
-)
-
 # Standard canonical sort prefix for path-anchored relationships.
 STANDARD_CANONICAL_SORT_PREFIX: tuple[SortKeySpec, ...] = (
     SortKeySpec(column="path", order="ascending"),
@@ -94,10 +74,10 @@ class RelationshipContractData:
         The table/contract name (e.g., "rel_name_symbol_v1").
     entity_id_cols : tuple[str, ...]
         Entity-specific ID columns that form the primary key prefix
-        (e.g., ("ref_id",) or ("call_id", "qname_id")).
+        (e.g., ("ref_id",) or ("call_id",)).
     dedupe_columns : tuple[str, ...]
         Standard dedupe columns following entity ID cols
-        (e.g., symbol+path+bstart+bend or qname_id+path+bstart+bend).
+        (e.g., symbol+path+bstart+bend).
     extra_dedupe_keys : tuple[str, ...]
         Additional columns beyond entity_id_cols and standard relationship
         columns for deduplication. Usually empty.
@@ -172,76 +152,6 @@ class RelationshipContractData:
         return RELATIONSHIP_SCHEMA_VERSION
 
 
-def _contract_data_from_symbol_spec(spec: RelationshipSpec) -> RelationshipContractData:
-    """Derive contract data from a symbol relationship spec.
-
-    Parameters
-    ----------
-    spec
-        Symbol relationship specification.
-
-    Returns
-    -------
-    RelationshipContractData
-        Contract data for the relationship.
-    """
-    entity_col = spec.entity_id_alias
-    return RelationshipContractData(
-        table_name=spec.output_view_name,
-        entity_id_cols=(entity_col,),
-        dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
-    )
-
-
-def _contract_data_from_qname_spec(spec: QNameRelationshipSpec) -> RelationshipContractData:
-    """Derive contract data from a qname relationship spec.
-
-    Parameters
-    ----------
-    spec
-        QName relationship specification.
-
-    Returns
-    -------
-    RelationshipContractData
-        Contract data for the relationship.
-    """
-    entity_col = spec.entity_id_alias
-    return RelationshipContractData(
-        table_name=spec.output_view_name,
-        entity_id_cols=(entity_col, "qname_id"),
-        dedupe_columns=STANDARD_QNAME_DEDUPE_COLUMNS,
-    )
-
-
-def contract_data_from_spec(
-    spec: RelationshipSpec | QNameRelationshipSpec,
-) -> RelationshipContractData:
-    """Derive contract data from any relationship spec.
-
-    Parameters
-    ----------
-    spec
-        Relationship specification (symbol or qname).
-
-    Returns
-    -------
-    RelationshipContractData
-        Contract data for the relationship.
-
-    Raises
-    ------
-    TypeError
-        When an unknown spec type is provided.
-    """
-    if isinstance(spec, RelationshipSpec):
-        return _contract_data_from_symbol_spec(spec)
-    if isinstance(spec, QNameRelationshipSpec):
-        return _contract_data_from_qname_spec(spec)
-    msg = f"Unknown relationship spec type: {type(spec)!r}"
-    raise TypeError(msg)
-
-
 def generate_relationship_contract(
     data: RelationshipContractData,
     table_spec: TableSchemaSpec,
@@ -296,23 +206,18 @@ RELATIONSHIP_CONTRACT_DATA: tuple[RelationshipContractData, ...] = (
         entity_id_cols=("call_id",),
         dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
     ),
-    RelationshipContractData(
-        table_name="rel_callsite_qname_v1",
-        entity_id_cols=("call_id", "qname_id"),
-        dedupe_columns=STANDARD_QNAME_DEDUPE_COLUMNS,
-    ),
 )
 
 
 def derive_relationship_contract_data() -> tuple[RelationshipContractData, ...]:
-    """Derive contract data from all registered relationship specs.
+    """Return the canonical relationship contract data set.
 
     Returns
     -------
     tuple[RelationshipContractData, ...]
-        Contract data derived from ALL_RELATIONSHIP_SPECS.
+        Contract data for all relationship outputs.
     """
-    return tuple(contract_data_from_spec(spec) for spec in ALL_RELATIONSHIP_SPECS)
+    return RELATIONSHIP_CONTRACT_DATA
 
 
 def relationship_contract_data_by_name() -> Mapping[str, RelationshipContractData]:
@@ -378,12 +283,10 @@ __all__ = [
     "RELATIONSHIP_SCHEMA_VERSION",
     "STANDARD_CANONICAL_SORT_PREFIX",
     "STANDARD_DEDUPE_STRATEGY",
-    "STANDARD_QNAME_DEDUPE_COLUMNS",
     "STANDARD_RELATIONSHIP_TIE_BREAKERS",
     "STANDARD_SYMBOL_DEDUPE_COLUMNS",
     "STANDARD_VIRTUAL_FIELDS",
     "RelationshipContractData",
-    "contract_data_from_spec",
     "derive_relationship_contract_data",
     "generate_relationship_contract",
     "generate_relationship_contract_catalog",

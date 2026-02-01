@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, TypedDict, Unpack
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 
 from hamilton.function_modifiers import cache
 
@@ -30,12 +30,15 @@ from hamilton_pipeline.types import (
     ScipIndexConfig,
     TreeSitterConfig,
 )
-from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
+from semantics.incremental import IncrementalConfig
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc_utils import IpcWriteConfig
 from utils.env_utils import env_bool, env_value
+
+if TYPE_CHECKING:
+    from datafusion_engine.dataset.registry import DatasetCatalog
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -116,9 +119,45 @@ def runtime_profile_spec(
     """
     resolved = resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
     normalize_root = _normalize_output_root(output_config)
-    if normalize_root is None:
+    semantic_root = _semantic_output_root(output_config)
+    catalog_name, registry_catalogs = _semantic_output_catalog(
+        output_config=output_config,
+        semantic_root=semantic_root,
+        existing_catalogs=resolved.datafusion.registry_catalogs,
+    )
+    extract_root = _extract_output_root(output_config)
+    extract_catalog_name, registry_catalogs = _extract_output_catalog(
+        output_config=output_config,
+        extract_root=extract_root,
+        existing_catalogs=registry_catalogs,
+    )
+    cache_root = _cache_output_root(
+        output_config=output_config,
+        existing=resolved.datafusion.cache_output_root,
+    )
+    if not _requires_profile_update(
+        (
+            normalize_root,
+            semantic_root,
+            extract_root,
+            cache_root,
+            catalog_name,
+            extract_catalog_name,
+        )
+    ):
         return resolved
-    updated_profile = replace(resolved.datafusion, normalize_output_root=normalize_root)
+    resolved_semantic_catalog_name = catalog_name
+    resolved_extract_catalog_name = extract_catalog_name
+    updated_profile = replace(
+        resolved.datafusion,
+        normalize_output_root=normalize_root,
+        semantic_output_root=semantic_root,
+        semantic_output_catalog_name=resolved_semantic_catalog_name,
+        extract_output_root=extract_root,
+        extract_output_catalog_name=resolved_extract_catalog_name,
+        cache_output_root=cache_root,
+        registry_catalogs=registry_catalogs,
+    )
     return replace(resolved, datafusion=updated_profile)
 
 
@@ -127,6 +166,95 @@ def _normalize_output_root(output_config: OutputConfig) -> str | None:
     if not base_dir:
         return None
     return str(Path(base_dir) / "normalize")
+
+
+def _requires_profile_update(values: tuple[object | None, ...]) -> bool:
+    return any(value is not None for value in values)
+
+
+def _semantic_output_root(output_config: OutputConfig) -> str | None:
+    base_dir = output_config.output_dir or output_config.work_dir
+    if not base_dir:
+        return None
+    return str(Path(base_dir) / "semantic")
+
+
+def _extract_output_root(output_config: OutputConfig) -> str | None:
+    base_dir = output_config.output_dir or output_config.work_dir
+    if not base_dir:
+        return None
+    return str(Path(base_dir) / "extract")
+
+
+def _cache_output_root(
+    *,
+    output_config: OutputConfig,
+    existing: str | None,
+) -> str | None:
+    if existing is not None:
+        return existing
+    base_dir = output_config.output_dir or output_config.work_dir
+    if not base_dir:
+        return None
+    return str(Path(base_dir) / "cache")
+
+
+def _semantic_output_catalog(
+    *,
+    output_config: OutputConfig,
+    semantic_root: str | None,
+    existing_catalogs: Mapping[str, DatasetCatalog],
+) -> tuple[str | None, Mapping[str, DatasetCatalog]]:
+    if semantic_root is None:
+        return output_config.semantic_output_catalog_name, existing_catalogs
+    catalog_name = output_config.semantic_output_catalog_name or "semantic_outputs"
+    if catalog_name in existing_catalogs:
+        return catalog_name, existing_catalogs
+
+    from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
+    from relspec.view_defs import RELATION_OUTPUT_NAME
+    from semantics.catalog.dataset_specs import dataset_spec
+    from semantics.naming import SEMANTIC_VIEW_NAMES
+
+    catalog = DatasetCatalog()
+    view_names = list(SEMANTIC_VIEW_NAMES)
+    if RELATION_OUTPUT_NAME not in view_names:
+        view_names.append(RELATION_OUTPUT_NAME)
+    for name in view_names:
+        spec = None
+        try:
+            spec = dataset_spec(name)
+        except KeyError:
+            spec = None
+        location = DatasetLocation(
+            path=str(Path(semantic_root) / name),
+            format="delta",
+            dataset_spec=spec,
+        )
+        catalog.register(name, location)
+
+    updated_catalogs = dict(existing_catalogs)
+    updated_catalogs[catalog_name] = catalog
+    return catalog_name, updated_catalogs
+
+
+def _extract_output_catalog(
+    *,
+    output_config: OutputConfig,
+    extract_root: str | None,
+    existing_catalogs: Mapping[str, DatasetCatalog],
+) -> tuple[str | None, Mapping[str, DatasetCatalog]]:
+    if extract_root is None:
+        return output_config.extract_output_catalog_name, existing_catalogs
+    catalog_name = output_config.extract_output_catalog_name or "extract_outputs"
+    if catalog_name in existing_catalogs:
+        return catalog_name, existing_catalogs
+    from datafusion_engine.extract.output_catalog import build_extract_output_catalog
+
+    catalog = build_extract_output_catalog(output_root=extract_root)
+    updated_catalogs = dict(existing_catalogs)
+    updated_catalogs[catalog_name] = catalog
+    return catalog_name, updated_catalogs
 
 
 @cache(behavior="ignore")
@@ -616,6 +744,8 @@ def output_config_overrides(
         ipc=resolved.ipc,
         delta=resolved.delta,
         output_storage_policy=resolved.output_storage_policy,
+        semantic_output_catalog_name=resolved.semantic_output_catalog_name,
+        extract_output_catalog_name=resolved.extract_output_catalog_name,
     )
 
 
@@ -643,6 +773,8 @@ class OutputConfigOverrideOptions:
     ipc: IpcConfigOverrides | None = None
     delta: DeltaOutputOverrides | None = None
     output_storage_policy: OutputStoragePolicy | None = None
+    semantic_output_catalog_name: str | None = None
+    extract_output_catalog_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -655,6 +787,8 @@ class OutputConfigOverrides:
     ipc: IpcConfigOverrides | None = None
     delta: DeltaOutputOverrides | None = None
     output_storage_policy: OutputStoragePolicy | None = None
+    semantic_output_catalog_name: str | None = None
+    extract_output_catalog_name: str | None = None
 
 
 @cache(behavior="ignore")
@@ -683,6 +817,8 @@ def output_config(
     return OutputConfig(
         work_dir=work_dir,
         output_dir=output_dir,
+        semantic_output_catalog_name=overrides.semantic_output_catalog_name,
+        extract_output_catalog_name=overrides.extract_output_catalog_name,
         overwrite_intermediate_datasets=overrides.overwrite_intermediate_datasets,
         materialize_param_tables=overrides.materialize_param_tables,
         writer_strategy=overrides.writer_strategy,

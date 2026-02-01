@@ -121,6 +121,11 @@ def build_task_execution_module(
     plan_context = _PlanTaskContext.from_plan(plan)
     outputs = {node.name: node for node in plan.view_nodes}
     scan_units_by_task = dict(plan.scan_task_units_by_name)
+    extract_task_names = tuple(
+        name
+        for name in sorted(plan.active_tasks)
+        if name not in outputs and name not in scan_units_by_task
+    )
     for scan_task_name in sorted(scan_units_by_task):
         scan_unit = scan_units_by_task[scan_task_name]
         task_spec = TaskNodeSpec(
@@ -141,6 +146,25 @@ def build_task_execution_module(
         task_node.__module__ = resolved.module_name
         module.__dict__[scan_task_name] = task_node
         all_names.append(scan_task_name)
+    for extract_task_name in extract_task_names:
+        task_spec = TaskNodeSpec(
+            name=extract_task_name,
+            output=extract_task_name,
+            kind="extract",
+            priority=priority_for_task(extract_task_name),
+            cache_policy="none",
+        )
+        task_node = _build_task_node(
+            plan_context.build_context(
+                task=task_spec,
+                output_name=extract_task_name,
+                dependency_key=extract_task_name,
+                scan_unit_key=None,
+            )
+        )
+        task_node.__module__ = resolved.module_name
+        module.__dict__[extract_task_name] = task_node
+        all_names.append(extract_task_name)
     for output_name, view_node in outputs.items():
         spec = _task_spec_from_view_node(view_node)
         task_node = _build_task_node(
@@ -209,7 +233,7 @@ class TaskNodeSpec:
 
     name: str
     output: str
-    kind: Literal["view", "scan"]
+    kind: Literal["view", "scan", "extract"]
     priority: int
     cache_policy: str = "none"
 

@@ -20,10 +20,10 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from incremental.types import IncrementalConfig
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_PIPELINE
 from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
+from semantics.incremental import IncrementalConfig
 from utils.uuid_factory import uuid7_str
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]

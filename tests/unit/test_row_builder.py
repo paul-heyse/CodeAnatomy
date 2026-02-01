@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pyarrow as pa
 import pytest
 
@@ -268,7 +270,7 @@ class TestExtractionBatchBuilder:
     def test_init_invalid_schema_type(self) -> None:
         """Verify TypeError for invalid schema."""
         with pytest.raises(TypeError, match=r"must be pa\.Schema"):
-            ExtractionBatchBuilder("not a schema")  # type: ignore[arg-type]
+            ExtractionBatchBuilder(cast("pa.Schema", "not a schema"))
 
 
 class TestSchemaTemplateOptions:

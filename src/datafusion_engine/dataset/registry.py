@@ -11,9 +11,6 @@ from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike
-from datafusion_engine.delta.protocol import DeltaFeatureGate
-from datafusion_engine.delta.scan_config import delta_scan_config_snapshot_from_options
-from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.identity import schema_identity_hash
 from schema_spec.specs import TableSchemaSpec
 from serde_msgspec import to_builtins
@@ -21,6 +18,7 @@ from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_s
 from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
+    from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import (
         DataFusionScanOptions,
@@ -151,6 +149,8 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
     list[dict[str, object]]
         Registry snapshot payloads.
     """
+    from datafusion_engine.delta.scan_config import delta_scan_config_snapshot_from_options
+
     snapshot: list[dict[str, object]] = []
     for name in catalog.names():
         loc = catalog.get(name)
@@ -272,32 +272,123 @@ def dataset_catalog_from_profile(
         return catalog
     profile_ref = profile
 
-    def _register(name: str, location: DatasetLocation) -> None:
-        if catalog.has(name):
-            return
-        resolved = apply_delta_store_policy(location, policy=profile_ref.delta_store_policy)
-        catalog.register(name, resolved)
-
-    def _register_locations(locations: Mapping[str, DatasetLocation]) -> None:
-        for name, location in locations.items():
-            _register(name, location)
-
-    def _register_registry_catalog(registry: DatasetCatalog) -> None:
-        for name in registry.names():
-            if catalog.has(name):
-                continue
-            with suppress(KeyError):
-                _register(name, registry.get(name))
-
-    _register_locations(profile.extract_dataset_locations)
-    _register_locations(profile.scip_dataset_locations)
     # Deferred import to avoid circular import with session.runtime
+    from datafusion_engine.dataset.semantic_catalog import build_semantic_dataset_catalog
     from datafusion_engine.session.runtime import normalize_dataset_locations_for_profile
 
-    _register_locations(normalize_dataset_locations_for_profile(profile))
+    _register_locations(
+        catalog,
+        profile=profile_ref,
+        locations=profile.extract_dataset_locations,
+    )
+    _register_registry_catalog_name(
+        catalog,
+        profile=profile_ref,
+        name=profile.extract_output_catalog_name,
+    )
+    _register_locations(
+        catalog,
+        profile=profile_ref,
+        locations=profile.semantic_output_locations,
+    )
+    _register_registry_catalog_name(
+        catalog,
+        profile=profile_ref,
+        name=profile.semantic_output_catalog_name,
+    )
+
+    unified_catalog = build_semantic_dataset_catalog(
+        semantic_output_root=profile.semantic_output_root,
+        extract_output_root=profile.extract_output_root,
+    )
+    _register_registry_catalog(
+        catalog,
+        profile=profile_ref,
+        registry=unified_catalog,
+    )
+    _register_locations(
+        catalog,
+        profile=profile_ref,
+        locations=profile.scip_dataset_locations,
+    )
+    _register_locations(
+        catalog,
+        profile=profile_ref,
+        locations=normalize_dataset_locations_for_profile(profile),
+    )
     for registry in profile.registry_catalogs.values():
-        _register_registry_catalog(registry)
+        _register_registry_catalog(
+            catalog,
+            profile=profile_ref,
+            registry=registry,
+        )
     return catalog
+
+
+def _register_location(
+    catalog: DatasetCatalog,
+    *,
+    profile: DataFusionRuntimeProfile,
+    name: str,
+    location: DatasetLocation,
+) -> None:
+    if catalog.has(name):
+        return
+    from datafusion_engine.delta.store_policy import apply_delta_store_policy
+
+    resolved = apply_delta_store_policy(location, policy=profile.delta_store_policy)
+    catalog.register(name, resolved)
+
+
+def _register_locations(
+    catalog: DatasetCatalog,
+    *,
+    profile: DataFusionRuntimeProfile,
+    locations: Mapping[str, DatasetLocation],
+) -> None:
+    for name, location in locations.items():
+        _register_location(
+            catalog,
+            profile=profile,
+            name=name,
+            location=location,
+        )
+
+
+def _register_registry_catalog(
+    catalog: DatasetCatalog,
+    *,
+    profile: DataFusionRuntimeProfile,
+    registry: DatasetCatalog,
+) -> None:
+    for name in registry.names():
+        if catalog.has(name):
+            continue
+        with suppress(KeyError):
+            _register_location(
+                catalog,
+                profile=profile,
+                name=name,
+                location=registry.get(name),
+            )
+
+
+def _register_registry_catalog_name(
+    catalog: DatasetCatalog,
+    *,
+    profile: DataFusionRuntimeProfile,
+    name: str | None,
+) -> None:
+    if name is None:
+        return
+    registry = profile.registry_catalogs.get(name)
+    if registry is None:
+        return
+    _register_registry_catalog(
+        catalog,
+        profile=profile,
+        registry=registry,
+    )
 
 
 def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScanOptions | None:

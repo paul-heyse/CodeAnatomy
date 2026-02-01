@@ -33,13 +33,15 @@ uv run ruff format
 
 **Four-Stage Pipeline:**
 1. **Extraction** → Evidence tables from multiple sources (LibCST, AST, symtable, bytecode, SCIP, tree-sitter)
-2. **Normalization** → Canonical byte spans, stable IDs, join-ready shape
+2. **Semantic Catalog + Normalization** → Canonical byte spans, stable IDs, join-ready shape
 3. **Task/Plan Catalog + Scheduling** → TaskSpec builders → PlanCatalog → inferred TaskGraph → schedule
 4. **CPG Build** → Node/edge/property emission → final outputs
 
 **Core Modules (`src/`):**
 - `extract/` - Multi-source extractors (repo scan, AST, CST, symtable, bytecode, SCIP)
-- `normalize/` - Byte-span canonicalization, stable ID generation
+- `semantics/` - Semantic catalog + normalization + incremental protocol (canonical)
+- `normalize/` - Deprecated facade (re-exports semantics.catalog)
+- `incremental/` - Deprecated facade (re-exports semantics.incremental)
 - `relspec/` - Task/plan catalog, inferred deps, rustworkx graph inference + scheduling
 - `cpg/` - CPG schema definitions, node/edge/property contracts
 - `engine/` - Execution runtime: sessions, plans, materialization
@@ -47,7 +49,6 @@ uv run ruff format
 - `datafusion_engine/` - DataFusion integration (query planning, UDFs, lineage, schema contracts)
 - `obs/` - Observability layer (diagnostics collection, metrics, scan telemetry)
 - `storage/` - Delta Lake integration with file pruning
-- `incremental/` - Incremental processing, CDF cursors, invalidation detection
 
 **Primary Entry Point:**
 ```python

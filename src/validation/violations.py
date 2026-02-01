@@ -14,6 +14,7 @@ class ViolationType(Enum):
     MISSING_COLUMN = "missing_column"
     EXTRA_COLUMN = "extra_column"
     TYPE_MISMATCH = "type_mismatch"
+    SEMANTIC_TYPE_MISMATCH = "semantic_type_mismatch"
     NULLABILITY_MISMATCH = "nullability_mismatch"
     METADATA_MISMATCH = "metadata_mismatch"
     NULL_VIOLATION = "null_violation"
@@ -126,12 +127,27 @@ def _format_duplicate_keys(violation: ValidationViolation) -> str:
     return "Duplicate keys"
 
 
+def _format_semantic_type_mismatch(violation: ValidationViolation) -> str:
+    if violation.table_name and violation.column_name:
+        return (
+            f"Semantic type mismatch for '{violation.table_name}.{violation.column_name}': "
+            f"expected {violation.expected}, got {violation.actual}"
+        )
+    if violation.column_name:
+        return (
+            f"Semantic type mismatch for '{violation.column_name}': "
+            f"expected {violation.expected}, got {violation.actual}"
+        )
+    return "Semantic type mismatch"
+
+
 _VIOLATION_FORMATTERS: dict[ViolationType, Callable[[ValidationViolation], str]] = {
     ViolationType.MISSING_TABLE: _format_missing_table,
     ViolationType.METADATA_MISMATCH: _format_metadata_mismatch,
     ViolationType.MISSING_COLUMN: _format_missing_column,
     ViolationType.EXTRA_COLUMN: _format_extra_column,
     ViolationType.TYPE_MISMATCH: _format_type_mismatch,
+    ViolationType.SEMANTIC_TYPE_MISMATCH: _format_semantic_type_mismatch,
     ViolationType.NULLABILITY_MISMATCH: _format_nullability_mismatch,
     ViolationType.NULL_VIOLATION: _format_null_violation,
     ViolationType.MISSING_KEY_FIELD: _format_missing_key_field,

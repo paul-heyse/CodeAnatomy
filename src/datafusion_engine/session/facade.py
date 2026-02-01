@@ -707,29 +707,19 @@ class DataFusionExecutionFacade:
             set_span_attributes(span, {"duration_s": duration_s, "status": "ok"})
             return ExecutionResult.from_write(result)
 
-    def ensure_view_graph(
-        self,
-        *,
-        include_registry_views: bool = True,
-    ) -> Mapping[str, object]:
+    def ensure_view_graph(self) -> Mapping[str, object]:
         """Ensure the view graph is registered for the current context.
-
-        Parameters
-        ----------
-        include_registry_views
-            Whether to register view registry fragments prior to pipeline views.
 
         Returns
         -------
         Mapping[str, object]
             Rust UDF snapshot used for view registration.
         """
-        from datafusion_engine.views.registry import ensure_view_graph
+        from datafusion_engine.views.registration import ensure_view_graph
 
         return ensure_view_graph(
             self.ctx,
             runtime_profile=self.runtime_profile,
-            include_registry_views=include_registry_views,
         )
 
     def register_dataset(

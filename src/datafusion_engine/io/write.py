@@ -54,7 +54,11 @@ from datafusion_engine.dataset.registry import (
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.contracts import delta_constraints_for_location
-from datafusion_engine.session.runtime import normalize_dataset_locations_for_profile
+from datafusion_engine.session.runtime import (
+    extract_output_locations_for_profile,
+    normalize_dataset_locations_for_profile,
+    semantic_output_locations_for_profile,
+)
 from datafusion_engine.sql.options import sql_options_for_profile
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
@@ -696,9 +700,10 @@ class WritePipeline:
             return destination, location
         normalized_destination = str(destination)
         locations = [
-            sorted(self.runtime_profile.extract_dataset_locations.items()),
+            sorted(extract_output_locations_for_profile(self.runtime_profile).items()),
             sorted(self.runtime_profile.scip_dataset_locations.items()),
             sorted(normalize_dataset_locations_for_profile(self.runtime_profile).items()),
+            sorted(semantic_output_locations_for_profile(self.runtime_profile).items()),
         ]
         for candidates in locations:
             match = self._match_dataset_location(

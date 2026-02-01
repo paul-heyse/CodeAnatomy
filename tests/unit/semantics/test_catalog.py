@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -190,7 +190,7 @@ class TestSemanticCatalog:
             pass
 
         with pytest.raises(TypeError, match="SemanticViewBuilder protocol"):
-            catalog.register(NotABuilder())  # type: ignore[arg-type]
+            catalog.register(cast("SemanticViewBuilder", NotABuilder()))
 
 
 class TestCatalogTopologicalOrder:

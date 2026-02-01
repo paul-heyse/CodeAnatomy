@@ -6,6 +6,7 @@ import contextlib
 import importlib
 import logging
 import os
+import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -92,6 +93,7 @@ from datafusion_engine.schema.registry import (
     validate_semantic_types,
     validate_udf_info_schema_parity,
 )
+from datafusion_engine.session.cache_policy import CachePolicyConfig, cache_policy_settings
 from datafusion_engine.session.factory import SessionFactory
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import (
@@ -497,7 +499,7 @@ def normalize_dataset_locations_for_profile(
     if profile.normalize_output_root is None:
         return {}
     root = Path(profile.normalize_output_root)
-    from normalize.dataset_specs import dataset_specs
+    from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
     for spec in dataset_specs():
@@ -505,6 +507,73 @@ def normalize_dataset_locations_for_profile(
             path=str(root / spec.name),
             format="delta",
             dataset_spec=spec,
+        )
+    return locations
+
+
+def extract_output_locations_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, DatasetLocation]:
+    """Return extract output dataset locations derived from the output root.
+
+    Returns
+    -------
+    Mapping[str, DatasetLocation]
+        Mapping of extract dataset names to locations, or empty mapping
+        when extract output root/catalog is not configured.
+    """
+    if profile.extract_dataset_locations:
+        return profile.extract_dataset_locations
+    if profile.extract_output_catalog_name is not None:
+        catalog = profile.registry_catalogs.get(profile.extract_output_catalog_name)
+        if catalog is None:
+            return {}
+        return {name: catalog.get(name) for name in catalog.names()}
+    if profile.extract_output_root is None:
+        return {}
+    from datafusion_engine.extract.output_catalog import build_extract_output_catalog
+
+    catalog = build_extract_output_catalog(output_root=profile.extract_output_root)
+    return {name: catalog.get(name) for name in catalog.names()}
+
+
+def semantic_output_locations_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, DatasetLocation]:
+    """Return semantic output dataset locations derived from the output root.
+
+    Returns
+    -------
+    Mapping[str, DatasetLocation]
+        Mapping of semantic output names to locations, or empty mapping
+        when semantic output root is not configured and no explicit
+        semantic output locations are provided.
+    """
+    from relspec.view_defs import RELATION_OUTPUT_NAME
+    from semantics.naming import SEMANTIC_VIEW_NAMES
+
+    view_names = list(SEMANTIC_VIEW_NAMES)
+    if RELATION_OUTPUT_NAME not in view_names:
+        view_names.append(RELATION_OUTPUT_NAME)
+    if profile.semantic_output_locations:
+        return profile.semantic_output_locations
+    if profile.semantic_output_catalog_name is not None:
+        catalog = profile.registry_catalogs.get(profile.semantic_output_catalog_name)
+        if catalog is None:
+            return {}
+        locations: dict[str, DatasetLocation] = {}
+        for name in view_names:
+            if catalog.has(name):
+                locations[name] = catalog.get(name)
+        return locations
+    if profile.semantic_output_root is None:
+        return {}
+    root = Path(profile.semantic_output_root)
+    locations: dict[str, DatasetLocation] = {}
+    for name in view_names:
+        locations[name] = DatasetLocation(
+            path=str(root / name),
+            format="delta",
         )
     return locations
 
@@ -2485,6 +2554,8 @@ class _RuntimeDiagnosticsMixin:
         payload: dict[str, str] = (
             dict(resolved_policy.settings) if resolved_policy is not None else {}
         )
+        if profile.cache_policy is not None:
+            payload.update(cache_policy_settings(profile.cache_policy))
         resolved_schema_hardening = _resolved_schema_hardening_for_profile(profile)
         if resolved_schema_hardening is not None:
             payload.update(resolved_schema_hardening.settings())
@@ -3017,8 +3088,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     bytecode_delta_constraints: tuple[str, ...] = ()
     bytecode_delta_scan: DeltaScanOptions | None = None
     extract_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
+    extract_output_catalog_name: str | None = None
+    extract_output_root: str | None = None
     scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
+    semantic_output_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
+    semantic_output_catalog_name: str | None = None
     normalize_output_root: str | None = None
+    semantic_output_root: str | None = None
     enable_information_schema: bool = True
     enable_ident_normalization: bool = False
     force_disable_ident_normalization: bool = False
@@ -3076,6 +3152,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     diagnostics_sink: DiagnosticsSink | None = None
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    cache_output_root: str | None = None
+    runtime_artifact_cache_enabled: bool = False
+    runtime_artifact_cache_root: str | None = None
+    metadata_cache_snapshot_enabled: bool = False
     plan_cache: PlanCache | None = None
     plan_proto_cache: PlanProtoCache | None = None
     udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
@@ -3086,6 +3166,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
+    cache_policy: CachePolicyConfig | None = None
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
     sql_policy_name: str | None = "write"
@@ -3165,7 +3246,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
             raise ValueError(msg)
 
-    def session_config(self) -> SessionConfig:
+    def _session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.
 
         Returns
@@ -3308,7 +3389,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         return self.session_context()
 
-    def delta_runtime_profile_ctx(
+    def _delta_runtime_profile_ctx(
         self,
         *,
         storage_options: Mapping[str, str] | None = None,
@@ -3373,6 +3454,40 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Planning-ready session runtime.
         """
         return build_session_runtime(self, use_cache=True)
+
+    def cache_root(self) -> str:
+        """Return the root directory for Delta-backed caches.
+
+        Returns
+        -------
+        str
+            Root directory for cache tables.
+        """
+        if self.cache_output_root is not None:
+            return self.cache_output_root
+        return str(Path(tempfile.gettempdir()) / "datafusion_cache")
+
+    def runtime_artifact_root(self) -> str:
+        """Return the root directory for runtime artifact cache tables.
+
+        Returns
+        -------
+        str
+            Root directory for runtime artifact cache outputs.
+        """
+        if self.runtime_artifact_cache_root is not None:
+            return self.runtime_artifact_cache_root
+        return str(Path(self.cache_root()) / "runtime_artifacts")
+
+    def metadata_cache_snapshot_root(self) -> str:
+        """Return the root directory for metadata cache snapshots.
+
+        Returns
+        -------
+        str
+            Root directory for metadata cache snapshot tables.
+        """
+        return str(Path(self.cache_root()) / "metadata_cache_snapshots")
 
     def ephemeral_context(self) -> SessionContext:
         """Return a non-cached SessionContext configured from the profile.
@@ -4175,7 +4290,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         DatasetLocation | None
             Extract dataset location when configured.
         """
-        location = self.extract_dataset_locations.get(name)
+        location = extract_output_locations_for_profile(self).get(name)
         if location is None:
             if name == "ast_files_v1":
                 return self._ast_dataset_location()
@@ -4205,15 +4320,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self.extract_dataset_location(name)
         if location is not None:
             return apply_delta_store_policy(location, policy=self.delta_store_policy)
-        normalize_location = normalize_dataset_locations_for_profile(self).get(name)
-        if normalize_location is not None:
-            return apply_delta_store_policy(normalize_location, policy=self.delta_store_policy)
-        mapped = self.scip_dataset_locations.get(name)
-        if mapped is not None:
-            return apply_delta_store_policy(mapped, policy=self.delta_store_policy)
-        for catalog in self.registry_catalogs.values():
-            if catalog.has(name):
-                return apply_delta_store_policy(catalog.get(name), policy=self.delta_store_policy)
+        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+
+        catalog = dataset_catalog_from_profile(self)
+        if catalog.has(name):
+            return catalog.get(name)
         return None
 
     def dataset_location_or_raise(self, name: str) -> DatasetLocation:
@@ -4781,7 +4892,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not self.enable_schema_registry:
             return
         self._record_catalog_autoload_snapshot(ctx)
-        ast_view_names, ast_optional_disabled, ast_gate_payload = self._ast_feature_gates(ctx)
+        ast_view_names, _, ast_gate_payload = self._ast_feature_gates(ctx)
         self._record_ast_feature_gates(ast_gate_payload)
         ast_registration = (
             self.ast_external_location is not None or self.ast_delta_location is not None
@@ -4794,14 +4905,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
-        from datafusion_engine.views.registry import registry_view_specs
-
-        fragment_views = registry_view_specs(ctx, exclude=ast_optional_disabled)
+        fragment_views: tuple[ViewSpec, ...] = ()
         fragment_names = self._register_schema_views(ctx, fragment_views=fragment_views)
         nested_views = tuple(
             view for view in nested_view_specs(ctx) if view.name not in fragment_names
         )
-        expected_names = tuple({view.name for view in (*fragment_views, *nested_views)})
+        expected_names = tuple({view.name for view in nested_views})
         self._validate_catalog_autoloads(
             ctx,
             ast_registration=ast_registration,
@@ -4990,11 +5099,21 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ctx
             DataFusion session context to introspect.
         """
+        self._snapshot_metadata_caches(ctx)
         if self.diagnostics_sink is None:
             return
         cache_diag = _capture_cache_diagnostics(ctx)
         config_payload = _cache_config_payload(cache_diag)
         self.record_artifact("datafusion_cache_config_v1", config_payload)
+        self.record_artifact(
+            "datafusion_cache_root_v1",
+            {"cache_root": self.cache_root()},
+        )
+        if self.cache_policy is not None:
+            self.record_artifact(
+                "cache_policy_v1",
+                cache_policy_settings(self.cache_policy),
+            )
         cache_snapshots = _cache_snapshot_rows(cache_diag)
         if cache_snapshots:
             self.record_events(
@@ -5009,6 +5128,32 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             self.record_events(
                 "diskcache_stats_v1",
                 diskcache_events,
+            )
+
+    def _snapshot_metadata_caches(self, ctx: SessionContext) -> None:
+        if not self.metadata_cache_snapshot_enabled:
+            return
+        from datafusion_engine.cache.metadata_snapshots import snapshot_datafusion_caches
+
+        try:
+            snapshots = snapshot_datafusion_caches(ctx, runtime_profile=self)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if self.diagnostics_sink is None:
+                return
+            self.record_artifact(
+                "datafusion_cache_snapshot_error_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "error": str(exc),
+                },
+            )
+            return
+        if self.diagnostics_sink is None:
+            return
+        if snapshots:
+            self.record_events(
+                "datafusion_cache_snapshot_v1",
+                snapshots,
             )
 
     def _diskcache_event_rows(self, diskcache_profile: DiskCacheProfile) -> list[dict[str, object]]:
@@ -5039,7 +5184,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return rows
 
     def _install_cache_tables(self, ctx: SessionContext) -> None:
-        if not (self.enable_cache_manager or self.cache_enabled):
+        if not (
+            self.enable_cache_manager or self.cache_enabled or self.metadata_cache_snapshot_enabled
+        ):
             return
         try:
             _register_cache_introspection_functions(ctx)
@@ -5300,7 +5447,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return None
         return self.sql_policy or resolve_sql_policy(self.sql_policy_name)
 
-    def compile_options(
+    def _compile_options(
         self,
         *,
         options: DataFusionCompileOptions | None = None,
@@ -6301,6 +6448,7 @@ __all__ = [
     "diagnostics_arrow_ingest_hook",
     "diagnostics_dml_hook",
     "evict_diskcache_entries",
+    "extract_output_locations_for_profile",
     "feature_state_snapshot",
     "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
@@ -6308,6 +6456,7 @@ __all__ = [
     "register_cdf_inputs_for_profile",
     "register_view_specs",
     "run_diskcache_maintenance",
+    "semantic_output_locations_for_profile",
     "session_runtime_hash",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",

@@ -2,7 +2,7 @@
 
 This module provides a CDF-based join framework that enables incremental
 relationship recomputation in the semantic pipeline. It integrates with
-the existing ``incremental.cdf_filters`` infrastructure.
+the semantic CDF filter types.
 
 The framework supports multiple merge strategies for combining CDF changes
 with existing data, and can automatically detect whether a DataFrame has
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import TYPE_CHECKING
 
-from incremental.cdf_filters import CdfFilterPolicy
+from semantics.incremental.cdf_types import CdfFilterPolicy
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -320,6 +320,180 @@ def build_incremental_join(
     return join_builder(filtered_left, filtered_right)
 
 
+# -----------------------------------------------------------------------------
+# CDF Merge Strategies
+# -----------------------------------------------------------------------------
+
+
+def apply_cdf_merge(
+    existing: DataFrame,
+    new_data: DataFrame,
+    *,
+    key_columns: tuple[str, ...],
+    strategy: CDFMergeStrategy,
+    partition_column: str | None = None,
+) -> DataFrame:
+    """Apply a CDF merge strategy to combine existing and new data.
+
+    This function implements the core merge logic for incremental updates,
+    supporting multiple strategies for combining new changes with existing
+    materialized data.
+
+    Parameters
+    ----------
+    existing
+        Existing DataFrame to merge into.
+    new_data
+        New data to merge.
+    key_columns
+        Columns that identify unique rows for merge operations.
+    strategy
+        Merge strategy to apply:
+        - APPEND: Add new rows without removing anything
+        - UPSERT: Update existing rows and insert new ones based on keys
+        - REPLACE: Replace all data matching partition column with new data
+        - DELETE_INSERT: Delete matching rows first, then insert new rows
+    partition_column
+        Optional column for partition-level replacement. Required when
+        using REPLACE strategy to scope the replacement operation.
+
+    Returns
+    -------
+    DataFrame
+        Merged result according to the specified strategy.
+
+    Raises
+    ------
+    ValueError
+        If REPLACE strategy is used without specifying partition_column,
+        or if an unsupported merge strategy is provided.
+
+    Examples
+    --------
+    UPSERT merge (update existing, insert new):
+
+    >>> result = apply_cdf_merge(
+    ...     existing=base_df,
+    ...     new_data=incremental_df,
+    ...     key_columns=("file_id", "ref_id"),
+    ...     strategy=CDFMergeStrategy.UPSERT,
+    ... )
+
+    Partition replacement (replace all rows in affected partitions):
+
+    >>> result = apply_cdf_merge(
+    ...     existing=base_df,
+    ...     new_data=incremental_df,
+    ...     key_columns=("file_id", "ref_id"),
+    ...     strategy=CDFMergeStrategy.REPLACE,
+    ...     partition_column="file_id",
+    ... )
+
+    Notes
+    -----
+    The merge strategies have different semantics:
+
+    - **APPEND**: Simple union of existing and new data. No deduplication
+      is performed, making this suitable for insert-only workloads.
+
+    - **UPSERT**: Anti-join on key columns followed by union. Rows in
+      ``existing`` that match keys in ``new_data`` are removed, then
+      all ``new_data`` rows are added.
+
+    - **REPLACE**: Partition-level replacement. All rows in ``existing``
+      that match any partition value in ``new_data`` are removed, then
+      ``new_data`` rows are added. Requires ``partition_column``.
+
+    - **DELETE_INSERT**: Explicit two-phase operation using anti-join
+      on key columns (same as UPSERT but semantically different intent).
+    """
+    from datafusion import col
+
+    if strategy == CDFMergeStrategy.APPEND:
+        # Simple union - no deduplication
+        return existing.union(new_data)
+
+    if strategy == CDFMergeStrategy.UPSERT:
+        # Anti-join to remove matching rows, then union
+        pruned = existing.join(new_data, key_columns, how="anti")
+        return pruned.union(new_data)
+
+    if strategy == CDFMergeStrategy.REPLACE:
+        # Partition replacement - remove all rows in affected partitions
+        if partition_column is None:
+            msg = (
+                "REPLACE strategy requires partition_column to be specified. "
+                "The partition column determines which rows to replace."
+            )
+            raise ValueError(msg)
+
+        # Extract distinct partition values from new data
+        affected_partitions = new_data.select(col(partition_column)).distinct()
+
+        # Anti-join by partition column to remove all rows in affected partitions
+        pruned = existing.join(
+            affected_partitions,
+            (partition_column,),
+            how="anti",
+        )
+        return pruned.union(new_data)
+
+    if strategy == CDFMergeStrategy.DELETE_INSERT:
+        # Same as UPSERT but with explicit delete-then-insert semantics
+        pruned = existing.join(new_data, key_columns, how="anti")
+        return pruned.union(new_data)
+
+    msg = f"Unsupported merge strategy: {strategy}"
+    raise ValueError(msg)
+
+
+def merge_incremental_results(
+    ctx: SessionContext,
+    *,
+    incremental_df: DataFrame,
+    base_table: str,
+    key_columns: tuple[str, ...],
+    strategy: CDFMergeStrategy = CDFMergeStrategy.UPSERT,
+) -> DataFrame:
+    """Merge incremental results into an existing base table.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    incremental_df
+        Incremental results to merge.
+    base_table
+        Base table name to merge into.
+    key_columns
+        Join keys used to identify rows to replace.
+    strategy
+        Merge strategy to apply. Defaults to UPSERT for backward compatibility.
+
+    Returns
+    -------
+    DataFrame
+        Merged result with base rows replaced by incremental rows.
+
+    Notes
+    -----
+    This function delegates to :func:`apply_cdf_merge` when the base table exists.
+    For tables not yet in the session, returns the incremental data directly.
+    """
+    from datafusion_engine.schema.introspection import table_names_snapshot
+
+    if base_table not in table_names_snapshot(ctx):
+        return incremental_df
+    base_df = ctx.table(base_table)
+    return apply_cdf_merge(
+        base_df,
+        incremental_df,
+        key_columns=key_columns,
+        strategy=strategy,
+        partition_column=None,
+    )
+
+
 def incremental_join_enabled(
     left_df: DataFrame,
     right_df: DataFrame,
@@ -351,7 +525,9 @@ __all__ = [
     "DEFAULT_CDF_COLUMN",
     "CDFJoinSpec",
     "CDFMergeStrategy",
+    "apply_cdf_merge",
     "build_incremental_join",
     "incremental_join_enabled",
     "is_cdf_enabled",
+    "merge_incremental_results",
 ]

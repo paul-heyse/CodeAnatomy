@@ -18,7 +18,7 @@ Supported prefixes:
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import Literal, cast, get_args
 
 import pyarrow as pa
 
@@ -39,7 +39,9 @@ SpanPrefix = Literal[
 ]
 
 # All valid span prefixes for runtime validation
-SPAN_PREFIXES: frozenset[str] = frozenset(get_args(SpanPrefix))
+SPAN_PREFIXES: frozenset[SpanPrefix] = frozenset(
+    cast("tuple[SpanPrefix, ...]", get_args(SpanPrefix))
+)
 
 
 def _normalize_prefix(prefix: str) -> str:

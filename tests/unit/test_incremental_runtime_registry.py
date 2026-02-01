@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from incremental.runtime import IncrementalRuntime, TempTableRegistry
+from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
 
 EXPECTED_ROW_COUNT = 2
 

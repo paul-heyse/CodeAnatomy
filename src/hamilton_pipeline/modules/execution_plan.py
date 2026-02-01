@@ -23,11 +23,11 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
-    from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from relspec.rustworkx_graph import TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule
     from relspec.schedule_events import TaskScheduleMetadata
     from schema_spec.system import DatasetSpec
+    from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 else:
     DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
@@ -419,13 +419,12 @@ def _active_task_names_node() -> object:
 
 
 def _ensure_view_graph(profile: DataFusionRuntimeProfile) -> None:
-    from datafusion_engine.views.registry import ensure_view_graph
+    from datafusion_engine.views.registration import ensure_view_graph
 
     session = profile.session_context()
     ensure_view_graph(
         session,
         runtime_profile=profile,
-        include_registry_views=True,
     )
 
 

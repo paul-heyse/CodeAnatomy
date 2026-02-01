@@ -477,7 +477,7 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     TreeSitterConfig,
 )
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 
 
 # === Run Context (injected via keyword-only parse=False) ===
@@ -2165,7 +2165,7 @@ codeanatomy diag --run-bundle ./build/run_bundles/2024-01-15_abc123
 - [TreeSitterConfig](../src/hamilton_pipeline/types/repo_config.py:95)
 - [ExecutorConfig](../src/hamilton_pipeline/types/execution.py:28)
 - [GraphAdapterConfig](../src/hamilton_pipeline/types/execution.py:42)
-- [IncrementalConfig](../src/incremental/types.py:13)
+- [IncrementalConfig](../src/semantics/incremental/config.py)
 
 ### Existing Scripts (Parity Targets)
 - [run_full_pipeline.py](../scripts/run_full_pipeline.py)

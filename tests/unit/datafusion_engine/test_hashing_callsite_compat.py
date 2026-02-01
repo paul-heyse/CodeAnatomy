@@ -24,9 +24,9 @@ from datafusion_engine.plan.bundle import (
 from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.scanning.repo_scan import _sha256_path
-from incremental.scip_fingerprint import scip_index_fingerprint
 from relspec.execution_plan import _protocol_payload as exec_protocol_payload
 from relspec.execution_plan import _scan_unit_signature
+from semantics.incremental.scip_fingerprint import scip_index_fingerprint
 from serde_artifacts import DeltaInputPin, DeltaScanConfigSnapshot, PlanArtifacts
 from serde_msgspec import JSON_ENCODER, MSGPACK_ENCODER, to_builtins
 from tests.test_helpers.datafusion_runtime import df_profile

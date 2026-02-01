@@ -7,11 +7,11 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-import incremental.delta_updates
-from incremental.delta_context import DeltaAccessContext
-from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
-from incremental.runtime import IncrementalRuntime
-from incremental.state_store import StateStore
+from semantics.incremental import delta_updates
+from semantics.incremental.delta_context import DeltaAccessContext
+from semantics.incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
+from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.state_store import StateStore
 from tests.test_helpers.diagnostics import diagnostic_profile
 
 EXPECTED_ROW_COUNT = 2
@@ -24,7 +24,7 @@ def test_streaming_write_records_metrics(
     """Record streaming diagnostics when overwrite outputs exceed the threshold."""
     profile, sink = diagnostic_profile()
     runtime = IncrementalRuntime.build(profile=profile)
-    monkeypatch.setattr(incremental.delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
+    monkeypatch.setattr(delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 
     schema = pa.schema([("file_id", pa.string()), ("value", pa.int64())])
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})

@@ -9,22 +9,12 @@ from cpg.relationship_contracts import (
     RELATIONSHIP_SCHEMA_VERSION,
     STANDARD_CANONICAL_SORT_PREFIX,
     STANDARD_DEDUPE_STRATEGY,
-    STANDARD_QNAME_DEDUPE_COLUMNS,
     STANDARD_RELATIONSHIP_TIE_BREAKERS,
     STANDARD_SYMBOL_DEDUPE_COLUMNS,
     STANDARD_VIRTUAL_FIELDS,
     RelationshipContractData,
-    contract_data_from_spec,
     derive_relationship_contract_data,
     relationship_contract_data_by_name,
-)
-from cpg.relationship_specs import (
-    ALL_RELATIONSHIP_SPECS,
-    REL_CALLSITE_QNAME_SPEC,
-    REL_CALLSITE_SYMBOL_SPEC,
-    REL_DEF_SYMBOL_SPEC,
-    REL_IMPORT_SYMBOL_SPEC,
-    REL_NAME_SYMBOL_SPEC,
 )
 from schema_spec.system import SortKeySpec
 
@@ -40,16 +30,6 @@ class TestRelationshipContractData:
             dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
         )
         expected = ("ref_id", "symbol", "path", "bstart", "bend")
-        assert data.dedupe_keys == expected
-
-    def test_dedupe_keys_qname_relationship(self) -> None:
-        """Test dedupe keys for qname relationships."""
-        data = RelationshipContractData(
-            table_name="rel_callsite_qname_v1",
-            entity_id_cols=("call_id", "qname_id"),
-            dedupe_columns=STANDARD_QNAME_DEDUPE_COLUMNS,
-        )
-        expected = ("call_id", "qname_id", "qname_id", "path", "bstart", "bend")
         assert data.dedupe_keys == expected
 
     def test_dedupe_keys_with_extra(self) -> None:
@@ -123,54 +103,13 @@ class TestRelationshipContractData:
         assert data.resolved_version == 42
 
 
-class TestContractDataFromSpec:
-    """Test suite for deriving contract data from relationship specs."""
-
-    def test_from_symbol_spec_name_symbol(self) -> None:
-        """Test deriving contract data from REL_NAME_SYMBOL_SPEC."""
-        data = contract_data_from_spec(REL_NAME_SYMBOL_SPEC)
-        assert data.table_name == "rel_name_symbol_v1"
-        assert data.entity_id_cols == ("ref_id",)
-        assert data.dedupe_columns == STANDARD_SYMBOL_DEDUPE_COLUMNS
-
-    def test_from_symbol_spec_import_symbol(self) -> None:
-        """Test deriving contract data from REL_IMPORT_SYMBOL_SPEC."""
-        data = contract_data_from_spec(REL_IMPORT_SYMBOL_SPEC)
-        assert data.table_name == "rel_import_symbol_v1"
-        assert data.entity_id_cols == ("import_alias_id",)
-
-    def test_from_symbol_spec_def_symbol(self) -> None:
-        """Test deriving contract data from REL_DEF_SYMBOL_SPEC."""
-        data = contract_data_from_spec(REL_DEF_SYMBOL_SPEC)
-        assert data.table_name == "rel_def_symbol_v1"
-        assert data.entity_id_cols == ("def_id",)
-
-    def test_from_symbol_spec_callsite_symbol(self) -> None:
-        """Test deriving contract data from REL_CALLSITE_SYMBOL_SPEC."""
-        data = contract_data_from_spec(REL_CALLSITE_SYMBOL_SPEC)
-        assert data.table_name == "rel_callsite_symbol_v1"
-        assert data.entity_id_cols == ("call_id",)
-
-    def test_from_qname_spec(self) -> None:
-        """Test deriving contract data from REL_CALLSITE_QNAME_SPEC."""
-        data = contract_data_from_spec(REL_CALLSITE_QNAME_SPEC)
-        assert data.table_name == "rel_callsite_qname_v1"
-        assert data.entity_id_cols == ("call_id", "qname_id")
-        assert data.dedupe_columns == STANDARD_QNAME_DEDUPE_COLUMNS
-
-    def test_from_unknown_spec_type_raises(self) -> None:
-        """Test that unknown spec types raise TypeError."""
-        with pytest.raises(TypeError, match="Unknown relationship spec type"):
-            contract_data_from_spec("not_a_spec")  # type: ignore[arg-type]
-
-
 class TestDeriveRelationshipContractData:
     """Test suite for derive_relationship_contract_data."""
 
     def test_derives_all_specs(self) -> None:
         """Test that derive_relationship_contract_data covers all specs."""
         derived = derive_relationship_contract_data()
-        assert len(derived) == len(ALL_RELATIONSHIP_SPECS)
+        assert len(derived) == len(RELATIONSHIP_CONTRACT_DATA)
 
     def test_derived_matches_static_data(self) -> None:
         """Test that derived data matches RELATIONSHIP_CONTRACT_DATA structure."""
@@ -210,7 +149,6 @@ class TestStaticContractDataMatches:
             ("rel_import_symbol_v1", ("import_alias_id",)),
             ("rel_def_symbol_v1", ("def_id",)),
             ("rel_callsite_symbol_v1", ("call_id",)),
-            ("rel_callsite_qname_v1", ("call_id", "qname_id")),
         ],
     )
     def test_contract_data_entity_cols(
@@ -234,11 +172,6 @@ class TestStaticContractDataMatches:
         mapping = relationship_contract_data_by_name()
         for name in symbol_names:
             assert mapping[name].dedupe_columns == STANDARD_SYMBOL_DEDUPE_COLUMNS
-
-    def test_qname_relationship_uses_qname_dedupe(self) -> None:
-        """Test that qname relationship uses STANDARD_QNAME_DEDUPE_COLUMNS."""
-        mapping = relationship_contract_data_by_name()
-        assert mapping["rel_callsite_qname_v1"].dedupe_columns == STANDARD_QNAME_DEDUPE_COLUMNS
 
 
 class TestStandardConstants:

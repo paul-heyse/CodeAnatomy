@@ -347,7 +347,7 @@ def _extract_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec
 
 def _normalize_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
     normalize_dataset_spec = _optional_module_attr(
-        "normalize.registry_runtime",
+        "semantics.catalog.dataset_specs",
         "dataset_spec",
     )
     if not callable(normalize_dataset_spec):
@@ -361,7 +361,7 @@ def _normalize_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpe
 
 def _incremental_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
     incremental_dataset_spec = _optional_module_attr(
-        "incremental.registry_specs",
+        "semantics.incremental.registry_specs",
         "dataset_spec",
     )
     if not callable(incremental_dataset_spec):
@@ -415,7 +415,7 @@ def _contract_spec_from_known_registries(
     ctx: SessionContext | None = None,
 ) -> ContractSpec | None:
     try:
-        from normalize.registry_runtime import dataset_contract as normalize_dataset_contract
+        from semantics.catalog.dataset_specs import dataset_contract as normalize_dataset_contract
     except (ImportError, RuntimeError, TypeError, ValueError):
         normalize_dataset_contract = None
     if normalize_dataset_contract is not None:
@@ -485,11 +485,11 @@ def _collect_extract_specs() -> list[DatasetSpec]:
 
 def _collect_normalize_specs(ctx: SessionContext | None) -> list[DatasetSpec]:
     normalize_dataset_names = _optional_module_attr(
-        "normalize.dataset_specs",
+        "semantics.catalog.dataset_specs",
         "dataset_names",
     )
     normalize_dataset_spec = _optional_module_attr(
-        "normalize.registry_runtime",
+        "semantics.catalog.dataset_specs",
         "dataset_spec",
     )
     if not callable(normalize_dataset_names) or not callable(normalize_dataset_spec):
@@ -505,7 +505,7 @@ def _collect_normalize_specs(ctx: SessionContext | None) -> list[DatasetSpec]:
 
 def _collect_incremental_specs() -> list[DatasetSpec]:
     incremental_specs = _optional_module_attr(
-        "incremental.schemas",
+        "semantics.incremental.schemas",
         "incremental_dataset_specs",
     )
     if not callable(incremental_specs):

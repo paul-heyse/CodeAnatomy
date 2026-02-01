@@ -213,7 +213,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     )
     profile = runtime_profile_spec.datafusion
     from cpg.kind_catalog import validate_edge_kind_requirements
-    from datafusion_engine.views.registry import ensure_view_graph
+    from datafusion_engine.views.registration import ensure_view_graph
     from datafusion_engine.views.registry_specs import view_graph_nodes
 
     session_runtime = profile.session_runtime()
@@ -222,7 +222,6 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     snapshot = ensure_view_graph(
         session_runtime.ctx,
         runtime_profile=profile,
-        include_registry_views=True,
     )
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
@@ -311,11 +310,11 @@ def _cdf_impacted_tasks(
     if state_dir is None:
         return None, None
     from datafusion_engine.dataset.registry import dataset_catalog_from_profile
-    from incremental.cdf_cursors import CdfCursorStore
-    from incremental.delta_context import DeltaAccessContext
-    from incremental.runtime import IncrementalRuntime
-    from incremental.state_store import StateStore
     from relspec.incremental import CdfImpactRequest, impacted_tasks_for_cdf
+    from semantics.incremental.cdf_cursors import CdfCursorStore
+    from semantics.incremental.delta_context import DeltaAccessContext
+    from semantics.incremental.runtime import IncrementalRuntime
+    from semantics.incremental.state_store import StateStore
 
     try:
         runtime = IncrementalRuntime.build(

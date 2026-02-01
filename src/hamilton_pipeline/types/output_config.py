@@ -55,6 +55,8 @@ class OutputConfig:
     work_dir: str | None
     output_dir: str | None
     overwrite_intermediate_datasets: bool
+    semantic_output_catalog_name: str | None = None
+    extract_output_catalog_name: str | None = None
     materialize_param_tables: bool = False
     writer_strategy: WriterStrategy = "arrow"
     ipc_dump_enabled: bool = False

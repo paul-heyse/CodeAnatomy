@@ -864,7 +864,7 @@ GraphProductBuildRequest(
 
 ### IncrementalConfig
 
-**Definition:** `src/incremental/types.py` (line 14)
+**Definition:** `src/semantics/incremental/config.py` (canonical; `incremental.types` is a facade)
 
 Configuration for incremental processing mode.
 
@@ -874,8 +874,10 @@ Configuration for incremental processing mode.
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `False` | Enable incremental processing. |
 | `state_dir` | `Path \| None` | `None` | State directory for incremental metadata. Defaults to `{output_dir}/state`. |
-| `repo_id` | `str \| None` | `None` | Repository identifier for state isolation. |
+| `cdf_filter_policy` | `CdfFilterPolicy` | `inserts_and_updates_only()` | Change Data Feed filter policy. |
+| `default_merge_strategy` | `CDFMergeStrategy` | `UPSERT` | Default merge strategy for incremental outputs. |
 | `impact_strategy` | `Literal["hybrid", "symbol_closure", "import_closure"]` | `"hybrid"` | Impact analysis strategy. |
+| `repo_id` | `str \| None` | `None` | Repository identifier for state isolation. |
 | `git_base_ref` | `str \| None` | `None` | Git base reference for diff computation. |
 | `git_head_ref` | `str \| None` | `None` | Git head reference for diff computation. |
 | `git_changed_only` | `bool` | `False` | Process only changed files (no impact closure). |
@@ -891,7 +893,7 @@ Configuration for incremental processing mode.
 **Example:**
 ```python
 from pathlib import Path
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 
 # Basic incremental mode
 IncrementalConfig(
@@ -1046,7 +1048,7 @@ from hamilton_pipeline.types import (
     ExecutorConfig,
     ScipIndexConfig,
 )
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 from core_types import DeterminismTier
 
 result = build_graph_product(
@@ -1126,7 +1128,7 @@ Incremental processing with Git diff-based change detection:
 ```python
 from pathlib import Path
 from graph.product_build import build_graph_product, GraphProductBuildRequest
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 
 # Initial full build
 initial_result = build_graph_product(
@@ -1653,4 +1655,4 @@ codeanatomy config init
 - `src/hamilton_pipeline/execution.py` - Pipeline execution
 - `src/hamilton_pipeline/types/` - Configuration types
 - `src/core_types.py` - Base type definitions
-- `src/incremental/types.py` - Incremental processing types
+- `src/semantics/incremental/config.py` - Incremental processing config (canonical)

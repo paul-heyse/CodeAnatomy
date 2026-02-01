@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import pandas as pd
-    import polars as pl  # type: ignore[import]
+    import polars as pl
 
     from datafusion.catalog import CatalogProvider, Table
     from datafusion.expr import SortKey

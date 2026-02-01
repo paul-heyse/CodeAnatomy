@@ -54,7 +54,7 @@ class TestSpanFieldNames:
     def test_all_known_prefixes(self) -> None:
         """All known prefixes produce valid field names."""
         for prefix in SPAN_PREFIXES:
-            bstart, bend = span_field_names(prefix)  # type: ignore[arg-type]
+            bstart, bend = span_field_names(prefix)
             expected_prefix = prefix if prefix else ""
             assert bstart == f"{expected_prefix}bstart"
             assert bend == f"{expected_prefix}bend"

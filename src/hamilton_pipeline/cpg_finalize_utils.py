@@ -8,7 +8,6 @@ from typing import cast
 import pyarrow as pa
 
 from datafusion_engine.arrow.build import empty_table
-from datafusion_engine.arrow.interop import TableLike as ArrowTableLike
 from datafusion_engine.arrow.semantic import (
     apply_semantic_types,
     edge_id_metadata,
@@ -38,7 +37,7 @@ def finalize_cpg_table(
         return empty_table(table.schema)
     contract = Contract(name=name, schema=table.schema)
     normalized = normalize_only(
-        cast("ArrowTableLike", table),
+        table,
         contract=contract,
         options=FinalizeOptions(
             runtime_profile=runtime_profile_spec.datafusion,

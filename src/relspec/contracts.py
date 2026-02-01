@@ -13,7 +13,6 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.schema.registry import SCHEMA_META_NAME, SCHEMA_META_VERSION
 from relspec.view_defs import (
-    REL_CALLSITE_QNAME_OUTPUT,
     REL_CALLSITE_SYMBOL_OUTPUT,
     REL_DEF_SYMBOL_OUTPUT,
     REL_IMPORT_SYMBOL_OUTPUT,
@@ -27,7 +26,6 @@ REL_NAME_SYMBOL_NAME: Final[str] = REL_NAME_SYMBOL_OUTPUT
 REL_IMPORT_SYMBOL_NAME: Final[str] = REL_IMPORT_SYMBOL_OUTPUT
 REL_DEF_SYMBOL_NAME: Final[str] = REL_DEF_SYMBOL_OUTPUT
 REL_CALLSITE_SYMBOL_NAME: Final[str] = REL_CALLSITE_SYMBOL_OUTPUT
-REL_CALLSITE_QNAME_NAME: Final[str] = REL_CALLSITE_QNAME_OUTPUT
 RELATION_OUTPUT_NAME: Final[str] = RELATION_OUTPUT_VIEW
 
 RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
@@ -123,18 +121,6 @@ def rel_callsite_symbol_metadata_spec() -> SchemaMetadataSpec:
 
 
 @cache
-def rel_callsite_qname_metadata_spec() -> SchemaMetadataSpec:
-    """Metadata spec for callsite-qname relationship outputs.
-
-    Returns
-    -------
-    SchemaMetadataSpec
-        Metadata spec for callsite-qname outputs.
-    """
-    return _metadata_spec(REL_CALLSITE_QNAME_NAME)
-
-
-@cache
 def relation_output_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for canonical relationship outputs.
 
@@ -167,7 +153,6 @@ def relspec_metadata_spec(name: str) -> SchemaMetadataSpec:
         REL_IMPORT_SYMBOL_NAME: rel_import_symbol_metadata_spec(),
         REL_DEF_SYMBOL_NAME: rel_def_symbol_metadata_spec(),
         REL_CALLSITE_SYMBOL_NAME: rel_callsite_symbol_metadata_spec(),
-        REL_CALLSITE_QNAME_NAME: rel_callsite_qname_metadata_spec(),
         RELATION_OUTPUT_NAME: relation_output_metadata_spec(),
     }
     resolved = specs.get(name)
@@ -180,12 +165,10 @@ def relspec_metadata_spec(name: str) -> SchemaMetadataSpec:
 __all__ = [
     "RELATION_OUTPUT_NAME",
     "RELATION_OUTPUT_ORDERING_KEYS",
-    "REL_CALLSITE_QNAME_NAME",
     "REL_CALLSITE_SYMBOL_NAME",
     "REL_DEF_SYMBOL_NAME",
     "REL_IMPORT_SYMBOL_NAME",
     "REL_NAME_SYMBOL_NAME",
-    "rel_callsite_qname_metadata_spec",
     "rel_callsite_symbol_metadata_spec",
     "rel_def_symbol_metadata_spec",
     "rel_import_symbol_metadata_spec",

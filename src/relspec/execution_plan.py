@@ -12,12 +12,12 @@ import rustworkx as rx
 from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.plan.pipeline import plan_with_delta_pins
-from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import (
     EvidenceCatalog,
     initial_evidence_from_views,
     known_dataset_specs,
 )
+from relspec.extract_plan import extract_inferred_deps, extract_task_kind_map
 from relspec.inferred_deps import InferredDeps
 from relspec.rustworkx_graph import (
     GraphDiagnostics,
@@ -51,6 +51,7 @@ from relspec.view_defs import (
     RELATION_VIEW_NAMES,
     SEMANTIC_INTERMEDIATE_VIEWS,
 )
+from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 from serde_msgspec import to_builtins
 from utils.hashing import hash_msgpack_canonical, hash_settings
 
@@ -651,21 +652,23 @@ def _prepare_plan_context(
         scan_units=planned.scan_units,
         scan_keys_by_task=planned.scan_keys_by_task,
     )
-    priorities = _priority_map(planned.inferred)
+    inferred_all = (*planned.inferred, *extract_inferred_deps())
+    priorities = _priority_map(inferred_all)
     graph = build_task_graph_from_inferred_deps(
-        planned.inferred,
+        inferred_all,
         options=TaskGraphBuildOptions(
             priorities=priorities,
             extra_evidence=tuple(sorted(dataset_spec_map)),
             scan_units_by_evidence_name=planned.scan_units_by_evidence_name,
             scan_task_names_by_task=planned.scan_task_names_by_task,
+            task_kinds=extract_task_kind_map(),
         ),
     )
     pruned = _pruned_plan_bundle(
         inputs=_PruneInputs(
             graph=graph,
             nodes_with_ast=nodes_with_ast,
-            inferred=planned.inferred,
+            inferred=inferred_all,
             scan_units=planned.scan_units,
             scan_keys_by_task=planned.scan_keys_by_task,
             scan_task_units_by_name=planned.scan_task_units_by_name,
@@ -676,11 +679,6 @@ def _prepare_plan_context(
         request=request,
         requested=requested,
     )
-    pruned_lineage_by_view = {
-        node.name: planned.lineage_by_view[node.name]
-        for node in pruned.view_nodes
-        if node.name in planned.lineage_by_view
-    }
     if request.runtime_profile is not None:
         from datafusion_engine.plan.artifact_store import (
             PlanArtifactsForViewsRequest,
@@ -695,7 +693,7 @@ def _prepare_plan_context(
                     view_nodes=pruned.view_nodes,
                     scan_units=pruned.scan_units,
                     scan_keys_by_view=pruned.scan_keys_by_task,
-                    lineage_by_view=pruned_lineage_by_view,
+                    lineage_by_view=pruned.lineage_by_view,
                 ),
             )
         except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:

@@ -430,13 +430,23 @@ def prefixed_span_bundle(prefix: str) -> FieldBundle:
     >>> [f.name for f in bundle.fields]
     ['call_bstart', 'call_bend']
     """
-    from schema_spec.span_fields import STANDARD_SPAN_TYPES
+    from schema_spec.span_fields import SPAN_PREFIXES, STANDARD_SPAN_TYPES, SpanPrefix
     from schema_spec.span_fields import make_span_field_specs as _span_fields
 
-    # Cast prefix to match the SpanPrefix type for known prefixes
-    fields = _span_fields(prefix)  # type: ignore[arg-type]
-    bundle_name = STANDARD_SPAN_TYPES.get(prefix, f"{prefix}span")  # type: ignore[arg-type]
-    return FieldBundle(name=bundle_name, fields=fields)
+    if prefix in SPAN_PREFIXES:
+        span_prefix = cast("SpanPrefix", prefix)
+        fields = _span_fields(span_prefix)
+        bundle_name = STANDARD_SPAN_TYPES[span_prefix]
+        return FieldBundle(name=bundle_name, fields=fields)
+
+    normalized = prefix
+    if prefix and not prefix.endswith("_"):
+        normalized = f"{prefix}_"
+    fields = (
+        FieldSpec(name=f"{normalized}bstart", dtype=interop.int64()),
+        FieldSpec(name=f"{normalized}bend", dtype=interop.int64()),
+    )
+    return FieldBundle(name=f"{prefix}span", fields=fields)
 
 
 def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBundle:

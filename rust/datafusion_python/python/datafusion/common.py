@@ -17,6 +17,7 @@
 """Common data types used throughout the DataFusion project."""
 
 from enum import Enum
+from typing import TypeAlias
 
 from ._internal import common as common_internal
 
@@ -30,7 +31,7 @@ RexType = common_internal.RexType
 SqlFunction = common_internal.SqlFunction
 SqlSchema = common_internal.SqlSchema
 SqlStatistics = common_internal.SqlStatistics
-SqlTable = common_internal.SqlTable
+SqlTable: TypeAlias = common_internal.SqlTable
 SqlType = common_internal.SqlType
 SqlView = common_internal.SqlView
 TableType = common_internal.TableType

@@ -81,7 +81,7 @@ def default_modules() -> list[ModuleType]:
 Loads 7 modules in order:
 
 1. **inputs.py** - Runtime profile, session, diagnostics collector, config bundles
-2. **dataloaders.py** - Repo scan, extract layers, normalize outputs
+2. **dataloaders.py** - Repo scan, extract layers, semantic catalog outputs
 3. **params.py** - Parameter bundles, param table registry, Delta materialization
 4. **execution_plan.py** - ExecutionPlan node, plan artifacts, validation reports
 5. **task_execution.py** - Task execution dispatcher
@@ -619,7 +619,7 @@ FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
 ```python
 _MODULE_NAMES: tuple[str, ...] = (
     "inputs",         # Runtime profiles, diagnostics, session
-    "dataloaders",    # Repo scan, extract layers, normalize
+    "dataloaders",    # Repo scan, extract layers, semantic catalog
     "params",         # Parameter bundles, param tables
     "execution_plan", # ExecutionPlan node, plan artifacts
     "task_execution", # Task dispatcher
@@ -650,9 +650,27 @@ def runtime_profile_spec(
 ) -> RuntimeProfileSpec:
     resolved = resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
     normalize_root = _normalize_output_root(output_config)
-    if normalize_root is None:
+    semantic_root = _semantic_output_root(output_config)
+    catalog_name, registry_catalogs = _semantic_output_catalog(
+        output_config=output_config,
+        semantic_root=semantic_root,
+        existing_catalogs=resolved.datafusion.registry_catalogs,
+    )
+    if (
+        normalize_root is None
+        and semantic_root is None
+        and output_config.semantic_output_catalog_name is None
+        and catalog_name is None
+    ):
         return resolved
-    updated_profile = replace(resolved.datafusion, normalize_output_root=normalize_root)
+    resolved_catalog_name = output_config.semantic_output_catalog_name or catalog_name
+    updated_profile = replace(
+        resolved.datafusion,
+        normalize_output_root=normalize_root,
+        semantic_output_root=semantic_root,
+        semantic_output_catalog_name=resolved_catalog_name,
+        registry_catalogs=registry_catalogs,
+    )
     return replace(resolved, datafusion=updated_profile)
 ```
 
@@ -705,7 +723,7 @@ def incremental_config(
 
 ### dataloaders.py - Data Loading
 
-Provides extract and normalize stage outputs (not included in reading scope, but referenced in module registry).
+Provides extract and semantic catalog stage outputs (analysis + diagnostics), referenced in the module registry.
 
 ### outputs.py - Output Materialization
 
@@ -1440,7 +1458,7 @@ src/hamilton_pipeline/
 └── modules/
     ├── __init__.py                # Module registry: load_all_modules()
     ├── inputs.py                  # Runtime profiles, session, diagnostics, config bundles
-    ├── dataloaders.py             # Repo scan, extract layers, normalize outputs
+    ├── dataloaders.py             # Repo scan, extract layers, semantic catalog outputs
     ├── params.py                  # Parameter bundles, param table registry
     ├── execution_plan.py          # ExecutionPlan node, plan artifacts
     ├── task_execution.py          # execute_task_from_catalog()
@@ -1640,7 +1658,7 @@ Plan diagnostics persistence adds ~100-500ms per run (scales with task count and
 ### Module Load Order
 
 1. **inputs.py** - 43 nodes (runtime profiles, session, diagnostics, config bundles)
-2. **dataloaders.py** - ~20 nodes (repo scan, extract layers, normalize outputs)
+2. **dataloaders.py** - ~20 nodes (repo scan, extract layers, semantic catalog outputs)
 3. **params.py** - 11 nodes (parameter bundles, param table registry, Delta write)
 4. **execution_plan.py** - 5 nodes (ExecutionPlan node, plan artifacts, validation)
 5. **task_execution.py** - 3 nodes (TaskExecutionInputs, execute_task_from_catalog)

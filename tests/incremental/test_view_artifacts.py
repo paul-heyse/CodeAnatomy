@@ -18,14 +18,14 @@ from datafusion_engine.views.artifacts import (
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
-from incremental.delta_context import DeltaAccessContext
-from incremental.invalidations import (
+from semantics.incremental.delta_context import DeltaAccessContext
+from semantics.incremental.invalidations import (
     build_invalidation_snapshot,
     read_invalidation_snapshot,
     write_invalidation_snapshot,
 )
-from incremental.runtime import IncrementalRuntime
-from incremental.state_store import StateStore
+from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.state_store import StateStore
 from tests.test_helpers.arrow_seed import register_arrow_table
 
 

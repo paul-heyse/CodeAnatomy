@@ -7,7 +7,7 @@ with all other properties derived from standard patterns.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
 RELATIONSHIP_SCHEMA_VERSION: int = 1
+
+SpecAccessor = Callable[["SessionContext | None"], DatasetSpec]
 
 
 # =============================================================================
@@ -83,14 +85,6 @@ RELATIONSHIP_DATA: tuple[RelationshipData, ...] = (
         name="rel_callsite_symbol",
         table_name="rel_callsite_symbol_v1",
         entity_id_col="call_id",
-    ),
-    RelationshipData(
-        name="rel_callsite_qname",
-        table_name="rel_callsite_qname_v1",
-        entity_id_col="call_id",
-        # qname_id replaces symbol in dedupe keys (non-standard pattern)
-        dedupe_keys=("call_id", "qname_id", "path", "bstart", "bend"),
-        extra_sort_keys=("qname_id",),
     ),
 )
 
@@ -294,29 +288,6 @@ def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
 
 
 @cache
-def _rel_callsite_qname_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_callsite_qname_v1")
-
-
-def rel_callsite_qname_spec(ctx: SessionContext | None = None) -> DatasetSpec:
-    """Return the dataset spec for callsite-to-qname relationships.
-
-    Parameters
-    ----------
-    ctx
-        Optional SessionContext to resolve the schema.
-
-    Returns
-    -------
-    DatasetSpec
-        Dataset spec for callsite-to-qname relationship rows.
-    """
-    if ctx is None:
-        return _rel_callsite_qname_spec_cached()
-    return dataset_spec_from_context("rel_callsite_qname_v1", ctx=ctx)
-
-
-@cache
 def _relation_output_spec_cached() -> DatasetSpec:
     return dataset_spec_from_context("relation_output_v1")
 
@@ -344,12 +315,11 @@ def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
 # =============================================================================
 
 # Mapping of table names to spec accessor functions
-_SPEC_ACCESSORS: dict[str, object] = {
+_SPEC_ACCESSORS: dict[str, SpecAccessor] = {
     "rel_name_symbol_v1": rel_name_symbol_spec,
     "rel_import_symbol_v1": rel_import_symbol_spec,
     "rel_def_symbol_v1": rel_def_symbol_spec,
     "rel_callsite_symbol_v1": rel_callsite_symbol_spec,
-    "rel_callsite_qname_v1": rel_callsite_qname_spec,
 }
 
 
@@ -371,7 +341,6 @@ def relationship_dataset_specs(ctx: SessionContext | None = None) -> tuple[Datas
         rel_import_symbol_spec(ctx),
         rel_def_symbol_spec(ctx),
         rel_callsite_symbol_spec(ctx),
-        rel_callsite_qname_spec(ctx),
         relation_output_spec(ctx),
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))
@@ -396,7 +365,7 @@ def relationship_contract_spec(ctx: SessionContext | None = None) -> ContractCat
         accessor = _SPEC_ACCESSORS.get(data.table_name)
         if accessor is None:
             continue
-        spec = accessor(ctx)  # type: ignore[operator]
+        spec = accessor(ctx)
         contracts[data.table_name] = generate_relationship_contract_entry(data, spec)
 
     return ContractCatalogSpec(contracts=contracts)
@@ -520,7 +489,6 @@ __all__ = [
     "STANDARD_RELATIONSHIP_TIE_BREAKERS",
     "RelationshipData",
     "generate_relationship_contract_entry",
-    "rel_callsite_qname_spec",
     "rel_callsite_symbol_spec",
     "rel_def_symbol_spec",
     "rel_import_symbol_spec",

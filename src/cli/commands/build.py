@@ -28,7 +28,7 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

@@ -2714,24 +2714,50 @@ def _register_delta_cache_for_dataset(
     schema = arrow_schema_from_df(df)
     schema_hash = schema_identity_hash(schema)
     partition_by = _dataset_cache_partition_by(schema, location=context.location)
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
     from datafusion_engine.io.write import (
         WriteFormat,
         WriteMode,
         WritePipeline,
         WriteRequest,
     )
+    from obs.otel.cache import cache_span
 
-    pipeline = WritePipeline(context.ctx, runtime_profile=runtime_profile)
-    result = pipeline.write(
-        WriteRequest(
-            source=df,
-            destination=cache_path,
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            partition_by=partition_by,
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_write",
+            cache_policy="dataset_delta_staging",
+            cache_scope="dataset",
+            schema_hash=schema_hash,
+            cache_key=cache_key,
         )
     )
-    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    pipeline = WritePipeline(context.ctx, runtime_profile=runtime_profile)
+    with cache_span(
+        "cache.dataset.delta_staging.write",
+        cache_policy="dataset_delta_staging",
+        cache_scope="dataset",
+        operation="write",
+        attributes={
+            "dataset_name": context.name,
+            "cache_key": cache_key,
+        },
+    ) as (_span, set_result):
+        result = pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=cache_path,
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                partition_by=partition_by,
+                format_options={"commit_metadata": commit_metadata},
+            )
+        )
+        set_result("write")
+    from datafusion_engine.cache.inventory import CacheInventoryEntry, delta_report_file_count
     from datafusion_engine.cache.registry import (
         record_cache_inventory,
         register_cached_delta_table,
@@ -2746,17 +2772,23 @@ def _register_delta_cache_for_dataset(
         location=location,
         snapshot_version=result.delta_result.version if result.delta_result else None,
     )
+    file_count = delta_report_file_count(
+        result.delta_result.report if result.delta_result is not None else None
+    )
     record_cache_inventory(
         runtime_profile,
         entry=CacheInventoryEntry(
             view_name=context.name,
             cache_policy="dataset_delta_staging",
             cache_path=cache_path,
+            result="write",
             plan_fingerprint=None,
             plan_identity_hash=cache_key,
             schema_identity_hash=schema_hash,
             snapshot_version=result.delta_result.version if result.delta_result else None,
             snapshot_timestamp=None,
+            row_count=result.rows_written,
+            file_count=file_count,
             partition_by=partition_by,
         ),
         ctx=context.ctx,

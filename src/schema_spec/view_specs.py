@@ -173,26 +173,18 @@ class ViewSpec:
         validate: bool = True,
         sql_options: SQLOptions | None = None,
     ) -> None:
-        """Register the view definition on a SessionRuntime.
+        """Legacy registration hook (removed).
 
-        Parameters
-        ----------
-        session_runtime:
-            DataFusion SessionRuntime used for registration.
-        validate:
-            Whether to validate the resulting schema after registration.
-        sql_options:
-            Optional SQL options to enforce SQL execution policy.
+        Raises
+        ------
+        RuntimeError
+            Always raised. Use ``datafusion_engine.views.registration.ensure_view_graph``.
         """
-        from datafusion_engine.session.runtime import register_view_specs
-
+        _ = session_runtime
+        _ = validate
         _ = sql_options
-        register_view_specs(
-            session_runtime.ctx,
-            views=(self,),
-            runtime_profile=session_runtime.profile,
-            validate=validate,
-        )
+        msg = f"ViewSpec.register is removed for {self.name!r}; use ensure_view_graph."
+        raise RuntimeError(msg)
 
     def validate(
         self,

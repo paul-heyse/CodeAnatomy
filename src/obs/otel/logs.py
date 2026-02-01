@@ -18,6 +18,71 @@ from obs.otel.scopes import SCOPE_DIAGNOSTICS
 _LOGGER = logging.getLogger(SCOPE_DIAGNOSTICS)
 
 
+class OtelDiagnosticsSink:
+    """Diagnostics sink that emits artifacts/events to OpenTelemetry logs."""
+
+    @staticmethod
+    def record_artifact(name: str, payload: Mapping[str, object]) -> None:
+        """Record an artifact payload as a diagnostics event.
+
+        Parameters
+        ----------
+        name
+            Artifact name.
+        payload
+            Artifact payload to log.
+        """
+        emit_diagnostics_event(name, payload=payload, event_kind="artifact")
+
+    @staticmethod
+    def record_event(name: str, properties: Mapping[str, object]) -> None:
+        """Record a diagnostics event payload.
+
+        Parameters
+        ----------
+        name
+            Event name.
+        properties
+            Event properties to log.
+        """
+        emit_diagnostics_event(name, payload=properties, event_kind="event")
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
+        """Record multiple diagnostics events.
+
+        Parameters
+        ----------
+        name
+            Event name.
+        rows
+            Event payloads to log.
+        """
+        for row in rows:
+            self.record_event(name, dict(row))
+
+    @staticmethod
+    def events_snapshot() -> dict[str, list[Mapping[str, object]]]:
+        """Return collected event payloads (not stored for OTel sinks).
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, object]]]
+            Empty mapping because OpenTelemetry sinks stream events directly.
+        """
+        return {}
+
+    @staticmethod
+    def artifacts_snapshot() -> dict[str, list[Mapping[str, object]]]:
+        """Return collected artifact payloads (not stored for OTel sinks).
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, object]]]
+            Empty mapping because OpenTelemetry sinks stream artifacts directly.
+        """
+        return {}
+
+
 def _serialize_payload(payload: object) -> str:
     try:
         return json.dumps(payload, sort_keys=True, default=str)
@@ -124,4 +189,4 @@ def _severity_from_level(level: int) -> SeverityNumber:
     return SeverityNumber.DEBUG
 
 
-__all__ = ["emit_diagnostics_event"]
+__all__ = ["OtelDiagnosticsSink", "emit_diagnostics_event"]

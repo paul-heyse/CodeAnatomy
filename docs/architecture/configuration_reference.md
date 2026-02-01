@@ -48,8 +48,8 @@ class RuntimeProfileSpec:
     name: str                                         # Profile name
     datafusion: DataFusionRuntimeProfile              # DataFusion runtime config
     determinism_tier: DeterminismTier                 # Determinism level
-    tracker_config: HamiltonTrackerConfig | None      # Hamilton tracker settings
-    hamilton_telemetry: HamiltonTelemetryProfile | None  # Telemetry profile
+    tracker_config: HamiltonTrackerConfig | None      # engine.telemetry.hamilton.HamiltonTrackerConfig
+    hamilton_telemetry: HamiltonTelemetryProfile | None  # engine.telemetry.hamilton.HamiltonTelemetryProfile
 ```
 
 **Properties**:
@@ -165,6 +165,9 @@ OpenTelemetry observability settings control tracing, metrics, and logging expor
 | `OTEL_METRICS_EXPORTER` | string | (enabled) | Metrics exporter type (set to "none" to disable) |
 | `OTEL_LOGS_EXPORTER` | string | (enabled) | Logs exporter type (set to "none" to disable) |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | string | `"grpc"` | OTLP protocol (grpc/http) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | string | (none) | OTLP endpoint (e.g., `http://localhost:4317`) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | string | (none) | OTLP headers (comma-separated `key=value`) |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | int | (none) | OTLP export timeout (ms) |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | string | (inherits) | Trace-specific OTLP protocol |
 | `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | string | (inherits) | Metrics-specific OTLP protocol |
 | `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | string | (inherits) | Logs-specific OTLP protocol |
@@ -469,6 +472,30 @@ Incremental impact analysis and change detection settings.
 | `CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY` | string | (none) | Impact analysis strategy |
 | `CODEANATOMY_ENABLE_STREAMING_TABLES` | bool | `false` | Enable streaming table processing |
 
+### DataFusion Cache Controls
+
+**File**: `src/engine/runtime_profile.py`
+
+Delta-backed cache controls for view caches, dataset caches, runtime artifacts,
+and metadata snapshots.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `CODEANATOMY_CACHE_OUTPUT_ROOT` | string | (none) | Root directory for Delta-backed caches (defaults to `/tmp/datafusion_cache`) |
+| `CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ENABLED` | bool | `false` | Persist runtime artifact tables to Delta |
+| `CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ROOT` | string | (none) | Override runtime artifact cache root (defaults to `<cache_output_root>/runtime_artifacts`) |
+| `CODEANATOMY_METADATA_CACHE_SNAPSHOT_ENABLED` | bool | `false` | Snapshot DataFusion metadata caches to Delta during session setup |
+
+### Diagnostics Sink Controls
+
+**File**: `src/engine/runtime_profile.py`, `src/datafusion_engine/lineage/diagnostics.py`
+
+Choose the diagnostics sink used for DataFusion runtime artifacts and events.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `CODEANATOMY_DIAGNOSTICS_SINK` | string | (none) | Diagnostics sink selection (`otel`, `memory`, `none`) |
+
 ### DataFusion Plugin
 
 **File**: `src/datafusion_engine/runtime.py`
@@ -769,7 +796,7 @@ CodeAnatomy follows strict naming conventions for configuration classes:
 
 **Suffix**: `*Config`
 **Purpose**: Request/command parameters
-**Examples**: `OtelConfig`, `HamiltonTrackerConfig`
+**Examples**: `OtelConfig`, `engine.telemetry.hamilton.HamiltonTrackerConfig`
 **Immutability**: Typically frozen dataclasses
 
 ### Spec

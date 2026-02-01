@@ -21,6 +21,12 @@
 5. **Catalogs must unify semantic + extract outputs** for deterministic planning and validation.
 6. **Semantic runtime config should be owned by semantics** with datafusion_engine adapters.
 
+### Status Update (2026-02-01)
+
+- Legacy view registry/DSL/spec modules are removed (`views/registry.py`, `views/dsl.py`, `views/dsl_views.py`, `views/view_spec.py`, `views/view_specs_catalog.py`).
+- Canonical view registration entrypoint is now `views/registration.py` + `views/registry_specs.py`.
+- All remaining references to legacy modules below are historical and should be treated as deprecated context.
+
 ---
 
 ## Architecture Overview

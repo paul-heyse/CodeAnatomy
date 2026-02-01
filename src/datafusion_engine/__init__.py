@@ -93,7 +93,6 @@ if TYPE_CHECKING:
         SchemaHardeningProfile,
         apply_execution_label,
         apply_execution_policy,
-        register_view_specs,
     )
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from datafusion_engine.tables.param import (
@@ -171,7 +170,6 @@ __all__ = [
     "nested_schema_names",
     "referenced_tables_from_plan",
     "register_registry_catalog",
-    "register_view_specs",
     "required_columns_by_table",
     "resolve_param_bindings",
     "validate_required_udfs_from_bundle",
@@ -195,7 +193,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "MemoryPool": ("datafusion_engine.session.runtime", "MemoryPool"),
     "apply_execution_label": ("datafusion_engine.session.runtime", "apply_execution_label"),
     "apply_execution_policy": ("datafusion_engine.session.runtime", "apply_execution_policy"),
-    "register_view_specs": ("datafusion_engine.session.runtime", "register_view_specs"),
     # Catalog and schema
     "RegistryCatalogProvider": ("datafusion_engine.catalog.provider", "RegistryCatalogProvider"),
     "RegistrySchemaProvider": ("datafusion_engine.catalog.provider", "RegistrySchemaProvider"),

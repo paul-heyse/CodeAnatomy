@@ -682,7 +682,7 @@ def runtime_profile_spec(
 def engine_session(
     runtime_profile_spec: RuntimeProfileSpec,
     diagnostics_collector: DiagnosticsCollector,
-    execution_surface_policy: ExecutionSurfacePolicy,
+    execution_surface_policy: MaterializationPolicy,
     pipeline_policy: PipelinePolicy,
 ) -> EngineSession:
     return build_engine_session(

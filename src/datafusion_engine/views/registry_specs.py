@@ -20,6 +20,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema.contracts import SchemaContract
+from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
 from datafusion_engine.views.bundle_extraction import (
     arrow_schema_from_df,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.metrics import SemanticOperationMetrics
     from semantics.plans.fingerprints import PlanFingerprint
+    from semantics.runtime import SemanticRuntimeConfig
     from semantics.stats import ViewStats
     from semantics.types import AnnotatedSchema
 
@@ -131,41 +133,29 @@ def _metadata_from_dataset_spec(spec: DatasetSpec) -> SchemaMetadataSpec:
     return _merge_metadata_specs([spec.metadata_spec, ordering])
 
 
-def _semantic_cache_policy(
-    view_name: str,
+def _semantic_cache_policy_for_row(
+    row: SemanticDatasetRow,
     *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    cdf_enabled: bool | None = None,
+    runtime_config: SemanticRuntimeConfig,
 ) -> Literal["none", "delta_staging", "delta_output"]:
-    """Determine cache policy for a semantic view.
+    """Determine cache policy for a semantic dataset row.
 
-    Parameters
-    ----------
-    view_name
-        Name of the view.
-    runtime_profile
-        Runtime configuration for dataset location lookup.
-    cdf_enabled
-        Whether CDF is enabled for this dataset. When provided, influences
-        the cache policy selection for incremental processing support.
+    Cache policy is derived from semantic metadata (CDF support, category,
+    merge keys) and runtime output configuration.
 
     Returns
     -------
     Literal["none", "delta_staging", "delta_output"]
-        Cache policy for the view.
+        Cache policy for the semantic dataset row.
     """
-    # Final output views get delta_output when location is configured
-    if view_name in {"cpg_nodes_v1", "cpg_edges_v1", "relation_output_v1"}:
-        if runtime_profile is not None and runtime_profile.dataset_location(view_name) is not None:
-            return "delta_output"
+    override = runtime_config.cache_policy_overrides.get(row.name)
+    if override is not None:
+        return override
+    if runtime_config.output_path(row.name) is not None:
+        return "delta_output"
+    if row.supports_cdf and row.merge_keys:
         return "delta_staging"
-
-    # CDF-enabled views benefit from delta_staging for incremental reads
-    if cdf_enabled:
-        return "delta_staging"
-
-    # Relationship and normalization views use delta_staging
-    if view_name.startswith("rel_") or view_name.endswith("_norm_v1"):
+    if row.category in {"semantic", "analysis"}:
         return "delta_staging"
     return "none"
 
@@ -262,6 +252,9 @@ def view_graph_nodes(
         msg = f"Unsupported view graph stage: {stage!r}."
         raise ValueError(msg)
     validate_rust_udf_snapshot(snapshot)
+    runtime_config: SemanticRuntimeConfig | None = None
+    if runtime_profile is not None:
+        runtime_config = semantic_runtime_from_profile(runtime_profile)
     nodes: list[ViewNode] = []
     if stage in {"all", "pre_cpg"}:
         nodes.extend(
@@ -283,6 +276,7 @@ def view_graph_nodes(
                 ctx,
                 snapshot=snapshot,
                 runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
             )
         )
     if stage in {"all", "cpg"}:
@@ -467,6 +461,7 @@ class SemanticRegistryRequest:
     ctx: SessionContext
     snapshot: Mapping[str, object]
     runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
     view_specs: list[tuple[str, DataFrameBuilder]]
     dataset_specs: Mapping[str, DatasetSpec]
     relation_output_name: str
@@ -589,12 +584,16 @@ def _register_semantic_view(
 
         annotated_contract = AnnotatedSchema.from_arrow_schema(expected_schema)
 
-    cdf_enabled = _cdf_enabled_from_spec(request.dataset_specs.get(name))
-    cache_policy = _semantic_cache_policy(
-        name,
-        runtime_profile=request.runtime_profile,
-        cdf_enabled=cdf_enabled,
-    )
+    from semantics.catalog.dataset_rows import dataset_row
+
+    row = dataset_row(name, strict=False)
+    if row is None:
+        cache_policy = request.runtime_config.cache_policy_overrides.get(name, "none")
+    else:
+        cache_policy = _semantic_cache_policy_for_row(
+            row,
+            runtime_config=request.runtime_config,
+        )
 
     fingerprint, annotated_schema, stats = _semantic_fingerprint_stats(
         request.ctx,
@@ -654,11 +653,6 @@ def _register_semantic_view(
     return node, metrics, fingerprint_payload, stats.as_dict()
 
 
-def _cdf_enabled_from_spec(spec: DatasetSpec | None) -> bool | None:
-    if spec is None or spec.delta_cdf_policy is None:
-        return None
-    return spec.delta_cdf_policy.required
-
 
 def _record_semantic_artifacts(
     runtime_profile: DataFusionRuntimeProfile,
@@ -713,46 +707,45 @@ def _validated_semantic_inputs(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
 ) -> tuple[dict[str, str], bool]:
     from datafusion_engine.lineage.diagnostics import record_artifact
     from semantics.pipeline import _resolve_semantic_input_mapping
-    from semantics.validation import validate_semantic_input_columns
+    from semantics.validation import (
+        SemanticInputValidationError,
+        require_semantic_inputs,
+    )
 
     input_mapping, use_cdf = _resolve_semantic_input_mapping(
         ctx,
         runtime_profile=runtime_profile,
-        use_cdf=None,
+        use_cdf=runtime_config.cdf_enabled,
         cdf_inputs=None,
     )
-    validation = validate_semantic_input_columns(
-        ctx,
-        input_mapping=input_mapping,
-    )
-    if validation.valid:
-        return input_mapping, use_cdf
-    record_artifact(
-        runtime_profile,
-        "semantic_input_schema_validation_v1",
-        {
-            "missing_tables": list(validation.missing_tables),
-            "missing_columns": {
-                table: list(columns) for table, columns in validation.missing_columns.items()
+    try:
+        validation = require_semantic_inputs(ctx, input_mapping=input_mapping)
+    except SemanticInputValidationError as exc:
+        validation = exc.validation
+        record_artifact(
+            runtime_profile,
+            "semantic_input_schema_validation_v1",
+            {
+                "missing_tables": list(validation.missing_tables),
+                "missing_columns": {
+                    table: list(columns) for table, columns in validation.missing_columns.items()
+                },
+                "resolved_tables": dict(validation.resolved_tables),
             },
-            "resolved_tables": dict(validation.resolved_tables),
-        },
-    )
-    msg = (
-        "Semantic input validation failed. "
-        f"Missing tables: {validation.missing_tables!r}. "
-        f"Missing columns: {validation.missing_columns!r}."
-    )
-    raise ValueError(msg)
+        )
+        raise
+    return input_mapping, use_cdf
 
 
 def _semantic_view_specs_for_registration(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
 ) -> list[tuple[str, DataFrameBuilder]]:
     from relspec.view_defs import (
         DEFAULT_REL_TASK_PRIORITY,
@@ -769,6 +762,7 @@ def _semantic_view_specs_for_registration(
     input_mapping, use_cdf = _validated_semantic_inputs(
         ctx,
         runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
     )
     base_specs = _cpg_view_specs(
         input_mapping=input_mapping,
@@ -813,6 +807,7 @@ def _semantics_view_nodes(
     *,
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    runtime_config: SemanticRuntimeConfig | None = None,
 ) -> list[ViewNode]:
     """Build semantic pipeline view nodes with inferred dependencies.
 
@@ -837,6 +832,8 @@ def _semantics_view_nodes(
         Rust UDF snapshot for UDF validation.
     runtime_profile
         Runtime configuration for building plan bundles.
+    runtime_config
+        Semantic runtime configuration for cache policy and output locations.
 
     Returns
     -------
@@ -856,13 +853,14 @@ def _semantics_view_nodes(
     from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.catalog import SEMANTIC_CATALOG
 
-    if runtime_profile is None:
+    if runtime_profile is None or runtime_config is None:
         msg = "Runtime profile is required for semantic view planning."
         raise ValueError(msg)
 
     view_specs = _semantic_view_specs_for_registration(
         ctx,
         runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
     )
     dataset_specs = _semantic_dataset_specs()
     nodes_by_name, metrics_payloads, fingerprint_payloads, stats_payloads = (
@@ -871,6 +869,7 @@ def _semantics_view_nodes(
                 ctx=ctx,
                 snapshot=snapshot,
                 runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
                 view_specs=view_specs,
                 dataset_specs=dataset_specs,
                 relation_output_name=RELATION_OUTPUT_NAME,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -27,6 +28,8 @@ from semantics.incremental import IncrementalConfig
 from utils.uuid_factory import uuid7_str
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
+
+logger = logging.getLogger(__name__)
 
 FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_cpg_nodes_delta",
@@ -185,6 +188,60 @@ def _resolve_run_id(execute_overrides: dict[str, object]) -> str:
     return run_id
 
 
+def _cache_output_root_for_options(options: PipelineExecutionOptions) -> str | None:
+    base_dir = options.output_dir or options.work_dir
+    if not base_dir:
+        return None
+    return str(ensure_path(base_dir) / "cache")
+
+
+def _runtime_profile_name_from_inputs(
+    options: PipelineExecutionOptions,
+    execute_overrides: Mapping[str, object],
+) -> str:
+    for key in ("runtime_profile_name", "runtime_profile_name_override"):
+        override_value = execute_overrides.get(key)
+        if isinstance(override_value, str) and override_value.strip():
+            return override_value.strip()
+    config_value = options.config.get("runtime_profile_name")
+    if isinstance(config_value, str) and config_value.strip():
+        return config_value.strip()
+    from utils.env_utils import env_value
+
+    return env_value("CODEANATOMY_RUNTIME_PROFILE") or "default"
+
+
+def _record_cache_run_summary(
+    *,
+    run_id: str,
+    options: PipelineExecutionOptions,
+    execute_overrides: Mapping[str, object],
+) -> None:
+    from datafusion_engine.cache.ledger import CacheRunSummary, record_cache_run_summary
+    from engine.runtime_profile import resolve_runtime_profile
+    from obs.otel.cache import drain_cache_run_stats
+
+    stats = drain_cache_run_stats(run_id)
+    if stats is None:
+        return
+    profile_name = _runtime_profile_name_from_inputs(options, execute_overrides)
+    profile_spec = resolve_runtime_profile(profile_name)
+    profile = profile_spec.datafusion
+    cache_root = _cache_output_root_for_options(options)
+    if cache_root is not None and profile.cache_output_root is None:
+        profile = replace(profile, cache_output_root=cache_root)
+    summary = CacheRunSummary(
+        run_id=stats.run_id,
+        start_time_unix_ms=stats.start_time_unix_ms,
+        end_time_unix_ms=stats.end_time_unix_ms,
+        cache_root=profile.cache_root(),
+        total_writes=stats.write_count,
+        total_reads=stats.read_count,
+        error_count=stats.error_count,
+    )
+    record_cache_run_summary(profile, summary=summary)
+
+
 def execute_pipeline(
     *,
     repo_root: PathLike,
@@ -246,6 +303,14 @@ def execute_pipeline(
             results_map = cast("Mapping[str, JsonDict | None]", results)
             return {name: results_map.get(name) for name in output_names}
     finally:
+        try:
+            _record_cache_run_summary(
+                run_id=run_id,
+                options=options,
+                execute_overrides=execute_overrides,
+            )
+        except (RuntimeError, TypeError, ValueError, OSError):
+            logger.exception("Cache run summary recording failed.")
         reset_run_id(run_token)
 
 

@@ -23,7 +23,7 @@ from datafusion_engine.delta.store_policy import (
     delta_store_policy_hash,
 )
 from datafusion_engine.identity import schema_identity_hash
-from datafusion_engine.plan.cache import PlanCacheEntry
+from datafusion_engine.plan.cache import PlanProtoCacheEntry
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.session.runtime import (
@@ -365,7 +365,7 @@ def _store_plan_cache_entry(
     if bundle.plan_identity_hash is None:
         return
     artifacts = bundle.artifacts
-    entry = PlanCacheEntry(
+    entry = PlanProtoCacheEntry(
         plan_identity_hash=bundle.plan_identity_hash,
         plan_fingerprint=bundle.plan_fingerprint,
         substrait_bytes=bundle.substrait_bytes,

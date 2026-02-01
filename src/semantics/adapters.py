@@ -55,6 +55,14 @@ class RelationshipProjectionOptions:
     include_extended_columns
         Include columns required by relation_output union
         (binding_kind, def_site_kind, use_kind, reason, diag_source, severity).
+    use_computed_confidence
+        If True, use the existing "confidence" column from the input DataFrame
+        instead of the static default. Use this for quality-aware relationships
+        that compute confidence dynamically.
+    use_computed_score
+        If True, use the existing "score" column from the input DataFrame
+        instead of the static default. Use this for quality-aware relationships
+        that compute score dynamically.
     """
 
     entity_id_alias: str
@@ -64,6 +72,8 @@ class RelationshipProjectionOptions:
     confidence: float = DEFAULT_CONFIDENCE
     score: float = DEFAULT_SCORE
     include_extended_columns: bool = False
+    use_computed_confidence: bool = False
+    use_computed_score: bool = False
 
 
 def legacy_relationship_projection(
@@ -87,8 +97,27 @@ def legacy_relationship_projection(
     -------
     DataFrame
         DataFrame projected to legacy relationship schema.
+
+    Notes
+    -----
+    When ``use_computed_confidence`` or ``use_computed_score`` is True,
+    the respective column is passed through from the input DataFrame
+    rather than using the static default. This enables quality-aware
+    relationships to preserve their dynamically computed values.
     """
     from datafusion import col, lit
+
+    # Choose between computed (passthrough) or static (literal) values
+    confidence_expr = (
+        col("confidence").cast(pa.float64()).alias("confidence")
+        if options.use_computed_confidence
+        else lit(options.confidence).cast(pa.float64()).alias("confidence")
+    )
+    score_expr = (
+        col("score").cast(pa.float64()).alias("score")
+        if options.use_computed_score
+        else lit(options.score).cast(pa.float64()).alias("score")
+    )
 
     return df.select(
         col("entity_id").alias(options.entity_id_alias),
@@ -99,8 +128,8 @@ def legacy_relationship_projection(
         col("bstart"),
         col("bend"),
         col("origin").alias("resolution_method"),
-        lit(options.confidence).cast(pa.float64()).alias("confidence"),
-        lit(options.score).cast(pa.float64()).alias("score"),
+        confidence_expr,
+        score_expr,
         lit(options.task_name).alias("task_name"),
         lit(options.task_priority).cast(pa.int32()).alias("task_priority"),
     )
@@ -126,8 +155,27 @@ def legacy_relationship_projection_extended(
     -------
     DataFrame
         DataFrame projected to extended legacy relationship schema.
+
+    Notes
+    -----
+    When ``use_computed_confidence`` or ``use_computed_score`` is True,
+    the respective column is passed through from the input DataFrame
+    rather than using the static default. This enables quality-aware
+    relationships to preserve their dynamically computed values.
     """
     from datafusion import col, lit
+
+    # Choose between computed (passthrough) or static (literal) values
+    confidence_expr = (
+        col("confidence").cast(pa.float64()).alias("confidence")
+        if options.use_computed_confidence
+        else lit(options.confidence).cast(pa.float64()).alias("confidence")
+    )
+    score_expr = (
+        col("score").cast(pa.float64()).alias("score")
+        if options.use_computed_score
+        else lit(options.score).cast(pa.float64()).alias("score")
+    )
 
     return df.select(
         col("entity_id").alias(options.entity_id_alias),
@@ -139,8 +187,8 @@ def legacy_relationship_projection_extended(
         col("bstart"),
         col("bend"),
         col("origin").alias("resolution_method"),
-        lit(options.confidence).cast(pa.float64()).alias("confidence"),
-        lit(options.score).cast(pa.float64()).alias("score"),
+        confidence_expr,
+        score_expr,
         lit(options.edge_kind).alias("edge_kind"),
         lit(options.task_name).alias("task_name"),
         lit(options.task_priority).cast(pa.int32()).alias("task_priority"),

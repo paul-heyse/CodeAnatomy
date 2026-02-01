@@ -17,10 +17,16 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 from semantics.naming import canonical_output_name
+from semantics.quality import QualityRelationshipSpec
+from semantics.quality_specs import (
+    REL_CALLSITE_SYMBOL,
+    REL_DEF_SYMBOL,
+    REL_IMPORT_SYMBOL,
+    REL_NAME_SYMBOL,
+)
 from semantics.specs import (
     ForeignKeyDerivation,
     IdDerivation,
-    RelationshipSpec,
     SemanticTableSpec,
     SpanBinding,
 )
@@ -274,48 +280,16 @@ def spec_for_table(table: str) -> SemanticTableSpec | None:
 
 # Canonical normalized table names
 _SCIP_NORM = canonical_output_name("scip_occurrences_norm")
-_REFS_NORM = normalization_output_name("cst_refs")
-_DEFS_NORM = normalization_output_name("cst_defs")
-_IMPORTS_NORM = normalization_output_name("cst_imports")
-_CALLS_NORM = normalization_output_name("cst_callsites")
 
-RELATIONSHIP_SPECS: Final[tuple[RelationshipSpec, ...]] = (
-    RelationshipSpec(
-        name=canonical_output_name("rel_name_symbol"),
-        left_table=_REFS_NORM,
-        right_table=_SCIP_NORM,
-        join_hint="overlap",
-        origin="cst_ref_text",
-        filter_sql="is_read = true",
-    ),
-    RelationshipSpec(
-        name=canonical_output_name("rel_def_symbol"),
-        left_table=_DEFS_NORM,
-        right_table=_SCIP_NORM,
-        join_hint="contains",
-        origin="cst_def_name",
-        filter_sql="is_definition = true",
-    ),
-    RelationshipSpec(
-        name=canonical_output_name("rel_import_symbol"),
-        left_table=_IMPORTS_NORM,
-        right_table=_SCIP_NORM,
-        join_hint="overlap",
-        origin="cst_import_name",
-        filter_sql="is_import = true",
-    ),
-    RelationshipSpec(
-        name=canonical_output_name("rel_callsite_symbol"),
-        left_table=_CALLS_NORM,
-        right_table=_SCIP_NORM,
-        join_hint="overlap",
-        origin="cst_callsite",
-        filter_sql=None,
-    ),
+RELATIONSHIP_SPECS: Final[tuple[QualityRelationshipSpec, ...]] = (
+    REL_NAME_SYMBOL,
+    REL_DEF_SYMBOL,
+    REL_IMPORT_SYMBOL,
+    REL_CALLSITE_SYMBOL,
 )
 
 
-def spec_for_relationship(name: str) -> RelationshipSpec | None:
+def spec_for_relationship(name: str) -> QualityRelationshipSpec | None:
     """Return a relationship spec by name when registered.
 
     Parameters
@@ -325,7 +299,7 @@ def spec_for_relationship(name: str) -> RelationshipSpec | None:
 
     Returns
     -------
-    RelationshipSpec | None
+    QualityRelationshipSpec | None
         Registered spec or None when absent.
     """
     for spec in RELATIONSHIP_SPECS:
@@ -392,7 +366,7 @@ def _build_semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
             SemanticSpecIndex(
                 name=spec.name,
                 kind="relate",
-                inputs=(spec.left_table, spec.right_table),
+                inputs=(spec.left_view, spec.right_view),
                 outputs=(spec.name,),
             )
             for spec in RELATIONSHIP_SPECS

@@ -868,3 +868,16 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
         "volatility": _count_map("volatility"),
         "rewrite_tags": _count_map("rewrite_tags"),
     }
+
+
+def otel_diagnostics_sink() -> DiagnosticsSink:
+    """Return an OTel-backed diagnostics sink.
+
+    Returns
+    -------
+    DiagnosticsSink
+        Diagnostics sink that emits OpenTelemetry logs.
+    """
+    from obs.otel.logs import OtelDiagnosticsSink
+
+    return OtelDiagnosticsSink()

@@ -36,6 +36,10 @@ class CacheInventoryRecord:
     schema_identity_hash: str | None
     snapshot_version: int | None
     snapshot_timestamp: str | None
+    run_id: str | None
+    result: str | None
+    row_count: int | None
+    file_count: int | None
     partition_by: tuple[str, ...]
     event_time_unix_ms: int | None
 
@@ -185,6 +189,10 @@ def _record_from_row(row: Mapping[str, object]) -> CacheInventoryRecord:
         schema_identity_hash=_coerce_opt_str(row.get("schema_identity_hash")),
         snapshot_version=_coerce_opt_int(row.get("snapshot_version")),
         snapshot_timestamp=_coerce_opt_str(row.get("snapshot_timestamp")),
+        run_id=_coerce_opt_str(row.get("run_id")),
+        result=_coerce_opt_str(row.get("result")),
+        row_count=_coerce_opt_int(row.get("row_count")),
+        file_count=_coerce_opt_int(row.get("file_count")),
         partition_by=_coerce_str_tuple(row.get("partition_by")),
         event_time_unix_ms=_coerce_opt_int(row.get("event_time_unix_ms")),
     )

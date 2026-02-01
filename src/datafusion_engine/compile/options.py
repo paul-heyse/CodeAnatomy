@@ -12,8 +12,8 @@ from core.config_base import FingerprintableConfig, config_fingerprint
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+    from datafusion_engine.plan.cache import PlanCache
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from engine.plan_cache import PlanCache
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:

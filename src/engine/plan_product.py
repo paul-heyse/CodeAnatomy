@@ -9,11 +9,12 @@ import pyarrow as pa
 
 from core_types import DeterminismTier
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from engine.plan_policy import WriterStrategy
+from datafusion_engine.materialize_policy import WriterStrategy
 
 if TYPE_CHECKING:
     from datafusion_engine.session.facade import ExecutionResult
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
+    from engine.materialize_pipeline import MaterializationCacheDecision
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class PlanProduct:
     determinism_tier: DeterminismTier
     writer_strategy: WriterStrategy
     view_artifact: DataFusionViewArtifact | None = None
+    cache_decision: MaterializationCacheDecision | None = None
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     execution_result: ExecutionResult | None = None

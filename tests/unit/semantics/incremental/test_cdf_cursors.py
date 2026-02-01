@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,9 @@ class TestCdfCursor:
     def test_cursor_is_frozen(self) -> None:
         """CdfCursor is immutable."""
         cursor = CdfCursor.create("dataset", 5)
-        with pytest.raises(AttributeError):
-            cursor.last_version = 10  # type: ignore[misc]
+        attr_name = "last_version"
+        with pytest.raises(FrozenInstanceError):
+            setattr(cursor, attr_name, 10)
 
     def test_cursor_with_timestamp(self) -> None:
         """CdfCursor can store timestamp."""

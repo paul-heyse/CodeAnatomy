@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from obs.otel.cache import cache_span
 from obs.otel.hamilton import OtelNodeHook
 from obs.otel.tracing import root_span
 from tests.obs._support.otel_harness import get_otel_harness
@@ -39,3 +40,23 @@ def test_hamilton_node_span_contract() -> None:
     spans = harness.span_exporter.get_finished_spans()
     assert any(span.name == "hamilton.task" for span in spans)
     assert any((span.attributes or {}).get("hamilton.task_kind") == "scan" for span in spans)
+
+
+def test_cache_span_contract() -> None:
+    """Validate cache span attributes are emitted."""
+    harness = get_otel_harness()
+    harness.reset()
+    with cache_span(
+        "cache.test",
+        cache_policy="dataset_delta_staging",
+        cache_scope="dataset",
+        operation="read",
+    ) as (_span, set_result):
+        set_result("hit")
+    spans = harness.span_exporter.get_finished_spans()
+    cache_spans = [span for span in spans if span.name == "cache.test"]
+    assert cache_spans
+    attributes = cache_spans[-1].attributes or {}
+    assert attributes.get("cache.policy") == "dataset_delta_staging"
+    assert attributes.get("cache.operation") == "read"
+    assert attributes.get("cache.result") == "hit"

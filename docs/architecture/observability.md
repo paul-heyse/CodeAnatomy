@@ -161,6 +161,48 @@ This allows diagnostics artifacts to be queryable and correlated to traces and s
 
 ---
 
+## Collector Configuration (Cache Telemetry)
+Cache telemetry is designed to flow through an OTel Collector to enforce **tail sampling** and **redaction** before export. The reference pipeline below:
+- Drops high-cardinality cache path attributes.
+- Applies redaction to common path prefixes.
+- Generates span-derived metrics for cache latency/error analysis.
+
+**Reference Collector YAML:**
+```yaml
+processors:
+  attributes:
+    actions:
+      - key: cache.path
+        action: delete
+  redaction:
+    blocked_values: ["/home/", "s3://"]
+  tail_sampling:
+    policies:
+      - name: cache-errors
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+      - name: cache-latency
+        type: latency
+        latency: {threshold_ms: 2000}
+connectors:
+  spanmetrics: {}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes, redaction, tail_sampling]
+      exporters: [spanmetrics, otlp]
+    metrics:
+      receivers: [spanmetrics]
+      exporters: [otlp]
+```
+
+**Redaction Guidance:**
+- Remove or hash file paths and repo roots at the Collector layer.
+- Keep `cache.policy`, `cache.scope`, and `cache.operation` as bounded dimensions.
+- Prefer Delta ledger tables for forensic details that are too high-cardinality for OTel.
+
 ## Auto-Instrumentation Boundaries
 CodeAnatomy uses auto-instrumentation for commodity libraries (HTTP clients, databases, gRPC) and manual instrumentation for pipeline stages and DataFusion internals.
 

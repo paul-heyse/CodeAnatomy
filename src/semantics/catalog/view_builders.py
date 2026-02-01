@@ -39,6 +39,7 @@ from semantics.catalog.analysis_builders import (
 
 if TYPE_CHECKING:
     from semantics.config import SemanticConfig
+    from semantics.quality import QualityRelationshipSpec
     from semantics.spec_registry import SemanticNormalizationSpec
     from semantics.specs import RelationshipSpec
 
@@ -183,7 +184,7 @@ def _normalize_spec_builder(
 
 
 def _relationship_builder(
-    spec: RelationshipSpec,
+    spec: RelationshipSpec | QualityRelationshipSpec,
     *,
     config: SemanticConfig | None,
     use_cdf: bool,
@@ -193,7 +194,7 @@ def _relationship_builder(
     Parameters
     ----------
     spec
-        The RelationshipSpec to use.
+        The relationship spec to use.
     config
         Optional semantic configuration.
     use_cdf
@@ -207,18 +208,33 @@ def _relationship_builder(
     Raises
     ------
     TypeError
-        Raised when spec is not a RelationshipSpec.
+        Raised when spec is not a RelationshipSpec or QualityRelationshipSpec.
     """
+    from semantics.quality import QualityRelationshipSpec
     from semantics.specs import RelationshipSpec
 
-    if not isinstance(spec, RelationshipSpec):
-        msg = f"Expected RelationshipSpec, got {type(spec)}"
+    if not isinstance(spec, (RelationshipSpec, QualityRelationshipSpec)):
+        msg = f"Expected RelationshipSpec or QualityRelationshipSpec, got {type(spec)}"
         raise TypeError(msg)
 
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import RelationOptions, SemanticCompiler
 
-        return SemanticCompiler(inner_ctx, config=config).relate(
+        compiler = SemanticCompiler(inner_ctx, config=config)
+        if isinstance(spec, QualityRelationshipSpec):
+            file_quality_df = None
+            if spec.join_file_quality:
+                from semantics.signals import build_file_quality_view
+
+                try:
+                    file_quality_df = inner_ctx.table(spec.file_quality_view)
+                except Exception:  # noqa: BLE001
+                    file_quality_df = build_file_quality_view(inner_ctx)
+            return compiler.compile_relationship_with_quality(
+                spec,
+                file_quality_df=file_quality_df,
+            )
+        return compiler.relate(
             spec.left_table,
             spec.right_table,
             options=RelationOptions(

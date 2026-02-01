@@ -1,4 +1,4 @@
-"""Tests for Delta QueryBuilder fallback path."""
+"""Tests for Delta query builder path."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
+from datafusion import DataFrame, SessionContext, col, lit
 
-from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.optional_deps import require_deltalake
 
@@ -15,8 +15,7 @@ require_deltalake()
 
 
 def test_delta_querybuilder_path(tmp_path: Path) -> None:
-    """Ensure delta_query can execute via QueryBuilder when enabled."""
-    from datafusion_engine.compile.options import DataFusionSqlPolicy
+    """Ensure delta_query can execute via DataFusion expressions."""
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from engine.delta_tools import DeltaQueryRequest, delta_query
 
@@ -25,21 +24,22 @@ def test_delta_querybuilder_path(tmp_path: Path) -> None:
         tmp_path,
         table=table,
         options=DeltaSeedOptions(
-            profile=df_profile(),
+            profile=DataFusionRuntimeProfile(),
             table_name="delta_table",
         ),
     )
 
-    profile = DataFusionRuntimeProfile(
-        enable_delta_querybuilder=True,
-        sql_policy=DataFusionSqlPolicy(allow_statements=True),
-        sql_policy_name=None,
-    )
+    profile = DataFusionRuntimeProfile()
+
+    def _builder(ctx: SessionContext, table_name: str) -> DataFrame:
+        return ctx.table(table_name).filter(col("id") > lit(1))
+
     request = DeltaQueryRequest(
         path=str(table_path),
-        sql="SELECT id FROM t WHERE id > 1",
         table_name="t",
         runtime_profile=profile,
+        builder=_builder,
+        query_label="id_gt_1",
     )
     reader = delta_query(request)
     result = reader.read_all()

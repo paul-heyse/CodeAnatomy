@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from semantics.catalog import SemanticCatalog
+    from semantics.quality import QualityRelationshipSpec
     from semantics.specs import RelationshipSpec, SemanticTableSpec
 
 
@@ -60,7 +61,7 @@ def _build_normalization_subgraph() -> list[str]:
 
 
 def _build_relationship_subgraph(
-    specs: tuple[RelationshipSpec, ...],
+    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
 ) -> list[str]:
     """Build Mermaid lines for relationship subgraph.
 
@@ -116,7 +117,7 @@ def _build_extraction_edges() -> list[str]:
 
 
 def _build_relationship_edges(
-    specs: tuple[RelationshipSpec, ...],
+    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
 ) -> list[str]:
     """Build Mermaid edges from normalization to relationships.
 
@@ -128,15 +129,16 @@ def _build_relationship_edges(
     lines = ["", "    %% Normalization to Relationships"]
     for spec in specs:
         node_id = spec.name.replace("_v1", "").replace("-", "_")
-        left_base = spec.left_table.replace("_v1", "").replace("-", "_")
-        right_base = spec.right_table.replace("_v1", "").replace("-", "_")
+        left_base, right_base = _relationship_left_right(spec)
+        left_base = left_base.replace("_v1", "").replace("-", "_")
+        right_base = right_base.replace("_v1", "").replace("-", "_")
         lines.append(f"    {left_base} --> {node_id}")
         lines.append(f"    {right_base} --> {node_id}")
     return lines
 
 
 def _build_output_edges(
-    specs: tuple[RelationshipSpec, ...],
+    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
 ) -> list[str]:
     """Build Mermaid edges to final outputs.
 
@@ -327,7 +329,26 @@ def _format_table_specs(
     return lines
 
 
-def _format_relationship_spec(spec: RelationshipSpec) -> list[str]:
+def _relationship_left_right(
+    spec: RelationshipSpec | QualityRelationshipSpec,
+) -> tuple[str, str]:
+    """Return left/right view names for a relationship spec.
+
+    Returns
+    -------
+    tuple[str, str]
+        Left and right view names.
+    """
+    from semantics.quality import QualityRelationshipSpec
+
+    if isinstance(spec, QualityRelationshipSpec):
+        return spec.left_view, spec.right_view
+    return spec.left_table, spec.right_table
+
+
+def _format_relationship_spec(
+    spec: RelationshipSpec | QualityRelationshipSpec,
+) -> list[str]:
     """Format a single relationship specification.
 
     Returns
@@ -335,22 +356,37 @@ def _format_relationship_spec(spec: RelationshipSpec) -> list[str]:
     list[str]
         Markdown lines for the relationship specification.
     """
+    from semantics.quality import QualityRelationshipSpec
+
+    left_view, right_view = _relationship_left_right(spec)
     lines = [
         f"### {spec.name}",
         "",
-        f"- **Left table**: `{spec.left_table}`",
-        f"- **Right table**: `{spec.right_table}`",
-        f"- **Join hint**: `{spec.join_hint}`",
-        f"- **Origin**: `{spec.origin}`",
+        f"- **Left view**: `{left_view}`",
+        f"- **Right view**: `{right_view}`",
     ]
-    if spec.filter_sql:
-        lines.append(f"- **Filter**: `{spec.filter_sql}`")
+    if isinstance(spec, QualityRelationshipSpec):
+        join_pairs = ", ".join(
+            f"{left}={right}" for left, right in zip(spec.left_on, spec.right_on, strict=False)
+        )
+        lines.append(f"- **Join type**: `{spec.how}`")
+        if join_pairs:
+            lines.append(f"- **Join keys**: `{join_pairs}`")
+        lines.append(f"- **Origin**: `{spec.origin}`")
+        lines.append(f"- **Provider**: `{spec.provider}`")
+        if spec.rule_name is not None:
+            lines.append(f"- **Rule name**: `{spec.rule_name}`")
+    else:
+        lines.append(f"- **Join hint**: `{spec.join_hint}`")
+        lines.append(f"- **Origin**: `{spec.origin}`")
+        if spec.filter_sql:
+            lines.append(f"- **Filter**: `{spec.filter_sql}`")
     lines.append("")
     return lines
 
 
 def _format_relationship_specs(
-    specs: tuple[RelationshipSpec, ...],
+    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
 ) -> list[str]:
     """Format relationship specifications section.
 

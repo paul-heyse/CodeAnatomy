@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -24,6 +24,7 @@ from datafusion_engine.udf.runtime import (
     validate_rust_udf_snapshot,
 )
 from datafusion_engine.views.artifacts import (
+    CachePolicy,
     ViewArtifactLineage,
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
@@ -37,8 +38,6 @@ from serde_artifacts import ViewCacheArtifact, ViewCacheArtifactEnvelope
 from serde_msgspec import convert, to_builtins
 from utils.uuid_factory import uuid7_hex
 from utils.validation import validate_required_items
-
-CachePolicy = Literal["none", "delta_staging", "delta_output"]
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
@@ -358,6 +357,7 @@ def _maybe_record_view_definition(
                 referenced_tables=node.deps,
             ),
             runtime_hash=context.runtime_hash,
+            cache_policy=node.cache_policy,
         ),
     )
     record_view_definition(runtime_profile, artifact=artifact)
@@ -569,7 +569,11 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
     )
     staging_path = _delta_staging_path(runtime_profile, registration.node)
     plan_fingerprint, plan_identity_hash = _plan_identifiers(registration.node)
-    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
+    from datafusion_engine.cache.inventory import CacheInventoryEntry, delta_report_file_count
     from datafusion_engine.cache.registry import (
         CacheHitRequest,
         record_cache_inventory,
@@ -585,22 +589,34 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
         WritePipeline,
         WriteRequest,
     )
+    from obs.otel.cache import cache_span
     from storage.deltalake import DeltaSchemaRequest
 
     try:
-        cache_hit = resolve_cache_hit(
-            registration.ctx,
-            runtime_profile,
-            request=CacheHitRequest(
-                view_name=registration.node.name,
-                cache_path=staging_path,
-                plan_identity_hash=plan_identity_hash,
-                expected_schema_hash=registration.schema_hash,
-                allow_evolution=False,
-                storage_options=None,
-                log_storage_options=None,
-            ),
-        )
+        with cache_span(
+            "cache.view.delta_staging.read",
+            cache_policy=registration.node.cache_policy,
+            cache_scope="view",
+            operation="read",
+            attributes={
+                "view_name": registration.node.name,
+                "plan_identity_hash": plan_identity_hash,
+            },
+        ) as (_span, set_result):
+            cache_hit = resolve_cache_hit(
+                registration.ctx,
+                runtime_profile,
+                request=CacheHitRequest(
+                    view_name=registration.node.name,
+                    cache_path=staging_path,
+                    plan_identity_hash=plan_identity_hash,
+                    expected_schema_hash=registration.schema_hash,
+                    allow_evolution=False,
+                    storage_options=None,
+                    log_storage_options=None,
+                ),
+            )
+            set_result("hit" if cache_hit is not None else "miss")
     except DeltaSchemaMismatchError as exc:
         _record_cache_error(
             registration.cache,
@@ -643,18 +659,39 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
         )
         raise
     partition_by = _cache_partition_by(registration.schema, location=None)
-    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
-    result = pipeline.write(
-        WriteRequest(
-            source=registration.df,
-            destination=staging_path,
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            partition_by=partition_by,
-            plan_fingerprint=plan_fingerprint,
-            plan_identity_hash=plan_identity_hash,
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_write",
+            cache_policy=registration.node.cache_policy,
+            cache_scope="view",
+            schema_hash=registration.schema_hash,
+            plan_hash=plan_identity_hash,
         )
     )
+    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
+    with cache_span(
+        "cache.view.delta_staging.write",
+        cache_policy=registration.node.cache_policy,
+        cache_scope="view",
+        operation="write",
+        attributes={
+            "view_name": registration.node.name,
+            "plan_identity_hash": plan_identity_hash,
+        },
+    ) as (_span, set_result):
+        result = pipeline.write(
+            WriteRequest(
+                source=registration.df,
+                destination=staging_path,
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                partition_by=partition_by,
+                plan_fingerprint=plan_fingerprint,
+                plan_identity_hash=plan_identity_hash,
+                format_options={"commit_metadata": commit_metadata},
+            )
+        )
+        set_result("write")
     register_cached_delta_table(
         registration.ctx,
         runtime_profile,
@@ -662,17 +699,23 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
         location=DatasetLocation(path=staging_path, format="delta"),
         snapshot_version=result.delta_result.version if result.delta_result else None,
     )
+    file_count = delta_report_file_count(
+        result.delta_result.report if result.delta_result is not None else None
+    )
     record_cache_inventory(
         runtime_profile,
         entry=CacheInventoryEntry(
             view_name=registration.node.name,
             cache_policy=registration.node.cache_policy,
             cache_path=staging_path,
+            result="write",
             plan_fingerprint=plan_fingerprint,
             plan_identity_hash=plan_identity_hash,
             schema_identity_hash=registration.schema_hash,
             snapshot_version=result.delta_result.version if result.delta_result else None,
             snapshot_timestamp=None,
+            row_count=result.rows_written,
+            file_count=file_count,
             partition_by=partition_by,
         ),
         ctx=registration.ctx,
@@ -697,7 +740,11 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
         raise ValueError(msg)
     target_path = str(location.path)
-    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
+    from datafusion_engine.cache.inventory import CacheInventoryEntry, delta_report_file_count
     from datafusion_engine.cache.registry import (
         CacheHitRequest,
         record_cache_inventory,
@@ -712,24 +759,36 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         WritePipeline,
         WriteRequest,
     )
+    from obs.otel.cache import cache_span
     from storage.deltalake import DeltaSchemaRequest
 
     allow_evolution = _allow_schema_evolution(location)
     plan_fingerprint, plan_identity_hash = _plan_identifiers(registration.node)
     try:
-        cache_hit = resolve_cache_hit(
-            registration.ctx,
-            runtime_profile,
-            request=CacheHitRequest(
-                view_name=registration.node.name,
-                cache_path=target_path,
-                plan_identity_hash=plan_identity_hash,
-                expected_schema_hash=registration.schema_hash,
-                allow_evolution=allow_evolution,
-                storage_options=location.storage_options,
-                log_storage_options=location.delta_log_storage_options,
-            ),
-        )
+        with cache_span(
+            "cache.view.delta_output.read",
+            cache_policy=registration.node.cache_policy,
+            cache_scope="view",
+            operation="read",
+            attributes={
+                "view_name": registration.node.name,
+                "plan_identity_hash": plan_identity_hash,
+            },
+        ) as (_span, set_result):
+            cache_hit = resolve_cache_hit(
+                registration.ctx,
+                runtime_profile,
+                request=CacheHitRequest(
+                    view_name=registration.node.name,
+                    cache_path=target_path,
+                    plan_identity_hash=plan_identity_hash,
+                    expected_schema_hash=registration.schema_hash,
+                    allow_evolution=allow_evolution,
+                    storage_options=location.storage_options,
+                    log_storage_options=location.delta_log_storage_options,
+                ),
+            )
+            set_result("hit" if cache_hit is not None else "miss")
     except DeltaSchemaMismatchError as exc:
         _record_cache_error(
             registration.cache,
@@ -778,18 +837,39 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         )
         raise
     partition_by = _cache_partition_by(registration.schema, location=location)
-    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
-    result = pipeline.write(
-        WriteRequest(
-            source=registration.df,
-            destination=target_path,
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            partition_by=partition_by,
-            plan_fingerprint=plan_fingerprint,
-            plan_identity_hash=plan_identity_hash,
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_write",
+            cache_policy=registration.node.cache_policy,
+            cache_scope="view",
+            schema_hash=registration.schema_hash,
+            plan_hash=plan_identity_hash,
         )
     )
+    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
+    with cache_span(
+        "cache.view.delta_output.write",
+        cache_policy=registration.node.cache_policy,
+        cache_scope="view",
+        operation="write",
+        attributes={
+            "view_name": registration.node.name,
+            "plan_identity_hash": plan_identity_hash,
+        },
+    ) as (_span, set_result):
+        result = pipeline.write(
+            WriteRequest(
+                source=registration.df,
+                destination=target_path,
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                partition_by=partition_by,
+                plan_fingerprint=plan_fingerprint,
+                plan_identity_hash=plan_identity_hash,
+                format_options={"commit_metadata": commit_metadata},
+            )
+        )
+        set_result("write")
     register_cached_delta_table(
         registration.ctx,
         runtime_profile,
@@ -797,17 +877,23 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         location=location,
         snapshot_version=result.delta_result.version if result.delta_result else None,
     )
+    file_count = delta_report_file_count(
+        result.delta_result.report if result.delta_result is not None else None
+    )
     record_cache_inventory(
         runtime_profile,
         entry=CacheInventoryEntry(
             view_name=registration.node.name,
             cache_policy=registration.node.cache_policy,
             cache_path=target_path,
+            result="write",
             plan_fingerprint=plan_fingerprint,
             plan_identity_hash=plan_identity_hash,
             schema_identity_hash=registration.schema_hash,
             snapshot_version=result.delta_result.version if result.delta_result else None,
             snapshot_timestamp=None,
+            row_count=result.rows_written,
+            file_count=file_count,
             partition_by=partition_by,
         ),
         ctx=registration.ctx,

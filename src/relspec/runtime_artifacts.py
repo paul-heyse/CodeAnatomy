@@ -594,24 +594,47 @@ def _persist_execution_result(
     )
     cache_path = Path(str(cache_location.path))
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
+    from datafusion_engine.cache.inventory import delta_report_file_count
     from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+    from obs.otel.cache import cache_span
 
     pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
-    try:
-        write_result = pipeline.write(
-            WriteRequest(
-                source=df,
-                destination=str(cache_path),
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-                format_options={
-                    "commit_metadata": {
-                        "operation": "runtime_artifact_cache",
-                        "artifact_name": name,
-                    }
-                },
-            )
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_write",
+            cache_policy="runtime_artifact_delta",
+            cache_scope="artifact",
+            schema_hash=schema_identity,
+            plan_hash=spec.plan_task_signature or spec.plan_signature,
+            cache_key=spec.plan_task_signature or spec.plan_signature,
+            extra={"artifact_name": name},
         )
+    )
+    try:
+        with cache_span(
+            "cache.artifact.delta.write",
+            cache_policy="runtime_artifact_delta",
+            cache_scope="artifact",
+            operation="write",
+            attributes={
+                "artifact_name": name,
+                "plan_task_signature": spec.plan_task_signature,
+            },
+        ) as (_span, set_result):
+            write_result = pipeline.write(
+                WriteRequest(
+                    source=df,
+                    destination=str(cache_path),
+                    format=WriteFormat.DELTA,
+                    mode=WriteMode.OVERWRITE,
+                    format_options={"commit_metadata": commit_metadata},
+                )
+            )
+            set_result("write")
     except (RuntimeError, TypeError, ValueError, OSError):
         logger.exception("Runtime artifact delta persistence failed.")
         return None
@@ -633,17 +656,23 @@ def _persist_execution_result(
         location=cache_location,
         snapshot_version=snapshot_version,
     )
+    file_count = delta_report_file_count(
+        write_result.delta_result.report if write_result.delta_result is not None else None
+    )
     record_cache_inventory(
         runtime_profile,
         entry=CacheInventoryEntry(
             view_name=name,
             cache_policy="runtime_artifact_delta",
             cache_path=str(cache_path),
+            result="write",
             plan_fingerprint=spec.plan_fingerprint,
             plan_identity_hash=spec.plan_task_signature,
             schema_identity_hash=schema_identity,
             snapshot_version=snapshot_version,
             snapshot_timestamp=None,
+            row_count=write_result.rows_written,
+            file_count=file_count,
             partition_by=(),
         ),
         ctx=ctx,

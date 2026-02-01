@@ -1,0 +1,385 @@
+"""Quality diagnostics and coverage reporting for semantic relationships.
+
+This module provides functions to compute quality metrics, coverage reports,
+and ambiguity analysis for quality-aware relationship compilation.
+
+Usage
+-----
+>>> from semantics.diagnostics import build_relationship_quality_metrics
+>>> from datafusion import SessionContext
+
+>>> ctx = SessionContext()
+>>> # ... register relationship tables ...
+>>> metrics_df = build_relationship_quality_metrics(ctx, "rel_docstring_owner_v1")
+>>> print(metrics_df.to_pandas())
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from datafusion import col, lit
+from datafusion import functions as f
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
+
+
+def _table_exists(ctx: SessionContext, name: str) -> bool:
+    """Check if a table exists in the session context.
+
+    Returns
+    -------
+    bool
+        True if table exists, False otherwise.
+    """
+    try:
+        ctx.table(name)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def build_relationship_quality_metrics(
+    ctx: SessionContext,
+    relationship_name: str,
+    *,
+    source_column: str = "src",
+    target_column: str = "dst",
+) -> DataFrame | None:
+    """Build aggregate quality metrics for a compiled relationship.
+
+    Computes summary statistics including edge counts, confidence
+    distribution, score ranges, and ambiguity metrics.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context with relationship table registered.
+    relationship_name
+        Name of the relationship table to analyze.
+    source_column
+        Column name containing source entity identifiers.
+    target_column
+        Column name containing target entity identifiers.
+
+    Returns
+    -------
+    DataFrame | None
+        Quality metrics DataFrame with columns:
+        - relationship_name: Name of the relationship
+        - total_edges: Total number of edges
+        - distinct_sources: Number of unique source entities
+        - distinct_targets: Number of unique target entities
+        - avg_confidence: Mean confidence score
+        - min_confidence: Minimum confidence
+        - max_confidence: Maximum confidence
+        - avg_score: Mean relationship score
+        - min_score: Minimum score
+        - max_score: Maximum score
+        - low_confidence_edges: Edges with confidence < 0.5
+
+        Returns None if table doesn't exist.
+
+    Notes
+    -----
+    Requires the relationship table to have `confidence` and `score` columns.
+    If these columns don't exist, appropriate defaults are used.
+    """
+    if not _table_exists(ctx, relationship_name):
+        return None
+
+    rel_df = ctx.table(relationship_name)
+    schema_names: list[str] = (
+        list(rel_df.schema().names) if hasattr(rel_df.schema(), "names") else []
+    )
+
+    # Check for required columns
+    has_confidence = "confidence" in schema_names
+    has_score = "score" in schema_names
+    has_src = source_column in schema_names
+    has_dst = target_column in schema_names
+
+    # Build aggregation expressions
+    agg_exprs = [
+        lit(relationship_name).alias("relationship_name"),
+        f.count(lit(1)).alias("total_edges"),
+    ]
+
+    if has_src:
+        agg_exprs.append(f.count(col(source_column), distinct=True).alias("distinct_sources"))
+    else:
+        agg_exprs.append(lit(0).alias("distinct_sources"))
+
+    if has_dst:
+        agg_exprs.append(f.count(col(target_column), distinct=True).alias("distinct_targets"))
+    else:
+        agg_exprs.append(lit(0).alias("distinct_targets"))
+
+    if has_confidence:
+        agg_exprs.extend([
+            f.avg(col("confidence")).alias("avg_confidence"),
+            f.min(col("confidence")).alias("min_confidence"),
+            f.max(col("confidence")).alias("max_confidence"),
+            f.sum(
+                f.when(col("confidence") < lit(0.5), lit(1)).otherwise(lit(0))
+            ).alias("low_confidence_edges"),
+        ])
+    else:
+        agg_exprs.extend([
+            lit(None).cast("float64").alias("avg_confidence"),
+            lit(None).cast("float64").alias("min_confidence"),
+            lit(None).cast("float64").alias("max_confidence"),
+            lit(0).alias("low_confidence_edges"),
+        ])
+
+    if has_score:
+        agg_exprs.extend([
+            f.avg(col("score")).alias("avg_score"),
+            f.min(col("score")).alias("min_score"),
+            f.max(col("score")).alias("max_score"),
+        ])
+    else:
+        agg_exprs.extend([
+            lit(None).cast("float64").alias("avg_score"),
+            lit(None).cast("float64").alias("min_score"),
+            lit(None).cast("float64").alias("max_score"),
+        ])
+
+    return rel_df.aggregate([], agg_exprs)
+
+
+def build_file_coverage_report(
+    ctx: SessionContext,
+    *,
+    base_table: str = "file_index",
+) -> DataFrame | None:
+    """Build extraction coverage report per file.
+
+    Summarizes which extraction sources have data for each file,
+    useful for identifying gaps in extraction coverage.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context with extraction tables registered.
+    base_table
+        Name of the base file table (default: "file_index").
+
+    Returns
+    -------
+    DataFrame | None
+        Coverage report DataFrame with columns:
+        - file_id: File identifier
+        - has_cst: 1 if CST data exists, 0 otherwise
+        - has_tree_sitter: 1 if tree-sitter data exists, 0 otherwise
+        - has_scip: 1 if SCIP data exists, 0 otherwise
+        - extraction_count: Number of extraction sources with data
+
+        Returns None if base_table doesn't exist.
+    """
+    if not _table_exists(ctx, base_table):
+        return None
+
+    base = ctx.table(base_table).select(col("file_id"))
+
+    # CST coverage
+    if _table_exists(ctx, "cst_defs_norm_v1"):
+        cst_files = (
+            ctx.table("cst_defs_norm_v1")
+            .select(col("file_id"))
+            .distinct()
+            .with_column("has_cst", lit(1))
+        )
+        base = base.join(cst_files, left_on=["file_id"], right_on=["file_id"], how="left")
+    else:
+        base = base.with_column("has_cst", lit(0))
+
+    # Tree-sitter coverage
+    if _table_exists(ctx, "tree_sitter_files_v1"):
+        ts_files = (
+            ctx.table("tree_sitter_files_v1")
+            .select(col("file_id"))
+            .distinct()
+            .with_column("has_tree_sitter", lit(1))
+        )
+        base = base.join(ts_files, left_on=["file_id"], right_on=["file_id"], how="left")
+    else:
+        base = base.with_column("has_tree_sitter", lit(0))
+
+    # SCIP coverage
+    if _table_exists(ctx, "scip_documents"):
+        scip_files = (
+            ctx.table("scip_documents")
+            .select(col("document_id").alias("file_id"))
+            .distinct()
+            .with_column("has_scip", lit(1))
+        )
+        base = base.join(scip_files, left_on=["file_id"], right_on=["file_id"], how="left")
+    else:
+        base = base.with_column("has_scip", lit(0))
+
+    # Coalesce and compute extraction count
+    return base.select(
+        col("file_id"),
+        f.coalesce(col("has_cst"), lit(0)).alias("has_cst"),
+        f.coalesce(col("has_tree_sitter"), lit(0)).alias("has_tree_sitter"),
+        f.coalesce(col("has_scip"), lit(0)).alias("has_scip"),
+        (
+            f.coalesce(col("has_cst"), lit(0))
+            + f.coalesce(col("has_tree_sitter"), lit(0))
+            + f.coalesce(col("has_scip"), lit(0))
+        ).alias("extraction_count"),
+    )
+
+
+def build_ambiguity_analysis(
+    ctx: SessionContext,
+    relationship_name: str,
+    *,
+    ambiguity_column: str = "ambiguity_group_id",
+    source_column: str = "src",
+) -> DataFrame | None:
+    """Analyze ambiguity patterns in a compiled relationship.
+
+    Identifies sources with multiple candidate matches and computes
+    ambiguity statistics for quality assessment.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context with relationship table registered.
+    relationship_name
+        Name of the relationship table to analyze.
+    ambiguity_column
+        Column containing ambiguity group identifiers.
+    source_column
+        Column containing source entity identifiers.
+
+    Returns
+    -------
+    DataFrame | None
+        Ambiguity analysis DataFrame with columns:
+        - relationship_name: Name of the relationship
+        - total_sources: Total unique source entities
+        - ambiguous_sources: Sources with multiple matches
+        - ambiguity_rate: Fraction of sources with ambiguity
+        - max_candidates: Maximum candidates per source
+        - avg_candidates: Average candidates per ambiguous source
+
+        Returns None if table doesn't exist.
+    """
+    if not _table_exists(ctx, relationship_name):
+        return None
+
+    rel_df = ctx.table(relationship_name)
+    schema_names: list[str] = (
+        list(rel_df.schema().names) if hasattr(rel_df.schema(), "names") else []
+    )
+
+    # Check for required columns
+    has_ambiguity = ambiguity_column in schema_names
+    has_source = source_column in schema_names
+
+    if not has_source:
+        # Cannot analyze without source column
+        return None
+
+    if not has_ambiguity:
+        # Without ambiguity column, count matches per source
+        per_source = rel_df.aggregate(
+            [col(source_column)],
+            [f.count(lit(1)).alias("match_count")],
+        )
+
+        # Compute all metrics in a single aggregation to avoid cross join
+        return per_source.aggregate(
+            [],
+            [
+                lit(relationship_name).alias("relationship_name"),
+                f.count(lit(1)).alias("total_sources"),
+                f.sum(
+                    f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))
+                ).alias("ambiguous_sources"),
+                f.max(col("match_count")).alias("max_candidates"),
+                f.avg(
+                    f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
+                ).alias("avg_candidates"),
+            ],
+        ).with_column(
+            "ambiguity_rate",
+            col("ambiguous_sources").cast("float64") / col("total_sources").cast("float64"),
+        )
+
+    # With ambiguity column, use it for grouping
+    per_group = rel_df.aggregate(
+        [col(ambiguity_column)],
+        [
+            f.count(lit(1)).alias("match_count"),
+            f.first_value(col(source_column)).alias("first_source"),
+        ],
+    )
+
+    return per_group.aggregate(
+        [],
+        [
+            lit(relationship_name).alias("relationship_name"),
+            f.count(lit(1)).alias("total_sources"),
+            f.sum(
+                f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))
+            ).alias("ambiguous_sources"),
+            f.max(col("match_count")).alias("max_candidates"),
+            f.avg(
+                f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
+            ).alias("avg_candidates"),
+        ],
+    ).with_column(
+        "ambiguity_rate",
+        col("ambiguous_sources").cast("float64") / col("total_sources").cast("float64"),
+    )
+
+
+def build_quality_summary(
+    ctx: SessionContext,
+    relationship_names: list[str],
+) -> DataFrame | None:
+    """Build aggregate quality summary across multiple relationships.
+
+    Combines metrics from multiple relationships into a single summary.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context with relationship tables registered.
+    relationship_names
+        List of relationship table names to analyze.
+
+    Returns
+    -------
+    DataFrame | None
+        Combined quality summary DataFrame, or None if no tables exist.
+    """
+    dfs: list[DataFrame] = []
+    for name in relationship_names:
+        metrics = build_relationship_quality_metrics(ctx, name)
+        if metrics is not None:
+            dfs.append(metrics)
+
+    if not dfs:
+        return None
+
+    # Union all metrics
+    result = dfs[0]
+    for df in dfs[1:]:
+        result = result.union(df)
+
+    return result
+
+
+__all__ = [
+    "build_ambiguity_analysis",
+    "build_file_coverage_report",
+    "build_quality_summary",
+    "build_relationship_quality_metrics",
+]

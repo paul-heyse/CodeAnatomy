@@ -18,6 +18,8 @@ class MetricName(StrEnum):
     DATASET_COLUMNS = "codeanatomy.dataset.columns"
     SCAN_ROW_GROUPS = "codeanatomy.scan.row_groups"
     SCAN_FRAGMENTS = "codeanatomy.scan.fragments"
+    CACHE_OPERATION_COUNT = "codeanatomy.cache.operation.count"
+    CACHE_OPERATION_DURATION = "codeanatomy.cache.operation.duration"
 
 
 class AttributeName(StrEnum):
@@ -33,6 +35,10 @@ class AttributeName(StrEnum):
     ERROR_TYPE = "error_type"
     STAGE_NAME = "codeanatomy.stage"
     DATASET = "dataset"
+    CACHE_POLICY = "cache.policy"
+    CACHE_SCOPE = "cache.scope"
+    CACHE_OPERATION = "cache.operation"
+    CACHE_RESULT = "cache.result"
 
 
 class ScopeName(StrEnum):

@@ -14,6 +14,8 @@ The semantic compiler produces CPG relationships by joining evidence from multip
 
 The approach leverages all available extraction metadata: CST parse errors, SCIP diagnostics, tree-sitter stats, and coordinate encoding metadata to produce relationships with explicit `confidence`, `score`, and `ambiguity_group_id` fields.
 
+**Implementation Policy**: Avoid raw SQL strings. Use native DataFusion DataFrame/Expr APIs for joins, filters, projections, aggregates, and window functions. If a SQL string is ever unavoidable, isolate it in a single well-documented function and treat it as a temporary exception.
+
 ---
 
 ## Part 1: Available Quality Signals from Extraction
@@ -141,6 +143,12 @@ Different evidence sources have inherent reliability differences. The `base_scor
 
 When multiple rules produce candidates for the same entity, the tier ordering ensures SCIP-based edges win over heuristic edges.
 
+### 3.1 Expression Policy (No SQL)
+
+- All relationship logic must be expressed using DataFusion `Expr` builders (e.g., `col`, `lit`, `when`) and DataFrame APIs.
+- `RelationshipSpec` expressions are represented as `ExprSpec` callables and evaluated via a typed `ExprContext`.
+- Add a validation pass that checks referenced columns exist in the joined schema and that expressions are deterministic.
+
 ---
 
 ## Part 4: Implementation Specifications
@@ -151,22 +159,46 @@ When multiple rules produce candidates for the same entity, the tier ordering en
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Sequence
+from typing import Callable, Literal, Protocol, Sequence
 
-ExprStr = str  # SQL expression strings for DataFusion compilation
+from datafusion import Expr
+
+
+class ExprContext(Protocol):
+    """Expression context for building DataFusion Expr objects."""
+
+    def col(self, name: str) -> Expr: ...
+    def lit(self, value: object) -> Expr: ...
+
+
+ExprSpec = Callable[[ExprContext], Expr]
+
+
+@dataclass(frozen=True)
+class SelectExpr:
+    """Projected expression with explicit alias."""
+    expr: ExprSpec
+    alias: str
+
+
+@dataclass(frozen=True)
+class OrderSpec:
+    """Order by expression with explicit direction."""
+    expr: ExprSpec
+    direction: Literal["asc", "desc"] = "desc"
 
 
 @dataclass(frozen=True)
 class HardPredicate:
     """Boolean predicate that must be true for valid candidates."""
-    expr: ExprStr
+    expr: ExprSpec
 
 
 @dataclass(frozen=True)
 class Feature:
     """Numeric feature for scoring candidates."""
     name: str
-    expr: ExprStr
+    expr: ExprSpec
     weight: float
     kind: Literal["evidence", "quality"] = "evidence"
 
@@ -183,9 +215,9 @@ class SignalsSpec:
 @dataclass(frozen=True)
 class RankSpec:
     """Deterministic ranking and ambiguity grouping."""
-    ambiguity_key_expr: ExprStr
-    ambiguity_group_id_expr: ExprStr | None = None
-    order_by: Sequence[str] = ("score DESC",)
+    ambiguity_key_expr: ExprSpec
+    ambiguity_group_id_expr: ExprSpec | None = None
+    order_by: Sequence[OrderSpec] = (OrderSpec(lambda e: e.col("score")),)
     keep: Literal["all", "best"] = "all"
     top_k: int = 1
 
@@ -214,82 +246,104 @@ class RelationshipSpec:
     rank: RankSpec | None = None
 
     # Output columns
-    select_exprs: Sequence[ExprStr] = ()
+    select_exprs: Sequence[SelectExpr] = ()
 ```
+
+`ExprContextImpl` should resolve columns with left/right aliases and provide helper accessors for literals and common DataFusion functions. This keeps all relationship logic in native DataFusion expressions and avoids SQL strings.
 
 ### 4.2 File Quality View
 
 Create a reusable `file_quality` view aggregating all provider health signals:
 
 ```python
+from datafusion.functions import col, coalesce, count, lit, when
+
 def build_file_quality_view(ctx: SessionContext) -> DataFrame:
     """Build aggregated file quality signals from all extraction sources."""
-    return ctx.sql("""
-        WITH
-        cst_err AS (
-            SELECT
-                file_id,
-                CAST(COUNT(*) > 0 AS INT) AS has_cst_parse_errors,
-                COUNT(*) AS cst_error_count
-            FROM cst_parse_errors
-            GROUP BY file_id
-        ),
-        ts AS (
-            SELECT
-                file_id,
-                CAST(parse_timed_out AS INT) AS ts_timed_out,
-                error_count AS ts_error_count,
-                missing_count AS ts_missing_count,
-                CAST(match_limit_exceeded AS INT) AS ts_match_limit_exceeded
-            FROM ts_stats
-        ),
-        scip_diag AS (
-            SELECT
-                document_id AS file_id,
-                CAST(COUNT(*) > 0 AS INT) AS has_scip_diagnostics,
-                COUNT(*) AS scip_diagnostic_count
-            FROM scip_diagnostics
-            GROUP BY document_id
-        ),
-        scip_meta AS (
-            SELECT
-                document_id AS file_id,
-                CASE WHEN position_encoding = 'UnspecifiedPositionEncoding' THEN 1 ELSE 0 END
-                    AS scip_encoding_unspecified
-            FROM scip_documents
+    cst_err = (
+        ctx.table("cst_parse_errors")
+        .aggregate(
+            ["file_id"],
+            [
+                (count(lit(1)) > lit(0)).cast("int").alias("has_cst_parse_errors"),
+                count(lit(1)).alias("cst_error_count"),
+            ],
         )
-        SELECT
-            f.file_id,
-            f.file_sha256,
-            COALESCE(cst_err.has_cst_parse_errors, 0) AS has_cst_parse_errors,
-            COALESCE(cst_err.cst_error_count, 0) AS cst_error_count,
-            COALESCE(ts.ts_timed_out, 0) AS ts_timed_out,
-            COALESCE(ts.ts_error_count, 0) AS ts_error_count,
-            COALESCE(ts.ts_missing_count, 0) AS ts_missing_count,
-            COALESCE(ts.ts_match_limit_exceeded, 0) AS ts_match_limit_exceeded,
-            COALESCE(scip_diag.has_scip_diagnostics, 0) AS has_scip_diagnostics,
-            COALESCE(scip_diag.scip_diagnostic_count, 0) AS scip_diagnostic_count,
-            COALESCE(scip_meta.scip_encoding_unspecified, 0) AS scip_encoding_unspecified,
-            -- Composite quality score (lower = worse)
-            (1000
-             - COALESCE(cst_err.has_cst_parse_errors, 0) * 200
-             - COALESCE(ts.ts_timed_out, 0) * 300
-             - COALESCE(ts.ts_error_count, 0) * 10
-             - COALESCE(ts.ts_match_limit_exceeded, 0) * 150
-             - COALESCE(scip_diag.has_scip_diagnostics, 0) * 100
-             - COALESCE(scip_meta.scip_encoding_unspecified, 0) * 50
-            ) AS file_quality_score
-        FROM file_index f
-        LEFT JOIN cst_err ON f.file_id = cst_err.file_id
-        LEFT JOIN ts ON f.file_id = ts.file_id
-        LEFT JOIN scip_diag ON f.file_id = scip_diag.file_id
-        LEFT JOIN scip_meta ON f.file_id = scip_meta.file_id
-    """)
+    )
+    ts = (
+        ctx.table("ts_stats")
+        .select(
+            col("file_id"),
+            col("parse_timed_out").cast("int").alias("ts_timed_out"),
+            col("error_count").alias("ts_error_count"),
+            col("missing_count").alias("ts_missing_count"),
+            col("match_limit_exceeded").cast("int").alias("ts_match_limit_exceeded"),
+        )
+    )
+    scip_diag = (
+        ctx.table("scip_diagnostics")
+        .aggregate(
+            ["document_id"],
+            [
+                (count(lit(1)) > lit(0)).cast("int").alias("has_scip_diagnostics"),
+                count(lit(1)).alias("scip_diagnostic_count"),
+            ],
+        )
+        .select(
+            col("document_id").alias("file_id"),
+            col("has_scip_diagnostics"),
+            col("scip_diagnostic_count"),
+        )
+    )
+    scip_meta = (
+        ctx.table("scip_documents")
+        .select(
+            col("document_id").alias("file_id"),
+            when(col("position_encoding") == lit("UnspecifiedPositionEncoding"), lit(1))
+            .otherwise(lit(0))
+            .alias("scip_encoding_unspecified"),
+        )
+    )
+    base = (
+        ctx.table("file_index")
+        .join(cst_err, join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(ts, join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(scip_diag, join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(scip_meta, join_keys=(["file_id"], ["file_id"]), how="left")
+    )
+    return base.select(
+        col("file_id"),
+        col("file_sha256"),
+        coalesce(col("has_cst_parse_errors"), lit(0)).alias("has_cst_parse_errors"),
+        coalesce(col("cst_error_count"), lit(0)).alias("cst_error_count"),
+        coalesce(col("ts_timed_out"), lit(0)).alias("ts_timed_out"),
+        coalesce(col("ts_error_count"), lit(0)).alias("ts_error_count"),
+        coalesce(col("ts_missing_count"), lit(0)).alias("ts_missing_count"),
+        coalesce(col("ts_match_limit_exceeded"), lit(0)).alias("ts_match_limit_exceeded"),
+        coalesce(col("has_scip_diagnostics"), lit(0)).alias("has_scip_diagnostics"),
+        coalesce(col("scip_diagnostic_count"), lit(0)).alias("scip_diagnostic_count"),
+        coalesce(col("scip_encoding_unspecified"), lit(0)).alias(
+            "scip_encoding_unspecified"
+        ),
+        (
+            lit(1000)
+            - coalesce(col("has_cst_parse_errors"), lit(0)) * lit(200)
+            - coalesce(col("ts_timed_out"), lit(0)) * lit(300)
+            - coalesce(col("ts_error_count"), lit(0)) * lit(10)
+            - coalesce(col("ts_match_limit_exceeded"), lit(0)) * lit(150)
+            - coalesce(col("has_scip_diagnostics"), lit(0)) * lit(100)
+            - coalesce(col("scip_encoding_unspecified"), lit(0)) * lit(50)
+        ).alias("file_quality_score"),
+    )
 ```
 
 ### 4.3 Relationship Compiler with Quality Integration
 
 ```python
+from datafusion.functions import col, coalesce, lit, row_number, window
+
+from semantics.exprs import ExprContextImpl, clamp, stable_hash64
+
 def compile_relationship_with_quality(
     ctx: SessionContext,
     spec: RelationshipSpec,
@@ -297,8 +351,9 @@ def compile_relationship_with_quality(
 ) -> DataFrame:
     """Compile relationship spec to DataFusion DataFrame with quality signals."""
 
-    l = ctx.table(spec.left_view)
-    r = ctx.table(spec.right_view)
+    l = ctx.table(spec.left_view).alias("l")
+    r = ctx.table(spec.right_view).alias("r")
+    expr_ctx = ExprContextImpl(left_alias="l", right_alias="r")
 
     # 1) Equi-join on hard keys
     if spec.left_on and spec.right_on:
@@ -308,71 +363,107 @@ def compile_relationship_with_quality(
 
     # 2) Join file quality signals
     df = df.join(
-        file_quality_df.select("file_id", "file_quality_score", "has_cst_parse_errors",
-                               "ts_timed_out", "has_scip_diagnostics"),
+        file_quality_df.select(
+            "file_id",
+            "file_quality_score",
+            "has_cst_parse_errors",
+            "ts_timed_out",
+            "has_scip_diagnostics",
+        ),
         join_keys=(["file_id"], ["file_id"]),
-        how="left"
+        how="left",
     )
 
     # 3) Apply hard predicates
     for hp in spec.signals.hard:
-        df = df.filter(hp.expr)
+        df = df.filter(hp.expr(expr_ctx))
 
     # 4) Add feature columns
-    feature_cols = []
+    feature_cols: list[str] = []
     for f in spec.signals.features:
-        feature_cols.append(f"{f.expr} AS feat__{f.kind}__{f.name}")
-    if feature_cols:
-        df = df.select_exprs("*", *feature_cols)
+        feat_name = f"feat__{f.kind}__{f.name}"
+        df = df.with_column(feat_name, f.expr(expr_ctx))
+        feature_cols.append(feat_name)
 
     # 5) Compute score = base_score + weighted_features + file_quality_adjustment
-    score_terms = [str(spec.signals.base_score)]
+    score_expr = lit(spec.signals.base_score)
     for f in spec.signals.features:
-        score_terms.append(f"({f.weight}) * feat__{f.kind}__{f.name}")
-    # Add file quality contribution
-    score_terms.append("COALESCE(file_quality_score - 1000, 0)")  # Normalize around 0
-    score_expr = " + ".join(score_terms) + " AS score"
+        score_expr = score_expr + lit(f.weight) * col(f"feat__{f.kind}__{f.name}")
+    score_expr = score_expr + coalesce(col("file_quality_score"), lit(1000)) - lit(1000)
+    df = df.with_column("score", score_expr)
 
     # 6) Compute confidence = clamp(base + scaled_score)
-    conf_expr = (
-        f"LEAST(1.0, GREATEST(0.0, "
-        f"{spec.signals.base_confidence} + (score / 10000.0)"
-        f")) AS confidence"
+    conf_expr = clamp(
+        lit(spec.signals.base_confidence) + (col("score") / lit(10000.0)),
+        min_value=lit(0.0),
+        max_value=lit(1.0),
     )
+    df = df.with_column("confidence", conf_expr)
 
     rule_name = spec.rule_name or spec.name
-    df = df.select_exprs(
-        *spec.select_exprs,
-        score_expr,
-        conf_expr,
-        f"'{spec.origin}' AS origin",
-        f"'{spec.provider}' AS provider",
-        f"'{rule_name}' AS rule_name",
+    df = df.select(
+        *[sel.expr(expr_ctx).alias(sel.alias) for sel in spec.select_exprs],
+        col("score"),
+        col("confidence"),
+        lit(spec.origin).alias("origin"),
+        lit(spec.provider).alias("provider"),
+        lit(rule_name).alias("rule_name"),
     )
 
     # 7) Ambiguity grouping + deterministic winner selection
     if spec.rank:
-        group_key = spec.rank.ambiguity_key_expr
-        group_id = spec.rank.ambiguity_group_id_expr or f"stable_hash64({group_key})"
-        df = df.select_exprs(
-            "*",
-            f"{group_id} AS ambiguity_group_id",
-            f"ROW_NUMBER() OVER ("
-            f"PARTITION BY {group_key} "
-            f"ORDER BY {', '.join(spec.rank.order_by)}"
-            f") AS _rn",
+        group_key = spec.rank.ambiguity_key_expr(expr_ctx)
+        group_id = (
+            spec.rank.ambiguity_group_id_expr(expr_ctx)
+            if spec.rank.ambiguity_group_id_expr
+            else stable_hash64(group_key)
         )
+        order_by = [order.expr(expr_ctx).sort(order.direction) for order in spec.rank.order_by]
+        df = df.with_column("ambiguity_group_id", group_id)
+        df = df.with_column("_rn", row_number().over(window(partition_by=[group_key], order_by=order_by)))
         if spec.rank.keep == "best":
-            df = df.filter(f"_rn <= {spec.rank.top_k}").drop_columns("_rn")
+            df = df.filter(col("_rn") <= lit(spec.rank.top_k)).drop_columns("_rn")
 
     return df
 ```
+
+`stable_hash64` should be a registered DataFusion UDF returning deterministic 64-bit hashes. `clamp` should be implemented via DataFusion expressions (e.g., `least(greatest(value, min), max)`), not SQL strings.
 
 ---
 
 ## Part 5: Concrete Relationship Specifications
 
-### 5.1 CST Docstring → Owner Definition (ID-based, high confidence)
+### 5.1 Expression Helpers (DataFusion-native)
+
+```python
+from datafusion.functions import abs as abs_, lit, when
+
+
+def c(name: str) -> ExprSpec:
+    return lambda e: e.col(name)
+
+
+def v(value: object) -> ExprSpec:
+    return lambda e: e.lit(value)
+
+
+def eq(left: str, right: str) -> ExprSpec:
+    return lambda e: e.col(left) == e.col(right)
+
+
+def gt(left: str, right: str) -> ExprSpec:
+    return lambda e: e.col(left) > e.col(right)
+
+
+def between_overlap(start_a: str, end_a: str, start_b: str, end_b: str) -> ExprSpec:
+    return lambda e: (e.col(start_a) < e.col(end_b)) & (e.col(start_b) < e.col(end_a))
+
+
+def case_eq(left: str, right: str) -> ExprSpec:
+    return lambda e: when(e.col(left) == e.col(right), e.lit(1)).otherwise(e.lit(0))
+```
+
+### 5.2 CST Docstring → Owner Definition (ID-based, high confidence)
 
 ```python
 REL_CST_DOCSTRING_OWNER_BY_ID = RelationshipSpec(
@@ -384,38 +475,37 @@ REL_CST_DOCSTRING_OWNER_BY_ID = RelationshipSpec(
     how="inner",
     provider="libcst",
     origin="semantic_compiler",
-
     signals=SignalsSpec(
         base_score=1000,
         base_confidence=0.98,
         hard=[
-            HardPredicate("owner_def_id IS NOT NULL"),
-            HardPredicate("owner_def_id = def_id"),
+            HardPredicate(lambda e: e.col("owner_def_id").is_not_null()),
+            HardPredicate(eq("owner_def_id", "def_id")),
         ],
         features=[
-            Feature("owner_kind_matches",
-                    "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END",
-                    weight=5.0, kind="evidence"),
+            Feature("owner_kind_matches", case_eq("owner_kind", "def_kind"), weight=5.0),
         ],
     ),
-
     rank=RankSpec(
-        ambiguity_key_expr="ds_entity_id",
-        order_by=["score DESC", "def_bstart ASC", "def_bend ASC"],
+        ambiguity_key_expr=c("ds_entity_id"),
+        order_by=[
+            OrderSpec(c("score"), direction="desc"),
+            OrderSpec(c("def_bstart"), direction="asc"),
+            OrderSpec(c("def_bend"), direction="asc"),
+        ],
         keep="best",
         top_k=1,
     ),
-
     select_exprs=[
-        "ds_entity_id AS src",
-        "def_entity_id AS dst",
-        "'has_docstring' AS kind",
-        "docstring_text AS payload",
+        SelectExpr(c("ds_entity_id"), "src"),
+        SelectExpr(c("def_entity_id"), "dst"),
+        SelectExpr(v("has_docstring"), "kind"),
+        SelectExpr(c("docstring_text"), "payload"),
     ],
 )
 ```
 
-### 5.2 CST Docstring → Owner Definition (Span fallback, lower confidence)
+### 5.3 CST Docstring → Owner Definition (Span fallback, lower confidence)
 
 ```python
 REL_CST_DOCSTRING_OWNER_BY_SPAN = RelationshipSpec(
@@ -427,39 +517,38 @@ REL_CST_DOCSTRING_OWNER_BY_SPAN = RelationshipSpec(
     how="inner",
     provider="libcst",
     origin="semantic_compiler",
-
     signals=SignalsSpec(
         base_score=500,
         base_confidence=0.75,
         hard=[
-            HardPredicate("owner_def_id IS NULL"),
-            HardPredicate("owner_def_bstart = def_bstart"),
-            HardPredicate("owner_def_bend = def_bend"),
+            HardPredicate(lambda e: e.col("owner_def_id").is_null()),
+            HardPredicate(eq("owner_def_bstart", "def_bstart")),
+            HardPredicate(eq("owner_def_bend", "def_bend")),
         ],
         features=[
-            Feature("owner_kind_matches",
-                    "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END",
-                    weight=5.0, kind="evidence"),
+            Feature("owner_kind_matches", case_eq("owner_kind", "def_kind"), weight=5.0),
         ],
     ),
-
     rank=RankSpec(
-        ambiguity_key_expr="ds_entity_id",
-        order_by=["score DESC", "def_bstart ASC", "def_bend ASC"],
+        ambiguity_key_expr=c("ds_entity_id"),
+        order_by=[
+            OrderSpec(c("score"), direction="desc"),
+            OrderSpec(c("def_bstart"), direction="asc"),
+            OrderSpec(c("def_bend"), direction="asc"),
+        ],
         keep="best",
         top_k=1,
     ),
-
     select_exprs=[
-        "ds_entity_id AS src",
-        "def_entity_id AS dst",
-        "'has_docstring' AS kind",
-        "docstring_text AS payload",
+        SelectExpr(c("ds_entity_id"), "src"),
+        SelectExpr(c("def_entity_id"), "dst"),
+        SelectExpr(v("has_docstring"), "kind"),
+        SelectExpr(c("docstring_text"), "payload"),
     ],
 )
 ```
 
-### 5.3 CST Name Ref → SCIP Symbol (Span-aligned, high confidence)
+### 5.4 CST Name Ref → SCIP Symbol (Span-aligned, high confidence)
 
 ```python
 REL_CST_REF_TO_SCIP_SYMBOL = RelationshipSpec(
@@ -471,62 +560,87 @@ REL_CST_REF_TO_SCIP_SYMBOL = RelationshipSpec(
     how="inner",
     provider="scip",
     origin="semantic_compiler",
-
     signals=SignalsSpec(
-        base_score=2000,  # SCIP tier
+        base_score=2000,
         base_confidence=0.95,
         hard=[
-            # Span overlap predicate
-            HardPredicate("cst_bstart < scip_bend AND scip_bstart < cst_bend"),
+            HardPredicate(between_overlap("cst_bstart", "cst_bend", "scip_bstart", "scip_bend")),
         ],
         features=[
-            # Prefer contained spans
-            Feature("contained",
-                    "CASE WHEN scip_bstart >= cst_bstart AND scip_bend <= cst_bend THEN 1 ELSE 0 END",
-                    weight=50.0, kind="evidence"),
-            # Penalize large span differences
-            Feature("span_len_delta",
-                    "ABS((scip_bend - scip_bstart) - (cst_bend - cst_bstart))",
-                    weight=-0.01, kind="evidence"),
-            # Context matching
-            Feature("ctx_matches_read",
-                    "CASE WHEN cst_expr_ctx = 'Load' AND scip_is_read THEN 1 ELSE 0 END",
-                    weight=10.0, kind="evidence"),
-            Feature("ctx_matches_write",
-                    "CASE WHEN cst_expr_ctx = 'Store' AND scip_is_write THEN 1 ELSE 0 END",
-                    weight=10.0, kind="evidence"),
-            # Quality: penalize missing coordinate encoding
-            Feature("coord_encoding_penalty",
-                    "CASE WHEN scip_position_encoding = 'UnspecifiedPositionEncoding' THEN 1 ELSE 0 END",
-                    weight=-100.0, kind="quality"),
-            # Quality: penalize generated/test code
-            Feature("generated_penalty",
-                    "CASE WHEN scip_is_generated THEN 1 ELSE 0 END",
-                    weight=-50.0, kind="quality"),
+            Feature(
+                "contained",
+                lambda e: when(
+                    (e.col("scip_bstart") >= e.col("cst_bstart"))
+                    & (e.col("scip_bend") <= e.col("cst_bend")),
+                    e.lit(1),
+                ).otherwise(e.lit(0)),
+                weight=50.0,
+            ),
+            Feature(
+                "span_len_delta",
+                lambda e: abs_(
+                    (e.col("scip_bend") - e.col("scip_bstart"))
+                    - (e.col("cst_bend") - e.col("cst_bstart"))
+                ),
+                weight=-0.01,
+            ),
+            Feature(
+                "ctx_matches_read",
+                lambda e: when(
+                    (e.col("cst_expr_ctx") == e.lit("Load")) & e.col("scip_is_read"),
+                    e.lit(1),
+                ).otherwise(e.lit(0)),
+                weight=10.0,
+            ),
+            Feature(
+                "ctx_matches_write",
+                lambda e: when(
+                    (e.col("cst_expr_ctx") == e.lit("Store")) & e.col("scip_is_write"),
+                    e.lit(1),
+                ).otherwise(e.lit(0)),
+                weight=10.0,
+            ),
+            Feature(
+                "coord_encoding_penalty",
+                lambda e: when(
+                    e.col("scip_position_encoding") == e.lit("UnspecifiedPositionEncoding"),
+                    e.lit(1),
+                ).otherwise(e.lit(0)),
+                weight=-100.0,
+                kind="quality",
+            ),
+            Feature(
+                "generated_penalty",
+                lambda e: when(e.col("scip_is_generated"), e.lit(1)).otherwise(e.lit(0)),
+                weight=-50.0,
+                kind="quality",
+            ),
         ],
     ),
-
     rank=RankSpec(
-        ambiguity_key_expr="cst_ref_id",
-        ambiguity_group_id_expr="stable_hash64(cst_ref_id)",
-        order_by=["score DESC", "scip_bstart ASC", "scip_bend ASC", "scip_symbol ASC"],
-        keep="all",  # Keep all for analysis; set to "best" for production
+        ambiguity_key_expr=c("cst_ref_id"),
+        ambiguity_group_id_expr=lambda e: stable_hash64(e.col("cst_ref_id")),
+        order_by=[
+            OrderSpec(c("score"), direction="desc"),
+            OrderSpec(c("scip_bstart"), direction="asc"),
+            OrderSpec(c("scip_bend"), direction="asc"),
+            OrderSpec(c("scip_symbol"), direction="asc"),
+        ],
+        keep="all",
     ),
-
     select_exprs=[
-        "cst_ref_id AS src",
-        "stable_hash64(scip_symbol) AS dst",
-        "'refers_to' AS kind",
-        "scip_symbol AS symbol",
-        "scip_symbol_roles AS roles",
+        SelectExpr(c("cst_ref_id"), "src"),
+        SelectExpr(lambda e: stable_hash64(e.col("scip_symbol")), "dst"),
+        SelectExpr(v("refers_to"), "kind"),
+        SelectExpr(c("scip_symbol"), "symbol"),
+        SelectExpr(c("scip_symbol_roles"), "roles"),
     ],
 )
 ```
 
-### 5.4 Call Site → Definition (Multi-tier resolution)
+### 5.5 Call Site → Definition (Multi-tier resolution)
 
 ```python
-# Tier 1: SCIP-resolved call target
 REL_CALL_TO_DEF_SCIP = RelationshipSpec(
     name="rel_call_to_def_scip",
     left_view="cst_callsites_norm",
@@ -536,33 +650,31 @@ REL_CALL_TO_DEF_SCIP = RelationshipSpec(
     how="inner",
     provider="scip",
     origin="semantic_compiler",
-
     signals=SignalsSpec(
         base_score=2000,
         base_confidence=0.95,
-        hard=[],  # Equi-join on symbol is sufficient
+        hard=[],
         features=[
-            Feature("signature_arg_match",
-                    "CASE WHEN def_arg_count = call_arg_count THEN 1 ELSE 0 END",
-                    weight=20.0, kind="evidence"),
+            Feature(
+                "signature_arg_match",
+                case_eq("def_arg_count", "call_arg_count"),
+                weight=20.0,
+            ),
         ],
     ),
-
     rank=RankSpec(
-        ambiguity_key_expr="callsite_id",
-        order_by=["score DESC", "def_bstart ASC"],
+        ambiguity_key_expr=c("callsite_id"),
+        order_by=[OrderSpec(c("score"), direction="desc"), OrderSpec(c("def_bstart"), direction="asc")],
         keep="best",
         top_k=1,
     ),
-
     select_exprs=[
-        "callsite_id AS src",
-        "def_entity_id AS dst",
-        "'calls' AS kind",
+        SelectExpr(c("callsite_id"), "src"),
+        SelectExpr(c("def_entity_id"), "dst"),
+        SelectExpr(v("calls"), "kind"),
     ],
 )
 
-# Tier 2: Name-based fallback (lower confidence)
 REL_CALL_TO_DEF_NAME = RelationshipSpec(
     name="rel_call_to_def_name",
     left_view="cst_callsites_norm",
@@ -572,35 +684,33 @@ REL_CALL_TO_DEF_NAME = RelationshipSpec(
     how="inner",
     provider="libcst",
     origin="semantic_compiler",
-
     signals=SignalsSpec(
-        base_score=500,  # Heuristic tier
+        base_score=500,
         base_confidence=0.50,
         hard=[
-            HardPredicate("callee_name = def_name"),
-            HardPredicate("callsite_bstart > def_bstart"),  # Call after def
+            HardPredicate(eq("callee_name", "def_name")),
+            HardPredicate(gt("callsite_bstart", "def_bstart")),
         ],
         features=[
-            Feature("qname_match",
-                    "CASE WHEN callee_qname = def_qname THEN 1 ELSE 0 END",
-                    weight=30.0, kind="evidence"),
-            Feature("scope_proximity",
-                    "1.0 / (1 + ABS(callsite_bstart - def_bend))",
-                    weight=10.0, kind="evidence"),
+            Feature("qname_match", case_eq("callee_qname", "def_qname"), weight=30.0),
+            Feature(
+                "scope_proximity",
+                lambda e: lit(1.0)
+                / (lit(1.0) + abs_(e.col("callsite_bstart") - e.col("def_bend"))),
+                weight=10.0,
+            ),
         ],
     ),
-
     rank=RankSpec(
-        ambiguity_key_expr="callsite_id",
-        order_by=["score DESC", "def_bstart DESC"],  # Prefer nearest preceding def
+        ambiguity_key_expr=c("callsite_id"),
+        order_by=[OrderSpec(c("score"), direction="desc"), OrderSpec(c("def_bstart"), direction="desc")],
         keep="best",
         top_k=1,
     ),
-
     select_exprs=[
-        "callsite_id AS src",
-        "def_entity_id AS dst",
-        "'calls' AS kind",
+        SelectExpr(c("callsite_id"), "src"),
+        SelectExpr(c("def_entity_id"), "dst"),
+        SelectExpr(v("calls"), "kind"),
     ],
 )
 ```
@@ -612,86 +722,132 @@ REL_CALL_TO_DEF_NAME = RelationshipSpec(
 ### 6.1 Relationship Quality Metrics View
 
 ```python
+from datafusion.functions import (
+    avg,
+    col,
+    count,
+    count_distinct,
+    lit,
+    max as max_,
+    min as min_,
+    sum as sum_,
+    when,
+)
+
 def build_relationship_quality_metrics(
     ctx: SessionContext,
     relationship_name: str,
 ) -> DataFrame:
     """Build quality metrics for a compiled relationship."""
-    return ctx.sql(f"""
-        SELECT
-            '{relationship_name}' AS relationship_name,
-            COUNT(*) AS total_edges,
-            COUNT(DISTINCT src) AS distinct_sources,
-            COUNT(DISTINCT dst) AS distinct_targets,
-            AVG(confidence) AS avg_confidence,
-            MIN(confidence) AS min_confidence,
-            MAX(confidence) AS max_confidence,
-            AVG(score) AS avg_score,
-            COUNT(DISTINCT ambiguity_group_id) AS ambiguity_groups,
-            SUM(CASE WHEN _rn > 1 THEN 1 ELSE 0 END) AS ambiguous_edges,
-            SUM(CASE WHEN confidence < 0.5 THEN 1 ELSE 0 END) AS low_confidence_edges
-        FROM {relationship_name}
-    """)
+    df = ctx.table(relationship_name)
+    return (
+        df.aggregate(
+            [],
+            [
+                count(lit(1)).alias("total_edges"),
+                count_distinct(col("src")).alias("distinct_sources"),
+                count_distinct(col("dst")).alias("distinct_targets"),
+                avg(col("confidence")).alias("avg_confidence"),
+                min_(col("confidence")).alias("min_confidence"),
+                max_(col("confidence")).alias("max_confidence"),
+                avg(col("score")).alias("avg_score"),
+                count_distinct(col("ambiguity_group_id")).alias("ambiguity_groups"),
+                sum_(
+                    when(col("_rn") > lit(1), lit(1)).otherwise(lit(0))
+                ).alias("ambiguous_edges"),
+                sum_(
+                    when(col("confidence") < lit(0.5), lit(1)).otherwise(lit(0))
+                ).alias("low_confidence_edges"),
+            ],
+        )
+        .with_column("relationship_name", lit(relationship_name))
+    )
 ```
 
 ### 6.2 File Coverage Report
 
 ```python
+from datafusion.functions import col, coalesce, count, lit, when
+
 def build_file_coverage_report(ctx: SessionContext) -> DataFrame:
     """Report extraction coverage and quality per file."""
-    return ctx.sql("""
-        SELECT
-            f.file_id,
-            f.path,
-            fq.file_quality_score,
-            fq.has_cst_parse_errors,
-            fq.ts_error_count,
-            fq.has_scip_diagnostics,
-            COALESCE(cst_def_count.cnt, 0) AS cst_def_count,
-            COALESCE(cst_ref_count.cnt, 0) AS cst_ref_count,
-            COALESCE(scip_occ_count.cnt, 0) AS scip_occurrence_count,
-            CASE
-                WHEN fq.file_quality_score >= 800 THEN 'high'
-                WHEN fq.file_quality_score >= 500 THEN 'medium'
-                ELSE 'low'
-            END AS quality_tier
-        FROM file_index f
-        LEFT JOIN file_quality fq ON f.file_id = fq.file_id
-        LEFT JOIN (
-            SELECT file_id, COUNT(*) AS cnt FROM cst_defs GROUP BY file_id
-        ) cst_def_count ON f.file_id = cst_def_count.file_id
-        LEFT JOIN (
-            SELECT file_id, COUNT(*) AS cnt FROM cst_refs GROUP BY file_id
-        ) cst_ref_count ON f.file_id = cst_ref_count.file_id
-        LEFT JOIN (
-            SELECT document_id AS file_id, COUNT(*) AS cnt FROM scip_occurrences GROUP BY document_id
-        ) scip_occ_count ON f.file_id = scip_occ_count.file_id
-        ORDER BY fq.file_quality_score ASC
-    """)
+    cst_def_count = (
+        ctx.table("cst_defs")
+        .aggregate(["file_id"], [count(lit(1)).alias("cnt")])
+        .select(col("file_id"), col("cnt").alias("cst_def_count"))
+    )
+    cst_ref_count = (
+        ctx.table("cst_refs")
+        .aggregate(["file_id"], [count(lit(1)).alias("cnt")])
+        .select(col("file_id"), col("cnt").alias("cst_ref_count"))
+    )
+    scip_occ_count = (
+        ctx.table("scip_occurrences")
+        .aggregate(["document_id"], [count(lit(1)).alias("cnt")])
+        .select(col("document_id").alias("file_id"), col("cnt").alias("scip_occurrence_count"))
+    )
+    base = (
+        ctx.table("file_index")
+        .join(ctx.table("file_quality"), join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(cst_def_count, join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(cst_ref_count, join_keys=(["file_id"], ["file_id"]), how="left")
+        .join(scip_occ_count, join_keys=(["file_id"], ["file_id"]), how="left")
+    )
+    quality_tier = (
+        when(col("file_quality_score") >= lit(800), lit("high"))
+        .when(col("file_quality_score") >= lit(500), lit("medium"))
+        .otherwise(lit("low"))
+    )
+    return (
+        base.select(
+            col("file_id"),
+            col("path"),
+            col("file_quality_score"),
+            col("has_cst_parse_errors"),
+            col("ts_error_count"),
+            col("has_scip_diagnostics"),
+            coalesce(col("cst_def_count"), lit(0)).alias("cst_def_count"),
+            coalesce(col("cst_ref_count"), lit(0)).alias("cst_ref_count"),
+            coalesce(col("scip_occurrence_count"), lit(0)).alias("scip_occurrence_count"),
+            quality_tier.alias("quality_tier"),
+        )
+        .sort(col("file_quality_score").sort("asc"))
+    )
 ```
 
 ### 6.3 Ambiguity Analysis View
 
 ```python
+from datafusion.functions import (
+    array_agg_distinct,
+    col,
+    count,
+    lit,
+    max as max_,
+    min as min_,
+)
+
 def build_ambiguity_analysis(
     ctx: SessionContext,
     relationship_name: str,
 ) -> DataFrame:
     """Analyze ambiguity patterns in a relationship."""
-    return ctx.sql(f"""
-        SELECT
-            ambiguity_group_id,
-            COUNT(*) AS candidate_count,
-            MAX(score) - MIN(score) AS score_spread,
-            MAX(confidence) AS best_confidence,
-            ARRAY_AGG(DISTINCT provider) AS providers,
-            ARRAY_AGG(DISTINCT rule_name) AS rules
-        FROM {relationship_name}
-        GROUP BY ambiguity_group_id
-        HAVING COUNT(*) > 1
-        ORDER BY candidate_count DESC
-        LIMIT 100
-    """)
+    df = ctx.table(relationship_name)
+    metrics = df.aggregate(
+        ["ambiguity_group_id"],
+        [
+            count(lit(1)).alias("candidate_count"),
+            (max_(col("score")) - min_(col("score"))).alias("score_spread"),
+            max_(col("confidence")).alias("best_confidence"),
+            array_agg_distinct(col("provider")).alias("providers"),
+            array_agg_distinct(col("rule_name")).alias("rules"),
+        ],
+    )
+    return (
+        metrics.filter(col("candidate_count") > lit(1))
+        .sort(col("candidate_count").sort("desc"))
+        .limit(100)
+    )
 ```
 
 ---
@@ -705,6 +861,7 @@ src/semantics/
 ├── __init__.py
 ├── schema.py              # Existing: SemanticSchema discovery
 ├── specs.py               # Existing: SemanticTableSpec, SpanBinding
+├── exprs.py               # NEW: DataFusion Expr helpers, clamp, stable_hash64, ExprContextImpl
 ├── quality.py             # NEW: SignalsSpec, Feature, RankSpec, RelationshipSpec
 ├── signals.py             # NEW: File quality view builder
 ├── compiler.py            # MODIFY: Add quality-aware compilation
@@ -716,8 +873,8 @@ src/semantics/
 ### 7.2 Pipeline Integration Points
 
 1. **Early in pipeline**: Register `file_quality` view before relationship compilation
-2. **During compilation**: Pass `file_quality_df` to relationship compiler
-3. **After compilation**: Generate quality metrics for each relationship
+2. **During compilation**: Pass `file_quality_df` to relationship compiler (DataFusion-native APIs only)
+3. **After compilation**: Generate quality metrics for each relationship using DataFrame aggregates
 4. **Final output**: Include quality metadata in CPG edges
 
 ### 7.3 SemanticCompiler Modifications
@@ -739,7 +896,7 @@ class SemanticCompiler:
         return build_file_quality_view(self.ctx)
 
     def compile_relationship(self, spec: RelationshipSpec) -> DataFrame:
-        """Compile relationship with quality signals integrated."""
+        """Compile relationship with quality signals integrated (DataFusion-native)."""
         return compile_relationship_with_quality(
             self.ctx, spec, self.file_quality_df
         )
@@ -775,6 +932,14 @@ def test_confidence_bounds():
 def test_ambiguity_grouping_stable():
     """Same inputs produce same ambiguity_group_id."""
     # Verify stable_hash64 consistency
+
+def test_expression_validation_rejects_unknown_columns():
+    """ExprSpec validation rejects missing columns before execution."""
+    # Build spec with a non-existent column and assert validation error
+
+def test_no_sql_strings_in_specs():
+    """RelationshipSpec expressions are DataFusion Expr builders only."""
+    # Ensure spec helpers produce Expr objects, not SQL strings
 ```
 
 ### 8.2 Integration Tests for Quality Signals
@@ -805,29 +970,41 @@ def test_score_monotonic_in_base(base_score, features):
 ## Part 9: Rollout Plan
 
 ### Phase 1: Foundation (Week 1)
-- [ ] Implement `SignalsSpec`, `Feature`, `RankSpec`, `RelationshipSpec` dataclasses
-- [ ] Implement `build_file_quality_view()` function
-- [ ] Unit tests for core dataclasses
+- [x] Implement `exprs.py` helpers (`ExprContextImpl`, `clamp`, `stable_hash64`, DSL helpers)
+- [x] Implement `SignalsSpec`, `Feature`, `RankSpec`, `RelationshipSpec` dataclasses
+- [x] Implement `build_file_quality_view()` function
+- [x] Implement expression validation for `ExprSpec` usage
+- [x] Unit tests for core dataclasses
+
+**Status (2026-02-01):** Foundation work is complete, including ExprSpec validation in `semantics/exprs.py` and unit coverage in `tests/unit/semantics`.
 
 ### Phase 2: Compiler Integration (Week 2)
-- [ ] Modify `SemanticCompiler` to accept quality signals
-- [ ] Implement `compile_relationship_with_quality()`
-- [ ] Integration tests for quality-aware compilation
+- [x] Modify `SemanticCompiler` to accept quality signals
+- [x] Implement `compile_relationship_with_quality()`
+- [x] Integration tests for quality-aware compilation
+
+**Status (2026-02-01):** Quality-aware compilation is implemented in `semantics/compiler.py` with integration coverage in `tests/unit/semantics/test_quality_compile.py`.
 
 ### Phase 3: Relationship Specs (Week 3)
-- [ ] Define `relationship_specs.py` with all concrete specs
-- [ ] Migrate existing semantic rules to new spec format
-- [ ] Validate output schema compatibility
+- [x] Define concrete quality specs for core relationships
+- [x] Migrate existing semantic rules to new spec format
+- [x] Validate output schema compatibility
+
+**Status (2026-02-01):** Core CPG relationship specs now live in `semantics/quality_specs.py` and are used by `semantics/spec_registry.py`. Dataset rows align with projected output schemas.
 
 ### Phase 4: Diagnostics (Week 4)
-- [ ] Implement quality metrics views
-- [ ] Implement coverage and ambiguity reports
+- [x] Implement quality metrics views
+- [x] Implement coverage and ambiguity reports
 - [ ] Dashboard integration for monitoring
 
+**Status (2026-02-01):** Implemented in `semantics/diagnostics.py` and `semantics/signals.py`, and registered via semantic catalog builders. Dashboard integration remains.
+
 ### Phase 5: Production (Week 5+)
-- [ ] Enable quality signals in production pipeline
+- [x] Enable quality signals in production pipeline
 - [ ] Monitor confidence distributions
 - [ ] Tune weights based on observed quality
+
+**Status (2026-02-01):** Quality signals are enabled in the semantic pipeline; monitoring and tuning remain.
 
 ---
 
@@ -884,21 +1061,53 @@ relationships:
       base_score: 1000
       base_confidence: 0.98
       hard:
-        - expr: "owner_def_id IS NOT NULL AND owner_def_id = def_id"
+        - op: and
+          args:
+            - op: is_not_null
+              col: owner_def_id
+            - op: eq
+              left: owner_def_id
+              right: def_id
       features:
         - name: owner_kind_matches
           kind: evidence
           weight: 5
-          expr: "CASE WHEN owner_kind = def_kind THEN 1 ELSE 0 END"
+          expr:
+            op: case
+            when:
+              - if:
+                  op: eq
+                  left: owner_kind
+                  right: def_kind
+                then: 1
 
     rank:
-      ambiguity_key_expr: "ds_entity_id"
-      order_by: ["score DESC", "def_bstart ASC"]
+      ambiguity_key_expr:
+        op: col
+        name: ds_entity_id
+      order_by:
+        - expr:
+            op: col
+            name: score
+          direction: desc
+        - expr:
+            op: col
+            name: def_bstart
+          direction: asc
       keep: best
       top_k: 1
 
     select_exprs:
-      - "ds_entity_id AS src"
-      - "def_entity_id AS dst"
-      - "'has_docstring' AS kind"
+      - expr:
+          op: col
+          name: ds_entity_id
+        alias: src
+      - expr:
+          op: col
+          name: def_entity_id
+        alias: dst
+      - expr:
+          op: lit
+          value: "has_docstring"
+        alias: kind
 ```

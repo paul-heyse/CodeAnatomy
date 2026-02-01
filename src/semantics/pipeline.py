@@ -13,17 +13,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from semantics.quality import QualityRelationshipSpec
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
 from semantics.specs import RelationshipSpec
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.io.write import WritePipeline
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
@@ -68,6 +71,17 @@ class CpgViewNodesRequest:
     config: SemanticConfig | None
     input_mapping: Mapping[str, str]
     use_cdf: bool
+
+
+@dataclass(frozen=True)
+class SemanticOutputWriteContext:
+    """Inputs required to materialize semantic outputs."""
+
+    ctx: SessionContext
+    pipeline: WritePipeline
+    runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
+    schema_policy: SchemaEvolutionPolicy
 
 
 @dataclass(frozen=True)
@@ -119,6 +133,20 @@ def _cache_policy_for(
     if policy is None:
         return "none"
     return policy.get(name, "none")
+
+
+def _normalize_cache_policy(policy: str) -> CachePolicy:
+    valid = {"none", "delta_staging", "delta_output"}
+    if policy in valid:
+        return cast("CachePolicy", policy)
+    msg = f"Unsupported cache policy: {policy!r}."
+    raise ValueError(msg)
+
+
+def _normalize_cache_policy_mapping(
+    policy: Mapping[str, str],
+) -> dict[str, CachePolicy]:
+    return {name: _normalize_cache_policy(value) for name, value in policy.items()}
 
 
 def _default_semantic_cache_policy(
@@ -223,7 +251,7 @@ def _relate_builder(
 
 
 def _relationship_builder(
-    spec: RelationshipSpec,
+    spec: RelationshipSpec | QualityRelationshipSpec,
     *,
     config: SemanticConfig | None,
     use_cdf: bool,
@@ -248,7 +276,22 @@ def _relationship_builder(
     def _builder(inner_ctx: SessionContext) -> DataFrame:
         from semantics.compiler import RelationOptions, SemanticCompiler
 
-        return SemanticCompiler(inner_ctx, config=config).relate(
+        compiler = SemanticCompiler(inner_ctx, config=config)
+        if isinstance(spec, QualityRelationshipSpec):
+            file_quality_df = None
+            if spec.join_file_quality:
+                from semantics.signals import build_file_quality_view
+
+                try:
+                    file_quality_df = inner_ctx.table(spec.file_quality_view)
+                except Exception:  # noqa: BLE001
+                    file_quality_df = build_file_quality_view(inner_ctx)
+            return compiler.compile_relationship_with_quality(
+                spec,
+                file_quality_df=file_quality_df,
+            )
+
+        return compiler.relate(
             spec.left_table,
             spec.right_table,
             options=RelationOptions(
@@ -477,8 +520,9 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
             view_names=[name for name, _builder in view_specs],
             runtime_config=request.runtime_config,
         )
-        if request.runtime_config.cache_policy_overrides:
-            resolved_cache.update(request.runtime_config.cache_policy_overrides)
+    if request.runtime_config.cache_policy_overrides:
+        resolved_cache = {**resolved_cache, **request.runtime_config.cache_policy_overrides}
+    normalized_cache = _normalize_cache_policy_mapping(resolved_cache)
     nodes: list[ViewNode] = []
 
     for name, builder in view_specs:
@@ -492,7 +536,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
                     runtime_profile=request.runtime_profile,
                     builder=builder,
                 ),
-                cache_policy=_cache_policy_for(name, resolved_cache),
+                cache_policy=_cache_policy_for(name, normalized_cache),
             )
         )
     return nodes
@@ -559,6 +603,9 @@ def build_cpg(
             use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
         )
+        from semantics.validation import require_semantic_inputs
+
+        require_semantic_inputs(ctx, input_mapping=input_mapping)
 
         from datafusion_engine.udf.runtime import rust_udf_snapshot
         from datafusion_engine.views.graph import (
@@ -599,38 +646,111 @@ def build_cpg(
             )
 
 
-def _materialize_semantic_outputs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    runtime_config: SemanticRuntimeConfig,
-    schema_policy: SchemaEvolutionPolicy,
-) -> None:
-    from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.delta.schema_guard import enforce_schema_policy
-    from datafusion_engine.delta.store_policy import apply_delta_store_policy
-    from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteViewRequest
-    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+def _semantic_output_view_names() -> list[str]:
+    """Return semantic output view names.
+
+    Returns
+    -------
+    list[str]
+        Semantic output view names, including the relation output.
+    """
     from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.naming import SEMANTIC_VIEW_NAMES
 
-    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
     view_names = list(SEMANTIC_VIEW_NAMES)
     if RELATION_OUTPUT_NAME not in view_names:
         view_names.append(RELATION_OUTPUT_NAME)
-    output_locations: dict[str, DatasetLocation] = {}
+    return view_names
+
+
+def _ensure_canonical_output_locations(runtime_config: SemanticRuntimeConfig) -> None:
+    """Validate that semantic output locations use canonical names.
+
+    Parameters
+    ----------
+    runtime_config
+        Semantic runtime configuration.
+
+    Raises
+    ------
+    ValueError
+        Raised when non-canonical names are supplied.
+    """
+    from semantics.naming import canonical_output_name
+
+    non_canonical = {
+        name: canonical_output_name(name)
+        for name in runtime_config.output_locations
+        if canonical_output_name(name) != name
+    }
+    if non_canonical:
+        msg = f"Semantic outputs must use canonical names: {non_canonical!r}."
+        raise ValueError(msg)
+
+
+def _semantic_output_locations(
+    view_names: Sequence[str],
+    runtime_config: SemanticRuntimeConfig,
+) -> dict[str, DatasetLocation]:
+    """Resolve dataset locations for semantic outputs.
+
+    Parameters
+    ----------
+    view_names
+        Semantic view names to materialize.
+    runtime_config
+        Semantic runtime configuration providing output locations.
+
+    Returns
+    -------
+    dict[str, DatasetLocation]
+        Mapping of view name to dataset location.
+    """
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from semantics.catalog.dataset_specs import dataset_spec
+
     storage_options = (
-        dict(runtime_config.storage_options) if runtime_config.storage_options is not None else {}
+        dict(runtime_config.storage_options)
+        if runtime_config.storage_options is not None
+        else {}
     )
+    output_locations: dict[str, DatasetLocation] = {}
     for name in view_names:
         output_path = runtime_config.output_path(name)
         if output_path is None:
             continue
+        spec = dataset_spec(name)
         output_locations[name] = DatasetLocation(
             path=output_path,
             format="delta",
             storage_options=storage_options,
+            dataset_spec=spec,
+            delta_write_policy=spec.delta_write_policy,
+            delta_schema_policy=spec.delta_schema_policy,
+            delta_maintenance_policy=spec.delta_maintenance_policy,
+            delta_feature_gate=spec.delta_feature_gate,
         )
+    return output_locations
+
+
+def _ensure_semantic_output_locations(
+    view_names: Sequence[str],
+    output_locations: Mapping[str, DatasetLocation],
+) -> None:
+    """Ensure all semantic outputs have explicit dataset locations.
+
+    Parameters
+    ----------
+    view_names
+        Expected semantic view names.
+    output_locations
+        Resolved output locations.
+
+    Raises
+    ------
+    ValueError
+        Raised when any output location is missing.
+    """
     missing_outputs = [name for name in view_names if name not in output_locations]
     if missing_outputs:
         missing = ", ".join(sorted(missing_outputs))
@@ -640,30 +760,112 @@ def _materialize_semantic_outputs(
         )
         raise ValueError(msg)
 
+
+def _write_semantic_output(
+    *,
+    view_name: str,
+    output_location: DatasetLocation,
+    write_context: SemanticOutputWriteContext,
+) -> None:
+    """Materialize a single semantic output view.
+
+    Parameters
+    ----------
+    view_name
+        Semantic view name to materialize.
+    output_location
+        Destination dataset location.
+    write_context
+        Shared context for output materialization.
+
+    Raises
+    ------
+    ValueError
+        Raised when the resolved output format is not Delta.
+    """
+    from datafusion_engine.delta.schema_guard import enforce_schema_policy
+    from datafusion_engine.delta.store_policy import apply_delta_store_policy
+    from datafusion_engine.io.write import WriteFormat, WriteMode, WriteViewRequest
+    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+    from semantics.catalog.dataset_specs import dataset_spec
+
+    ctx = write_context.ctx
+    pipeline = write_context.pipeline
+    runtime_profile = write_context.runtime_profile
+    runtime_config = write_context.runtime_config
+    schema_policy = write_context.schema_policy
+    spec = dataset_spec(view_name)
+    location = apply_delta_store_policy(
+        output_location,
+        policy=runtime_profile.delta_store_policy,
+    )
+    if location.format != "delta":
+        msg = f"Semantic output {view_name!r} must be stored as Delta."
+        raise ValueError(msg)
+    df = ctx.table(view_name)
+    schema = arrow_schema_from_df(df)
+    resolved_schema_policy = schema_policy
+    if spec.delta_schema_policy is not None and spec.delta_schema_policy.schema_mode == "merge":
+        resolved_schema_policy = SchemaEvolutionPolicy(mode="additive")
+    if not runtime_config.schema_evolution_enabled:
+        resolved_schema_policy = SchemaEvolutionPolicy(mode="strict")
+    schema_hash = enforce_schema_policy(
+        expected_schema=schema,
+        dataset_location=location,
+        policy=resolved_schema_policy,
+    )
+    commit_metadata: dict[str, object] = {
+        "semantic_schema_hash": schema_hash,
+        "semantic_view": view_name,
+    }
+    format_options: dict[str, object] = {
+        "delta_commit_metadata": commit_metadata,
+        "delta_write_policy": spec.delta_write_policy,
+        "delta_schema_policy": spec.delta_schema_policy,
+        "delta_maintenance_policy": spec.delta_maintenance_policy,
+    }
+    partition_by = (
+        tuple(spec.delta_write_policy.partition_by) if spec.delta_write_policy is not None else ()
+    )
+    pipeline.write_view(
+        WriteViewRequest(
+            view_name=view_name,
+            destination=str(location.path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            partition_by=partition_by,
+            format_options=format_options,
+        )
+    )
+
+
+def _materialize_semantic_outputs(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
+    schema_policy: SchemaEvolutionPolicy,
+) -> None:
+    from datafusion_engine.io.write import WritePipeline
+
+    view_names = _semantic_output_view_names()
+    _ensure_canonical_output_locations(runtime_config)
+    output_locations = _semantic_output_locations(view_names, runtime_config)
+    _ensure_semantic_output_locations(view_names, output_locations)
+
+    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
+    write_context = SemanticOutputWriteContext(
+        ctx=ctx,
+        pipeline=pipeline,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        schema_policy=schema_policy,
+    )
     for view_name in view_names:
-        location = apply_delta_store_policy(
-            output_locations[view_name],
-            policy=runtime_profile.delta_store_policy,
-        )
-        if location.format != "delta":
-            msg = f"Semantic output {view_name!r} must be stored as Delta."
-            raise ValueError(msg)
-        df = ctx.table(view_name)
-        schema = arrow_schema_from_df(df)
-        schema_hash = enforce_schema_policy(
-            expected_schema=schema,
-            dataset_location=location,
-            policy=schema_policy,
-        )
-        commit_metadata = {"semantic_schema_hash": schema_hash, "semantic_view": view_name}
-        pipeline.write_view(
-            WriteViewRequest(
-                view_name=view_name,
-                destination=str(location.path),
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-                format_options={"delta_commit_metadata": commit_metadata},
-            )
+        _write_semantic_output(
+            view_name=view_name,
+            output_location=output_locations[view_name],
+            write_context=write_context,
         )
 
 

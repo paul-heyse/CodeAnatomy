@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from semantics.adapters import RelationshipProjectionOptions
+    from semantics.quality import QualityRelationshipSpec
     from semantics.specs import RelationshipSpec
 
     DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -67,7 +68,7 @@ class SemanticProjectionConfig:
     rel_import_output: str
     rel_def_output: str
     rel_call_output: str
-    relationship_specs: Sequence[RelationshipSpec]
+    relationship_specs: Sequence[RelationshipSpec | QualityRelationshipSpec]
 
 
 def relation_output_projection(
@@ -167,6 +168,13 @@ def semantic_projection_options(
         EDGE_KIND_PY_REFERENCES_SYMBOL,
     )
     from semantics.adapters import RelationshipProjectionOptions
+    from semantics.quality import QualityRelationshipSpec
+
+    quality_names = {
+        spec.name
+        for spec in config.relationship_specs
+        if isinstance(spec, QualityRelationshipSpec)
+    }
 
     projection_map: dict[str, RelationshipProjectionOptions] = {
         config.rel_name_output: RelationshipProjectionOptions(
@@ -174,24 +182,32 @@ def semantic_projection_options(
             edge_kind=str(EDGE_KIND_PY_REFERENCES_SYMBOL),
             task_name="rel.name_symbol",
             task_priority=config.default_priority,
+            use_computed_confidence=config.rel_name_output in quality_names,
+            use_computed_score=config.rel_name_output in quality_names,
         ),
         config.rel_import_output: RelationshipProjectionOptions(
             entity_id_alias="import_alias_id",
             edge_kind=str(EDGE_KIND_PY_IMPORTS_SYMBOL),
             task_name="rel.import_symbol",
             task_priority=config.default_priority,
+            use_computed_confidence=config.rel_import_output in quality_names,
+            use_computed_score=config.rel_import_output in quality_names,
         ),
         config.rel_def_output: RelationshipProjectionOptions(
             entity_id_alias="def_id",
             edge_kind=str(EDGE_KIND_PY_DEFINES_SYMBOL),
             task_name="rel.def_symbol",
             task_priority=config.default_priority,
+            use_computed_confidence=config.rel_def_output in quality_names,
+            use_computed_score=config.rel_def_output in quality_names,
         ),
         config.rel_call_output: RelationshipProjectionOptions(
             entity_id_alias="call_id",
             edge_kind=str(EDGE_KIND_PY_CALLS_SYMBOL),
             task_name="rel.callsite_symbol",
             task_priority=config.default_priority,
+            use_computed_confidence=config.rel_call_output in quality_names,
+            use_computed_score=config.rel_call_output in quality_names,
         ),
     }
     required = {spec.name for spec in config.relationship_specs}
@@ -205,7 +221,7 @@ def semantic_projection_options(
 def semantic_view_specs(
     base_specs: list[tuple[str, DataFrameBuilder]],
     *,
-    relationship_specs: Sequence[RelationshipSpec],
+    relationship_specs: Sequence[RelationshipSpec | QualityRelationshipSpec],
     projection_options: Mapping[str, RelationshipProjectionOptions],
 ) -> tuple[list[tuple[str, DataFrameBuilder]], dict[str, DataFrameBuilder]]:
     """Return semantic view specs with relationship projections applied.

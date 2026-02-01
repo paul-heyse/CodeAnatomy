@@ -72,7 +72,7 @@ from datafusion_engine.lineage.diagnostics import (
     record_artifact,
     record_events,
 )
-from datafusion_engine.plan.cache import PlanProtoCache
+from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
 from datafusion_engine.schema.introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -87,7 +87,6 @@ from datafusion_engine.schema.registry import (
     TREE_SITTER_VIEW_NAMES,
     extract_nested_dataset_names,
     missing_schema_names,
-    nested_view_specs,
     validate_nested_types,
     validate_required_engine_functions,
     validate_semantic_types,
@@ -104,7 +103,6 @@ from datafusion_engine.tables.metadata import table_provider_metadata
 from datafusion_engine.udf.catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf.factory import function_factory_payloads, install_function_factory
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
-from engine.plan_cache import PlanCache
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
@@ -120,6 +118,8 @@ if TYPE_CHECKING:
     from datafusion_engine.udf.catalog import UdfCatalog
     from datafusion_engine.views.graph import ViewNode
     from obs.datafusion_runs import DataFusionRun
+    from semantics.incremental.cdf_cursors import CdfCursorStore
+    from semantics.runtime import CachePolicy
     from storage.deltalake.delta import IdempotentWriteOptions
 
     class _DeltaRuntimeEnvOptions(Protocol):
@@ -1470,19 +1470,8 @@ def _relationship_constraint_errors(
     *,
     sql_options: SQLOptions,
 ) -> Mapping[str, object] | None:
-    try:
-        module = importlib.import_module("schema_spec.relationship_specs")
-    except ImportError:
-        return None
-    errors = getattr(module, "relationship_constraint_errors", None)
-    if not callable(errors):
-        return None
-    try:
-        result = errors(session_runtime, sql_options=sql_options)
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if isinstance(result, Mapping) and result:
-        return result
+    _ = session_runtime
+    _ = sql_options
     return None
 
 
@@ -1520,49 +1509,19 @@ def register_view_specs(
     runtime_profile: DataFusionRuntimeProfile | None = None,
     validate: bool = True,
 ) -> None:
-    """Register view specs through the unified view graph pipeline.
-
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context used for registration.
-    views:
-        View specifications to register.
-    runtime_profile:
-        Runtime profile for recording view definitions.
-    validate:
-        Whether to validate view schemas after registration.
+    """Legacy view-spec registration (removed).
 
     Raises
     ------
-    ValueError
-        Raised when ``runtime_profile`` is not provided.
-
+    RuntimeError
+        Always raised. Use ``datafusion_engine.views.registration.ensure_view_graph`` instead.
     """
-    from datafusion_engine.views.graph import (
-        ViewGraphOptions,
-        ViewGraphRuntimeOptions,
-        register_view_graph,
-    )
-
-    if not views:
-        return
-    if runtime_profile is None:
-        msg = "Runtime profile is required for view registration."
-        raise ValueError(msg)
-    snapshot = _register_view_specs_udfs(ctx, runtime_profile=runtime_profile)
-    nodes = _build_view_nodes(
-        ctx,
-        views=views,
-        runtime_profile=runtime_profile,
-    )
-    register_view_graph(
-        ctx,
-        nodes=nodes,
-        snapshot=snapshot,
-        runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
-        options=ViewGraphOptions(overwrite=False, temporary=False, validate_schema=validate),
-    )
+    _ = ctx
+    _ = views
+    _ = runtime_profile
+    _ = validate
+    msg = "Legacy view spec registration is removed; use ensure_view_graph."
+    raise RuntimeError(msg)
 
 
 def _register_view_specs_udfs(
@@ -3095,6 +3054,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     semantic_output_catalog_name: str | None = None
     normalize_output_root: str | None = None
     semantic_output_root: str | None = None
+    semantic_cache_overrides: Mapping[str, CachePolicy] = field(default_factory=dict)
+    cdf_enabled: bool = False
+    cdf_cursor_store: CdfCursorStore | None = None
     enable_information_schema: bool = True
     enable_ident_normalization: bool = False
     force_disable_ident_normalization: bool = False
@@ -4789,25 +4751,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         *,
         fragment_views: Sequence[ViewSpec],
     ) -> set[str]:
-        fragment_names = {view.name for view in fragment_views}
+        _ = ctx
         if fragment_views:
-            register_view_specs(
-                ctx,
-                views=fragment_views,
-                runtime_profile=self,
-                validate=True,
+            msg = (
+                f"{type(self).__name__} no longer supports legacy view specs; "
+                "use ensure_view_graph."
             )
-        nested_views = tuple(
-            view for view in nested_view_specs(ctx) if view.name not in fragment_names
-        )
-        if nested_views:
-            register_view_specs(
-                ctx,
-                views=nested_views,
-                runtime_profile=self,
-                validate=True,
-            )
-        return fragment_names
+            raise RuntimeError(msg)
+        return set()
 
     def _validate_catalog_autoloads(
         self,
@@ -4906,11 +4857,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
         fragment_views: tuple[ViewSpec, ...] = ()
-        fragment_names = self._register_schema_views(ctx, fragment_views=fragment_views)
-        nested_views = tuple(
-            view for view in nested_view_specs(ctx) if view.name not in fragment_names
-        )
-        expected_names = tuple({view.name for view in nested_views})
+        _ = self._register_schema_views(ctx, fragment_views=fragment_views)
+        expected_names: tuple[str, ...] = ()
         self._validate_catalog_autoloads(
             ctx,
             ast_registration=ast_registration,
@@ -6454,7 +6402,6 @@ __all__ = [
     "read_delta_as_reader",
     "record_schema_snapshots_for_profile",
     "register_cdf_inputs_for_profile",
-    "register_view_specs",
     "run_diskcache_maintenance",
     "semantic_output_locations_for_profile",
     "session_runtime_hash",

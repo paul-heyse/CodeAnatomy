@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
+from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime import EngineRuntime
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ class EngineSession:
     engine_runtime: EngineRuntime
     datasets: DatasetCatalog
     diagnostics: DiagnosticsCollector | None = None
-    surface_policy: ExecutionSurfacePolicy = field(default_factory=ExecutionSurfacePolicy)
+    surface_policy: MaterializationPolicy = field(default_factory=MaterializationPolicy)
     settings_hash: str | None = None
     runtime_profile_hash: str | None = None
 

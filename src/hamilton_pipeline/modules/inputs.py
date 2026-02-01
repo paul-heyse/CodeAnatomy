@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
+from datafusion_engine.materialize_policy import MaterializationPolicy, WriterStrategy
+from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 from datafusion_engine.session.runtime import AdapterExecutionPolicy
-from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
@@ -39,6 +40,7 @@ from utils.env_utils import env_bool, env_value
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetCatalog
+    from semantics.runtime import SemanticRuntimeConfig
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -276,8 +278,9 @@ def diagnostics_collector() -> DiagnosticsCollector:
 def engine_session(
     runtime_profile_spec: RuntimeProfileSpec,
     diagnostics_collector: DiagnosticsCollector,
-    execution_surface_policy: ExecutionSurfacePolicy,
+    execution_surface_policy: MaterializationPolicy,
     pipeline_policy: PipelinePolicy,
+    semantic_runtime_config: SemanticRuntimeConfig,
 ) -> EngineSession:
     """Build an engine session for downstream execution surfaces.
 
@@ -291,7 +294,23 @@ def engine_session(
         diagnostics=diagnostics_collector,
         surface_policy=execution_surface_policy,
         diagnostics_policy=pipeline_policy.diagnostics,
+        semantic_config=semantic_runtime_config,
     )
+
+
+@cache(behavior="ignore")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
+def semantic_runtime_config(
+    runtime_profile_spec: RuntimeProfileSpec,
+) -> SemanticRuntimeConfig:
+    """Return semantic runtime configuration derived from the runtime profile.
+
+    Returns
+    -------
+    SemanticRuntimeConfig
+        Semantic runtime configuration derived from the profile.
+    """
+    return semantic_runtime_from_profile(runtime_profile_spec.datafusion)
 
 
 @cache(behavior="ignore")
@@ -879,15 +898,15 @@ def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> t
 def execution_surface_policy(
     runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
-) -> ExecutionSurfacePolicy:
+) -> MaterializationPolicy:
     """Return the execution surface policy for plan materialization.
 
     Returns
     -------
-    ExecutionSurfacePolicy
+    MaterializationPolicy
         Policy describing streaming and writer strategy preferences.
     """
-    return ExecutionSurfacePolicy(
+    return MaterializationPolicy(
         prefer_streaming=True,
         determinism_tier=runtime_profile_spec.determinism_tier,
         writer_strategy=output_config.writer_strategy,

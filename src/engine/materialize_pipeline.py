@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from datafusion_engine.lineage.diagnostics import (
-    record_artifact,
-    record_events,
-    recorder_for_profile,
-)
+from datafusion_engine.lineage.diagnostics import recorder_for_profile
+from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.plan.execution import (
     PlanExecutionOptions,
@@ -35,22 +30,22 @@ from datafusion_engine.session.runtime import (
 )
 from datafusion_engine.session.streaming import StreamingExecutionResult
 from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
-from engine.plan_policy import ExecutionSurfacePolicy
+from engine.diagnostics import EngineEventRecorder
 from engine.plan_product import PlanProduct
+from engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from obs.otel import OtelBootstrapOptions, configure_otel
-from storage.deltalake import DeltaWriteResult
 from utils.uuid_factory import uuid7_hex
 from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
-    from datafusion_engine.views.artifacts import DataFusionViewArtifact
+    from semantics.runtime import CachePolicy as SemanticCachePolicy
 
 
 def _resolve_prefer_reader(
     *,
-    policy: ExecutionSurfacePolicy,
+    policy: MaterializationPolicy,
 ) -> bool:
     if policy.determinism_tier == DeterminismTier.CANONICAL:
         return False
@@ -74,7 +69,7 @@ def _cache_event_reporter(
 
 
 @dataclass(frozen=True)
-class CachePolicy(FingerprintableConfig):
+class MaterializationCacheDecision(FingerprintableConfig):
     """Cache policy for DataFusion materialization surfaces."""
 
     enabled: bool
@@ -84,6 +79,13 @@ class CachePolicy(FingerprintableConfig):
     param_signature: str | None
 
     def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the cache decision.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload for fingerprint computation.
+        """
         return {
             "enabled": self.enabled,
             "reason": self.reason,
@@ -93,6 +95,13 @@ class CachePolicy(FingerprintableConfig):
         }
 
     def fingerprint(self) -> str:
+        """Return fingerprint for the cache decision.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint.
+        """
         return config_fingerprint(self.fingerprint_payload())
 
 
@@ -111,24 +120,36 @@ def _param_binding_state(params: Mapping[str, object] | None) -> tuple[str, str 
     return "none", None
 
 
-def _resolve_cache_policy(
+def _resolve_materialization_cache_decision(
     *,
-    policy: ExecutionSurfacePolicy,
+    policy: MaterializationPolicy,
     prefer_reader: bool,
     params: Mapping[str, object] | None,
-) -> CachePolicy:
+    semantic_cache_policy: SemanticCachePolicy | None = None,
+) -> MaterializationCacheDecision:
     writer_strategy = policy.writer_strategy
     param_mode, param_signature = _param_binding_state(params)
     if param_mode != "none":
-        return CachePolicy(
+        return MaterializationCacheDecision(
             enabled=False,
             reason="params",
             writer_strategy=writer_strategy,
             param_mode=param_mode,
             param_signature=param_signature,
         )
+
+    # Semantic policy (authoritative) overrides engine heuristics
+    if semantic_cache_policy is not None:
+        return MaterializationCacheDecision(
+            enabled=semantic_cache_policy != "none",
+            reason=f"semantic_policy_{semantic_cache_policy}",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+
     if writer_strategy != "arrow":
-        return CachePolicy(
+        return MaterializationCacheDecision(
             enabled=False,
             reason=f"writer_strategy_{writer_strategy}",
             writer_strategy=writer_strategy,
@@ -136,7 +157,7 @@ def _resolve_cache_policy(
             param_signature=param_signature,
         )
     if prefer_reader:
-        return CachePolicy(
+        return MaterializationCacheDecision(
             enabled=False,
             reason="prefer_streaming",
             writer_strategy=writer_strategy,
@@ -144,14 +165,14 @@ def _resolve_cache_policy(
             param_signature=param_signature,
         )
     if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
-        return CachePolicy(
+        return MaterializationCacheDecision(
             enabled=False,
             reason="policy_best_effort",
             writer_strategy=writer_strategy,
             param_mode=param_mode,
             param_signature=param_signature,
         )
-    return CachePolicy(
+    return MaterializationCacheDecision(
         enabled=True,
         reason="materialize",
         writer_strategy=writer_strategy,
@@ -160,27 +181,44 @@ def _resolve_cache_policy(
     )
 
 
-def resolve_cache_policy(
+def resolve_materialization_cache_decision(
     *,
-    policy: ExecutionSurfacePolicy,
+    policy: MaterializationPolicy,
     prefer_reader: bool,
     params: Mapping[str, object] | None,
-) -> CachePolicy:
+    semantic_cache_policy: SemanticCachePolicy | None = None,
+) -> MaterializationCacheDecision:
     """Return the resolved cache policy for plan materialization.
+
+    When semantic_cache_policy is provided, it is authoritative and originates
+    from semantics (definition authority). Engine only adapts execution.
+
+    Parameters
+    ----------
+    policy
+        Materialization policy from engine.
+    prefer_reader
+        Whether to prefer streaming readers.
+    params
+        Optional parameter bindings.
+    semantic_cache_policy
+        Optional semantic cache policy. When provided, takes precedence over
+        engine heuristics for cache decisions.
 
     Returns
     -------
-    CachePolicy
+    MaterializationCacheDecision
         Cache policy for the materialization.
     """
-    return _resolve_cache_policy(
+    return _resolve_materialization_cache_decision(
         policy=policy,
         prefer_reader=prefer_reader,
         params=params,
+        semantic_cache_policy=semantic_cache_policy,
     )
 
 
-def resolve_prefer_reader(*, policy: ExecutionSurfacePolicy) -> bool:
+def resolve_prefer_reader(*, policy: MaterializationPolicy) -> bool:
     """Return the prefer_reader flag for plan execution.
 
     Returns
@@ -189,25 +227,6 @@ def resolve_prefer_reader(*, policy: ExecutionSurfacePolicy) -> bool:
         ``True`` when plan execution should prefer streaming readers.
     """
     return _resolve_prefer_reader(policy=policy)
-
-
-def build_plan_product(
-    plan: DataFusionPlanBundle,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    policy: ExecutionSurfacePolicy,
-    plan_id: str | None = None,
-) -> PlanProduct:
-    """Raise because plan materialization is deprecated.
-
-    Raises
-    ------
-    ValueError
-        Always raised to enforce view-only materialization.
-    """
-    _ = (plan, runtime_profile, policy, plan_id)
-    msg = "Plan materialization is deprecated; use build_view_product instead."
-    raise ValueError(msg)
 
 
 def _plan_view_bundle(
@@ -254,7 +273,7 @@ def build_view_product(
     view_name: str,
     *,
     session_runtime: SessionRuntime,
-    policy: ExecutionSurfacePolicy,
+    policy: MaterializationPolicy,
     view_id: str | None = None,
 ) -> PlanProduct:
     """Execute a registered view and return a PlanProduct wrapper.
@@ -285,13 +304,14 @@ def build_view_product(
         options=OtelBootstrapOptions(resource_overrides={"codeanatomy.view_name": view_name}),
     )
     profile = session_runtime.profile
-    session = session_runtime.ctx
-    if not session.table_exist(view_name):
+    if is_semantic_view(view_name):
+        ensure_semantic_views_registered(session_runtime.ctx, view_names=[view_name])
+    if not session_runtime.ctx.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
         raise ValueError(msg)
     from datafusion_engine.schema.registry import validate_nested_types
 
-    validate_nested_types(session, view_name)
+    validate_nested_types(session_runtime.ctx, view_name)
     bundle = _plan_view_bundle(
         view_name,
         session_runtime=session_runtime,
@@ -302,18 +322,29 @@ def build_view_product(
         from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(
-            session,
+            session_runtime.ctx,
             scan_units=scan_units,
             runtime_profile=profile,
         )
-    prefer_reader = _resolve_prefer_reader(policy=policy)
-    stream: RecordBatchReaderLike | None = None
-    table: TableLike | None = None
     view_artifact = (
         profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
     )
+    semantic_cache_policy: SemanticCachePolicy | None = None
+    if view_artifact is not None:
+        semantic_cache_policy = view_artifact.cache_policy
+    else:
+        semantic_cache_policy = profile.semantic_cache_overrides.get(view_name)
+    prefer_reader = _resolve_prefer_reader(policy=policy)
+    cache_decision = resolve_materialization_cache_decision(
+        policy=policy,
+        prefer_reader=prefer_reader,
+        params=None,
+        semantic_cache_policy=semantic_cache_policy,
+    )
+    stream: RecordBatchReaderLike | None = None
+    table: TableLike | None = None
     execution = execute_plan_bundle_helper(
-        session,
+        session_runtime.ctx,
         bundle,
         options=PlanExecutionOptions(
             runtime_profile=profile,
@@ -334,8 +365,7 @@ def build_view_product(
         table = cast("TableLike", df.to_arrow_table())
         schema = table.schema
         result = ExecutionResult.from_table(table)
-    _record_plan_execution(
-        profile,
+    EngineEventRecorder(profile).record_plan_execution(
         plan_id=view_id or view_name,
         result=result,
         view_artifact=view_artifact,
@@ -346,91 +376,11 @@ def build_view_product(
         determinism_tier=policy.determinism_tier,
         writer_strategy=policy.writer_strategy,
         view_artifact=view_artifact,
+        cache_decision=cache_decision,
         stream=stream,
         table=table,
         execution_result=result,
     )
-
-
-def _record_plan_execution(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    plan_id: str,
-    result: ExecutionResult,
-    view_artifact: DataFusionViewArtifact | None = None,
-) -> None:
-    rows: int | None = None
-    if result.table is not None:
-        rows = result.table.num_rows
-    payload = {
-        "plan_id": plan_id,
-        "result_kind": result.kind.value,
-        "rows": rows,
-    }
-    if view_artifact is not None:
-        payload["plan_fingerprint"] = view_artifact.plan_fingerprint
-    record_artifact(runtime_profile, "plan_execute_v1", payload)
-
-
-@dataclass(frozen=True)
-class _ExtractWriteRecord:
-    dataset: str
-    mode: str
-    path: str
-    file_format: str
-    rows: int | None
-    copy_sql: str | None
-    copy_options: Mapping[str, object] | None
-    delta_result: DeltaWriteResult | None
-
-
-def _record_extract_write(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    record: _ExtractWriteRecord,
-) -> None:
-    payload = {
-        "event_time_unix_ms": int(time.time() * 1000),
-        "dataset": record.dataset,
-        "mode": record.mode,
-        "path": record.path,
-        "format": record.file_format,
-        "rows": record.rows,
-        "copy_sql": record.copy_sql,
-        "copy_options": dict(record.copy_options) if record.copy_options is not None else None,
-        "delta_version": record.delta_result.version if record.delta_result is not None else None,
-    }
-    record_artifact(runtime_profile, "datafusion_extract_output_writes_v1", payload)
-
-
-def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
-    profile = runtime_profile.diskcache_profile
-    if profile is None:
-        return
-    events: list[dict[str, object]] = []
-    for kind in ("plan", "extract", "schema", "repo_scan", "runtime", "coordination"):
-        cache = cache_for_kind(profile, cast("DiskCacheKind", kind))
-        settings = profile.settings_for(cast("DiskCacheKind", kind))
-        payload = diskcache_stats_snapshot(cache)
-        payload.update(
-            {
-                "kind": kind,
-                "profile_key": runtime_profile.context_cache_key(),
-                "size_limit_bytes": settings.size_limit_bytes,
-                "eviction_policy": settings.eviction_policy,
-                "cull_limit": settings.cull_limit,
-                "shards": settings.shards,
-                "statistics": settings.statistics,
-                "tag_index": settings.tag_index,
-                "disk_min_file_size": settings.disk_min_file_size,
-                "sqlite_journal_mode": settings.sqlite_journal_mode,
-                "sqlite_mmap_size": settings.sqlite_mmap_size,
-                "sqlite_synchronous": settings.sqlite_synchronous,
-            }
-        )
-        events.append(payload)
-    if events:
-        record_events(runtime_profile, "diskcache_stats_v1", events)
 
 
 def _resolve_reader(
@@ -521,25 +471,24 @@ def write_extract_outputs(
             format_options={"commit_metadata": commit_metadata},
         )
     )
-    _record_extract_write(
-        runtime_profile,
-        record=_ExtractWriteRecord(
-            dataset=name,
-            mode="append",
-            path=str(location.path),
-            file_format="delta",
-            rows=rows,
-            copy_sql=None,
-            copy_options=None,
-            delta_result=write_result.delta_result,
-        ),
+    recorder = EngineEventRecorder(runtime_profile)
+    recorder.record_extract_write(
+        dataset=name,
+        mode="append",
+        path=str(location.path),
+        file_format="delta",
+        rows=rows,
+        copy_sql=None,
+        copy_options=None,
+        delta_result=write_result.delta_result,
     )
-    _record_diskcache_stats(runtime_profile)
+    recorder.record_diskcache_stats()
 
 
 __all__ = [
+    "MaterializationCacheDecision",
     "build_view_product",
-    "resolve_cache_policy",
+    "resolve_materialization_cache_decision",
     "resolve_prefer_reader",
     "write_extract_outputs",
 ]

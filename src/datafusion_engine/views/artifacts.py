@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
 import pyarrow as pa
@@ -20,6 +20,8 @@ from serde_msgspec import (
     validation_error_payload,
 )
 from utils.hashing import hash_msgpack_canonical, hash_settings
+
+CachePolicy = Literal["none", "delta_staging", "delta_output"]
 
 if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
@@ -43,6 +45,8 @@ class DataFusionViewArtifact:
         UDF names required by this view.
     referenced_tables : tuple[str, ...]
         Table names referenced by this view.
+    cache_policy : CachePolicy
+        Semantic cache policy for the view.
     """
 
     name: str
@@ -51,6 +55,7 @@ class DataFusionViewArtifact:
     schema: pa.Schema
     required_udfs: tuple[str, ...]
     referenced_tables: tuple[str, ...]
+    cache_policy: CachePolicy = "none"
     schema_describe: tuple[Mapping[str, object], ...] = ()
     schema_provenance: Mapping[str, object] | None = None
 
@@ -160,6 +165,7 @@ class ViewArtifactRequest:
     schema: pa.Schema
     lineage: ViewArtifactLineage
     runtime_hash: str | None = None
+    cache_policy: CachePolicy = "none"
 
 
 def build_view_artifact_from_bundle(
@@ -191,6 +197,7 @@ def build_view_artifact_from_bundle(
         schema=request.schema,
         required_udfs=request.lineage.required_udfs,
         referenced_tables=request.lineage.referenced_tables,
+        cache_policy=request.cache_policy,
         schema_describe=schema_describe,
         schema_provenance=schema_provenance,
     )
@@ -296,6 +303,7 @@ def _schema_provenance_payload(schema: pa.Schema) -> Mapping[str, object]:
 
 __all__ = [
     "VIEW_ARTIFACT_PAYLOAD_SCHEMA",
+    "CachePolicy",
     "DataFusionViewArtifact",
     "ViewArtifactLineage",
     "ViewArtifactRequest",

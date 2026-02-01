@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import pyarrow as pa
 import pytest
 from datafusion import SessionContext
+from datafusion.dataframe import DataFrame
 
 from semantics.incremental.cdf_joins import (
     DEFAULT_CDF_COLUMN,
@@ -164,14 +167,14 @@ class TestApplyCdfMerge:
         self,
         ctx: SessionContext,
         name: str,
-        data: dict[str, list[object]],
-    ) -> object:
+        data: Mapping[str, Sequence[object]],
+    ) -> DataFrame:
         table = pa.table(data)
         ctx.register_record_batches(name, [table.to_batches()])
         return ctx.table(name)
 
-    def _collect_all_rows(self, df: object) -> dict[str, list[object]]:
-        collected = df.collect()  # type: ignore[union-attr]
+    def _collect_all_rows(self, df: DataFrame) -> dict[str, list[object]]:
+        collected = df.collect()
         if not collected:
             return {}
         # Concatenate all batches into a single table
@@ -186,8 +189,8 @@ class TestApplyCdfMerge:
         new_data = self._create_df(ctx, "new_data", {"id": ["c", "d"], "value": [3, 4]})
 
         result = apply_cdf_merge(
-            existing,  # type: ignore[arg-type]
-            new_data,  # type: ignore[arg-type]
+            existing,
+            new_data,
             key_columns=("id",),
             strategy=CDFMergeStrategy.APPEND,
         )
@@ -203,8 +206,8 @@ class TestApplyCdfMerge:
         new_data = self._create_df(ctx, "new_data", {"id": ["b", "c"], "value": [20, 3]})
 
         result = apply_cdf_merge(
-            existing,  # type: ignore[arg-type]
-            new_data,  # type: ignore[arg-type]
+            existing,
+            new_data,
             key_columns=("id",),
             strategy=CDFMergeStrategy.UPSERT,
         )
@@ -224,8 +227,8 @@ class TestApplyCdfMerge:
         new_data = self._create_df(ctx, "new_data", {"id": ["b"], "value": [20]})
 
         result = apply_cdf_merge(
-            existing,  # type: ignore[arg-type]
-            new_data,  # type: ignore[arg-type]
+            existing,
+            new_data,
             key_columns=("id",),
             strategy=CDFMergeStrategy.DELETE_INSERT,
         )
@@ -242,8 +245,8 @@ class TestApplyCdfMerge:
 
         with pytest.raises(ValueError, match="partition_column"):
             apply_cdf_merge(
-                existing,  # type: ignore[arg-type]
-                new_data,  # type: ignore[arg-type]
+                existing,
+                new_data,
                 key_columns=("id",),
                 strategy=CDFMergeStrategy.REPLACE,
             )
@@ -263,8 +266,8 @@ class TestApplyCdfMerge:
         )
 
         result = apply_cdf_merge(
-            existing,  # type: ignore[arg-type]
-            new_data,  # type: ignore[arg-type]
+            existing,
+            new_data,
             key_columns=("id",),
             strategy=CDFMergeStrategy.REPLACE,
             partition_column="file_id",
@@ -287,14 +290,14 @@ class TestMergeIncrementalResults:
         self,
         ctx: SessionContext,
         name: str,
-        data: dict[str, list[object]],
-    ) -> object:
+        data: Mapping[str, Sequence[object]],
+    ) -> DataFrame:
         table = pa.table(data)
         ctx.register_record_batches(name, [table.to_batches()])
         return ctx.table(name)
 
-    def _collect_all_rows(self, df: object) -> dict[str, list[object]]:
-        collected = df.collect()  # type: ignore[union-attr]
+    def _collect_all_rows(self, df: DataFrame) -> dict[str, list[object]]:
+        collected = df.collect()
         if not collected:
             return {}
         # Concatenate all batches into a single table
@@ -313,7 +316,7 @@ class TestMergeIncrementalResults:
 
         result = merge_incremental_results(
             ctx,
-            incremental_df=incremental,  # type: ignore[arg-type]
+            incremental_df=incremental,
             base_table="nonexistent_base",
             key_columns=("id",),
         )
@@ -337,7 +340,7 @@ class TestMergeIncrementalResults:
 
         result = merge_incremental_results(
             ctx,
-            incremental_df=incremental,  # type: ignore[arg-type]
+            incremental_df=incremental,
             base_table="base_table",
             key_columns=("id",),
         )
@@ -362,7 +365,7 @@ class TestMergeIncrementalResults:
         # Default strategy should be UPSERT
         result = merge_incremental_results(
             ctx,
-            incremental_df=incremental,  # type: ignore[arg-type]
+            incremental_df=incremental,
             base_table="base_table",
             key_columns=("id",),
         )

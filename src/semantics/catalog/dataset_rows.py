@@ -303,25 +303,188 @@ def _build_relationship_rows() -> tuple[SemanticDatasetRow, ...]:
         Semantic dataset rows for relationship outputs.
     """
     # Lazy import to avoid circular dependencies
+    from relspec.view_defs import (
+        DEFAULT_REL_TASK_PRIORITY,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+    )
+    from semantics.catalog.projections import (
+        SemanticProjectionConfig,
+        semantic_projection_options,
+    )
     from semantics.spec_registry import RELATIONSHIP_SPECS
 
-    return tuple(
+    projection_options = semantic_projection_options(
+        SemanticProjectionConfig(
+            default_priority=DEFAULT_REL_TASK_PRIORITY,
+            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
+            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
+            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
+            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
+            relationship_specs=RELATIONSHIP_SPECS,
+        )
+    )
+
+    def _relationship_fields(entity_id_alias: str) -> tuple[str, ...]:
+        return (
+            entity_id_alias,
+            "symbol",
+            "symbol_roles",
+            "path",
+            "edge_owner_file_id",
+            "bstart",
+            "bend",
+            "resolution_method",
+            "confidence",
+            "score",
+            "task_name",
+            "task_priority",
+        )
+
+    rows: list[SemanticDatasetRow] = []
+    for spec in RELATIONSHIP_SPECS:
+        options = projection_options[spec.name]
+        join_keys = (options.entity_id_alias, "symbol")
+        rows.append(
+            SemanticDatasetRow(
+                name=spec.name,
+                version=SEMANTIC_SCHEMA_VERSION,
+                bundles=(),
+                fields=_relationship_fields(options.entity_id_alias),
+                category="semantic",
+                supports_cdf=True,
+                partition_cols=(),
+                merge_keys=join_keys,
+                join_keys=join_keys,
+                template="semantic_relationship",
+                view_builder=f"{spec.name.replace('_v1', '')}_df_builder",
+                register_view=True,
+                source_dataset=None,
+            )
+        )
+    return tuple(rows)
+
+
+def _build_file_quality_row() -> SemanticDatasetRow:
+    """Build the semantic row for file_quality view.
+
+    Returns
+    -------
+    SemanticDatasetRow
+        Semantic dataset row for file quality signals.
+    """
+    fields = (
+        "file_id",
+        "file_sha256",
+        "has_cst_parse_errors",
+        "cst_error_count",
+        "ts_timed_out",
+        "ts_error_count",
+        "ts_missing_count",
+        "ts_match_limit_exceeded",
+        "has_scip_diagnostics",
+        "scip_diagnostic_count",
+        "scip_encoding_unspecified",
+        "file_quality_score",
+    )
+    return SemanticDatasetRow(
+        name="file_quality_v1",
+        version=SEMANTIC_SCHEMA_VERSION,
+        bundles=(),
+        fields=fields,
+        category="analysis",
+        supports_cdf=True,
+        partition_cols=(),
+        merge_keys=("file_id",),
+        join_keys=("file_id",),
+        template="file_quality",
+        view_builder="file_quality_df_builder",
+        register_view=True,
+        source_dataset=None,
+    )
+
+
+def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
+    """Build semantic rows for diagnostic quality views.
+
+    Returns
+    -------
+    tuple[SemanticDatasetRow, ...]
+        Semantic dataset rows for diagnostic reports.
+    """
+    return (
         SemanticDatasetRow(
-            name=spec.name,
+            name="relationship_quality_metrics_v1",
             version=SEMANTIC_SCHEMA_VERSION,
-            bundles=("file_identity",),
-            fields=("left_id", "right_id", "origin"),
-            category="semantic",
-            supports_cdf=True,
+            bundles=(),
+            fields=(
+                "relationship_name",
+                "total_edges",
+                "distinct_sources",
+                "distinct_targets",
+                "avg_confidence",
+                "min_confidence",
+                "max_confidence",
+                "low_confidence_edges",
+                "avg_score",
+                "min_score",
+                "max_score",
+            ),
+            category="diagnostic",
+            supports_cdf=False,
             partition_cols=(),
-            merge_keys=("left_id", "right_id"),
-            join_keys=("left_id", "right_id"),
-            template="semantic_relationship",
-            view_builder=f"{spec.name.replace('_v1', '')}_df_builder",
+            merge_keys=("relationship_name",),
+            join_keys=("relationship_name",),
+            template="relationship_quality_metrics",
+            view_builder="relationship_quality_metrics_df_builder",
             register_view=True,
             source_dataset=None,
-        )
-        for spec in RELATIONSHIP_SPECS
+        ),
+        SemanticDatasetRow(
+            name="relationship_ambiguity_report_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "relationship_name",
+                "total_sources",
+                "ambiguous_sources",
+                "max_candidates",
+                "avg_candidates",
+                "ambiguity_rate",
+            ),
+            category="diagnostic",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=("relationship_name",),
+            join_keys=("relationship_name",),
+            template="relationship_ambiguity_report",
+            view_builder="relationship_ambiguity_report_df_builder",
+            register_view=True,
+            source_dataset=None,
+        ),
+        SemanticDatasetRow(
+            name="file_coverage_report_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "file_id",
+                "has_cst",
+                "has_tree_sitter",
+                "has_scip",
+                "extraction_count",
+            ),
+            category="diagnostic",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=("file_id",),
+            join_keys=("file_id",),
+            template="file_coverage_report",
+            view_builder="file_coverage_report_df_builder",
+            register_view=True,
+            source_dataset=None,
+        ),
     )
 
 
@@ -443,8 +606,12 @@ def _build_all_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     rows.extend(_build_semantic_normalization_rows())
     # SCIP normalization
     rows.append(_build_scip_normalization_row())
+    # File quality signals (used by quality-aware relationships)
+    rows.append(_build_file_quality_row())
     # Relationship outputs
     rows.extend(_build_relationship_rows())
+    # Diagnostic quality reports
+    rows.extend(_build_diagnostic_rows())
     # Relation output union
     rows.append(_build_relation_output_row())
     # Final CPG outputs

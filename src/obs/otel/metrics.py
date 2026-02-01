@@ -27,6 +27,8 @@ _DATASET_ROWS = MetricName.DATASET_ROWS
 _DATASET_COLUMNS = MetricName.DATASET_COLUMNS
 _SCAN_ROW_GROUPS = MetricName.SCAN_ROW_GROUPS
 _SCAN_FRAGMENTS = MetricName.SCAN_FRAGMENTS
+_CACHE_OPERATION_COUNT = MetricName.CACHE_OPERATION_COUNT
+_CACHE_OPERATION_DURATION = MetricName.CACHE_OPERATION_DURATION
 
 _DEFAULT_BUCKETS_S = (
     0.005,
@@ -90,6 +92,8 @@ class MetricsRegistry:
     dataset_columns: GaugeStore
     scan_row_groups: GaugeStore
     scan_fragments: GaugeStore
+    cache_operation_count: metrics.Counter
+    cache_operation_duration: metrics.Histogram
 
 
 _REGISTRY_CACHE: dict[str, MetricsRegistry | None] = {"value": None}
@@ -174,6 +178,27 @@ def metric_views() -> list[View]:
                 AttributeName.STAGE.value,
             },
         ),
+        View(
+            instrument_name=_CACHE_OPERATION_COUNT,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.CACHE_POLICY.value,
+                AttributeName.CACHE_SCOPE.value,
+                AttributeName.CACHE_OPERATION.value,
+                AttributeName.CACHE_RESULT.value,
+            },
+        ),
+        View(
+            instrument_name=_CACHE_OPERATION_DURATION,
+            aggregation=histogram,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.CACHE_POLICY.value,
+                AttributeName.CACHE_SCOPE.value,
+                AttributeName.CACHE_OPERATION.value,
+                AttributeName.CACHE_RESULT.value,
+            },
+        ),
     ]
 
 
@@ -237,6 +262,16 @@ def _registry() -> MetricsRegistry:
             name=_SCAN_FRAGMENTS,
             description="Fragment counts observed during scans.",
             unit="1",
+        ),
+        cache_operation_count=meter.create_counter(
+            _CACHE_OPERATION_COUNT,
+            unit="1",
+            description="Cache operation count by policy/scope/result.",
+        ),
+        cache_operation_duration=meter.create_histogram(
+            _CACHE_OPERATION_DURATION,
+            unit="s",
+            description="Cache operation duration by policy/scope/result.",
         ),
     )
     meter.create_observable_gauge(
@@ -440,9 +475,39 @@ def set_scan_telemetry(
     )
 
 
+def record_cache_event(
+    *,
+    cache_policy: str,
+    cache_scope: str,
+    operation: str,
+    result: str,
+    duration_s: float | None = None,
+) -> None:
+    """Record a cache operation as metrics."""
+    registry = _registry()
+    base = {
+        AttributeName.CACHE_POLICY.value: cache_policy,
+        AttributeName.CACHE_SCOPE.value: cache_scope,
+        AttributeName.CACHE_OPERATION.value: operation,
+        AttributeName.CACHE_RESULT.value: result,
+    }
+    if duration_s is not None:
+        _emit_metric(
+            registry.cache_operation_duration.record,
+            value=duration_s,
+            base_attributes=base,
+        )
+    _emit_metric(
+        registry.cache_operation_count.add,
+        value=1.0,
+        base_attributes=base,
+    )
+
+
 __all__ = [
     "metric_views",
     "record_artifact_count",
+    "record_cache_event",
     "record_datafusion_duration",
     "record_error",
     "record_stage_duration",

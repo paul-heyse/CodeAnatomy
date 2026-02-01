@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal
 from core.config_base import FingerprintableConfig, config_fingerprint
 
 if TYPE_CHECKING:
-    from engine.plan_policy import WriterStrategy
+    from datafusion_engine.materialize_policy import WriterStrategy
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
     from storage.ipc_utils import IpcWriteConfig
 

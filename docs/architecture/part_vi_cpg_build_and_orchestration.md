@@ -1163,7 +1163,7 @@ class EngineSession:
     engine_runtime: EngineRuntime
     datasets: DatasetCatalog
     diagnostics: DiagnosticsCollector | None = None
-    surface_policy: ExecutionSurfacePolicy = field(default_factory=ExecutionSurfacePolicy)
+    surface_policy: MaterializationPolicy = field(default_factory=MaterializationPolicy)
     settings_hash: str | None = None
     runtime_profile_hash: str | None = None
 
@@ -1196,7 +1196,7 @@ def build_engine_session(
     *,
     runtime_spec: RuntimeProfileSpec,
     diagnostics: DiagnosticsCollector | None = None,
-    surface_policy: ExecutionSurfacePolicy | None = None,
+    surface_policy: MaterializationPolicy | None = None,
     diagnostics_policy: DiagnosticsPolicy | None = None,
 ) -> EngineSession:
     """Build an EngineSession bound to the provided runtime spec."""
@@ -1236,7 +1236,7 @@ def build_engine_session(
         engine_runtime=engine_runtime,
         datasets=datasets,
         diagnostics=diagnostics,
-        surface_policy=surface_policy or ExecutionSurfacePolicy(),
+        surface_policy=surface_policy or MaterializationPolicy(),
         settings_hash=settings_hash,
         runtime_profile_hash=runtime_snapshot.profile_hash,
     )
@@ -1263,7 +1263,7 @@ def build_view_product(
     view_name: str,
     *,
     session_runtime: SessionRuntime,
-    policy: ExecutionSurfacePolicy,
+    policy: MaterializationPolicy,
     view_id: str | None = None,
 ) -> PlanProduct:
     """Execute a registered view and return a PlanProduct wrapper."""
@@ -1292,11 +1292,6 @@ def build_view_product(
     prefer_reader = _resolve_prefer_reader(policy=policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
-    view_artifact = (
-        profile.view_registry.entries.get(view_name)
-        if profile.view_registry is not None
-        else None
-    )
     facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
     df = facade.execute_plan_bundle(
         bundle,
@@ -2004,7 +1999,7 @@ The driver factory (`build_driver`, `DriverFactory`) caches built Hamilton drive
 
 ### Strategy Pattern
 
-The materialization pipeline uses strategy selection to choose between streaming (for memory efficiency) and table (for random access) outputs based on the `ExecutionSurfacePolicy`. The execution manager uses strategy selection to route tasks to executors based on task kind and cost.
+The materialization pipeline uses strategy selection to choose between streaming (for memory efficiency) and table (for random access) outputs based on the `MaterializationPolicy`. The execution manager uses strategy selection to route tasks to executors based on task kind and cost.
 
 ### Template Pattern
 

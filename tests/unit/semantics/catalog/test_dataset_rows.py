@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from semantics.catalog.dataset_rows import (
@@ -97,8 +99,9 @@ class TestSemanticDatasetRow:
             fields=(),
             category="semantic",
         )
-        with pytest.raises(AttributeError):
-            row.name = "modified"  # type: ignore[misc]
+        attr_name = "name"
+        with pytest.raises(FrozenInstanceError):
+            setattr(row, attr_name, "modified")
 
 
 class TestDatasetRowLookup:

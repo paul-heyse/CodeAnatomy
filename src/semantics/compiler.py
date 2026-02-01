@@ -1054,5 +1054,254 @@ class SemanticCompiler:
             ranked = info.df.with_column("_rank", row_num)
             return ranked.filter(col("_rank") == lit(1)).drop("_rank")
 
+    # -------------------------------------------------------------------------
+    # Quality-aware relationship compilation
+    # -------------------------------------------------------------------------
+
+    def compile_relationship_with_quality(  # noqa: C901, PLR0912, PLR0914, PLR0915
+        self,
+        spec: QualityRelationshipSpec,
+        *,
+        file_quality_df: DataFrame | None = None,
+    ) -> DataFrame:
+        """Compile a relationship with quality signals.
+
+        This method implements quality-aware relationship compilation:
+        1. Alias left/right tables with prefixes to prevent column collision
+        2. Equi-join on hard keys (left_on/right_on)
+        3. Optionally join file_quality signals via file_id
+        4. Apply hard predicates via filter()
+        5. Add feature columns via with_column()
+        6. Compute score and confidence
+        7. Add metadata columns (origin, provider, rule_name)
+        8. Apply ambiguity grouping with row_number() window function
+        9. Filter to top_k if keep="best"
+
+        Parameters
+        ----------
+        spec
+            Quality relationship specification.
+        file_quality_df
+            Optional pre-built file quality DataFrame. If None and
+            spec.join_file_quality is True, will try to use file_quality_v1.
+
+        Returns
+        -------
+        DataFrame
+            Compiled relationship with confidence, score, and ambiguity_group_id.
+
+        Raises
+        ------
+        SemanticSchemaError
+            If left_on or right_on are empty.
+        """
+        from datafusion import col, functions, lit
+
+        from semantics.exprs import ExprContextImpl, clamp, validate_expr_spec
+
+        with stage_span(
+            "semantics.compile_relationship_with_quality",
+            stage="semantics",
+            scope_name=SCOPE_SEMANTICS,
+            attributes={
+                "codeanatomy.spec_name": spec.name,
+                "codeanatomy.left_view": spec.left_view,
+                "codeanatomy.right_view": spec.right_view,
+                "codeanatomy.join_how": spec.how,
+                "codeanatomy.join_file_quality": spec.join_file_quality,
+            },
+        ):
+            # 1. Get and alias tables
+            left_df = self.ctx.table(spec.left_view)
+            right_df = self.ctx.table(spec.right_view)
+
+            left_prefix = "l__"
+            right_prefix = "r__"
+            left_aliased = self._prefix_df(left_df, left_prefix)
+            right_aliased = self._prefix_df(right_df, right_prefix)
+
+            # 2. Build join keys with prefixes
+            left_keys = [f"{left_prefix}{k}" for k in spec.left_on]
+            right_keys = [f"{right_prefix}{k}" for k in spec.right_on]
+
+            # 3. Perform equi-join (require keys)
+            if not left_keys or not right_keys:
+                msg = f"Quality relationship {spec.name!r} requires non-empty left_on and right_on."
+                raise SemanticSchemaError(msg)
+
+            joined = left_aliased.join(
+                right_aliased,
+                left_on=left_keys,
+                right_on=right_keys,
+                how=spec.how,
+            )
+
+            # 4. Optionally join file quality signals
+            if spec.join_file_quality:
+                fq_df = file_quality_df
+                if fq_df is None:
+                    try:
+                        fq_df = self.ctx.table(spec.file_quality_view)
+                    except Exception:  # noqa: BLE001
+                        fq_df = None
+
+                if fq_df is not None:
+                    # Join on file_id from left table
+                    fq_prefix = "fq__"
+                    fq_aliased = self._prefix_df(fq_df, fq_prefix)
+                    left_file_id = f"{left_prefix}file_id"
+                    fq_file_id = f"{fq_prefix}file_id"
+                    joined = joined.join(
+                        fq_aliased,
+                        left_on=[left_file_id],
+                        right_on=[fq_file_id],
+                        how="left",
+                    )
+
+            # 5. Set up expression context with prefixes
+            expr_ctx = ExprContextImpl(left_alias="l", right_alias="r")
+            schema_names = set(self._schema_names(joined))
+            feature_columns = {f"_feat_{feature.name}" for feature in spec.signals.features}
+            rank_available = {
+                *schema_names,
+                *feature_columns,
+                "score",
+                "confidence",
+                "origin",
+                "provider",
+            }
+            if spec.rule_name is not None:
+                rank_available.add("rule_name")
+
+            # 6. Apply hard predicates
+            for index, hard_pred in enumerate(spec.signals.hard, start=1):
+                validate_expr_spec(
+                    hard_pred.predicate,
+                    available_columns=schema_names,
+                    expr_label=f"{spec.name}.hard[{index}]",
+                )
+                pred_expr = hard_pred.predicate(expr_ctx)
+                joined = joined.filter(pred_expr)
+
+            # 7. Add feature columns and compute score
+            base_score = lit(spec.signals.base_score)
+            for feature in spec.signals.features:
+                validate_expr_spec(
+                    feature.expr,
+                    available_columns=schema_names,
+                    expr_label=f"{spec.name}.feature[{feature.name}]",
+                )
+                feature_expr = feature.expr(expr_ctx)
+                joined = joined.with_column(f"_feat_{feature.name}", feature_expr)
+                base_score = base_score + col(f"_feat_{feature.name}") * lit(feature.weight)  # noqa: PLR6104
+
+            joined = joined.with_column("score", base_score)
+
+            # 8. Compute confidence with quality adjustment
+            base_conf = lit(spec.signals.base_confidence)
+            quality_col = f"fq__{spec.signals.quality_score_column}"
+
+            # Check if quality column exists
+            schema_names = self._schema_names(joined)
+            if quality_col in schema_names:
+                quality_adj = (
+                    functions.coalesce(col(quality_col), lit(1000.0))
+                    * lit(spec.signals.quality_weight)
+                )
+                raw_conf = base_conf + (col("score") / lit(10000.0)) + quality_adj
+            else:
+                raw_conf = base_conf + (col("score") / lit(10000.0))
+
+            # Clamp confidence to [0, 1]
+            conf_expr = clamp(raw_conf, min_value=lit(0.0), max_value=lit(1.0))
+            joined = joined.with_column("confidence", conf_expr)
+
+            # 9. Add metadata columns
+            joined = joined.with_column("origin", lit(spec.origin))
+            joined = joined.with_column("provider", lit(spec.provider))
+            if spec.rule_name is not None:
+                joined = joined.with_column("rule_name", lit(spec.rule_name))
+
+            # 10. Apply ranking if specified
+            if spec.rank is not None:
+                # Build ambiguity group key
+                validate_expr_spec(
+                    spec.rank.ambiguity_key_expr,
+                    available_columns=schema_names,
+                    expr_label=f"{spec.name}.rank.ambiguity_key_expr",
+                )
+                group_key = spec.rank.ambiguity_key_expr(expr_ctx)
+                group_id_expr = group_key
+                if spec.rank.ambiguity_group_id_expr is not None:
+                    validate_expr_spec(
+                        spec.rank.ambiguity_group_id_expr,
+                        available_columns=schema_names,
+                        expr_label=f"{spec.name}.rank.ambiguity_group_id_expr",
+                    )
+                    group_id_expr = spec.rank.ambiguity_group_id_expr(expr_ctx)
+                joined = joined.with_column("ambiguity_group_id", group_id_expr)
+
+                # Build sort expressions
+                if spec.rank.order_by:
+                    from datafusion.expr import SortKey
+
+                    order_exprs: list[SortKey] = []
+                    for index, order in enumerate(spec.rank.order_by, start=1):
+                        validate_expr_spec(
+                            order.expr,
+                            available_columns=rank_available,
+                            expr_label=f"{spec.name}.rank.order_by[{index}]",
+                        )
+                        order_exprs.append(
+                            order.expr(expr_ctx).sort(ascending=(order.direction == "asc"))
+                        )
+
+                    # Apply row_number window function
+                    row_num = functions.row_number(
+                        partition_by=[col("ambiguity_group_id")],
+                        order_by=order_exprs,
+                    )
+                    joined = joined.with_column("_rn", row_num)
+
+                    # Filter to keep only top_k if keep="best"
+                    if spec.rank.keep == "best":
+                        joined = joined.filter(col("_rn") <= lit(spec.rank.top_k))
+
+                    joined = joined.drop("_rn")
+
+            # 11. Project final output columns if specified
+            if spec.select_exprs:
+                select_available = {
+                    *rank_available,
+                    "ambiguity_group_id",
+                }
+                select_cols = []
+                for select_expr in spec.select_exprs:
+                    validate_expr_spec(
+                        select_expr.expr,
+                        available_columns=select_available,
+                        expr_label=f"{spec.name}.select[{select_expr.alias}]",
+                    )
+                    select_cols.append(select_expr.expr(expr_ctx).alias(select_expr.alias))
+                # Always include standard columns
+                select_cols.extend([
+                    col("confidence"),
+                    col("score"),
+                    col("origin"),
+                    col("provider"),
+                ])
+                if spec.rank is not None:
+                    select_cols.append(col("ambiguity_group_id"))
+                if spec.rule_name is not None:
+                    select_cols.append(col("rule_name"))
+                joined = joined.select(*select_cols)
+
+            return joined
+
+
+# Type import for compile_relationship_with_quality
+if TYPE_CHECKING:
+    from semantics.quality import QualityRelationshipSpec
+
 
 __all__ = ["SemanticCompiler", "TableInfo"]

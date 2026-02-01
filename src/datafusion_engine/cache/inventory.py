@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from datafusion_engine.io.write import (
     WritePipeline,
     WriteRequest,
 )
+from obs.otel.run_context import get_run_id
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -50,6 +52,10 @@ class CacheInventoryEntry:
     schema_identity_hash: str | None
     snapshot_version: int | None
     snapshot_timestamp: str | None
+    run_id: str | None = None
+    result: str | None = None
+    row_count: int | None = None
+    file_count: int | None = None
     partition_by: tuple[str, ...] = ()
     event_time_unix_ms: int | None = None
 
@@ -61,16 +67,21 @@ class CacheInventoryEntry:
         dict[str, object]
             JSON-ready representation of the inventory entry.
         """
+        run_id = self.run_id or get_run_id()
         return {
             "event_time_unix_ms": self.event_time_unix_ms or int(time.time() * 1000),
+            "run_id": run_id,
             "view_name": self.view_name,
             "cache_policy": self.cache_policy,
             "cache_path": self.cache_path,
+            "result": self.result,
             "plan_fingerprint": self.plan_fingerprint,
             "plan_identity_hash": self.plan_identity_hash,
             "schema_identity_hash": self.schema_identity_hash,
             "snapshot_version": self.snapshot_version,
             "snapshot_timestamp": self.snapshot_timestamp,
+            "row_count": self.row_count,
+            "file_count": self.file_count,
             "partition_by": list(self.partition_by),
         }
 
@@ -137,18 +148,27 @@ def record_cache_inventory_entry(
         value=table,
     )
     pipeline = WritePipeline(ctx=active_ctx, runtime_profile=profile)
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
+
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_inventory_append",
+            cache_policy="cache_inventory",
+            cache_scope="ledger",
+            cache_key=entry.view_name,
+            result=entry.result,
+        )
+    )
     result = pipeline.write(
         WriteRequest(
             source=df,
             destination=str(location.path),
             format=WriteFormat.DELTA,
             mode=WriteMode.APPEND,
-            format_options={
-                "commit_metadata": {
-                    "operation": "view_cache_inventory_append",
-                    "view_name": entry.view_name,
-                }
-            },
+            format_options={"commit_metadata": commit_metadata},
         )
     )
     if result.delta_result is None:
@@ -170,18 +190,27 @@ def _bootstrap_cache_inventory_table(
     )
     df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
     pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
+    from datafusion_engine.cache.commit_metadata import (
+        CacheCommitMetadataRequest,
+        cache_commit_metadata,
+    )
+
+    commit_metadata = cache_commit_metadata(
+        CacheCommitMetadataRequest(
+            operation="cache_inventory_bootstrap",
+            cache_policy="cache_inventory",
+            cache_scope="ledger",
+            cache_key=table_path.name,
+            result="write",
+        )
+    )
     pipeline.write(
         WriteRequest(
             source=df,
             destination=str(table_path),
             format=WriteFormat.DELTA,
             mode=WriteMode.OVERWRITE,
-            format_options={
-                "commit_metadata": {
-                    "operation": "view_cache_inventory_bootstrap",
-                    "table": table_path.name,
-                }
-            },
+            format_options={"commit_metadata": commit_metadata},
         )
     )
 
@@ -197,17 +226,69 @@ def _cache_inventory_schema() -> pa.Schema:
     return pa.schema(
         [
             int64_field("event_time_unix_ms"),
+            string_field("run_id", nullable=True),
             string_field("view_name"),
             string_field("cache_policy"),
             string_field("cache_path"),
+            string_field("result", nullable=True),
             string_field("plan_fingerprint", nullable=True),
             string_field("plan_identity_hash", nullable=True),
             string_field("schema_identity_hash", nullable=True),
             int64_field("snapshot_version", nullable=True),
             string_field("snapshot_timestamp", nullable=True),
+            int64_field("row_count", nullable=True),
+            int64_field("file_count", nullable=True),
             list_field("partition_by", string_field("item"), nullable=True),
         ]
     )
+
+
+def delta_report_file_count(report: Mapping[str, object] | None) -> int | None:
+    """Extract a file count from a Delta write report payload.
+
+    Returns
+    -------
+    int | None
+        File count when present in the payload.
+    """
+    if report is None:
+        return None
+    payloads: list[Mapping[str, object]] = []
+    payloads.append(report)
+    metrics = report.get("metrics") if isinstance(report, Mapping) else None
+    if isinstance(metrics, Mapping):
+        payloads.append(metrics)
+    for payload in payloads:
+        for key in (
+            "numFiles",
+            "num_files",
+            "files",
+            "added_files",
+            "files_added",
+            "numAddFiles",
+            "numAddedFiles",
+        ):
+            if key not in payload:
+                continue
+            value = _coerce_int(payload.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def cache_inventory_schema() -> pa.Schema:
@@ -225,6 +306,7 @@ __all__ = [
     "CACHE_INVENTORY_TABLE_NAME",
     "CacheInventoryEntry",
     "cache_inventory_schema",
+    "delta_report_file_count",
     "ensure_cache_inventory_table",
     "record_cache_inventory_entry",
 ]

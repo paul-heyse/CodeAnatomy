@@ -73,9 +73,60 @@ def snapshot_datafusion_caches(
     events: list[dict[str, object]] = []
     for snapshot_name, table_name in _CACHE_SNAPSHOT_QUERIES.items():
         sql = f"SELECT * FROM {table_name}()"
+        from datafusion_engine.cache.commit_metadata import (
+            CacheCommitMetadataRequest,
+            cache_commit_metadata,
+        )
+        from datafusion_engine.cache.ledger import (
+            CacheSnapshotRegistryEntry,
+            record_cache_snapshot_registry,
+        )
+        from obs.otel.cache import cache_span
+
         try:
-            df = ctx.sql(sql)
+            with cache_span(
+                "cache.metadata.snapshot",
+                cache_policy="metadata_snapshot",
+                cache_scope="metadata",
+                operation="snapshot",
+                attributes={
+                    "snapshot_name": snapshot_name,
+                    "cache_table": table_name,
+                },
+            ) as (_span, set_result):
+                df = ctx.sql(sql)
+                path = cache_root / snapshot_name
+                commit_metadata = cache_commit_metadata(
+                    CacheCommitMetadataRequest(
+                        operation="cache_snapshot",
+                        cache_policy="metadata_snapshot",
+                        cache_scope="metadata",
+                        cache_key=snapshot_name,
+                        extra={"cache_table": table_name},
+                    )
+                )
+                result = pipeline.write(
+                    WriteRequest(
+                        source=df,
+                        destination=str(path),
+                        format=WriteFormat.DELTA,
+                        mode=WriteMode.OVERWRITE,
+                        format_options={"commit_metadata": commit_metadata},
+                    )
+                )
+                set_result("write")
         except (RuntimeError, TypeError, ValueError) as exc:
+            record_cache_snapshot_registry(
+                runtime_profile,
+                entry=CacheSnapshotRegistryEntry(
+                    snapshot_name=snapshot_name,
+                    cache_table=table_name,
+                    cache_path=None,
+                    snapshot_version=None,
+                    error=str(exc),
+                ),
+                ctx=ctx,
+            )
             events.append(
                 CacheSnapshotEvent(
                     snapshot_name=snapshot_name,
@@ -87,20 +138,6 @@ def snapshot_datafusion_caches(
             )
             continue
         path = cache_root / snapshot_name
-        result = pipeline.write(
-            WriteRequest(
-                source=df,
-                destination=str(path),
-                format=WriteFormat.DELTA,
-                mode=WriteMode.OVERWRITE,
-                format_options={
-                    "commit_metadata": {
-                        "operation": "cache_snapshot",
-                        "cache_table": table_name,
-                    }
-                },
-            )
-        )
         location = DatasetLocation(path=str(path), format="delta")
         deregister_table(ctx, snapshot_name)
         register_dataset_df(
@@ -110,6 +147,17 @@ def snapshot_datafusion_caches(
             runtime_profile=runtime_profile,
         )
         snapshot_version = result.delta_result.version if result.delta_result else None
+        record_cache_snapshot_registry(
+            runtime_profile,
+            entry=CacheSnapshotRegistryEntry(
+                snapshot_name=snapshot_name,
+                cache_table=table_name,
+                cache_path=str(path),
+                snapshot_version=snapshot_version,
+                error=None,
+            ),
+            ctx=ctx,
+        )
         events.append(
             CacheSnapshotEvent(
                 snapshot_name=snapshot_name,

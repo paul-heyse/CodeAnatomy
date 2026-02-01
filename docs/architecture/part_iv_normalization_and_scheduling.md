@@ -953,9 +953,9 @@ This decouples view definition (builders) from execution (plan bundles) and sche
 
 #### Dynamic View Registration
 
-**File:** `/home/paul/CodeAnatomy/src/datafusion_engine/views/registry.py`
+**Files:** `src/datafusion_engine/views/registration.py`, `src/datafusion_engine/views/registry_specs.py`
 
-Dynamic views are constructed programmatically for nested dataset access. These views flatten nested structs/maps into relational schemas, enabling SQL queries over hierarchical data. The registry module manages view lifecycle, compilation, and integration with the task graph.
+Dynamic semantic views are registered through the view graph entrypoint (`ensure_view_graph`). View nodes are generated from semantic builders and specs, with dependencies inferred from plan bundles. Legacy registry-based view construction has been removed in favor of semantics-first definitions.
 
 ### Critical Design Patterns
 

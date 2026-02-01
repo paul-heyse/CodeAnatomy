@@ -6,7 +6,7 @@ import importlib
 
 import pytest
 
-from obs.otel.logs import emit_diagnostics_event
+from obs.otel.logs import OtelDiagnosticsSink, emit_diagnostics_event
 from tests.obs._support.otel_harness import get_otel_harness
 
 
@@ -40,3 +40,17 @@ def test_log_attribute_limits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT", raising=False)
     monkeypatch.delenv("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT", raising=False)
     importlib.reload(otel_attributes)
+
+
+def test_otel_diagnostics_sink_emits() -> None:
+    """Ensure the OTel diagnostics sink emits logs."""
+    harness = get_otel_harness()
+    harness.reset()
+    sink = OtelDiagnosticsSink()
+    sink.record_artifact("cache.test", {"status": "ok"})
+    logs = harness.log_exporter.get_finished_logs()
+    assert logs
+    log_record = logs[-1].log_record
+    attributes = log_record.attributes or {}
+    assert attributes.get("event.name") == "cache.test"
+    assert attributes.get("event.kind") == "artifact"

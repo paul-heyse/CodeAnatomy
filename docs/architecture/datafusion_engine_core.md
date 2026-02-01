@@ -584,103 +584,19 @@ Validation detects:
 
 Violations raise `SchemaContractViolationError` with detailed diagnostic information.
 
-#### View Specification DSL
+#### Semantic View Registration
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/view_spec.py` (672 lines)
+The semantic view registration flow is now semantics‑first:
 
-The view specification DSL provides a declarative approach to defining view projections, replacing hand-coded expression tuples with concise specifications.
+**Execution authority**:
+- `src/datafusion_engine/views/registration.py` (`ensure_view_graph`)
+- `src/datafusion_engine/views/registry_specs.py` (view graph nodes as a pure bridge)
 
-**ViewProjectionSpec**:
+**Definition authority**:
+- `src/semantics/catalog/*` (builders, dataset specs, projections)
+- `src/semantics/spec_registry.py` (semantic specs registry)
 
-```python
-from datafusion_engine.views.view_spec import ViewProjectionSpec, ColumnTransform
-
-spec = ViewProjectionSpec(
-    name="ast_calls",
-    base_table="ast_files_v1",
-    include_file_identity=True,
-    passthrough_cols=("ast_id", "parent_ast_id"),
-    include_span_struct=True,
-)
-
-# Generate expressions from spec
-exprs = spec.to_exprs(base_schema)
-```
-
-**Column Transform Types** (`ColumnTransformKind`):
-- `PASSTHROUGH`: Direct column pass-through with alias
-- `RENAME`: Rename column
-- `CAST`: Type casting via `arrow_cast()`
-- `STRUCT_FIELD`: Extract struct field
-- `NESTED_STRUCT_FIELD`: Extract nested struct field
-- `MAP_EXTRACT`: Extract map value by key
-- `METADATA_EXTRACT`: Extract Arrow metadata by key
-- `COALESCE`: Coalesce multiple columns
-- `LITERAL`: Literal value
-- `EXPRESSION`: Custom expression
-
-**Benefits of DSL**:
-- Uniform interface for view projection definitions
-- Composable with view registry for dependency management
-- Reduces boilerplate for common transformation patterns
-- Type-safe transformation specifications
-- Enables generic builders for expression generation
-
-#### Registry Views
-
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/registry.py` (3256 lines)
-
-The registry views module provides pre-defined view builders for AST, CST, symtable, and tree-sitter evidence layers.
-
-**Registry View Categories**:
-- **AST Core Views**: Core AST views (required)
-- **AST Optional Views**: Optional AST enrichment views
-- **CST Views**: LibCST view definitions
-- **Symtable Views**: Symtable analysis views (class methods, function partitions, scope edges, namespace edges)
-- **Tree-sitter Views**: Tree-sitter AST views and CST alignment checks
-- **Python Imports**: Python import extraction views
-- **Map Utilities**: Map entries, keys, values views for nested structures
-- **Span Unnesting**: CST span unnesting views
-
-**View Builder Patterns**:
-
-```python
-def _symtable_class_methods_df(ctx: SessionContext) -> DataFrame:
-    """Build symtable_class_methods view."""
-    return ctx.sql("""
-        SELECT
-            file_id,
-            stable_id(file_id, class_name, method_name) AS class_method_id,
-            class_name,
-            method_name
-        FROM symtable_classes_v1
-        CROSS JOIN UNNEST(methods) AS t(method_name)
-    """)
-```
-
-**Registry Integration** (`ensure_view_graph()`):
-
-```python
-def ensure_view_graph(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    include_registry_views: bool = True,
-) -> Mapping[str, object]:
-    """Ensure the view graph is registered for the current context."""
-    # Install UDF platform
-    # Register registry views if requested
-    # Return UDF snapshot for downstream use
-```
-
-**View Spec Catalog**:
-
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/views/view_specs_catalog.py` (1207 lines)
-
-Centralized catalog of view projection specifications for all registry views. Provides:
-- Comprehensive view spec definitions
-- Spec validation and composition
-- Metadata for view dependencies and contracts
+Legacy registry/DSL/view‑spec modules were removed to avoid duplicated view definitions.
 
 #### Python ↔ Rust UDF Boundary
 
@@ -1051,35 +967,13 @@ This prevents accidental mutation and enables safe sharing across threads and pr
   - `_topo_sort_nodes()`: rustworkx/Kahn topological sort
   - Cache policies: `none`, `memory`, `delta_staging`, `delta_output`
 
-- **`views/registry.py`** (3256 lines): Registry view specifications and registration
-  - `registry_view_specs()`: View specifications for registry views
-  - `register_all_views()`: Register all registry views
-  - `registry_view_nodes()`: Registry view nodes for graph registration
-  - `ensure_view_graph()`: Ensure view graph is registered
-  - View builders for AST, CST, symtable, and tree-sitter views
-  - Map entries/keys/values view builders
-  - Python imports view builders
+- **`views/registration.py`**: View graph registration entrypoint
+  - `ensure_view_graph()`: Registers semantic view graph and captures artifacts
+  - Installs UDF platform, applies scan overrides, and validates contracts
 
-- **`views/view_spec.py`** (672 lines): Declarative view projection specifications
-  - `ViewProjectionSpec`: DSL for view projections
-  - `ColumnTransform`: Column transformation specification
-  - `ColumnTransformKind`: Transformation type enumeration
-  - Generic builder for expression generation from specs
-
-- **`views/view_specs_catalog.py`** (1207 lines): View specification catalog
-  - Centralized catalog of view projection specifications
-  - View spec definitions for all registry views
-
-- **`views/registry_specs.py`** (566 lines): Registry spec builders
-  - View spec builders for registry views
-  - Spec composition and validation
-
-- **`views/dsl.py`** (625 lines): View DSL implementation
-  - DSL for building views from specifications
-  - Expression builders and helpers
-
-- **`views/dsl_views.py`**: DSL-driven view definitions
-  - Views built using the DSL
+- **`views/registry_specs.py`**: Semantic view graph bridge
+  - Builds `ViewNode` entries from semantic builders and specs
+  - Centralizes semantic input validation + artifact recording
 
 - **`views/bundle_extraction.py`**: Bundle extraction utilities
   - `arrow_schema_from_df()`: Extract Arrow schema from DataFrame
@@ -1288,7 +1182,7 @@ Scan overrides enable fine-grained control over table scan behavior after Delta 
    - Pruned file lists (only candidate files from predicate pushdown)
    - Custom scan configuration (file column injection, schema overrides)
 
-**Override Mechanism** (from `view_registry.py` usage):
+**Override Mechanism** (view graph registration):
 ```python
 from datafusion_engine.dataset_resolution import apply_scan_unit_overrides
 
@@ -1335,11 +1229,11 @@ pruning_result = evaluate_and_select_files(index, policy, ctx=ctx)
 
 This enables **predicate pushdown to Delta file selection**: only files matching partition/stats filters are registered with the table provider, minimizing scan I/O.
 
-### View Registry
+### View Graph Registration
 
-**File**: `/home/paul/CodeAnatomy/src/datafusion_engine/view_registry.py` (704 lines)
+**Files**: `src/datafusion_engine/views/registration.py`, `src/datafusion_engine/views/graph.py`
 
-The view registry provides dependency-aware view registration with automatic topological sorting, schema validation, and artifact recording.
+The view graph system provides dependency-aware view registration with automatic topological sorting, schema validation, and artifact recording.
 
 **ViewNode Abstraction** (lines 46-74):
 
@@ -1528,12 +1422,12 @@ def normalized_spans(ctx: SessionContext) -> DataFrame:
     """)
 ```
 
-**Integration with View Registry**:
+**Integration with View Graph**:
 
 Extract templates are wrapped in `ViewNode` objects for dependency-aware registration:
 
 ```python
-from datafusion_engine.view_registry import ViewNode
+from datafusion_engine.views.graph import ViewNode
 
 node = ViewNode(
     name="libcst_nodes_normalized",

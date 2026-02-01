@@ -174,11 +174,10 @@ src/
 │   │   ├── scan.py              # Scan lineage
 │   │   └── diagnostics.py       # Lineage diagnostics
 │   ├── views/               # View management
-│   │   ├── registry.py          # View registry
-│   │   ├── view_spec.py         # View specifications
-│   │   ├── view_specs_catalog.py # View specs catalog
-│   │   ├── dsl.py               # View DSL
-│   │   ├── dsl_views.py         # DSL-based views
+│   │   ├── registration.py      # View graph registration entrypoint
+│   │   ├── registry_specs.py    # View graph node bridge to semantics
+│   │   ├── graph.py             # View graph execution
+│   │   ├── artifacts.py         # View artifacts serialization
 │   │   └── bundle_extraction.py # Bundle extraction
 │   ├── udf/                 # UDF management
 │   │   ├── catalog.py           # UDF metadata + builtin resolution
@@ -507,8 +506,8 @@ class DataFusionPlanBundle:
 | `src/datafusion_engine/udf/catalog.py` | ~300 | UDF registration |
 | `src/datafusion_engine/udf/runtime.py` | ~400+ | UDF snapshot caching + validation |
 | `src/datafusion_engine/delta/scan_config.py` | ~300+ | Delta scan configuration |
-| `src/datafusion_engine/views/registry.py` | ~500+ | View registry |
-| `src/datafusion_engine/views/view_specs_catalog.py` | ~400+ | View specifications catalog |
+| `src/datafusion_engine/views/registration.py` | ~200+ | View graph registration entrypoint |
+| `src/datafusion_engine/views/registry_specs.py` | ~900+ | View graph node bridge to semantics |
 
 ---
 

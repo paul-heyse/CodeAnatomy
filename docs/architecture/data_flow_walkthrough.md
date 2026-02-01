@@ -1186,13 +1186,17 @@ def cst_function_defs_view(ctx: ViewBuilderContext) -> ViewExpr:
 **PlanCatalog Construction:**
 
 ```python
-# From src/relspec/plan_catalog.py
-from datafusion_engine.view_registry import compile_view_to_plan
+# From src/datafusion_engine/plan/bundle.py
+from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 
-plan_bundle = compile_view_to_plan(
-    view_name="cst_function_defs",
-    sql=cst_function_defs_view(ctx).sql,
-    session=session
+df = cst_function_defs_view(ctx)
+plan_bundle = build_plan_bundle(
+    session,
+    df,
+    options=PlanBundleOptions(
+        compute_execution_plan=True,
+        validate_udfs=True,
+    ),
 )
 
 # plan_bundle contains:

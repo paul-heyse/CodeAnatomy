@@ -7,12 +7,18 @@ it from the DataFusion-native runtime profile.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeGuard
 
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+def _is_cache_policy(value: object) -> TypeGuard[CachePolicy]:
+    if not isinstance(value, str):
+        return False
+    return value in {"none", "delta_staging", "delta_output"}
 
 
 def semantic_runtime_from_profile(
@@ -38,28 +44,21 @@ def semantic_runtime_from_profile(
     from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.naming import SEMANTIC_VIEW_NAMES
 
-    output_locations: dict[str, str] = {}
     view_names = list(SEMANTIC_VIEW_NAMES)
     if RELATION_OUTPUT_NAME not in view_names:
         view_names.append(RELATION_OUTPUT_NAME)
-    for name in view_names:
-        location = profile.dataset_location(name)
-        if location is None:
-            continue
-        output_locations[name] = str(location.path)
+    output_locations = {
+        name: str(location.path)
+        for name in view_names
+        if (location := profile.dataset_location(name)) is not None
+    }
 
     # Extract cache policy overrides
     cache_overrides: dict[str, CachePolicy] = {}
-    semantic_cache = getattr(profile, "semantic_cache_overrides", None)
-    if semantic_cache is not None:
-        valid_policies = {"none", "delta_staging", "delta_output"}
-        cache_overrides.update(
-            {
-                name: policy  # type: ignore[misc]
-                for name, policy in semantic_cache.items()
-                if policy in valid_policies
-            }
-        )
+    semantic_cache = profile.semantic_cache_overrides
+    cache_overrides.update(
+        {name: policy for name, policy in semantic_cache.items() if _is_cache_policy(policy)}
+    )
 
     # Extract CDF configuration
     cdf_enabled = getattr(profile, "cdf_enabled", False)
@@ -84,6 +83,76 @@ def semantic_runtime_from_profile(
     )
 
 
+def apply_semantic_runtime_config(
+    profile: DataFusionRuntimeProfile,
+    semantic_config: SemanticRuntimeConfig,
+) -> DataFusionRuntimeProfile:
+    """Apply SemanticRuntimeConfig to a DataFusion runtime profile.
+
+    This function applies semantic-defined configuration back to a DataFusion
+    profile, ensuring semantic settings take precedence over profile defaults.
+
+    Parameters
+    ----------
+    profile
+        DataFusion runtime profile to update.
+    semantic_config
+        Semantic runtime configuration to apply.
+
+    Returns
+    -------
+    DataFusionRuntimeProfile
+        Updated profile with semantic settings applied.
+    """
+    from dataclasses import replace
+
+    from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
+
+    # Build updated semantic output locations from config
+    semantic_output_locations: dict[str, DatasetLocation] = dict(profile.semantic_output_locations)
+    for name, path in semantic_config.output_locations.items():
+        if name not in semantic_output_locations:
+            semantic_output_locations[name] = DatasetLocation(
+                path=path,
+                format="delta",
+                storage_options=dict(semantic_config.storage_options or {}),
+            )
+
+    # Update registry catalog if semantic_output_catalog_name is set
+    registry_catalogs = dict(profile.registry_catalogs)
+    if profile.semantic_output_catalog_name:
+        catalog_name = profile.semantic_output_catalog_name
+        existing_catalog = registry_catalogs.get(catalog_name)
+        if existing_catalog is None:
+            existing_catalog = DatasetCatalog()
+        for name, path in semantic_config.output_locations.items():
+            if existing_catalog.get(name) is None:
+                existing_catalog.register(
+                    name,
+                    DatasetLocation(
+                        path=path,
+                        format="delta",
+                        storage_options=dict(semantic_config.storage_options or {}),
+                    ),
+                )
+        registry_catalogs[catalog_name] = existing_catalog
+
+    # Apply cache policy overrides - semantic config is authoritative
+    semantic_cache_overrides = dict(getattr(profile, "semantic_cache_overrides", {}) or {})
+    semantic_cache_overrides.update(semantic_config.cache_policy_overrides)
+
+    return replace(
+        profile,
+        semantic_output_locations=semantic_output_locations,
+        registry_catalogs=registry_catalogs,
+        semantic_cache_overrides=semantic_cache_overrides,
+        cdf_enabled=semantic_config.cdf_enabled,
+        cdf_cursor_store=semantic_config.cdf_cursor_store,
+        enable_schema_evolution_adapter=semantic_config.schema_evolution_enabled,
+    )
+
+
 __all__ = [
+    "apply_semantic_runtime_config",
     "semantic_runtime_from_profile",
 ]

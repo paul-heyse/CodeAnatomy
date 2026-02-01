@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -62,8 +63,9 @@ class TestIncrementalConfig:
     def test_config_is_frozen(self) -> None:
         """IncrementalConfig is immutable."""
         config = IncrementalConfig()
-        with pytest.raises(AttributeError):
-            config.enabled = True  # type: ignore[misc]
+        attr_name = "enabled"
+        with pytest.raises(FrozenInstanceError):
+            setattr(config, attr_name, True)
 
 
 class TestCursorStorePath:

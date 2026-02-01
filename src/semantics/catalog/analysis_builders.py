@@ -632,6 +632,154 @@ def span_errors_df_builder(ctx: SessionContext) -> DataFrame:
     return ctx.table("span_errors_v1")
 
 
+def file_quality_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame for file quality signals.
+
+    Returns
+    -------
+    DataFrame
+        File quality DataFrame.
+    """
+    from semantics.signals import build_file_quality_view
+
+    return build_file_quality_view(ctx)
+
+
+def relationship_quality_metrics_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame summarizing relationship quality metrics.
+
+    Returns
+    -------
+    DataFrame
+        Relationship quality metrics DataFrame.
+
+    Raises
+    ------
+    ValueError
+        Raised when no metrics can be generated.
+    """
+    from relspec.view_defs import (
+        DEFAULT_REL_TASK_PRIORITY,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+    )
+    from semantics.catalog.projections import (
+        SemanticProjectionConfig,
+        semantic_projection_options,
+    )
+    from semantics.diagnostics import build_relationship_quality_metrics
+    from semantics.spec_registry import RELATIONSHIP_SPECS, relationship_names
+
+    projection_options = semantic_projection_options(
+        SemanticProjectionConfig(
+            default_priority=DEFAULT_REL_TASK_PRIORITY,
+            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
+            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
+            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
+            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
+            relationship_specs=RELATIONSHIP_SPECS,
+        )
+    )
+    reports: list[DataFrame] = []
+    for name in relationship_names():
+        options = projection_options[name]
+        metrics = build_relationship_quality_metrics(
+            ctx,
+            name,
+            source_column=options.entity_id_alias,
+            target_column="symbol",
+        )
+        if metrics is not None:
+            reports.append(metrics)
+    if not reports:
+        msg = "No relationship metrics could be generated for relationship_quality_metrics_v1."
+        raise ValueError(msg)
+    result = reports[0]
+    for report in reports[1:]:
+        result = result.union(report)
+    return result
+
+
+def relationship_ambiguity_report_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame summarizing relationship ambiguity metrics.
+
+    Returns
+    -------
+    DataFrame
+        Relationship ambiguity report DataFrame.
+
+    Raises
+    ------
+    ValueError
+        Raised when no reports can be generated.
+    """
+    from relspec.view_defs import (
+        DEFAULT_REL_TASK_PRIORITY,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+    )
+    from semantics.catalog.projections import (
+        SemanticProjectionConfig,
+        semantic_projection_options,
+    )
+    from semantics.diagnostics import build_ambiguity_analysis
+    from semantics.spec_registry import RELATIONSHIP_SPECS, relationship_names
+
+    projection_options = semantic_projection_options(
+        SemanticProjectionConfig(
+            default_priority=DEFAULT_REL_TASK_PRIORITY,
+            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
+            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
+            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
+            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
+            relationship_specs=RELATIONSHIP_SPECS,
+        )
+    )
+    reports: list[DataFrame] = []
+    for name in relationship_names():
+        options = projection_options[name]
+        report = build_ambiguity_analysis(
+            ctx,
+            name,
+            source_column=options.entity_id_alias,
+        )
+        if report is not None:
+            reports.append(report)
+    if not reports:
+        msg = "No relationship ambiguity reports could be generated."
+        raise ValueError(msg)
+    result = reports[0]
+    for report in reports[1:]:
+        result = result.union(report)
+    return result
+
+
+def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame reporting extraction coverage per file.
+
+    Returns
+    -------
+    DataFrame
+        File coverage report DataFrame.
+
+    Raises
+    ------
+    ValueError
+        Raised when the file index is unavailable.
+    """
+    from semantics.diagnostics import build_file_coverage_report
+
+    report = build_file_coverage_report(ctx)
+    if report is None:
+        msg = "file_coverage_report_v1 requires file_index input."
+        raise ValueError(msg)
+    return report
+
+
 # View builder registry mapping view names to builders
 VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "type_exprs_norm_v1": type_exprs_df_builder,
@@ -642,6 +790,10 @@ VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "py_bc_reaches_v1": reaching_defs_df_builder,
     "diagnostics_norm_v1": diagnostics_df_builder,
     "span_errors_v1": span_errors_df_builder,
+    "file_quality_v1": file_quality_df_builder,
+    "relationship_quality_metrics_v1": relationship_quality_metrics_df_builder,
+    "relationship_ambiguity_report_v1": relationship_ambiguity_report_df_builder,
+    "file_coverage_report_v1": file_coverage_report_df_builder,
 }
 
 
@@ -661,7 +813,11 @@ __all__ = [
     "cfg_edges_df_builder",
     "def_use_events_df_builder",
     "diagnostics_df_builder",
+    "file_coverage_report_df_builder",
+    "file_quality_df_builder",
     "reaching_defs_df_builder",
+    "relationship_ambiguity_report_df_builder",
+    "relationship_quality_metrics_df_builder",
     "span_errors_df_builder",
     "type_exprs_df_builder",
     "type_nodes_df_builder",

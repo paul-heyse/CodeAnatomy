@@ -246,9 +246,9 @@ class TestRelationshipSpecsInDocumentation:
         """Verify docs contain relationship spec details."""
         result = generate_markdown_docs()
         assert "### rel_name_symbol_v1" in result
-        assert "- **Left table**:" in result
-        assert "- **Right table**:" in result
-        assert "- **Join hint**:" in result
+        assert "- **Left view**:" in result
+        assert "- **Right view**:" in result
+        assert "- **Join type**:" in result
 
 
 class TestTableSpecsInDocumentation:

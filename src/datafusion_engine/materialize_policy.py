@@ -1,4 +1,4 @@
-"""Execution surface policies for plan materialization."""
+"""Materialization policies for view output handling."""
 
 from __future__ import annotations
 
@@ -13,20 +13,24 @@ WriterStrategy = Literal["arrow", "datafusion"]
 
 
 @dataclass(frozen=True)
-class ExecutionSurfacePolicy(FingerprintableConfig):
-    """Policy describing how plan outputs should be materialized."""
+class MaterializationPolicy(FingerprintableConfig):
+    """Policy controlling how view outputs are materialized.
+
+    Controls streaming preferences, determinism tier, and writer strategy for
+    output handling.
+    """
 
     prefer_streaming: bool = True
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
     writer_strategy: WriterStrategy = "arrow"
 
     def fingerprint_payload(self) -> Mapping[str, object]:
-        """Return fingerprint payload for the execution surface policy.
+        """Return fingerprint payload for the materialization policy.
 
         Returns
         -------
         Mapping[str, object]
-            Payload describing execution surface policy settings.
+            Payload describing materialization policy settings.
         """
         return {
             "prefer_streaming": self.prefer_streaming,
@@ -35,7 +39,7 @@ class ExecutionSurfacePolicy(FingerprintableConfig):
         }
 
     def fingerprint(self) -> str:
-        """Return fingerprint for the execution surface policy.
+        """Return fingerprint for the materialization policy.
 
         Returns
         -------
@@ -45,4 +49,4 @@ class ExecutionSurfacePolicy(FingerprintableConfig):
         return config_fingerprint(self.fingerprint_payload())
 
 
-__all__ = ["ExecutionSurfacePolicy", "WriterStrategy"]
+__all__ = ["MaterializationPolicy", "WriterStrategy"]

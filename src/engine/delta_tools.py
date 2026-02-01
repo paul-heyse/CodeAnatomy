@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
+from engine.diagnostics import EngineEventRecorder
 from storage.deltalake import (
     DeltaVacuumOptions,
     StorageOptions,
@@ -20,6 +20,8 @@ from storage.deltalake import (
 _DELTA_MIN_RETENTION_HOURS = 168
 
 if TYPE_CHECKING:
+    from datafusion import DataFrame, SessionContext
+
     from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -70,14 +72,15 @@ class DeltaVacuumRequest:
 
 @dataclass(frozen=True)
 class DeltaQueryRequest:
-    """Inputs for Delta SQL execution via DataFusion."""
+    """Inputs for Delta DataFusion query execution."""
 
     path: str
-    sql: str
+    builder: Callable[[SessionContext, str], DataFrame] | None = None
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
     table_name: str = "t"
     runtime_profile: DataFusionRuntimeProfile | None = None
+    query_label: str | None = None
 
 
 def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
@@ -116,13 +119,11 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         snapshot=history or {},
         dataset_name=request.dataset,
     )
-    _record_maintenance(
-        request.runtime_profile,
-        payload={
-            "event_time_unix_ms": int(time.time() * 1000),
-            "dataset": request.dataset,
-            "path": request.path,
-            "operation": "history",
+    EngineEventRecorder(request.runtime_profile).record_delta_maintenance(
+        dataset=request.dataset,
+        path=request.path,
+        operation="history",
+        extra={
             "version": version,
             "history": history,
             "protocol": protocol,
@@ -176,13 +177,11 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             dry_run=resolved.dry_run,
         )
     )
-    _record_maintenance(
-        request.runtime_profile,
-        payload={
-            "event_time_unix_ms": int(time.time() * 1000),
-            "dataset": request.dataset,
-            "path": request.path,
-            "operation": "vacuum",
+    EngineEventRecorder(request.runtime_profile).record_delta_maintenance(
+        dataset=request.dataset,
+        path=request.path,
+        operation="vacuum",
+        extra={
             "dry_run": resolved.dry_run,
             "retention_hours": resolved.retention_hours,
             "removed_files": list(removed),
@@ -191,20 +190,8 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
     return result
 
 
-def _record_maintenance(
-    runtime_profile: DataFusionRuntimeProfile | None,
-    *,
-    payload: Mapping[str, object],
-) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
-        return
-    from datafusion_engine.lineage.diagnostics import record_artifact
-
-    record_artifact(runtime_profile, "delta_maintenance_v1", payload)
-
-
 def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
-    """Execute SQL against a Delta table using DataFusion.
+    """Execute a DataFusion query against a Delta table.
 
     Returns
     -------
@@ -219,25 +206,6 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     storage = dict(request.storage_options or {})
     if request.log_storage_options:
         storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
-    if profile.enable_delta_querybuilder:
-        from storage.deltalake import query_delta_sql
-
-        reader = query_delta_sql(
-            request.sql,
-            {request.table_name: request.path},
-            storage_options=storage or None,
-        )
-        _record_delta_query(
-            profile,
-            payload={
-                "event_time_unix_ms": int(time.time() * 1000),
-                "path": request.path,
-                "sql": request.sql,
-                "table_name": request.table_name,
-                "engine": "delta_querybuilder",
-            },
-        )
-        return reader
     from datafusion_engine.dataset.registration import register_dataset_df
     from datafusion_engine.dataset.registry import DatasetLocation
 
@@ -254,35 +222,20 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
         location=location,
         runtime_profile=profile,
     )
-    df = ctx.sql_with_options(request.sql, profile.sql_options())
+    builder = request.builder
+    df = builder(ctx, request.table_name) if builder is not None else ctx.table(request.table_name)
     to_reader = getattr(df, "to_arrow_reader", None)
     reader = cast(
         "RecordBatchReaderLike",
         to_reader() if callable(to_reader) else df.to_arrow_table().to_reader(),
     )
-    _record_delta_query(
-        profile,
-        payload={
-            "event_time_unix_ms": int(time.time() * 1000),
-            "path": request.path,
-            "sql": request.sql,
-            "table_name": request.table_name,
-            "engine": "datafusion",
-        },
+    EngineEventRecorder(profile).record_delta_query(
+        path=request.path,
+        sql=request.query_label,
+        table_name=request.table_name,
+        engine="datafusion",
     )
     return reader
-
-
-def _record_delta_query(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    payload: Mapping[str, object],
-) -> None:
-    if runtime_profile.diagnostics_sink is None:
-        return
-    from datafusion_engine.lineage.diagnostics import record_artifact
-
-    record_artifact(runtime_profile, "delta_query_v1", payload)
 
 
 def _record_delta_snapshot_table(

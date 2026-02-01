@@ -1,0 +1,49 @@
+{
+  "graph": {
+    "critical_path": [
+      "a",
+      "b",
+      "c"
+    ],
+    "critical_path_length": 3,
+    "dot": "digraph { a -> b; b -> c; }"
+  },
+  "inferred_deps": {
+    "b": [
+      "a"
+    ],
+    "c": [
+      "b"
+    ]
+  },
+  "plan_signature": "plan-123",
+  "reduced_plan_signature": "plan-123-reduced",
+  "schedule": {
+    "schedule": [
+      "a",
+      "b",
+      "c"
+    ]
+  },
+  "task_count": 3,
+  "task_graph": {
+    "edges": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "b",
+        "c"
+      ]
+    ],
+    "nodes": [
+      "a",
+      "b",
+      "c"
+    ]
+  },
+  "validation": {
+    "ok": true
+  }
+}

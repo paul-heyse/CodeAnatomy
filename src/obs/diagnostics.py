@@ -27,6 +27,7 @@ _OBS_SESSION_ID: Final[str] = uuid7_str()
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.views.graph import ViewNode
 
 
@@ -105,6 +106,32 @@ class PreparedStatementSpec(StructBaseCompat, frozen=True):
         }
 
 
+class SemanticQualityArtifact(StructBaseCompat, frozen=True):
+    """Summary payload for a semantic diagnostics artifact."""
+
+    name: str
+    row_count: int
+    schema_hash: str | None
+    artifact_uri: str | None
+    run_id: str | None
+
+    def payload(self) -> Mapping[str, object]:
+        """Return a JSON-ready payload for diagnostics sinks.
+
+        Returns
+        -------
+        Mapping[str, object]
+            JSON-ready payload describing the artifact summary.
+        """
+        return {
+            "name": self.name,
+            "row_count": self.row_count,
+            "schema_hash": self.schema_hash,
+            "artifact_uri": self.artifact_uri,
+            "run_id": self.run_id,
+        }
+
+
 def prepared_statement_hook(
     sink: DiagnosticsCollector,
 ) -> Callable[[PreparedStatementSpec], None]:
@@ -121,6 +148,45 @@ def prepared_statement_hook(
         recorder_sink.record_artifact("datafusion_prepared_statements_v1", spec.payload())
 
     return _hook
+
+
+def record_semantic_quality_artifact(
+    sink: DiagnosticsSink,
+    *,
+    artifact: SemanticQualityArtifact,
+) -> None:
+    """Record a semantic quality artifact payload.
+
+    Parameters
+    ----------
+    sink
+        Diagnostics sink for recording the artifact.
+    artifact
+        Semantic diagnostics artifact summary payload.
+    """
+    recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
+    recorder_sink.record_artifact("semantic_quality_artifact_v1", artifact.payload())
+
+
+def record_semantic_quality_events(
+    sink: DiagnosticsSink,
+    *,
+    name: str,
+    rows: Sequence[Mapping[str, object]],
+) -> None:
+    """Record semantic quality event rows.
+
+    Parameters
+    ----------
+    sink
+        Diagnostics sink for recording the events.
+    name
+        Event stream name.
+    rows
+        Event payload rows.
+    """
+    recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
+    recorder_sink.record_events(name, rows)
 
 
 def record_view_fingerprints(
@@ -212,9 +278,12 @@ def record_cache_lineage(
 __all__ = [
     "DiagnosticsCollector",
     "PreparedStatementSpec",
+    "SemanticQualityArtifact",
     "prepared_statement_hook",
     "record_cache_lineage",
     "record_rust_udf_snapshot",
+    "record_semantic_quality_artifact",
+    "record_semantic_quality_events",
     "record_view_artifact",
     "record_view_contract_violations",
     "record_view_fingerprints",

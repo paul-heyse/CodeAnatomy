@@ -30,7 +30,7 @@ from datafusion_engine.arrow.interop import (
 )
 from datafusion_engine.encoding.policy import NormalizePolicy
 from datafusion_engine.identity import schema_identity_hash
-from obs.otel.metrics import set_dataset_stats
+from obs.otel.metrics import record_artifact_count, set_dataset_stats
 from serde_msgspec import MSGPACK_ENCODER
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
@@ -687,6 +687,46 @@ def quality_from_ids(
     )
 
 
+def quality_issue_rows(
+    *,
+    entity_kind: str,
+    rows: Sequence[Mapping[str, object]],
+    source_table: str,
+) -> list[dict[str, object]]:
+    """Normalize issue rows into the quality schema shape.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Normalized issue rows matching QUALITY_SCHEMA.
+    """
+    return [
+        {
+            "entity_kind": entity_kind,
+            "entity_id": row.get("entity_id"),
+            "issue": row.get("issue"),
+            "source_table": source_table,
+        }
+        for row in rows
+    ]
+
+
+def record_quality_issue_counts(*, issue_kind: str, count: int) -> None:
+    """Record a low-cardinality count for issue diagnostics.
+
+    Parameters
+    ----------
+    issue_kind
+        Issue identifier used as the artifact kind.
+    count
+        Count to record.
+    """
+    if count <= 0:
+        return
+    for _ in range(count):
+        record_artifact_count(issue_kind, status="ok", attributes={"artifact.type": "event"})
+
+
 def concat_quality_tables(tables: Sequence[TableLike]) -> TableLike:
     """Concatenate quality tables, returning an empty table when none exist.
 
@@ -722,6 +762,8 @@ __all__ = [
     "parquet_metadata_collector",
     "parquet_metadata_factory",
     "quality_from_ids",
+    "quality_issue_rows",
+    "record_quality_issue_counts",
     "row_group_count",
     "row_group_fragments",
     "row_group_stats",

@@ -3,20 +3,33 @@ Usage: codeanatomy COMMAND
 CodeAnatomy CPG Builder - Inference-driven Code Property Graph generation.
 
 ╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ build        Build the Code Property Graph for a repository.                                                         │
-│ config       Configuration management.                                                                               │
-│ delta        Delta Lake maintenance operations.                                                                      │
-│ diag         Generate a diagnostic report for pipeline outputs.                                                      │
-│ plan         Show the computed execution plan without running it.                                                    │
-│ --help (-h)  Display this message and exit.                                                                          │
+│ build (b)       Build the Code Property Graph for a repository.                                                      │
+│ config (cfg)    Configuration management.                                                                            │
+│ delta           Delta Lake maintenance operations.                                                                   │
+│ diag (d)        Generate a diagnostic report for pipeline outputs.                                                   │
+│ plan (p)        Show the computed execution plan without running it.                                                 │
+│ version (v)     Show version and engine information.                                                                 │
+│ --help (-h)     Display this message and exit.                                                                       │
+│ --version (-V)  Display application version.                                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Session ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Session and run context options.                                                                                     │
 │                                                                                                                      │
-│ --config --no-  Path to configuration file (overrides default search).                                               │
-│ --run-id --no-  Explicit run identifier (UUID7 generated if not provided).                                           │
-│ --log-level     Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]     │
-│                 [default: INFO]                                                                                      │
+│ --config     Path to configuration file (overrides default search). [default: None]                                  │
+│ --run-id     Explicit run identifier (UUID7 generated if not provided). [default: None]                              │
+│ --log-level  Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]        │
+│              [default: INFO]                                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Observability ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Configure OpenTelemetry tracing, metrics, and logging.                                                               │
+│                                                                                                                      │
+│ --enable-traces --no-enable-traces    Enable OpenTelemetry traces. [env var: CODEANATOMY_ENABLE_TRACES] [default:    │
+│                                       None]                                                                          │
+│ --enable-metrics --no-enable-metrics  Enable OpenTelemetry metrics. [env var: CODEANATOMY_ENABLE_METRICS] [default:  │
+│                                       None]                                                                          │
+│ --enable-logs --no-enable-logs        Enable OpenTelemetry logs. [env var: CODEANATOMY_ENABLE_LOGS] [default: None]  │
+│ --otel-test-mode --no-otel-test-mode  Use in-memory exporters for OpenTelemetry (for testing). [env var:             │
+│                                       CODEANATOMY_OTEL_TEST_MODE] [default: None]                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Admin ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Administrative commands and help.                                                                                    │
@@ -24,6 +37,24 @@ CodeAnatomy CPG Builder - Inference-driven Code Property Graph generation.
 │                                                                                                                      │
 │ Administrative commands and help.                                                                                    │
 │                                                                                                                      │
-│ version               Show version and engine information.                                                           │
 │ --install-completion  Install shell completion scripts.                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+Examples:
+  codeanatomy build .                    Build CPG for current directory
+  codeanatomy build ./repo -o ./out      Build with custom output directory
+  codeanatomy plan ./repo --show-graph   Show execution plan with graph
+  codeanatomy config show                Show effective configuration
+  codeanatomy delta vacuum --path ./data Vacuum Delta table
+
+Environment Variables:
+  CODEANATOMY_LOG_LEVEL      Default log level (DEBUG, INFO, WARNING, ERROR)
+  CODEANATOMY_RUNTIME_PROFILE Runtime profile name
+  CODEANATOMY_OUTPUT_DIR     Default output directory
+  CODEANATOMY_ENABLE_TRACES  Enable OpenTelemetry traces
+
+Tips:
+  Use `codeanatomy config show --with-sources` to see config precedence.
+
+Documentation: https://github.com/codeanatomy/codeanatomy

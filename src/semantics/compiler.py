@@ -1204,9 +1204,8 @@ class SemanticCompiler:
             # Check if quality column exists
             schema_names = self._schema_names(joined)
             if quality_col in schema_names:
-                quality_adj = (
-                    functions.coalesce(col(quality_col), lit(1000.0))
-                    * lit(spec.signals.quality_weight)
+                quality_adj = functions.coalesce(col(quality_col), lit(1000.0)) * lit(
+                    spec.signals.quality_weight
                 )
                 raw_conf = base_conf + (col("score") / lit(10000.0)) + quality_adj
             else:
@@ -1284,12 +1283,14 @@ class SemanticCompiler:
                     )
                     select_cols.append(select_expr.expr(expr_ctx).alias(select_expr.alias))
                 # Always include standard columns
-                select_cols.extend([
-                    col("confidence"),
-                    col("score"),
-                    col("origin"),
-                    col("provider"),
-                ])
+                select_cols.extend(
+                    [
+                        col("confidence"),
+                        col("score"),
+                        col("origin"),
+                        col("provider"),
+                    ]
+                )
                 if spec.rank is not None:
                     select_cols.append(col("ambiguity_group_id"))
                 if spec.rule_name is not None:

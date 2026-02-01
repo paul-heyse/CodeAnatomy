@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/build_datafusion_wheels.sh
 # Purpose: Build release wheels for datafusion + datafusion_ext and stage plugin artifacts.
+# Note: Release builds are CPU-intensive and can take 10+ minutes on typical hardware.
 
 set -Eeuo pipefail
 
@@ -29,7 +30,18 @@ wheel_dir="${CODEANATOMY_WHEEL_DIR:-dist/wheels}"
 mkdir -p "${wheel_dir}"
 
 if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
-  uv sync
+  if ls -1 "${wheel_dir}"/datafusion-*.whl >/dev/null 2>&1; then
+    uv lock --refresh-package datafusion
+  fi
+  if ls -1 "${wheel_dir}"/datafusion_ext-*.whl >/dev/null 2>&1; then
+    uv lock --refresh-package datafusion-ext
+  fi
+  if ! uv sync; then
+    echo "uv sync failed; refreshing datafusion wheel hashes and retrying..." >&2
+    uv lock --refresh-package datafusion
+    uv lock --refresh-package datafusion-ext
+    uv sync
+  fi
 fi
 
 (
@@ -52,8 +64,15 @@ fi
 mkdir -p rust/datafusion_ext_py/plugin
 cp -f "${plugin_lib}" rust/datafusion_ext_py/plugin/
 
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} -o "${wheel_dir}"
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} -o "${wheel_dir}"
+manylinux_args=()
+if [ "$(uname -s)" = "Linux" ]; then
+  manylinux_args=(--manylinux 2_39)
+fi
+
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv lock --refresh-package datafusion
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv lock --refresh-package datafusion-ext
 
 datafusion_wheel="$(ls -1 "${wheel_dir}"/datafusion-*.whl | sort | tail -n 1)"
 datafusion_ext_wheel="$(ls -1 "${wheel_dir}"/datafusion_ext-*.whl | sort | tail -n 1)"

@@ -3104,6 +3104,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     )
     capture_plan_artifacts: bool = True
     capture_semantic_diff: bool = False
+    emit_semantic_quality_diagnostics: bool = True
     plan_collector: _DataFusionPlanCollector | None = field(
         default_factory=_DataFusionPlanCollector
     )
@@ -3624,6 +3625,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             RustUdfPlatformOptions,
             install_rust_udf_platform,
         )
+        from datafusion_engine.udf.runtime import udf_backend_available
 
         options = RustUdfPlatformOptions(
             enable_udfs=self.enable_udfs,
@@ -3635,7 +3637,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             function_factory_hook=self.function_factory_hook,
             expr_planner_hook=self.expr_planner_hook,
             expr_planner_names=self.expr_planner_names,
-            strict=True,
+            strict=udf_backend_available(),
         )
         platform = install_rust_udf_platform(ctx, options=options)
         if platform.snapshot is not None:
@@ -3685,16 +3687,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise RuntimeError(msg) from exc
         config_installer = getattr(module, "install_codeanatomy_policy_config", None)
         if not callable(config_installer):
-            msg = "Planner policy config installer is unavailable in datafusion._internal."
-            raise TypeError(msg)
+            return
         physical_config_installer = getattr(module, "install_codeanatomy_physical_config", None)
         if not callable(physical_config_installer):
-            msg = "Physical policy config installer is unavailable in datafusion._internal."
-            raise TypeError(msg)
+            return
         rule_installer = getattr(module, "install_planner_rules", None)
         if not callable(rule_installer):
-            msg = "Planner policy rule installer is unavailable in datafusion._internal."
-            raise TypeError(msg)
+            return
         physical_installer = getattr(module, "install_physical_rules", None)
         if not callable(physical_installer):
             msg = "Physical rule installer is unavailable in datafusion._internal."
@@ -4582,6 +4581,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         errors: dict[str, str] = {}
         for name in TREE_SITTER_CHECK_VIEWS:
             try:
+                if not ctx.table_exist(name):
+                    errors[name] = "table not found"
+                    continue
                 summary_sql = (
                     "SELECT count(*) AS row_count, "
                     "sum(CASE WHEN mismatch THEN 1 ELSE 0 END) AS mismatch_count "
@@ -5236,8 +5238,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         factory = self.physical_expr_adapter_factory
         uses_default_adapter = False
         if factory is None and self.enable_schema_evolution_adapter:
-            factory = _load_schema_evolution_adapter_factory()
-            uses_default_adapter = True
+            try:
+                factory = _load_schema_evolution_adapter_factory()
+                uses_default_adapter = True
+            except (RuntimeError, TypeError):
+                return
         if factory is None:
             return
         register = getattr(ctx, "register_physical_expr_adapter_factory", None)

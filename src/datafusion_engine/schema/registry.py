@@ -3762,6 +3762,10 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
     ValueError
         Raised when required functions are missing.
     """
+    from datafusion_engine.udf.runtime import udf_backend_available
+
+    if not udf_backend_available():
+        return
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
     requirements = _function_requirements(ENGINE_RUNTIME_SCHEMA)

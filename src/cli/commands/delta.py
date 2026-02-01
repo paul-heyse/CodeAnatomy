@@ -98,6 +98,7 @@ class VacuumOptions:
         Parameter(
             name="--storage-option",
             help="Storage option key=value (repeatable).",
+            env_var="CODEANATOMY_DELTA_STORAGE_OPTIONS",
         ),
     ] = ()
     retention_hours: Annotated[

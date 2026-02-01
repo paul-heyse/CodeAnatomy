@@ -8,96 +8,109 @@ Build the Code Property Graph for a repository.
 ╭─ Session ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Session and run context options.                                                                                     │
 │                                                                                                                      │
-│ --config --no-  Path to configuration file (overrides default search).                                               │
-│ --run-id --no-  Explicit run identifier (UUID7 generated if not provided).                                           │
-│ --log-level     Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]     │
-│                 [default: INFO]                                                                                      │
+│ --config     Path to configuration file (overrides default search). [default: None]                                  │
+│ --run-id     Explicit run identifier (UUID7 generated if not provided). [default: None]                              │
+│ --log-level  Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]        │
+│              [default: INFO]                                                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Output ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure output directory and artifact selection.                                                                   │
 │                                                                                                                      │
-│ OUTPUT-DIR --output-dir -o --no-           Directory for CPG outputs. Defaults to <repo_root>/build.                 │
-│ WORK-DIR --work-dir --no-                  Working directory for intermediate artifacts.                             │
-│ INCLUDE-QUALITY --include-quality --no-    Include quality metrics in output. [default: True]                        │
-│ INCLUDE-ERRORS --include-errors --no-      Include extraction error artifacts. [default: True]                       │
-│ INCLUDE-MANIFEST --include-manifest --no-  Include run manifest in output. [default: True]                           │
-│ INCLUDE-RUN-BUNDLE --include-run-bundle    Include run bundle directory. [default: True]                             │
-│   --no-                                                                                                              │
+│ OUTPUT-DIR --output-dir -o               Directory for CPG outputs. Defaults to <repo_root>/build. [env var:         │
+│                                          CODEANATOMY_OUTPUT_DIR] [default: None]                                     │
+│ WORK-DIR --work-dir                      Working directory for intermediate artifacts. [env var:                     │
+│                                          CODEANATOMY_WORK_DIR] [default: None]                                       │
+│ INCLUDE-QUALITY --include-quality        Include quality metrics in output. [default: True]                          │
+│   --no-include-quality                                                                                               │
+│ INCLUDE-ERRORS --include-errors          Include extraction error artifacts. [default: True]                         │
+│   --no-include-errors                                                                                                │
+│ INCLUDE-MANIFEST --include-manifest      Include run manifest in output. [default: True]                             │
+│   --no-include-manifest                                                                                              │
+│ INCLUDE-RUN-BUNDLE --include-run-bundle  Include run bundle directory. [default: True]                               │
+│   --no-include-run-bundle                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Execution ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Control pipeline execution strategy and parallelism.                                                                 │
 │                                                                                                                      │
-│ EXECUTION-MODE --execution-mode            Pipeline execution strategy: deterministic_serial, plan_parallel,         │
-│                                            plan_parallel_remote. [choices: deterministic-serial, plan-parallel,      │
-│                                            plan-parallel-remote] [default: plan-parallel]                            │
-│ EXECUTOR-KIND --executor-kind --no-        Primary executor backend for parallel execution. [choices: threadpool,    │
-│                                            multiprocessing, dask, ray]                                               │
-│ EXECUTOR-MAX-TASKS --executor-max-tasks    Maximum concurrent tasks for primary executor.                            │
-│   --no-                                                                                                              │
-│ EXECUTOR-REMOTE-KIND                       Remote executor backend for scan/high-cost tasks. [choices: threadpool,   │
-│   --executor-remote-kind --no-             multiprocessing, dask, ray]                                               │
-│ EXECUTOR-REMOTE-MAX-TASKS                  Maximum concurrent tasks for remote executor.                             │
-│   --executor-remote-max-tasks --no-                                                                                  │
-│ EXECUTOR-COST-THRESHOLD                    Cost threshold for routing tasks to remote executor.                      │
-│   --executor-cost-threshold --no-                                                                                    │
-│ DETERMINISM-TIER --determinism-tier --no-  Determinism level: canonical/tier2, stable_set/tier1/stable,              │
-│                                            best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,        │
-│                                            stable_set, tier0, fast, best_effort]                                     │
-│ RUNTIME-PROFILE --runtime-profile --no-    Named runtime profile from configuration. [env var:                       │
-│                                            CODEANATOMY_RUNTIME_PROFILE]                                              │
-│ WRITER-STRATEGY --writer-strategy --no-    Writer strategy for materialization. [choices: arrow, datafusion]         │
+│ EXECUTION-MODE --execution-mode          Pipeline execution strategy: deterministic_serial, plan_parallel,           │
+│                                          plan_parallel_remote. [choices: deterministic-serial, plan-parallel,        │
+│                                          plan-parallel-remote] [env var: CODEANATOMY_EXECUTION_MODE] [default:       │
+│                                          plan-parallel]                                                              │
+│ EXECUTOR-KIND --executor-kind            Primary executor backend for parallel execution. [choices: threadpool,      │
+│                                          multiprocessing, dask, ray] [default: None]                                 │
+│ EXECUTOR-MAX-TASKS --executor-max-tasks  Maximum concurrent tasks for primary executor. [default: None]              │
+│ EXECUTOR-REMOTE-KIND                     Remote executor backend for scan/high-cost tasks. [choices: threadpool,     │
+│   --executor-remote-kind                 multiprocessing, dask, ray] [default: None]                                 │
+│ EXECUTOR-REMOTE-MAX-TASKS                Maximum concurrent tasks for remote executor. [default: None]               │
+│   --executor-remote-max-tasks                                                                                        │
+│ EXECUTOR-COST-THRESHOLD                  Cost threshold for routing tasks to remote executor. [default: None]        │
+│   --executor-cost-threshold                                                                                          │
+│ DETERMINISM-TIER --determinism-tier      Determinism level: canonical/tier2, stable_set/tier1/stable,                │
+│                                          best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,          │
+│                                          stable_set, tier0, fast, best_effort] [env var:                             │
+│                                          CODEANATOMY_DETERMINISM_TIER] [default: None]                               │
+│ RUNTIME-PROFILE --runtime-profile        Named runtime profile from configuration. [env var:                         │
+│                                          CODEANATOMY_RUNTIME_PROFILE] [default: None]                                │
+│ WRITER-STRATEGY --writer-strategy        Writer strategy for materialization. [choices: arrow, datafusion] [default: │
+│                                          None]                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ SCIP Configuration ─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure SCIP semantic index extraction.                                                                            │
 │                                                                                                                      │
-│ DISABLE-SCIP --disable-scip --no-          Disable SCIP indexing (not recommended; produces less useful outputs).    │
-│                                            [default: False]                                                          │
-│ SCIP-OUTPUT-DIR --scip-output-dir --no-    SCIP output directory (relative to repo root unless absolute). Default:   │
-│                                            build/scip.                                                               │
-│ SCIP-INDEX-PATH-OVERRIDE                   Override the index.scip path.                                             │
-│   --scip-index-path-override --no-                                                                                   │
-│ SCIP-PYTHON-BIN --scip-python-bin          scip-python executable to use. [default: scip-python]                     │
-│ SCIP-TARGET-ONLY --scip-target-only --no-  Optional target file/module to index.                                     │
-│ SCIP-TIMEOUT-S --scip-timeout-s --no-      Timeout in seconds for scip-python.                                       │
-│ SCIP-ENV-JSON --scip-env-json --no-        Path to SCIP environment JSON.                                            │
-│ NODE-MAX-OLD-SPACE-MB                      Node.js memory cap (MB) for scip-python.                                  │
-│   --node-max-old-space-mb --no-                                                                                      │
-│ SCIP-EXTRA-ARG --scip-extra-arg --no-      Extra arguments passed to scip-python (repeatable). [default: ()]         │
-│ SCIP-PROJECT-NAME --scip-project-name      Override SCIP project name.                                               │
-│   --no-                                                                                                              │
-│ SCIP-PROJECT-VERSION                       Override SCIP project version.                                            │
-│   --scip-project-version --no-                                                                                       │
-│ SCIP-PROJECT-NAMESPACE                     Override SCIP project namespace.                                          │
-│   --scip-project-namespace --no-                                                                                     │
+│ DISABLE-SCIP --disable-scip            Disable SCIP indexing (not recommended; produces less useful outputs). When   │
+│   --no-disable-scip                    enabled, SCIP-specific options are ignored and a warning is emitted. [env     │
+│                                        var: CODEANATOMY_DISABLE_SCIP] [default: False]                               │
+│ SCIP-OUTPUT-DIR --scip-output-dir      SCIP output directory (relative to repo root unless absolute). Default:       │
+│                                        build/scip. [env var: CODEANATOMY_SCIP_OUTPUT_DIR] [default: None]            │
+│ SCIP-INDEX-PATH-OVERRIDE               Override the index.scip path. [default: None]                                 │
+│   --scip-index-path-override                                                                                         │
+│ SCIP-PYTHON-BIN --scip-python-bin      scip-python executable to use. [default: scip-python]                         │
+│ SCIP-TARGET-ONLY --scip-target-only    Optional target file/module to index. [default: None]                         │
+│ SCIP-TIMEOUT-S --scip-timeout-s        Timeout in seconds for scip-python. [default: None]                           │
+│ SCIP-ENV-JSON --scip-env-json          Path to SCIP environment JSON. [default: None]                                │
+│ NODE-MAX-OLD-SPACE-MB                  Node.js memory cap (MB) for scip-python. [default: None]                      │
+│   --node-max-old-space-mb                                                                                            │
+│ SCIP-EXTRA-ARG --scip-extra-arg        Extra arguments passed to scip-python (repeatable). [default: ()]             │
+│   --empty-scip-extra-arg                                                                                             │
+│ SCIP-PROJECT-NAME --scip-project-name  Override SCIP project name. [default: None]                                   │
+│ SCIP-PROJECT-VERSION                   Override SCIP project version. [default: None]                                │
+│   --scip-project-version                                                                                             │
+│ SCIP-PROJECT-NAMESPACE                 Override SCIP project namespace. [default: None]                              │
+│   --scip-project-namespace                                                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Incremental Processing ─────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure incremental/CDF-based processing.                                                                          │
 │                                                                                                                      │
-│ INCREMENTAL --incremental --no-            Enable incremental processing using cached state. [default: False]        │
-│ INCREMENTAL-STATE-DIR                      Directory for incremental processing state (relative to repo_root). [env  │
-│   --incremental-state-dir --no-            var: CODEANATOMY_STATE_DIR]                                               │
-│ INCREMENTAL-REPO-ID --incremental-repo-id  Repository identifier for incremental state. [env var:                    │
-│   --no-                                    CODEANATOMY_REPO_ID]                                                      │
-│ INCREMENTAL-IMPACT-STRATEGY                Strategy for computing incremental impact. [choices: hybrid,              │
-│   --incremental-impact-strategy --no-      symbol_closure, import_closure] [env var:                                 │
-│                                            CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY]                                  │
-│ GIT-BASE-REF --git-base-ref --no-          Git base ref for incremental diff. [env var: CODEANATOMY_GIT_BASE_REF]    │
-│ GIT-HEAD-REF --git-head-ref --no-          Git head ref for incremental diff. [env var: CODEANATOMY_GIT_HEAD_REF]    │
-│ GIT-CHANGED-ONLY --git-changed-only --no-  Process only changed files (no closure expansion). [env var:              │
-│                                            CODEANATOMY_GIT_CHANGED_ONLY] [default: False]                            │
+│ INCREMENTAL --incremental --no-incremental  Enable incremental processing using cached state. [default: False]       │
+│ INCREMENTAL-STATE-DIR                       Directory for incremental processing state (relative to repo_root). [env │
+│   --incremental-state-dir                   var: CODEANATOMY_STATE_DIR] [default: None]                              │
+│ INCREMENTAL-REPO-ID --incremental-repo-id   Repository identifier for incremental state. [env var:                   │
+│                                             CODEANATOMY_REPO_ID] [default: None]                                     │
+│ INCREMENTAL-IMPACT-STRATEGY                 Strategy for computing incremental impact. [choices: hybrid,             │
+│   --incremental-impact-strategy             symbol_closure, import_closure] [env var:                                │
+│                                             CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY] [default: None]                 │
+│ GIT-BASE-REF --git-base-ref                 Git base ref for incremental diff. [env var: CODEANATOMY_GIT_BASE_REF]   │
+│                                             [default: None]                                                          │
+│ GIT-HEAD-REF --git-head-ref                 Git head ref for incremental diff. [env var: CODEANATOMY_GIT_HEAD_REF]   │
+│                                             [default: None]                                                          │
+│ GIT-CHANGED-ONLY --git-changed-only         Process only changed files (no closure expansion). [env var:             │
+│   --no-git-changed-only                     CODEANATOMY_GIT_CHANGED_ONLY] [default: False]                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Repository Scope ───────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Control which files are included in analysis.                                                                        │
 │                                                                                                                      │
-│ INCLUDE-GLOB --include-glob --no-        Glob patterns for files to include (repeatable). [default: ()]              │
-│ EXCLUDE-GLOB --exclude-glob --no-        Glob patterns for files to exclude (repeatable). [default: ()]              │
+│ INCLUDE-GLOB --include-glob              Glob patterns for files to include (repeatable). [env var:                  │
+│   --empty-include-glob                   CODEANATOMY_INCLUDE_GLOBS] [default: ()]                                    │
+│ EXCLUDE-GLOB --exclude-glob              Glob patterns for files to exclude (repeatable). [env var:                  │
+│   --empty-exclude-glob                   CODEANATOMY_EXCLUDE_GLOBS] [default: ()]                                    │
 │ INCLUDE-UNTRACKED --include-untracked    Include untracked (not git-ignored) files. [default: True]                  │
-│   --no-                                                                                                              │
+│   --no-include-untracked                                                                                             │
 │ INCLUDE-SUBMODULES --include-submodules  Include files from git submodules. [default: False]                         │
-│   --no-                                                                                                              │
+│   --no-include-submodules                                                                                            │
 │ INCLUDE-WORKTREES --include-worktrees    Include files from git worktrees. [default: False]                          │
-│   --no-                                                                                                              │
-│ FOLLOW-SYMLINKS --follow-symlinks --no-  Follow symbolic links when scanning. [default: False]                       │
+│   --no-include-worktrees                                                                                             │
+│ FOLLOW-SYMLINKS --follow-symlinks        Follow symbolic links when scanning. [default: False]                       │
+│   --no-follow-symlinks                                                                                               │
 │ EXTERNAL-INTERFACE-DEPTH                 Depth for external interface extraction. [choices: metadata, full]          │
 │   --external-interface-depth             [default: metadata]                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -105,31 +118,68 @@ Build the Code Property Graph for a repository.
 │ Configure Hamilton graph adapter backend.                                                                            │
 │                                                                                                                      │
 │ GRAPH-ADAPTER-KIND --graph-adapter-kind  Hamilton graph adapter backend (non-dynamic execution). [choices:           │
-│   --no-                                  threadpool, dask, ray]                                                      │
+│                                          threadpool, dask, ray] [default: None]                                      │
 │ GRAPH-ADAPTER-OPTION                     Graph adapter option key=value (repeatable). [default: ()]                  │
-│   --graph-adapter-option --no-                                                                                       │
+│   --graph-adapter-option                                                                                             │
+│   --empty-graph-adapter-option                                                                                       │
 │ GRAPH-ADAPTER-OPTION-JSON                Graph adapter option key=json (repeatable; JSON values). [default: ()]      │
-│   --graph-adapter-option-json --no-                                                                                  │
+│   --graph-adapter-option-json                                                                                        │
+│   --empty-graph-adapter-option-json                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Advanced ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Advanced configuration options (most set via config file).                                                           │
 │                                                                                                                      │
-│ ENABLE-TREE-SITTER --enable-tree-sitter     Enable tree-sitter extraction for syntax nodes. [default: True]          │
-│   --no-                                                                                                              │
-│ PLAN-ALLOW-PARTIAL --plan-allow-partial     Allow partial execution plans (advanced).                                │
-│   --no-                                                                                                              │
-│ PLAN-REQUESTED-TASK --plan-requested-task   Explicit task names to request in plan compilation (repeatable).         │
-│   --no-                                     [default: ()]                                                            │
-│ PLAN-IMPACTED-TASK --plan-impacted-task     Explicit task names to mark as impacted in plan compilation              │
-│   --no-                                     (repeatable). [default: ()]                                              │
-│ ENABLE-METRIC-SCHEDULING                    Enable metric-based scheduling in plan compilation (advanced).           │
-│   --enable-metric-scheduling --no-                                                                                   │
-│ ENABLE-PLAN-DIAGNOSTICS                     Enable plan diagnostics emission (advanced).                             │
-│   --enable-plan-diagnostics --no-                                                                                    │
-│ ENABLE-PLAN-TASK-SUBMISSION-HOOK            Enable plan task submission hook (advanced).                             │
-│   --enable-plan-task-submission-hook --no-                                                                           │
-│ ENABLE-PLAN-TASK-GROUPING-HOOK              Enable plan task grouping hook (advanced).                               │
-│   --enable-plan-task-grouping-hook --no-                                                                             │
-│ ENFORCE-PLAN-TASK-SUBMISSION                Enforce plan task submission policy (advanced).                          │
-│   --enforce-plan-task-submission --no-                                                                               │
+│ ENABLE-TREE-SITTER --enable-tree-sitter    Enable tree-sitter extraction for syntax nodes. [default: True]           │
+│   --no-enable-tree-sitter                                                                                            │
+│ PLAN-ALLOW-PARTIAL --plan-allow-partial    Allow partial execution plans (advanced). [default: None]                 │
+│   --no-plan-allow-partial                                                                                            │
+│ PLAN-REQUESTED-TASK --plan-requested-task  Explicit task names to request in plan compilation (repeatable).          │
+│   --empty-plan-requested-task              [default: ()]                                                             │
+│ PLAN-IMPACTED-TASK --plan-impacted-task    Explicit task names to mark as impacted in plan compilation (repeatable). │
+│   --empty-plan-impacted-task               [default: ()]                                                             │
+│ ENABLE-METRIC-SCHEDULING                   Enable metric-based scheduling in plan compilation (advanced). [default:  │
+│   --enable-metric-scheduling               None]                                                                     │
+│   --no-enable-metric-scheduling                                                                                      │
+│ ENABLE-PLAN-DIAGNOSTICS                    Enable plan diagnostics emission (advanced). [default: None]              │
+│   --enable-plan-diagnostics                                                                                          │
+│   --no-enable-plan-diagnostics                                                                                       │
+│ ENABLE-PLAN-TASK-SUBMISSION-HOOK           Enable plan task submission hook (advanced). [default: None]              │
+│   --enable-plan-task-submission-hook                                                                                 │
+│   --no-enable-plan-task-submission-hook                                                                              │
+│ ENABLE-PLAN-TASK-GROUPING-HOOK             Enable plan task grouping hook (advanced). [default: None]                │
+│   --enable-plan-task-grouping-hook                                                                                   │
+│   --no-enable-plan-task-grouping-hook                                                                                │
+│ ENFORCE-PLAN-TASK-SUBMISSION               Enforce plan task submission policy (advanced). [default: None]           │
+│   --enforce-plan-task-submission                                                                                     │
+│   --no-enforce-plan-task-submission                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Observability ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Configure OpenTelemetry tracing, metrics, and logging.                                                               │
+│                                                                                                                      │
+│ --enable-traces --no-enable-traces    Enable OpenTelemetry traces. [env var: CODEANATOMY_ENABLE_TRACES] [default:    │
+│                                       None]                                                                          │
+│ --enable-metrics --no-enable-metrics  Enable OpenTelemetry metrics. [env var: CODEANATOMY_ENABLE_METRICS] [default:  │
+│                                       None]                                                                          │
+│ --enable-logs --no-enable-logs        Enable OpenTelemetry logs. [env var: CODEANATOMY_ENABLE_LOGS] [default: None]  │
+│ --otel-test-mode --no-otel-test-mode  Use in-memory exporters for OpenTelemetry (for testing). [env var:             │
+│                                       CODEANATOMY_OTEL_TEST_MODE] [default: None]                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+Examples:
+  codeanatomy build .                    Build CPG for current directory
+  codeanatomy build ./repo -o ./out      Build with custom output directory
+  codeanatomy plan ./repo --show-graph   Show execution plan with graph
+  codeanatomy config show                Show effective configuration
+  codeanatomy delta vacuum --path ./data Vacuum Delta table
+
+Environment Variables:
+  CODEANATOMY_LOG_LEVEL      Default log level (DEBUG, INFO, WARNING, ERROR)
+  CODEANATOMY_RUNTIME_PROFILE Runtime profile name
+  CODEANATOMY_OUTPUT_DIR     Default output directory
+  CODEANATOMY_ENABLE_TRACES  Enable OpenTelemetry traces
+
+Tips:
+  Use `codeanatomy config show --with-sources` to see config precedence.
+
+Documentation: https://github.com/codeanatomy/codeanatomy

@@ -18,18 +18,23 @@ from hamilton.function_modifiers import (
     value,
 )
 
-from datafusion_engine.arrow.interop import RecordBatchReaderLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.delta.protocol import DeltaFeatureGate
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import record_artifact, recorder_for_profile
 from engine.runtime_profile import RuntimeProfileSpec
-from extract.extractors.scip.extract import ScipExtractContext, extract_scip_tables
+from extract.extractors.scip.extract import (
+    ScipExtractContext,
+    ScipExtractOptions,
+    extract_scip_tables,
+)
 from extract.helpers import ExtractExecutionContext
 from extract.python.scope import PythonScopePolicy
 from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
 from extract.scanning.repo_scope import RepoScopeOptions
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag, tag_outputs_by_name
+from hamilton_pipeline.types import OutputConfig, RepoScanConfig
 from schema_spec.system import DeltaMaintenancePolicy
 from semantics.incremental import IncrementalConfig
 from serde_artifacts import (
@@ -52,12 +57,10 @@ if TYPE_CHECKING:
     from hamilton.function_modifiers.dependencies import ParametrizedDependency
 
     from core_types import JsonDict, JsonValue
-    from datafusion_engine.arrow.interop import TableLike
     from datafusion_engine.io.write import WriteResult
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import SessionRuntime
-    from extract.extractors.scip.extract import ScipExtractOptions
-    from hamilton_pipeline.types import CacheRuntimeContext, OutputConfig, RepoScanConfig
+    from hamilton_pipeline.types import CacheRuntimeContext
 
     type DataSaverDict = dict[str, JsonValue]
 else:
@@ -126,17 +129,17 @@ _DELTA_OUTPUT_SPECS: tuple[OutputMaterializationSpec, ...] = (
         materialized_name="semantic.cpg_props_quality_v1",
     ),
     OutputMaterializationSpec(
-        table_node="cpg_props_map_v1",
+        table_node="cpg_props_map",
         dataset_name="cpg_props_map",
         materialized_name="semantic.cpg_props_map_v1",
     ),
     OutputMaterializationSpec(
-        table_node="cpg_edges_by_src_v1",
+        table_node="cpg_edges_by_src",
         dataset_name="cpg_edges_by_src",
         materialized_name="semantic.cpg_edges_by_src_v1",
     ),
     OutputMaterializationSpec(
-        table_node="cpg_edges_by_dst_v1",
+        table_node="cpg_edges_by_dst",
         dataset_name="cpg_edges_by_dst",
         materialized_name="semantic.cpg_edges_by_dst_v1",
     ),
@@ -944,17 +947,17 @@ _CPG_DELTA_WRITE_PARAMS: dict[str, dict[str, ParametrizedDependency]] = {
         write_policy=_CPG_PROPS_WRITE_POLICY,
     ),
     "write_cpg_props_map_delta": _delta_write_spec(
-        table="cpg_props_map_v1",
+        table="cpg_props_map",
         dataset_name="cpg_props_map",
         write_policy=_CPG_PROPS_MAP_WRITE_POLICY,
     ),
     "write_cpg_edges_by_src_delta": _delta_write_spec(
-        table="cpg_edges_by_src_v1",
+        table="cpg_edges_by_src",
         dataset_name="cpg_edges_by_src",
         write_policy=_CPG_EDGES_BY_SRC_WRITE_POLICY,
     ),
     "write_cpg_edges_by_dst_delta": _delta_write_spec(
-        table="cpg_edges_by_dst_v1",
+        table="cpg_edges_by_dst",
         dataset_name="cpg_edges_by_dst",
         write_policy=_CPG_EDGES_BY_DST_WRITE_POLICY,
     ),

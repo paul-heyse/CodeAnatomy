@@ -21,6 +21,9 @@ This plan introduces a diagnostics-first observability layer for semantic qualit
 ### Goal
 Create typed, versioned payloads for semantic quality artifacts and events, and emit them consistently via `DiagnosticsCollector` and OTel logs.
 
+### Status
+**Completed.** Implemented in `src/obs/diagnostics.py` with `SemanticQualityArtifact`, `record_semantic_quality_artifact`, and `record_semantic_quality_events`.
+
 ### Key Architectural Elements
 
 ```python
@@ -60,7 +63,7 @@ class SemanticQualityArtifact(StructBaseCompat, frozen=True):
 
 
 def record_semantic_quality_artifact(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
     *,
     artifact: SemanticQualityArtifact,
 ) -> None:
@@ -69,7 +72,7 @@ def record_semantic_quality_artifact(
 
 
 def record_semantic_quality_events(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
     *,
     name: str,
     rows: Sequence[Mapping[str, object]],
@@ -87,9 +90,9 @@ def record_semantic_quality_events(
 - None (new diagnostics payloads)
 
 ### Implementation Checklist
-- [ ] Add typed artifact payloads for semantic quality summaries
-- [ ] Add recorder helpers for semantic diagnostics events
-- [ ] Emit `semantic_quality_artifact_v1` artifacts with `run_id` and schema hash
+- [x] Add typed artifact payloads for semantic quality summaries
+- [x] Add recorder helpers for semantic diagnostics events
+- [x] Emit `semantic_quality_artifact_v1` artifacts with `run_id` and schema hash
 
 ---
 
@@ -97,6 +100,9 @@ def record_semantic_quality_events(
 
 ### Goal
 Persist full diagnostic datasets (`file_quality_v1`, `relationship_quality_metrics_v1`, `relationship_ambiguity_report_v1`, `file_coverage_report_v1`) to Delta and emit pointer artifacts that describe where the data lives.
+
+### Status
+**Partially completed.** Pointer artifacts are emitted from the semantic pipeline. Diagnostic views are materialized to Delta when output locations are configured. A standalone snapshot writer exists but is not yet wired into an incremental pipeline path.
 
 ### Key Architectural Elements
 
@@ -158,9 +164,9 @@ def write_semantic_diagnostics_snapshots(
 - None (new Delta snapshot path)
 
 ### Implementation Checklist
-- [ ] Introduce a diagnostics snapshot writer for semantic quality tables
-- [ ] Emit pointer artifacts including `artifact_uri`, row counts, and schema hash
-- [ ] Ensure snapshots use deterministic commit metadata for easy retrieval
+- [x] Introduce a diagnostics snapshot writer for semantic quality tables
+- [x] Emit pointer artifacts including `artifact_uri`, row counts, and schema hash
+- [ ] Ensure snapshots use deterministic commit metadata for easy retrieval (diagnostic views currently use semantic output commit metadata; wire `write_semantic_diagnostics_snapshots` if `snapshot_kind` metadata is required)
 
 ---
 
@@ -168,6 +174,9 @@ def write_semantic_diagnostics_snapshots(
 
 ### Goal
 Normalize row-level issues into a single lightweight stream and emit low-cardinality counters for quality thresholds.
+
+### Status
+**Completed.** Normalization helpers live in `src/obs/metrics.py`, and issue batches are emitted from the semantic pipeline.
 
 ### Key Architectural Elements
 
@@ -215,9 +224,9 @@ def record_quality_issue_counts(*, issue_kind: str, count: int) -> None:
 - None (new issue normalization stream)
 
 ### Implementation Checklist
-- [ ] Normalize issue rows into `QUALITY_SCHEMA`
-- [ ] Emit low-cardinality counters for thresholds (low confidence, ambiguity, missing coverage)
-- [ ] Keep metrics attribute sets minimal to avoid cardinality blowups
+- [x] Normalize issue rows into `QUALITY_SCHEMA`
+- [x] Emit low-cardinality counters for thresholds (low confidence, ambiguity, missing coverage)
+- [x] Keep metrics attribute sets minimal to avoid cardinality blowups
 
 ---
 
@@ -225,6 +234,9 @@ def record_quality_issue_counts(*, issue_kind: str, count: int) -> None:
 
 ### Goal
 Emit diagnostics at a single pipeline boundary with explicit policy switches and consistent run correlation.
+
+### Status
+**Completed.** Policy flag added to `DiagnosticsPolicy` and propagated to `DataFusionRuntimeProfile`; emission is centralized in `semantics.pipeline.build_cpg`.
 
 ### Key Architectural Elements
 
@@ -269,9 +281,9 @@ def emit_semantic_quality_diagnostics(
 - None (policy gating and centralized emission)
 
 ### Implementation Checklist
-- [ ] Add `emit_semantic_quality_diagnostics` policy flag
-- [ ] Centralize emission at a single pipeline boundary
-- [ ] Ensure events/artifacts include run correlation (`run_id`)
+- [x] Add `emit_semantic_quality_diagnostics` policy flag
+- [x] Centralize emission at a single pipeline boundary
+- [x] Ensure events/artifacts include run correlation (`run_id`) via `obs.otel.run_context.get_run_id` (may be `None` if not set upstream)
 
 ---
 
@@ -279,6 +291,9 @@ def emit_semantic_quality_diagnostics(
 
 ### Goal
 Guarantee diagnostic payload shape and emission behavior without requiring a live OTel backend.
+
+### Status
+**Completed.** New unit tests added under `tests/unit/obs`, `tests/unit/semantics`, and `tests/unit/engine`.
 
 ### Key Architectural Elements
 
@@ -310,9 +325,9 @@ def test_semantic_quality_artifact_payload() -> None:
 - None
 
 ### Implementation Checklist
-- [ ] Add unit tests for artifact payloads
-- [ ] Add tests for policy gating (emission on/off)
-- [ ] Add tests for issue normalization and counts
+- [x] Add unit tests for artifact payloads
+- [x] Add tests for policy gating (emission on/off)
+- [x] Add tests for issue normalization and counts
 
 ---
 
@@ -321,3 +336,9 @@ def test_semantic_quality_artifact_payload() -> None:
 - This plan intentionally avoids a dashboard and uses diagnostics artifacts/events as the primary surface.
 - Full-fidelity data should be stored in Delta and referenced by pointer artifacts.
 - All new diagnostics payloads should remain versioned with `_v1` suffixes.
+
+## Remaining Follow-Ups
+
+1. **Wire `write_semantic_diagnostics_snapshots` into an incremental pipeline path** so diagnostic snapshots always include `snapshot_kind` commit metadata and can be persisted independent of semantic output materialization.
+2. **Decide on the canonical storage location strategy** for diagnostic snapshots when output locations are not provided (e.g., a state-store path or dedicated diagnostics output root).
+3. **Ensure run correlation context is set** (`obs.otel.run_context.set_run_id`) in the entrypoint that drives semantic builds if you want non-`None` `run_id` values in artifact payloads.

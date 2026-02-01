@@ -19,6 +19,7 @@ class DiagnosticsPolicy(FingerprintableConfig):
     explain_analyze: bool = True
     explain_analyze_level: str | None = "summary"
     emit_kernel_lane_diagnostics: bool = True
+    emit_semantic_quality_diagnostics: bool = True
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for diagnostics policy.
@@ -35,6 +36,7 @@ class DiagnosticsPolicy(FingerprintableConfig):
             "explain_analyze": self.explain_analyze,
             "explain_analyze_level": self.explain_analyze_level,
             "emit_kernel_lane_diagnostics": self.emit_kernel_lane_diagnostics,
+            "emit_semantic_quality_diagnostics": self.emit_semantic_quality_diagnostics,
         }
 
     def fingerprint(self) -> str:

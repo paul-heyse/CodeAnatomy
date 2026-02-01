@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from hamilton.lifecycle import api as lifecycle_api
@@ -24,6 +26,8 @@ _REQUIRED_SEMANTIC_TAGS: frozenset[str] = frozenset(
         "stability",
     }
 )
+_REQUIRED_TABLE_TAGS: frozenset[str] = frozenset({"schema_ref", "entity_keys", "join_keys"})
+_REQUIRED_NON_TABLE_TAGS: frozenset[str] = frozenset({"dtype"})
 _ERROR_PREVIEW_LIMIT = 8
 
 if TYPE_CHECKING:
@@ -122,6 +126,22 @@ def compile_semantic_registry(
     -------
     SemanticRegistry
         Compiled semantic registry.
+    """
+    tag_map = {name: node_.tags for name, node_ in nodes.items()}
+    return compile_semantic_registry_from_tags(tag_map, plan_signature=plan_signature)
+
+
+def compile_semantic_registry_from_tags(
+    nodes: Mapping[str, Mapping[str, object]],
+    *,
+    plan_signature: str,
+) -> SemanticRegistry:
+    """Compile a semantic registry from node name -> tag mappings.
+
+    Returns
+    -------
+    SemanticRegistry
+        Compiled semantic registry.
 
     Raises
     ------
@@ -130,14 +150,23 @@ def compile_semantic_registry(
     """
     record_registry: MutableRegistry[str, SemanticNodeRecord] = MutableRegistry()
     errors: list[str] = []
-    for node_name, node_ in sorted(nodes.items()):
+    seen_semantic_ids: dict[str, str] = {}
+    for node_name, tags in sorted(nodes.items()):
         record, node_errors = _semantic_record(
             node_name=node_name,
-            tags=node_.tags,
+            tags=tags,
             plan_signature=plan_signature,
         )
         errors.extend(node_errors)
         if record is not None:
+            existing = seen_semantic_ids.get(record.semantic_id)
+            if existing is not None:
+                errors.append(
+                    "Duplicate semantic_id for nodes "
+                    f"{existing!r} and {record.node_name!r}: {record.semantic_id!r}."
+                )
+                continue
+            seen_semantic_ids[record.semantic_id] = record.node_name
             record_registry.register(record.node_name, record)
     registry = SemanticRegistry(
         plan_signature=plan_signature,
@@ -163,10 +192,9 @@ def semantic_registry_from_driver(
     SemanticRegistry
         Compiled semantic registry.
     """
-    return compile_semantic_registry(
-        driver.graph.nodes,
-        plan_signature=plan_signature,
-    )
+    nodes = driver.list_available_variables(tag_filter={"layer": "semantic"})
+    tag_map = {node.name: node.tags for node in nodes}
+    return compile_semantic_registry_from_tags(tag_map, plan_signature=plan_signature)
 
 
 @dataclass
@@ -199,12 +227,21 @@ class SemanticRegistryHook(lifecycle_api.GraphExecutionHook):
             driver,
             plan_signature=self.plan_signature,
         )
+        path = _registry_path(
+            self.config,
+            plan_signature=self.plan_signature,
+            run_id=run_id,
+        )
+        payload = registry.payload()
+        _write_registry_payload(path, payload)
         from datafusion_engine.lineage.diagnostics import record_artifact
 
+        payload_with_path = dict(payload)
+        payload_with_path["path"] = str(path)
         record_artifact(
             self.profile,
             "semantic_registry_v1",
-            registry.payload(),
+            payload_with_path,
         )
 
     def run_after_graph_execution(
@@ -240,6 +277,18 @@ def _semantic_record(
         semantic_id = node_name
     kind_value = tags.get("kind")
     kind = kind_value if isinstance(kind_value, str) and kind_value else "unknown"
+    if kind == "table":
+        missing_table_tags = sorted(_missing_required_table_tags(tags))
+        if missing_table_tags:
+            errors.append(
+                f"{node_name}: missing required semantic table tags: {missing_table_tags}"
+            )
+    else:
+        missing_non_table = sorted(_missing_required_non_table_tags(tags))
+        if missing_non_table:
+            errors.append(
+                f"{node_name}: missing required semantic non-table tags: {missing_non_table}"
+            )
     record = SemanticNodeRecord(
         node_name=node_name,
         semantic_id=semantic_id,
@@ -271,6 +320,24 @@ def _missing_required_tags(tags: Mapping[str, object]) -> set[str]:
     return missing
 
 
+def _missing_required_table_tags(tags: Mapping[str, object]) -> set[str]:
+    missing: set[str] = set()
+    for key in _REQUIRED_TABLE_TAGS:
+        value = tags.get(key)
+        if not isinstance(value, (str, Sequence)) or not value:
+            missing.add(key)
+    return missing
+
+
+def _missing_required_non_table_tags(tags: Mapping[str, object]) -> set[str]:
+    missing: set[str] = set()
+    for key in _REQUIRED_NON_TABLE_TAGS:
+        value = tags.get(key)
+        if not isinstance(value, str) or not value.strip():
+            missing.add(key)
+    return missing
+
+
 def _parse_key_list(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         items = [item.strip() for item in value.split(",") if item.strip()]
@@ -291,10 +358,47 @@ def _record_sort_key(record: SemanticNodeRecord) -> tuple[str, str]:
     return record.semantic_id, record.node_name
 
 
+def _registry_path(
+    config: Mapping[str, JsonValue],
+    *,
+    plan_signature: str,
+    run_id: str | None,
+) -> Path:
+    filename = f"semantic_registry_{plan_signature}.json"
+    explicit = config.get("semantic_registry_path") or config.get(
+        "hamilton_semantic_registry_path"
+    )
+    if isinstance(explicit, str) and explicit:
+        base = Path(explicit).expanduser()
+        if base.suffix:
+            return base
+        if run_id:
+            return base / run_id / filename
+        return base / filename
+    cache_path = config.get("cache_path")
+    if isinstance(cache_path, str) and cache_path:
+        base = Path(cache_path).expanduser() / "lineage"
+        if run_id:
+            base /= run_id
+        return base / filename
+    base = Path("build") / "structured_logs" / "cache_lineage"
+    if run_id:
+        base /= run_id
+    return base / filename
+
+
+def _write_registry_payload(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+        handle.write("\n")
+
+
 __all__ = [
     "SemanticNodeRecord",
     "SemanticRegistry",
     "SemanticRegistryHook",
     "compile_semantic_registry",
+    "compile_semantic_registry_from_tags",
     "semantic_registry_from_driver",
 ]

@@ -16,10 +16,14 @@ Usage
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 from datafusion import col, lit
 from datafusion import functions as f
+
+from obs.metrics import quality_issue_rows
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -39,6 +43,26 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return True
+
+
+SEMANTIC_DIAGNOSTIC_VIEW_NAMES: tuple[str, ...] = (
+    "file_quality_v1",
+    "relationship_quality_metrics_v1",
+    "relationship_ambiguity_report_v1",
+    "file_coverage_report_v1",
+)
+
+FILE_QUALITY_SCORE_THRESHOLD: float = 800.0
+MIN_EXTRACTION_COUNT: int = 1
+DEFAULT_MAX_ISSUE_ROWS: int = 200
+
+
+@dataclass(frozen=True)
+class SemanticIssueBatch:
+    """Batch of issue rows for diagnostics emission."""
+
+    issue_kind: str
+    rows: tuple[dict[str, object], ...]
 
 
 def build_relationship_quality_metrics(
@@ -118,34 +142,42 @@ def build_relationship_quality_metrics(
         agg_exprs.append(lit(0).alias("distinct_targets"))
 
     if has_confidence:
-        agg_exprs.extend([
-            f.avg(col("confidence")).alias("avg_confidence"),
-            f.min(col("confidence")).alias("min_confidence"),
-            f.max(col("confidence")).alias("max_confidence"),
-            f.sum(
-                f.when(col("confidence") < lit(0.5), lit(1)).otherwise(lit(0))
-            ).alias("low_confidence_edges"),
-        ])
+        agg_exprs.extend(
+            [
+                f.avg(col("confidence")).alias("avg_confidence"),
+                f.min(col("confidence")).alias("min_confidence"),
+                f.max(col("confidence")).alias("max_confidence"),
+                f.sum(f.when(col("confidence") < lit(0.5), lit(1)).otherwise(lit(0))).alias(
+                    "low_confidence_edges"
+                ),
+            ]
+        )
     else:
-        agg_exprs.extend([
-            lit(None).cast("float64").alias("avg_confidence"),
-            lit(None).cast("float64").alias("min_confidence"),
-            lit(None).cast("float64").alias("max_confidence"),
-            lit(0).alias("low_confidence_edges"),
-        ])
+        agg_exprs.extend(
+            [
+                lit(None).cast("float64").alias("avg_confidence"),
+                lit(None).cast("float64").alias("min_confidence"),
+                lit(None).cast("float64").alias("max_confidence"),
+                lit(0).alias("low_confidence_edges"),
+            ]
+        )
 
     if has_score:
-        agg_exprs.extend([
-            f.avg(col("score")).alias("avg_score"),
-            f.min(col("score")).alias("min_score"),
-            f.max(col("score")).alias("max_score"),
-        ])
+        agg_exprs.extend(
+            [
+                f.avg(col("score")).alias("avg_score"),
+                f.min(col("score")).alias("min_score"),
+                f.max(col("score")).alias("max_score"),
+            ]
+        )
     else:
-        agg_exprs.extend([
-            lit(None).cast("float64").alias("avg_score"),
-            lit(None).cast("float64").alias("min_score"),
-            lit(None).cast("float64").alias("max_score"),
-        ])
+        agg_exprs.extend(
+            [
+                lit(None).cast("float64").alias("avg_score"),
+                lit(None).cast("float64").alias("min_score"),
+                lit(None).cast("float64").alias("max_score"),
+            ]
+        )
 
     return rel_df.aggregate([], agg_exprs)
 
@@ -299,9 +331,9 @@ def build_ambiguity_analysis(
             [
                 lit(relationship_name).alias("relationship_name"),
                 f.count(lit(1)).alias("total_sources"),
-                f.sum(
-                    f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))
-                ).alias("ambiguous_sources"),
+                f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
+                    "ambiguous_sources"
+                ),
                 f.max(col("match_count")).alias("max_candidates"),
                 f.avg(
                     f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
@@ -326,9 +358,9 @@ def build_ambiguity_analysis(
         [
             lit(relationship_name).alias("relationship_name"),
             f.count(lit(1)).alias("total_sources"),
-            f.sum(
-                f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))
-            ).alias("ambiguous_sources"),
+            f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
+                "ambiguous_sources"
+            ),
             f.max(col("match_count")).alias("max_candidates"),
             f.avg(
                 f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
@@ -338,6 +370,154 @@ def build_ambiguity_analysis(
         "ambiguity_rate",
         col("ambiguous_sources").cast("float64") / col("total_sources").cast("float64"),
     )
+
+
+def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], DataFrame]]:
+    """Return DataFrame builders for semantic diagnostic views.
+
+    Returns
+    -------
+    dict[str, Callable[[SessionContext], DataFrame]]
+        Mapping of diagnostic view names to builder callables.
+    """
+    from semantics.catalog.analysis_builders import (
+        file_coverage_report_df_builder,
+        file_quality_df_builder,
+        relationship_ambiguity_report_df_builder,
+        relationship_quality_metrics_df_builder,
+    )
+
+    return {
+        "file_quality_v1": file_quality_df_builder,
+        "relationship_quality_metrics_v1": relationship_quality_metrics_df_builder,
+        "relationship_ambiguity_report_v1": relationship_ambiguity_report_df_builder,
+        "file_coverage_report_v1": file_coverage_report_df_builder,
+    }
+
+
+def dataframe_row_count(df: DataFrame) -> int:
+    """Return a row count for a DataFusion DataFrame.
+
+    Returns
+    -------
+    int
+        Row count for the DataFrame.
+    """
+    count_df = df.aggregate([], [f.count(lit(1)).alias("row_count")])
+    table = count_df.to_arrow_table()
+    if table.num_rows == 0:
+        return 0
+    rows = cast("list[dict[str, object]]", table.to_pylist())
+    value = rows[0].get("row_count")
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    return 0
+
+
+def semantic_quality_issue_batches(
+    *,
+    view_name: str,
+    df: DataFrame,
+    max_rows: int = DEFAULT_MAX_ISSUE_ROWS,
+) -> Sequence[SemanticIssueBatch]:
+    """Return issue batches for a diagnostic view.
+
+    Returns
+    -------
+    Sequence[SemanticIssueBatch]
+        Issue batches for diagnostics emission.
+    """
+    if view_name == "file_quality_v1":
+        issue_kind = f"file_quality_score_below_{int(FILE_QUALITY_SCORE_THRESHOLD)}"
+        issue_df = df.filter(col("file_quality_score") < lit(FILE_QUALITY_SCORE_THRESHOLD)).select(
+            col("file_id").alias("entity_id"),
+            lit(issue_kind).alias("issue"),
+        )
+        return _issue_batches(
+            issue_kind=issue_kind,
+            entity_kind="file",
+            source_table=view_name,
+            df=issue_df,
+            max_rows=max_rows,
+        )
+    if view_name == "file_coverage_report_v1":
+        issue_kind = "missing_extraction_sources"
+        issue_df = df.filter(col("extraction_count") < lit(MIN_EXTRACTION_COUNT)).select(
+            col("file_id").alias("entity_id"),
+            lit(issue_kind).alias("issue"),
+        )
+        return _issue_batches(
+            issue_kind=issue_kind,
+            entity_kind="file",
+            source_table=view_name,
+            df=issue_df,
+            max_rows=max_rows,
+        )
+    if view_name == "relationship_quality_metrics_v1":
+        issue_kind = "low_confidence_edges"
+        issue_df = df.filter(col("low_confidence_edges") > lit(0)).select(
+            col("relationship_name").alias("entity_id"),
+            lit(issue_kind).alias("issue"),
+        )
+        return _issue_batches(
+            issue_kind=issue_kind,
+            entity_kind="relationship",
+            source_table=view_name,
+            df=issue_df,
+            max_rows=max_rows,
+        )
+    if view_name == "relationship_ambiguity_report_v1":
+        issue_kind = "ambiguous_sources"
+        issue_df = df.filter(col("ambiguous_sources") > lit(0)).select(
+            col("relationship_name").alias("entity_id"),
+            lit(issue_kind).alias("issue"),
+        )
+        return _issue_batches(
+            issue_kind=issue_kind,
+            entity_kind="relationship",
+            source_table=view_name,
+            df=issue_df,
+            max_rows=max_rows,
+        )
+    return ()
+
+
+def _issue_batches(
+    *,
+    issue_kind: str,
+    entity_kind: str,
+    source_table: str,
+    df: DataFrame,
+    max_rows: int,
+) -> list[SemanticIssueBatch]:
+    rows = _issue_rows_from_df(df, max_rows=max_rows)
+    normalized = quality_issue_rows(
+        entity_kind=entity_kind,
+        rows=rows,
+        source_table=source_table,
+    )
+    if not normalized:
+        return []
+    return [
+        SemanticIssueBatch(
+            issue_kind=issue_kind,
+            rows=tuple(normalized),
+        )
+    ]
+
+
+def _issue_rows_from_df(
+    df: DataFrame,
+    *,
+    max_rows: int,
+) -> list[dict[str, object]]:
+    limited = df.limit(max_rows)
+    table = limited.to_arrow_table()
+    return cast("list[dict[str, object]]", table.to_pylist())
 
 
 def build_quality_summary(
@@ -378,8 +558,16 @@ def build_quality_summary(
 
 
 __all__ = [
+    "DEFAULT_MAX_ISSUE_ROWS",
+    "FILE_QUALITY_SCORE_THRESHOLD",
+    "MIN_EXTRACTION_COUNT",
+    "SEMANTIC_DIAGNOSTIC_VIEW_NAMES",
+    "SemanticIssueBatch",
     "build_ambiguity_analysis",
     "build_file_coverage_report",
     "build_quality_summary",
     "build_relationship_quality_metrics",
+    "dataframe_row_count",
+    "semantic_diagnostic_view_builders",
+    "semantic_quality_issue_batches",
 ]

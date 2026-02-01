@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import polars as pl
-from hamilton.function_modifiers import check_output_custom
+from hamilton.function_modifiers import check_output_custom, schema
 from hamilton.plugins.h_polars import with_columns
 
 from cpg.emit_specs import _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
 from datafusion_engine.arrow.interop import TableLike
-from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
+from hamilton_pipeline.tag_policy import TagPolicy, apply_tag, semantic_tag_policy
 from hamilton_pipeline.validators import (
     NonEmptyTableValidator,
     SchemaContractValidator,
@@ -96,11 +96,12 @@ _CPG_NODES_QUALITY_COLUMNS = (
 
 
 @check_output_custom(
-    SchemaContractValidator(dataset_name="cpg_nodes_quality", importance="warn"),
+    SchemaContractValidator(dataset_name="cpg_nodes_quality_v1", importance="warn"),
     TableSchemaValidator(expected_columns=_CPG_NODES_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_nodes_quality"))
+@schema.output(*tuple((col, "string") for col in _CPG_NODES_QUALITY_COLUMNS))
+@apply_tag(semantic_tag_policy("cpg_nodes_quality"))
 def cpg_nodes_quality(cpg_nodes_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG nodes quality output as Arrow.
 
@@ -186,11 +187,12 @@ _CPG_PROPS_QUALITY_COLUMNS = (
 
 
 @check_output_custom(
-    SchemaContractValidator(dataset_name="cpg_props_quality", importance="warn"),
+    SchemaContractValidator(dataset_name="cpg_props_quality_v1", importance="warn"),
     TableSchemaValidator(expected_columns=_CPG_PROPS_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@apply_tag(TagPolicy(layer="execution", kind="table", artifact="cpg_props_quality"))
+@schema.output(*tuple((col, "string") for col in _CPG_PROPS_QUALITY_COLUMNS))
+@apply_tag(semantic_tag_policy("cpg_props_quality"))
 def cpg_props_quality(cpg_props_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG properties quality output as Arrow.
 

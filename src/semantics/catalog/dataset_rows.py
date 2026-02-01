@@ -58,6 +58,22 @@ class SemanticDatasetRow:
         Template name for schema generation.
     view_builder
         Name of the view builder function.
+    kind
+        Semantic output kind (table, scalar, artifact).
+    semantic_id
+        Stable semantic identifier for the dataset.
+    entity
+        Semantic entity type for the dataset rows.
+    grain
+        Row-level grain for the dataset.
+    stability
+        Stability marker for the dataset contract.
+    schema_ref
+        Logical schema reference name.
+    materialization
+        External materialization type (delta, parquet, etc.).
+    materialized_name
+        External materialized object name.
     metadata_extra
         Additional schema metadata (bytes -> bytes mapping).
     register_view
@@ -77,6 +93,14 @@ class SemanticDatasetRow:
     join_keys: tuple[str, ...] = ()
     template: str | None = None
     view_builder: str | None = None
+    kind: str = "table"
+    semantic_id: str | None = None
+    entity: str | None = None
+    grain: str | None = None
+    stability: str | None = None
+    schema_ref: str | None = None
+    materialization: str | None = None
+    materialized_name: str | None = None
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
     register_view: bool = True
     source_dataset: str | None = None
@@ -550,14 +574,38 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
         Semantic dataset rows for cpg_nodes and cpg_edges.
     """
     # Lazy import to avoid circular dependencies
+    from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
     from semantics.naming import canonical_output_name
+
+    nodes_name = canonical_output_name("cpg_nodes")
+    edges_name = canonical_output_name("cpg_edges")
+    props_name = canonical_output_name("cpg_props")
+    nodes_quality_name = canonical_output_name("cpg_nodes_quality")
+    props_quality_name = canonical_output_name("cpg_props_quality")
+    props_map_name = canonical_output_name("cpg_props_map")
+    edges_by_src_name = canonical_output_name("cpg_edges_by_src")
+    edges_by_dst_name = canonical_output_name("cpg_edges_by_dst")
+
+    nodes_quality_fields = (
+        *_NODE_OUTPUT_COLUMNS,
+        "cpg_nodes_path_depth",
+        "cpg_nodes_span_length",
+        "cpg_nodes_has_file_id",
+        "cpg_nodes_has_task_name",
+    )
+    props_quality_fields = (
+        *_PROP_OUTPUT_COLUMNS,
+        "cpg_props_value_present",
+        "cpg_props_value_is_numeric",
+        "cpg_props_key_length",
+    )
 
     return (
         SemanticDatasetRow(
-            name=canonical_output_name("cpg_nodes"),
+            name=nodes_name,
             version=SEMANTIC_SCHEMA_VERSION,
             bundles=("file_identity", "span"),
-            fields=("node_id", "node_type", "node_label"),
+            fields=_NODE_OUTPUT_COLUMNS,
             category="semantic",
             supports_cdf=True,
             partition_cols=(),
@@ -567,12 +615,17 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
             view_builder="cpg_nodes_df_builder",
             register_view=True,
             source_dataset=None,
+            entity="node",
+            grain="per_node",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{nodes_name}",
         ),
         SemanticDatasetRow(
-            name=canonical_output_name("cpg_edges"),
+            name=edges_name,
             version=SEMANTIC_SCHEMA_VERSION,
             bundles=("file_identity",),
-            fields=("edge_id", "src_node_id", "dst_node_id", "edge_type", "origin"),
+            fields=_EDGE_OUTPUT_COLUMNS,
             category="semantic",
             supports_cdf=True,
             partition_cols=(),
@@ -582,6 +635,131 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
             view_builder="cpg_edges_df_builder",
             register_view=True,
             source_dataset=None,
+            entity="edge",
+            grain="per_edge",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{edges_name}",
+        ),
+        SemanticDatasetRow(
+            name=props_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=("file_identity",),
+            fields=_PROP_OUTPUT_COLUMNS,
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("entity_kind", "entity_id", "prop_key"),
+            join_keys=("entity_kind", "entity_id", "prop_key"),
+            template="cpg_output",
+            view_builder="cpg_props_df_builder",
+            register_view=True,
+            source_dataset=None,
+            entity="prop",
+            grain="per_prop",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{props_name}",
+        ),
+        SemanticDatasetRow(
+            name=nodes_quality_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=("file_identity", "span"),
+            fields=nodes_quality_fields,
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("node_id",),
+            join_keys=("node_id",),
+            template="cpg_quality",
+            view_builder=None,
+            register_view=False,
+            source_dataset=nodes_name,
+            entity="node",
+            grain="per_node",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{nodes_quality_name}",
+        ),
+        SemanticDatasetRow(
+            name=props_quality_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=("file_identity",),
+            fields=props_quality_fields,
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("entity_kind", "entity_id", "prop_key"),
+            join_keys=("entity_kind", "entity_id", "prop_key"),
+            template="cpg_quality",
+            view_builder=None,
+            register_view=False,
+            source_dataset=props_name,
+            entity="prop",
+            grain="per_prop",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{props_quality_name}",
+        ),
+        SemanticDatasetRow(
+            name=props_map_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=("entity_kind", "entity_id", "node_kind", "props"),
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("entity_kind", "entity_id"),
+            join_keys=("entity_kind", "entity_id"),
+            template="cpg_adjacency",
+            view_builder="cpg_props_map_df_builder",
+            register_view=True,
+            source_dataset=props_name,
+            entity="prop",
+            grain="per_entity",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{props_map_name}",
+        ),
+        SemanticDatasetRow(
+            name=edges_by_src_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=("src_node_id", "edges"),
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("src_node_id",),
+            join_keys=("src_node_id",),
+            template="cpg_adjacency",
+            view_builder="cpg_edges_by_src_df_builder",
+            register_view=True,
+            source_dataset=edges_name,
+            entity="edge",
+            grain="per_node",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{edges_by_src_name}",
+        ),
+        SemanticDatasetRow(
+            name=edges_by_dst_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=("dst_node_id", "edges"),
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("dst_node_id",),
+            join_keys=("dst_node_id",),
+            template="cpg_adjacency",
+            view_builder="cpg_edges_by_dst_df_builder",
+            register_view=True,
+            source_dataset=edges_name,
+            entity="edge",
+            grain="per_node",
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{edges_by_dst_name}",
         ),
     )
 

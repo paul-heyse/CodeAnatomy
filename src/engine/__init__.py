@@ -43,7 +43,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_view_product": ("engine.materialize_pipeline", "build_view_product"),
     "delta_history": ("engine.delta_tools", "delta_history"),
     "delta_vacuum": ("engine.delta_tools", "delta_vacuum"),
-    "resolve_materialization_cache_decision": ("engine.materialize_pipeline", "resolve_materialization_cache_decision"),
+    "resolve_materialization_cache_decision": (
+        "engine.materialize_pipeline",
+        "resolve_materialization_cache_decision",
+    ),
     "resolve_prefer_reader": ("engine.materialize_pipeline", "resolve_prefer_reader"),
     "resolve_runtime_profile": ("engine.runtime_profile", "resolve_runtime_profile"),
 }

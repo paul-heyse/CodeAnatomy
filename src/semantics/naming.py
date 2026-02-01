@@ -32,6 +32,12 @@ SEMANTIC_OUTPUT_NAMES: Final[dict[str, str]] = {
     # Final CPG outputs
     "cpg_nodes": "cpg_nodes_v1",
     "cpg_edges": "cpg_edges_v1",
+    "cpg_props": "cpg_props_v1",
+    "cpg_nodes_quality": "cpg_nodes_quality_v1",
+    "cpg_props_quality": "cpg_props_quality_v1",
+    "cpg_props_map": "cpg_props_map_v1",
+    "cpg_edges_by_src": "cpg_edges_by_src_v1",
+    "cpg_edges_by_dst": "cpg_edges_by_dst_v1",
 }
 
 # Legacy aliases preserved for backward compatibility.

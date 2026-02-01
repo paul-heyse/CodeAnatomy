@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from core_types import JsonValue
 
 _NODE_KEY_LEN = 2
 _CACHE_LINEAGE_DIRNAME = "cache_lineage"
+_CACHE_LINEAGE_FILENAME = "cache_lineage.json"
 
 if TYPE_CHECKING:
     from hamilton import driver as hamilton_driver
@@ -50,23 +52,27 @@ def export_cache_lineage_artifacts(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     cache = driver.cache
+    semantic_ids = _semantic_ids_by_node(driver)
     logs_by_node = cache.logs(run_id=run_id, level="debug")
     log_rows, log_errors = _lineage_rows_from_logs(
         cache=cache,
         run_id=run_id,
         logs_by_node=logs_by_node,
         plan_signature=plan_signature,
+        semantic_ids=semantic_ids,
     )
     metadata_rows, metadata_errors = _lineage_rows_from_metadata_store(
         cache=cache,
         run_id=run_id,
         plan_signature=plan_signature,
+        semantic_ids=semantic_ids,
     )
     merged_rows = _merge_lineage_rows(log_rows=log_rows, metadata_rows=metadata_rows)
     record_count = len(merged_rows)
     error_count = log_errors + metadata_errors
-    return CacheLineageSummary(
-        path=out_dir,
+    artifact_path = out_dir / _CACHE_LINEAGE_FILENAME
+    summary = CacheLineageSummary(
+        path=artifact_path,
         run_id=run_id,
         record_count=record_count,
         error_count=error_count,
@@ -74,6 +80,8 @@ def export_cache_lineage_artifacts(
         metadata_count=len(metadata_rows),
         rows=tuple(merged_rows),
     )
+    _write_cache_lineage(artifact_path, summary)
+    return summary
 
 
 @dataclass
@@ -145,7 +153,7 @@ def _lineage_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
         return Path(explicit).expanduser()
     cache_path = config.get("cache_path")
     if not isinstance(cache_path, str) or not cache_path:
-        return Path("build") / _CACHE_LINEAGE_DIRNAME / run_id
+        return Path("build") / "structured_logs" / _CACHE_LINEAGE_DIRNAME / run_id
     base = Path(cache_path).expanduser()
     return base / "lineage" / run_id
 
@@ -184,60 +192,32 @@ def _lineage_rows_from_logs(
     run_id: str,
     logs_by_node: Mapping[object, Sequence[object]],
     plan_signature: str | None,
+    semantic_ids: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     rows: list[dict[str, object]] = []
     error_count = 0
     for node_key, events in sorted(logs_by_node.items(), key=lambda item: str(item[0])):
         node_name, task_id = _node_and_task_id(node_key)
+        semantic_id = _semantic_id_for_node(node_name, semantic_ids)
         event_types = [
             getattr(getattr(event, "event_type", None), "value", "unknown") for event in events
         ]
-        cache_key_value = None
-        data_version_value: str | None = None
-        code_version_value: str | None = None
-        error_value: str | None = None
-        try:
-            get_cache_key = getattr(cache, "get_cache_key", None)
-            cache_key_value = (
-                get_cache_key(run_id=run_id, node_name=node_name, task_id=task_id)
-                if callable(get_cache_key)
-                else None
+        cache_key_str, data_version_value, code_version_value, error_value = (
+            _cache_versions_for_node(
+                cache,
+                run_id=run_id,
+                node_name=node_name,
+                task_id=task_id,
             )
-            cache_key_str = cache_key_value if isinstance(cache_key_value, str) else None
-            get_data_version = getattr(cache, "get_data_version", None)
-            data_version = (
-                get_data_version(
-                    run_id=run_id,
-                    node_name=node_name,
-                    cache_key=cache_key_str,
-                    task_id=task_id,
-                )
-                if callable(get_data_version)
-                else None
-            )
-            if isinstance(data_version, str):
-                data_version_value = data_version
-            elif data_version is not None:
-                data_version_value = str(data_version)
-            get_code_version = getattr(cache, "get_code_version", None)
-            code_version = (
-                get_code_version(run_id=run_id, node_name=node_name, task_id=task_id)
-                if callable(get_code_version)
-                else None
-            )
-            if isinstance(code_version, str):
-                code_version_value = code_version
-            elif code_version is not None:
-                code_version_value = str(code_version)
-        except (KeyError, TypeError, ValueError) as exc:
+        )
+        if error_value is not None:
             error_count += 1
-            error_value = f"{type(exc).__name__}: {exc}"
-        cache_key_str = cache_key_value if isinstance(cache_key_value, str) else None
         rows.append(
             {
                 "run_id": run_id,
                 "plan_signature": plan_signature,
                 "node_name": node_name,
+                "semantic_id": semantic_id,
                 "task_id": task_id,
                 "source": "logs",
                 "cache_key": cache_key_str,
@@ -250,6 +230,50 @@ def _lineage_rows_from_logs(
             }
         )
     return rows, error_count
+
+
+def _cache_versions_for_node(
+    cache: object,
+    *,
+    run_id: str,
+    node_name: str,
+    task_id: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    cache_key_value = None
+    data_version_value: str | None = None
+    code_version_value: str | None = None
+    error_value: str | None = None
+    cache_key_str: str | None = None
+    try:
+        get_cache_key = getattr(cache, "get_cache_key", None)
+        cache_key_value = (
+            get_cache_key(run_id=run_id, node_name=node_name, task_id=task_id)
+            if callable(get_cache_key)
+            else None
+        )
+        cache_key_str = cache_key_value if isinstance(cache_key_value, str) else None
+        get_data_version = getattr(cache, "get_data_version", None)
+        data_version = (
+            get_data_version(
+                run_id=run_id,
+                node_name=node_name,
+                cache_key=cache_key_str,
+                task_id=task_id,
+            )
+            if callable(get_data_version)
+            else None
+        )
+        data_version_value = _stringify(data_version)
+        get_code_version = getattr(cache, "get_code_version", None)
+        code_version = (
+            get_code_version(run_id=run_id, node_name=node_name, task_id=task_id)
+            if callable(get_code_version)
+            else None
+        )
+        code_version_value = _stringify(code_version)
+    except (KeyError, TypeError, ValueError) as exc:
+        error_value = f"{type(exc).__name__}: {exc}"
+    return cache_key_str, data_version_value, code_version_value, error_value
 
 
 def _nodes_from_run_meta(run_meta: object) -> Mapping[str, object] | None:
@@ -284,6 +308,7 @@ def _lineage_rows_from_metadata_store(
     cache: object,
     run_id: str,
     plan_signature: str | None,
+    semantic_ids: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     metadata_store = getattr(cache, "metadata_store", None)
     get_run = getattr(metadata_store, "get_run", None)
@@ -301,6 +326,7 @@ def _lineage_rows_from_metadata_store(
     for node_name, meta in sorted(nodes.items(), key=lambda item: str(item[0])):
         if not isinstance(node_name, str):
             continue
+        semantic_id = _semantic_id_for_node(node_name, semantic_ids)
         task_id_value = _meta_attr(meta, "task_id")
         task_id = task_id_value if isinstance(task_id_value, str) else None
         cache_key_value = _meta_attr(meta, "cache_key")
@@ -319,6 +345,7 @@ def _lineage_rows_from_metadata_store(
                 "run_id": run_id,
                 "plan_signature": plan_signature,
                 "node_name": node_name,
+                "semantic_id": semantic_id,
                 "task_id": task_id,
                 "source": "metadata_store",
                 "cache_key": cache_key_str,
@@ -339,6 +366,30 @@ def _stringify(value: object) -> str | None:
     if isinstance(value, str):
         return value
     return str(value)
+
+
+def _semantic_ids_by_node(
+    driver: hamilton_driver.Driver,
+) -> Mapping[str, str]:
+    nodes = driver.list_available_variables(tag_filter={"layer": "semantic"})
+    semantic_ids: dict[str, str] = {}
+    for node in nodes:
+        tags = node.tags
+        if not isinstance(tags, Mapping):
+            continue
+        semantic_id_value = tags.get("semantic_id")
+        if isinstance(semantic_id_value, str) and semantic_id_value:
+            semantic_ids[node.name] = semantic_id_value
+    return semantic_ids
+
+
+def _semantic_id_for_node(
+    node_name: str,
+    semantic_ids: Mapping[str, str] | None,
+) -> str | None:
+    if semantic_ids is None:
+        return None
+    return semantic_ids.get(node_name)
 
 
 def _merge_lineage_rows(
@@ -388,6 +439,22 @@ def _merge_lineage_rows(
         )
     )
     return ordered
+
+
+def _write_cache_lineage(path: Path, summary: CacheLineageSummary) -> None:
+    payload = {
+        "run_id": summary.run_id,
+        "path": str(summary.path),
+        "record_count": summary.record_count,
+        "error_count": summary.error_count,
+        "log_count": summary.log_count,
+        "metadata_count": summary.metadata_count,
+        "rows": list(summary.rows),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+        handle.write("\n")
 
 
 __all__ = [

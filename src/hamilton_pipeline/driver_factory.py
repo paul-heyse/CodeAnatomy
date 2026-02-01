@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from hamilton_pipeline.cache_lineage import CacheLineageHook
+    from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
     from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
 
@@ -784,6 +785,8 @@ def _resolve_config_payload(
         "enable_dynamic_scan_units",
         (execution_mode or ExecutionMode.PLAN_PARALLEL) != ExecutionMode.DETERMINISTIC_SERIAL,
     )
+    config_payload.setdefault("enable_output_validation", True)
+    config_payload.setdefault("enable_graph_snapshot", True)
     config_payload.setdefault("hamilton.enable_power_user_mode", True)
     config_payload = _apply_tracker_config_from_profile(
         config_payload,
@@ -1266,12 +1269,15 @@ def _apply_cache(
     builder: driver.Builder,
     *,
     config: Mapping[str, JsonValue],
+    profile_spec: RuntimeProfileSpec,
 ) -> driver.Builder:
     cache_path = _cache_path_from_config(config)
     if cache_path is None:
         return builder
     from hamilton.caching.stores.file import FileResultStore
     from hamilton.caching.stores.sqlite import SQLiteMetadataStore
+
+    from hamilton_pipeline.cache_versioning import register_cache_fingerprinters
 
     base_path = Path(cache_path).expanduser()
     base_path.mkdir(parents=True, exist_ok=True)
@@ -1280,15 +1286,44 @@ def _apply_cache(
     results_path.mkdir(parents=True, exist_ok=True)
     result_store = FileResultStore(path=str(results_path))
     profile = _cache_policy_profile(config)
+    register_cache_fingerprinters()
+    default_nodes = _cache_default_nodes(config=config, profile_spec=profile_spec)
     return builder.with_cache(
         path=str(base_path),
         metadata_store=metadata_store,
         result_store=result_store,
+        default=default_nodes if default_nodes else None,
         default_behavior=profile.default_behavior,
         default_loader_behavior=profile.default_loader_behavior,
         default_saver_behavior=profile.default_saver_behavior,
         log_to_file=profile.log_to_file,
     )
+
+
+def _cache_default_nodes(
+    *,
+    config: Mapping[str, JsonValue],
+    profile_spec: RuntimeProfileSpec,
+) -> tuple[str, ...]:
+    explicit = _task_name_list_from_config(config, key="cache_default_nodes")
+    if explicit is not None:
+        return explicit
+    from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
+    from hamilton_pipeline.io_contracts import delta_output_specs
+    from semantics.naming import internal_name
+
+    defaults: set[str] = {spec.table_node for spec in delta_output_specs()}
+    runtime_config = semantic_runtime_from_profile(profile_spec.datafusion)
+    for dataset_name, policy in runtime_config.cache_policy_overrides.items():
+        node_name = internal_name(dataset_name)
+        if policy in {"delta_output", "delta_staging"}:
+            defaults.add(node_name)
+        if policy == "none" and node_name in defaults:
+            defaults.remove(node_name)
+    if not runtime_config.cache_policy_overrides and runtime_config.output_locations:
+        for dataset_name in runtime_config.output_locations:
+            defaults.add(internal_name(dataset_name))
+    return tuple(sorted(defaults))
 
 
 def _cache_path_from_config(config: Mapping[str, JsonValue]) -> str | None:
@@ -1462,7 +1497,11 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         executor_config=plan_ctx.executor_config,
         adapter_config=plan_ctx.graph_adapter_config,
     )
-    builder = _apply_cache(builder, config=config_payload)
+    builder = _apply_cache(
+        builder,
+        config=config_payload,
+        profile_spec=plan_ctx.view_ctx.runtime_profile_spec,
+    )
     builder = _apply_materializers(builder, config=config_payload)
     adapter_context = _AdapterContext(
         diagnostics=plan_ctx.diagnostics,
@@ -1500,10 +1539,23 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
             plan_signature=plan_ctx.plan.plan_signature,
         )
         builder = builder.with_adapters(cache_lineage_hook)
+    graph_snapshot_hook: GraphSnapshotHook | None = None
+    if bool(config_payload.get("enable_graph_snapshot", True)):
+        from hamilton_pipeline.graph_snapshot import (
+            GraphSnapshotHook as _GraphSnapshotHook,
+        )
+
+        graph_snapshot_hook = _GraphSnapshotHook(
+            profile=plan_ctx.view_ctx.profile,
+            plan_signature=plan_ctx.plan.plan_signature,
+            config=config_payload,
+        )
+        builder = builder.with_adapters(graph_snapshot_hook)
     return DriverBuilder(
         builder=builder,
         semantic_registry_hook=semantic_registry_hook,
         cache_lineage_hook=cache_lineage_hook,
+        graph_snapshot_hook=graph_snapshot_hook,
     )
 
 

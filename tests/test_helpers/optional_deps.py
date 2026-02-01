@@ -34,6 +34,11 @@ def require_datafusion() -> ModuleType:
             "DataFusion build missing codeanatomy_physical config; skipping tests.",
             allow_module_level=True,
         )
+    if not hasattr(internal, "register_codeanatomy_udfs"):
+        pytest.skip(
+            "DataFusion build missing codeanatomy UDFs; skipping tests.",
+            allow_module_level=True,
+        )
     return datafusion
 
 

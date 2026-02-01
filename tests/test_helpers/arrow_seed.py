@@ -42,6 +42,8 @@ def register_arrow_table(
     DataFrame
         DataFusion DataFrame for the registered table.
     """
+    if ctx.table_exist(name):
+        ctx.deregister_table(name)
     return datafusion_from_arrow(
         ctx,
         name=name,

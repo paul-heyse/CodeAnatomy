@@ -230,7 +230,3 @@ version = "0.14.1"
 
 [build-dependencies.pyo3-build-config]
 version = "0.26"
-
-[profile.release]
-lto = true
-codegen-units = 1

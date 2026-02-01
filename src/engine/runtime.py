@@ -90,6 +90,7 @@ def _apply_diagnostics_policy(
         metrics_collector=profile.metrics_collector if enable_metrics else None,
         enable_tracing=enable_tracing,
         tracing_collector=profile.tracing_collector if enable_tracing else None,
+        emit_semantic_quality_diagnostics=policy.emit_semantic_quality_diagnostics,
     )
 
 

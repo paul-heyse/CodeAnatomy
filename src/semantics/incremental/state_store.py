@@ -98,6 +98,31 @@ class StateStore:
         """
         return self.root / "metadata"
 
+    def semantic_diagnostics_dir(self) -> Path:
+        """Return the semantic diagnostics directory.
+
+        Returns
+        -------
+        Path
+            Semantic diagnostics directory path.
+        """
+        return self.metadata_dir() / "semantic_diagnostics"
+
+    def semantic_diagnostics_path(self, name: str) -> Path:
+        """Return the Delta path for a semantic diagnostics snapshot.
+
+        Parameters
+        ----------
+        name
+            Diagnostic view name.
+
+        Returns
+        -------
+        Path
+            Semantic diagnostics Delta table path.
+        """
+        return self.semantic_diagnostics_dir() / name
+
     def invalidation_snapshot_path(self) -> Path:
         """Return the invalidation snapshot Delta path.
 

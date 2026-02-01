@@ -7,7 +7,7 @@ names and returns a typed result with stable fields.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
@@ -119,6 +119,7 @@ class GraphProductBuildRequest:
 
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     overrides: Mapping[str, object] | None = None
+    otel_options: OtelBootstrapOptions | None = None
     use_materialize: bool = True
 
 
@@ -134,6 +135,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     _resolve_output_dir(repo_root_path, request.output_dir)
 
     overrides: dict[str, object] = dict(request.overrides or {})
+    if request.otel_options is not None:
+        overrides["otel_options"] = request.otel_options
     if request.runtime_profile_name is not None:
         overrides["runtime_profile_name"] = request.runtime_profile_name
     if request.determinism_override is not None:
@@ -162,9 +165,12 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         use_materialize=request.use_materialize,
     )
 
+    effective_otel = request.otel_options or OtelBootstrapOptions()
+    resource_overrides = dict(effective_otel.resource_overrides or {})
+    resource_overrides.update(_otel_resource_overrides(repo_root_path))
     configure_otel(
         service_name="codeanatomy",
-        options=OtelBootstrapOptions(resource_overrides=_otel_resource_overrides(repo_root_path)),
+        options=replace(effective_otel, resource_overrides=resource_overrides),
     )
     run_token = set_run_id(run_id)
     try:

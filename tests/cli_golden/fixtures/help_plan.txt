@@ -1,0 +1,63 @@
+Usage: codeanatomy plan REPO-ROOT [ARGS]
+
+Show the computed execution plan without running it.
+
+╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *  REPO-ROOT --repo-root                    [required]                                                               │
+│    SHOW-GRAPH --show-graph --no-show-graph  Display task dependency graph. [default: False]                          │
+│    SHOW-SCHEDULE --show-schedule            Display computed execution schedule. [default: False]                    │
+│      --no-show-schedule                                                                                              │
+│    SHOW-INFERRED-DEPS --show-inferred-deps  Display inferred task dependencies. [default: False]                     │
+│      --no-show-inferred-deps                                                                                         │
+│    SHOW-TASK-GRAPH --show-task-graph        Display task graph structure with edges. [default: False]                │
+│      --no-show-task-graph                                                                                            │
+│    VALIDATE --validate --no-validate        Validate plan consistency and report issues. [default: False]            │
+│    OUTPUT-FORMAT --output-format            Output format for plan display. [choices: text, json, dot] [env var:     │
+│                                             CODEANATOMY_PLAN_OUTPUT_FORMAT] [default: text]                          │
+│    O -o                                     Write plan to file instead of stdout. [env var:                          │
+│                                             CODEANATOMY_PLAN_OUTPUT_FILE] [default: None]                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Session ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Session and run context options.                                                                                     │
+│                                                                                                                      │
+│ --config     Path to configuration file (overrides default search). [default: None]                                  │
+│ --run-id     Explicit run identifier (UUID7 generated if not provided). [default: None]                              │
+│ --log-level  Logging verbosity level. [choices: DEBUG, INFO, WARNING, ERROR] [env var: CODEANATOMY_LOG_LEVEL]        │
+│              [default: INFO]                                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Execution ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Control pipeline execution strategy and parallelism.                                                                 │
+│                                                                                                                      │
+│ EXECUTION-MODE --execution-mode  Execution mode to use when compiling the plan. [choices: deterministic-serial,      │
+│                                  plan-parallel, plan-parallel-remote] [default: plan-parallel]                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Observability ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Configure OpenTelemetry tracing, metrics, and logging.                                                               │
+│                                                                                                                      │
+│ --enable-traces --no-enable-traces    Enable OpenTelemetry traces. [env var: CODEANATOMY_ENABLE_TRACES] [default:    │
+│                                       None]                                                                          │
+│ --enable-metrics --no-enable-metrics  Enable OpenTelemetry metrics. [env var: CODEANATOMY_ENABLE_METRICS] [default:  │
+│                                       None]                                                                          │
+│ --enable-logs --no-enable-logs        Enable OpenTelemetry logs. [env var: CODEANATOMY_ENABLE_LOGS] [default: None]  │
+│ --otel-test-mode --no-otel-test-mode  Use in-memory exporters for OpenTelemetry (for testing). [env var:             │
+│                                       CODEANATOMY_OTEL_TEST_MODE] [default: None]                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+Examples:
+  codeanatomy build .                    Build CPG for current directory
+  codeanatomy build ./repo -o ./out      Build with custom output directory
+  codeanatomy plan ./repo --show-graph   Show execution plan with graph
+  codeanatomy config show                Show effective configuration
+  codeanatomy delta vacuum --path ./data Vacuum Delta table
+
+Environment Variables:
+  CODEANATOMY_LOG_LEVEL      Default log level (DEBUG, INFO, WARNING, ERROR)
+  CODEANATOMY_RUNTIME_PROFILE Runtime profile name
+  CODEANATOMY_OUTPUT_DIR     Default output directory
+  CODEANATOMY_ENABLE_TRACES  Enable OpenTelemetry traces
+
+Tips:
+  Use `codeanatomy config show --with-sources` to see config precedence.
+
+Documentation: https://github.com/codeanatomy/codeanatomy

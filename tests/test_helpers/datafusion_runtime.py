@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from obs.diagnostics import DiagnosticsCollector
+from tests.test_helpers.optional_deps import require_datafusion
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -27,6 +28,7 @@ def df_profile(
     DataFusionRuntimeProfile
         Runtime profile configured for the test.
     """
+    require_datafusion()
     if diagnostics is None:
         return DataFusionRuntimeProfile()
     return DataFusionRuntimeProfile(diagnostics_sink=diagnostics)

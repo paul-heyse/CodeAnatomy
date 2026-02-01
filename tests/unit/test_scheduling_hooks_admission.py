@@ -83,11 +83,11 @@ def _dummy_view_node(name: str) -> ViewNode:
 
 
 def _plan_for_tests() -> ExecutionPlan:
-    from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from relspec.evidence import EvidenceCatalog
     from relspec.execution_plan import ExecutionPlan
     from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
+    from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 
     view_nodes = (_dummy_view_node(name="task_a"), _dummy_view_node(name="task_b"))
     resolved_view_nodes = cast("tuple[RegistryViewNode, ...]", view_nodes)

@@ -93,11 +93,11 @@ def _plan_for_module(
     dependency_map: dict[str, tuple[str, ...]],
     schedule_metadata: dict[str, TaskScheduleMetadata] | None = None,
 ) -> ExecutionPlan:
-    from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from relspec.evidence import EvidenceCatalog
     from relspec.execution_plan import ExecutionPlan
     from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
+    from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 
     @dataclass(frozen=True)
     class _PlanSnapshotBundle:

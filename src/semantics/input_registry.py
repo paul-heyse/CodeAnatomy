@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from datafusion_engine.extract.bundles import dataset_name_for_output
+
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
@@ -26,52 +28,71 @@ class SemanticInputSpec:
     """Alternative table names to try if primary is missing."""
 
 
+def _fallback_names(output: str) -> tuple[str, ...]:
+    try:
+        dataset = dataset_name_for_output(output)
+    except KeyError:
+        return ()
+    if dataset is None or dataset == output:
+        return ()
+    return (dataset,)
+
+
 # Canonical input specifications
 SEMANTIC_INPUT_SPECS: Final[tuple[SemanticInputSpec, ...]] = (
     SemanticInputSpec(
         canonical_name="cst_refs",
         extraction_source="cst_refs",
         required=True,
+        fallback_names=_fallback_names("cst_refs"),
     ),
     SemanticInputSpec(
         canonical_name="cst_defs",
         extraction_source="cst_defs",
         required=True,
+        fallback_names=_fallback_names("cst_defs"),
     ),
     SemanticInputSpec(
         canonical_name="cst_imports",
         extraction_source="cst_imports",
         required=True,
+        fallback_names=_fallback_names("cst_imports"),
     ),
     SemanticInputSpec(
         canonical_name="cst_callsites",
         extraction_source="cst_callsites",
         required=True,
+        fallback_names=_fallback_names("cst_callsites"),
     ),
     SemanticInputSpec(
         canonical_name="cst_call_args",
         extraction_source="cst_call_args",
         required=True,
+        fallback_names=_fallback_names("cst_call_args"),
     ),
     SemanticInputSpec(
         canonical_name="cst_docstrings",
         extraction_source="cst_docstrings",
         required=True,
+        fallback_names=_fallback_names("cst_docstrings"),
     ),
     SemanticInputSpec(
         canonical_name="cst_decorators",
         extraction_source="cst_decorators",
         required=True,
+        fallback_names=_fallback_names("cst_decorators"),
     ),
     SemanticInputSpec(
         canonical_name="scip_occurrences",
         extraction_source="scip_occurrences",
         required=True,
+        fallback_names=_fallback_names("scip_occurrences"),
     ),
     SemanticInputSpec(
         canonical_name="file_line_index_v1",
         extraction_source="file_line_index_v1",
         required=True,  # Required for SCIP byte offset conversion
+        fallback_names=_fallback_names("file_line_index_v1"),
     ),
 )
 

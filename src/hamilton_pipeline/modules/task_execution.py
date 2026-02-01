@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -12,7 +12,13 @@ from hamilton.htypes import Collect, Parallelizable
 
 from core_types import JsonDict
 from datafusion_engine.arrow.build import empty_table
-from datafusion_engine.arrow.interop import TableLike as ArrowTableLike
+from datafusion_engine.arrow.interop import (
+    RecordBatchReaderLike,
+    coerce_table_like,
+)
+from datafusion_engine.arrow.interop import (
+    TableLike as ArrowTableLike,
+)
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.execution import (
@@ -23,16 +29,22 @@ from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
 from datafusion_engine.session.facade import ExecutionResult
-from datafusion_engine.views.registry import ensure_view_graph
+from datafusion_engine.views.registration import ensure_view_graph
 from hamilton_pipeline.modules.subdags import cpg_final_tables
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
 if TYPE_CHECKING:
+    from datafusion.dataframe import DataFrame
+
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from engine.session import EngineSession
+    from extract.extractors.scip.extract import ScipExtractOptions
+    from extract.session import ExtractSession
+    from hamilton_pipeline.types import RepoScanConfig
+    from semantics.incremental.config import IncrementalConfig
 
 
 @dataclass(frozen=True)
@@ -40,6 +52,7 @@ class TaskExecutionInputs:
     """Shared inputs for task execution."""
 
     runtime: RuntimeArtifacts
+    engine_session: EngineSession
     evidence: EvidenceCatalog
     plan_signature: str
     active_task_names: frozenset[str]
@@ -50,6 +63,30 @@ class TaskExecutionInputs:
     scan_task_name_by_key: Mapping[str, str]
     scan_unit_results_by_key: Mapping[str, TableLike]
     scan_units_hash: str | None
+    repo_scan_config: RepoScanConfig
+    incremental_config: IncrementalConfig | None
+    cache_salt: str
+    scip_index_path: str | None
+    scip_extract_options: ScipExtractOptions
+
+
+@dataclass(frozen=True)
+class TaskExecutionRuntimeConfig:
+    """Runtime configuration inputs for task execution."""
+
+    engine_session: EngineSession
+    repo_scan_config: RepoScanConfig
+    incremental_config: IncrementalConfig | None
+    cache_salt: str
+    scip_config: ScipExecutionConfig
+
+
+@dataclass(frozen=True)
+class ScipExecutionConfig:
+    """SCIP execution inputs for task execution."""
+
+    scip_index_path: str | None
+    scip_extract_options: ScipExtractOptions
 
 
 @dataclass(frozen=True)
@@ -81,7 +118,7 @@ class TaskExecutionSpec:
     task_output: str
     plan_fingerprint: str
     plan_task_signature: str
-    task_kind: Literal["view", "scan"]
+    task_kind: Literal["view", "scan", "extract"]
     scan_unit_key: str | None = None
 
 
@@ -100,7 +137,7 @@ def _record_output(
         return
     runtime.register_execution(
         spec.task_output,
-        ExecutionResult.from_table(cast("ArrowTableLike", table)),
+        ExecutionResult.from_table(table),
         spec=ExecutionArtifactSpec(
             source_task=spec.task_name,
             schema_identity_hash=schema_identity_hash(schema),
@@ -306,6 +343,7 @@ def task_execution_inputs(
     evidence_catalog: EvidenceCatalog,
     plan_context: PlanExecutionContext,
     scan_unit_results_by_key: Mapping[str, TableLike],
+    runtime_config: TaskExecutionRuntimeConfig,
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
 
@@ -319,6 +357,8 @@ def task_execution_inputs(
         Execution-plan context for signatures, tasks, and scan inputs.
     scan_unit_results_by_key
         Mapping of scan unit keys to their executed tables.
+    runtime_config
+        Runtime configuration inputs for task execution.
 
     Returns
     -------
@@ -327,6 +367,7 @@ def task_execution_inputs(
     """
     return TaskExecutionInputs(
         runtime=runtime_artifacts,
+        engine_session=runtime_config.engine_session,
         evidence=evidence_catalog,
         plan_signature=plan_context.plan_signature,
         active_task_names=plan_context.active_task_names,
@@ -337,6 +378,85 @@ def task_execution_inputs(
         scan_task_name_by_key=plan_context.plan_scan_inputs.scan_task_name_by_key,
         scan_unit_results_by_key=scan_unit_results_by_key,
         scan_units_hash=plan_context.plan_scan_inputs.scan_units_hash,
+        repo_scan_config=runtime_config.repo_scan_config,
+        incremental_config=runtime_config.incremental_config,
+        cache_salt=runtime_config.cache_salt,
+        scip_index_path=runtime_config.scip_config.scip_index_path,
+        scip_extract_options=runtime_config.scip_config.scip_extract_options,
+    )
+
+
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="context",
+        artifact="task_execution_runtime_config",
+    )
+)
+def task_execution_runtime_config(
+    engine_session: EngineSession,
+    repo_scan_config: RepoScanConfig,
+    incremental_config: IncrementalConfig | None,
+    cache_salt: str,
+    scip_config: ScipExecutionConfig,
+) -> TaskExecutionRuntimeConfig:
+    """Bundle runtime configuration inputs for task execution.
+
+    Parameters
+    ----------
+    engine_session
+        Engine session for execution surfaces.
+    repo_scan_config
+        Repository scan configuration.
+    incremental_config
+        Incremental configuration (when enabled).
+    cache_salt
+        Cache salt for deterministic repo identifiers.
+    scip_config
+        SCIP execution inputs (index path + extract options).
+
+    Returns
+    -------
+    TaskExecutionRuntimeConfig
+        Bundled runtime configuration inputs.
+    """
+    return TaskExecutionRuntimeConfig(
+        engine_session=engine_session,
+        repo_scan_config=repo_scan_config,
+        incremental_config=incremental_config,
+        cache_salt=cache_salt,
+        scip_config=scip_config,
+    )
+
+
+@apply_tag(
+    TagPolicy(
+        layer="execution",
+        kind="context",
+        artifact="scip_execution_config",
+    )
+)
+def scip_execution_config(
+    scip_index_path: str | None,
+    scip_extract_options: ScipExtractOptions,
+) -> ScipExecutionConfig:
+    """Bundle SCIP execution inputs.
+
+    Parameters
+    ----------
+    scip_index_path
+        Optional path to a SCIP index file.
+    scip_extract_options
+        Options for SCIP extraction.
+
+    Returns
+    -------
+    ScipExecutionConfig
+        Bundled SCIP execution inputs.
+    """
+    return ScipExecutionConfig(
+        scip_index_path=scip_index_path,
+        scip_extract_options=scip_extract_options,
     )
 
 
@@ -359,7 +479,6 @@ def _ensure_scan_overrides(
         ensure_view_graph(
             session,
             runtime_profile=profile,
-            include_registry_views=True,
             scan_units=scan_context.scan_units,
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
@@ -382,7 +501,6 @@ def _execute_view(
         ensure_view_graph(
             session,
             runtime_profile=profile,
-            include_registry_views=True,
             scan_units=scan_context.scan_units,
         )
         if not session.table_exist(view_name):
@@ -425,6 +543,343 @@ def _execute_scan_task(
     schema = pa.schema([], metadata=metadata)
     table = empty_table(schema)
     return ExecutionResult.from_table(table)
+
+
+def _resolve_extract_input_table(
+    inputs: TaskExecutionInputs,
+    name: str,
+) -> TableLike | None:
+    runtime = inputs.runtime
+    artifact = runtime.execution_artifacts.get(name)
+    table: TableLike | None = None
+    if artifact is not None and artifact.result.table is not None:
+        table = artifact.result.table
+    else:
+        table = runtime.materialized_tables.get(name)
+    if table is not None:
+        return table
+    session_runtime = runtime.execution
+    if session_runtime is None:
+        return None
+    df = _resolve_dataframe_from_session(session_runtime, name)
+    if df is None:
+        return None
+    try:
+        table = cast("TableLike", df.to_arrow_table())
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+    return table
+
+
+def _resolve_dataframe_from_session(
+    session_runtime: SessionRuntime,
+    name: str,
+) -> DataFrame | None:
+    ctx = session_runtime.ctx
+    try:
+        return ctx.table(name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        location = session_runtime.profile.dataset_location(name)
+        if location is None:
+            return None
+        from datafusion_engine.session.facade import DataFusionExecutionFacade
+
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=session_runtime.profile)
+        try:
+            facade.register_dataset(name=name, location=location)
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            return None
+        try:
+            return ctx.table(name)
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            return None
+
+
+def _require_extract_input_table(
+    inputs: TaskExecutionInputs,
+    name: str,
+) -> TableLike:
+    table = _resolve_extract_input_table(inputs, name)
+    if table is None:
+        msg = f"Missing extract input table {name!r}."
+        raise ValueError(msg)
+    return table
+
+
+def _coerce_extract_output(value: object) -> ArrowTableLike:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    if isinstance(value, ArrowTableLike):
+        return value
+    to_arrow = getattr(value, "to_arrow_table", None)
+    if callable(to_arrow):
+        return cast("ArrowTableLike", to_arrow())
+    coerced = coerce_table_like(value)
+    if isinstance(coerced, RecordBatchReaderLike):
+        return coerced.read_all()
+    return coerced
+
+
+def _resolve_extract_dataset_name(name: str) -> str | None:
+    from datafusion_engine.extract.bundles import dataset_name_for_output
+
+    try:
+        dataset = dataset_name_for_output(name)
+    except KeyError:
+        return name
+    return dataset
+
+
+def _normalize_extract_outputs(
+    outputs: Mapping[str, object],
+) -> dict[str, TableLike]:
+    normalized: dict[str, TableLike] = {}
+    for name, value in outputs.items():
+        dataset_name = _resolve_extract_dataset_name(name)
+        if dataset_name is None:
+            continue
+        normalized[dataset_name] = _coerce_extract_output(value)
+    return normalized
+
+
+def _resolve_repo_files_table(inputs: TaskExecutionInputs) -> TableLike:
+    repo_files_name = _resolve_extract_dataset_name("repo_files") or "repo_files"
+    return _require_extract_input_table(inputs, repo_files_name)
+
+
+def _extract_repo_scan(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.helpers import ExtractExecutionContext
+    from extract.scanning.repo_scan import scan_repo_tables
+    from hamilton_pipeline.io_contracts import _repo_scan_options
+
+    options = _repo_scan_options(
+        inputs.repo_scan_config,
+        incremental=inputs.incremental_config,
+        cache_salt=inputs.cache_salt,
+    )
+    exec_ctx = ExtractExecutionContext(session=extract_session, profile=profile_name)
+    return scan_repo_tables(
+        inputs.repo_scan_config.repo_root,
+        options=options,
+        context=exec_ctx,
+        prefer_reader=False,
+    )
+
+
+def _extract_scip(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.scip.extract import ScipExtractContext, extract_scip_tables
+
+    context = ScipExtractContext(
+        scip_index_path=inputs.scip_index_path,
+        repo_root=inputs.repo_scan_config.repo_root,
+        session=extract_session,
+        profile=profile_name,
+    )
+    return extract_scip_tables(
+        context=context,
+        options=inputs.scip_extract_options,
+        prefer_reader=False,
+    )
+
+
+def _extract_python_imports(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.imports_extract import extract_python_imports_tables
+
+    return extract_python_imports_tables(
+        ast_imports=_resolve_extract_input_table(inputs, "ast_imports"),
+        cst_imports=_resolve_extract_input_table(inputs, "cst_imports"),
+        ts_imports=_resolve_extract_input_table(inputs, "ts_imports"),
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+
+
+def _extract_python_external(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.external_scope import extract_python_external_tables
+
+    python_imports = _require_extract_input_table(inputs, "python_imports")
+    return extract_python_external_tables(
+        python_imports=python_imports,
+        repo_root=inputs.repo_scan_config.repo_root,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+
+
+def _extract_ast(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.ast_extract import extract_ast_tables
+
+    repo_files = _resolve_repo_files_table(inputs)
+    return extract_ast_tables(
+        repo_files=repo_files,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+
+
+def _extract_cst(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.cst_extract import extract_cst_tables
+
+    repo_files = _resolve_repo_files_table(inputs)
+    return extract_cst_tables(
+        repo_files=repo_files,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+
+
+def _extract_tree_sitter(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.tree_sitter.extract import extract_ts_tables
+
+    repo_files = _resolve_repo_files_table(inputs)
+    return extract_ts_tables(
+        repo_files=repo_files,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+
+
+def _extract_bytecode(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.bytecode_extract import extract_bytecode_table
+
+    repo_files = _resolve_repo_files_table(inputs)
+    table = extract_bytecode_table(
+        repo_files=repo_files,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+    return {"bytecode_files": table}
+
+
+def _extract_symtable(
+    inputs: TaskExecutionInputs,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    from extract.extractors.symtable_extract import extract_symtables_table
+
+    repo_files = _resolve_repo_files_table(inputs)
+    table = extract_symtables_table(
+        repo_files=repo_files,
+        session=extract_session,
+        profile=profile_name,
+        prefer_reader=False,
+    )
+    return {"symtable_files": table}
+
+
+def _extract_outputs_for_template(
+    inputs: TaskExecutionInputs,
+    *,
+    template: str,
+    extract_session: ExtractSession,
+    profile_name: str,
+) -> Mapping[str, object]:
+    handlers: dict[
+        str, Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]
+    ] = {
+        "repo_scan": _extract_repo_scan,
+        "scip": _extract_scip,
+        "python_imports": _extract_python_imports,
+        "python_external": _extract_python_external,
+        "ast": _extract_ast,
+        "cst": _extract_cst,
+        "tree_sitter": _extract_tree_sitter,
+        "bytecode": _extract_bytecode,
+        "symtable": _extract_symtable,
+    }
+    handler = handlers.get(template)
+    if handler is None:
+        msg = f"Unsupported extract template {template!r}."
+        raise ValueError(msg)
+    return handler(inputs, extract_session, profile_name)
+
+
+def _ensure_extract_output(
+    *,
+    inputs: TaskExecutionInputs,
+    spec: TaskExecutionSpec,
+    normalized: dict[str, TableLike],
+) -> None:
+    fallback = normalized.get(spec.task_output)
+    if fallback is None:
+        table = _resolve_extract_input_table(inputs, spec.task_output)
+        if table is not None:
+            normalized[spec.task_output] = table
+    if spec.task_output not in normalized:
+        msg = f"Extract task {spec.task_name!r} produced no output for {spec.task_output!r}."
+        raise ValueError(msg)
+
+
+def _execute_extract_task(
+    inputs: TaskExecutionInputs,
+    *,
+    spec: TaskExecutionSpec,
+    scan_context: PlanScanInputs,
+) -> dict[str, TableLike]:
+    runtime = inputs.runtime
+    session_runtime = runtime.execution
+    if session_runtime is None:
+        msg = "RuntimeArtifacts.execution must be configured for extract execution."
+        raise ValueError(msg)
+    _ensure_scan_overrides(runtime, scan_context=scan_context)
+    from extract.session import ExtractSession
+    from relspec.extract_plan import extract_output_task_map
+
+    task_map = extract_output_task_map()
+    task_spec = task_map.get(spec.task_output)
+    if task_spec is None:
+        msg = f"Unknown extract task output {spec.task_output!r}."
+        raise ValueError(msg)
+    extract_session = ExtractSession(engine_session=inputs.engine_session)
+    profile_name = inputs.engine_session.datafusion_profile.config_policy_name or "default"
+    outputs = _extract_outputs_for_template(
+        inputs,
+        template=task_spec.extractor,
+        extract_session=extract_session,
+        profile_name=profile_name,
+    )
+    normalized = _normalize_extract_outputs(outputs)
+    _ensure_extract_output(inputs=inputs, spec=spec, normalized=normalized)
+    return normalized
 
 
 def execute_task_from_catalog(
@@ -520,6 +975,15 @@ def _execute_and_record(
             scan_unit=scan_unit,
             scan_context=scan_context,
         )
+    elif spec.task_kind == "extract":
+        outputs = _execute_extract_task(inputs, spec=spec, scan_context=scan_context)
+        _record_extract_outputs(
+            inputs=inputs,
+            outputs=outputs,
+            plan_signature=plan_signature,
+            default_spec=spec,
+        )
+        return outputs[spec.task_output]
     else:
         plan_bundle = inputs.plan_bundles_by_task.get(spec.task_output)
         result = _execute_view(
@@ -538,14 +1002,51 @@ def _execute_and_record(
     return table
 
 
+def _record_extract_outputs(
+    *,
+    inputs: TaskExecutionInputs,
+    outputs: Mapping[str, TableLike],
+    plan_signature: str,
+    default_spec: TaskExecutionSpec,
+) -> None:
+    from relspec.extract_plan import extract_output_task_map
+
+    task_map = extract_output_task_map()
+    for name, table in outputs.items():
+        if name not in inputs.active_task_names:
+            continue
+        mapped = task_map.get(name)
+        plan_fingerprint = (
+            mapped.plan_fingerprint if mapped is not None else default_spec.plan_fingerprint
+        )
+        plan_task_signature = plan_fingerprint
+        output_spec = TaskExecutionSpec(
+            task_name=name,
+            task_output=name,
+            plan_fingerprint=plan_fingerprint,
+            plan_task_signature=plan_task_signature,
+            task_kind="extract",
+        )
+        _record_output(
+            inputs=inputs,
+            spec=output_spec,
+            plan_signature=plan_signature,
+            table=table,
+        )
+
+
 __all__ = [
     "PlanExecutionContext",
     "PlanScanInputs",
+    "ScipExecutionConfig",
     "TaskExecutionInputs",
+    "TaskExecutionRuntimeConfig",
     "TaskExecutionSpec",
     "cpg_final_tables",
     "execute_task_from_catalog",
     "plan_scan_inputs",
     "runtime_artifacts",
+    "scip_execution_config",
     "task_execution_inputs",
+    "task_execution_runtime_config",
 ]

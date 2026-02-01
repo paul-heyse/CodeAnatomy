@@ -24,10 +24,10 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from incremental.types import IncrementalConfig
 from obs.otel import OtelBootstrapOptions, configure_otel
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
+from semantics.incremental import IncrementalConfig
 from utils.uuid_factory import uuid7_str
 
 GraphProduct = Literal["cpg"]

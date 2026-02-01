@@ -198,7 +198,6 @@ class RelationshipOutputTables:
     rel_name_symbol: TableLike
     rel_import_symbol: TableLike
     rel_callsite_symbol: TableLike
-    rel_callsite_qname: TableLike
     rel_def_symbol: TableLike
 
     def as_dict(self) -> dict[str, TableLike]:
@@ -213,7 +212,6 @@ class RelationshipOutputTables:
             "rel_name_symbol": self.rel_name_symbol,
             "rel_import_symbol": self.rel_import_symbol,
             "rel_callsite_symbol": self.rel_callsite_symbol,
-            "rel_callsite_qname": self.rel_callsite_qname,
             "rel_def_symbol": self.rel_def_symbol,
         }
 

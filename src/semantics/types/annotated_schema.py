@@ -343,6 +343,27 @@ class AnnotatedSchema:
         """
         return cls.from_arrow_schema(df.schema())
 
+    def to_arrow(self) -> pa.Schema:
+        """Return the PyArrow schema representation.
+
+        Returns
+        -------
+        pa.Schema
+            Arrow schema derived from annotated columns.
+        """
+        import pyarrow as pa
+
+        return pa.schema(
+            [
+                pa.field(
+                    column.name,
+                    column.arrow_type,
+                    nullable=column.is_nullable,
+                )
+                for column in self.columns
+            ]
+        )
+
 
 __all__ = [
     "AnnotatedColumn",

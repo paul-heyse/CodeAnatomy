@@ -7,13 +7,13 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from incremental.cdf_cursors import CdfCursor, CdfCursorStore
-from incremental.cdf_runtime import read_cdf_changes
-from incremental.changes import file_changes_from_cdf
-from incremental.delta_context import DeltaAccessContext
-from incremental.runtime import IncrementalRuntime
-from incremental.snapshot import write_repo_snapshot
-from incremental.state_store import StateStore
+from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from semantics.incremental.cdf_runtime import read_cdf_changes
+from semantics.incremental.changes import file_changes_from_cdf
+from semantics.incremental.delta_context import DeltaAccessContext
+from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.snapshot import write_repo_snapshot
+from semantics.incremental.state_store import StateStore
 
 
 def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:

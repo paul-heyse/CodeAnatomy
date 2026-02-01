@@ -253,7 +253,7 @@ def _extract_dataset_spec(name: str) -> DatasetSpec | None:
 
 def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
     normalize_dataset_spec = _optional_module_attr(
-        "normalize.registry_runtime",
+        "semantics.catalog.dataset_specs",
         "dataset_spec",
     )
     if not callable(normalize_dataset_spec):
@@ -267,7 +267,7 @@ def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
 
 def _incremental_dataset_spec(name: str) -> DatasetSpec | None:
     incremental_dataset_spec = _optional_module_attr(
-        "incremental.registry_specs",
+        "semantics.incremental.registry_specs",
         "dataset_spec",
     )
     if not callable(incremental_dataset_spec):

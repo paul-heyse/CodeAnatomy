@@ -8,10 +8,10 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.session.runtime import read_delta_as_reader
-from incremental.delta_context import DeltaAccessContext
-from incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
-from incremental.runtime import IncrementalRuntime
-from incremental.types import IncrementalFileChanges
+from semantics.incremental.delta_context import DeltaAccessContext
+from semantics.incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
+from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.types import IncrementalFileChanges
 
 
 def _read_delta(path: Path) -> pa.Table:

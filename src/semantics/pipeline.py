@@ -12,11 +12,13 @@ The entire pipeline in ~50 lines:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
+from semantics.runtime import CachePolicy, SemanticRuntimeConfig
 from semantics.specs import RelationshipSpec
 
 if TYPE_CHECKING:
@@ -29,7 +31,6 @@ if TYPE_CHECKING:
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
-CachePolicy = Literal["none", "delta_staging", "delta_output"]
 CPG_INPUT_TABLES: tuple[str, ...] = (
     "cst_refs",
     "cst_defs",
@@ -52,6 +53,8 @@ class CpgBuildOptions:
     config: SemanticConfig | None = None
     use_cdf: bool | None = None
     cdf_inputs: Mapping[str, str] | None = None
+    materialize_outputs: bool = True
+    schema_policy: SchemaEvolutionPolicy = field(default_factory=SchemaEvolutionPolicy)
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class CpgViewNodesRequest:
 
     ctx: SessionContext
     runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
     cache_policy: Mapping[str, CachePolicy] | None
     config: SemanticConfig | None
     input_mapping: Mapping[str, str]
@@ -120,12 +124,12 @@ def _cache_policy_for(
 def _default_semantic_cache_policy(
     *,
     view_names: Sequence[str],
-    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
 ) -> dict[str, CachePolicy]:
     resolved: dict[str, CachePolicy] = {}
     for name in view_names:
         if name in {"cpg_nodes_v1", "cpg_edges_v1"}:
-            if runtime_profile.dataset_location(name) is not None:
+            if runtime_config.output_path(name) is not None:
                 resolved[name] = "delta_output"
             else:
                 resolved[name] = "delta_staging"
@@ -252,6 +256,7 @@ def _relationship_builder(
                 filter_sql=spec.filter_sql,
                 origin=spec.origin,
                 use_cdf=use_cdf,
+                output_name=spec.name,
             ),
         )
 
@@ -389,9 +394,7 @@ def _cpg_view_specs(
     def _input(name: str) -> str:
         return input_mapping.get(name, name)
 
-    normalization_by_output = {
-        spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS
-    }
+    normalization_by_output = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
     relationship_by_name = {spec.name: spec for spec in RELATIONSHIP_SPECS}
 
     ordered_specs = _ordered_semantic_specs(semantic_spec_index())
@@ -472,8 +475,10 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     if resolved_cache is None:
         resolved_cache = _default_semantic_cache_policy(
             view_names=[name for name, _builder in view_specs],
-            runtime_profile=request.runtime_profile,
+            runtime_config=request.runtime_config,
         )
+        if request.runtime_config.cache_policy_overrides:
+            resolved_cache.update(request.runtime_config.cache_policy_overrides)
     nodes: list[ViewNode] = []
 
     for name, builder in view_specs:
@@ -497,6 +502,7 @@ def build_cpg(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    runtime_config: SemanticRuntimeConfig,
     options: CpgBuildOptions | None = None,
 ) -> None:
     """Build the complete CPG from extraction tables.
@@ -518,6 +524,8 @@ def build_cpg(
         DataFusion session context with extraction tables registered.
     runtime_profile
         Runtime configuration for building cached view graphs (required).
+    runtime_config
+        Semantic runtime configuration for cache policy and output locations.
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
 
@@ -530,6 +538,9 @@ def build_cpg(
     if runtime_profile is None:
         msg = "build_cpg requires a runtime_profile for view-graph execution."
         raise ValueError(msg)
+    effective_use_cdf = (
+        resolved.use_cdf if resolved.use_cdf is not None else runtime_config.cdf_enabled
+    )
 
     with stage_span(
         "semantics.build_cpg",
@@ -545,7 +556,7 @@ def build_cpg(
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
-            use_cdf=resolved.use_cdf,
+            use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
         )
 
@@ -561,6 +572,7 @@ def build_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
                 runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
                 cache_policy=resolved.cache_policy,
                 config=resolved.config,
                 input_mapping=input_mapping,
@@ -578,12 +590,88 @@ def build_cpg(
                 validate_schema=resolved.validate_schema,
             ),
         )
+        if resolved.materialize_outputs:
+            _materialize_semantic_outputs(
+                ctx,
+                runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
+                schema_policy=resolved.schema_policy,
+            )
+
+
+def _materialize_semantic_outputs(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
+    schema_policy: SchemaEvolutionPolicy,
+) -> None:
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.delta.schema_guard import enforce_schema_policy
+    from datafusion_engine.delta.store_policy import apply_delta_store_policy
+    from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteViewRequest
+    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+    from relspec.view_defs import RELATION_OUTPUT_NAME
+    from semantics.naming import SEMANTIC_VIEW_NAMES
+
+    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
+    view_names = list(SEMANTIC_VIEW_NAMES)
+    if RELATION_OUTPUT_NAME not in view_names:
+        view_names.append(RELATION_OUTPUT_NAME)
+    output_locations: dict[str, DatasetLocation] = {}
+    storage_options = (
+        dict(runtime_config.storage_options) if runtime_config.storage_options is not None else {}
+    )
+    for name in view_names:
+        output_path = runtime_config.output_path(name)
+        if output_path is None:
+            continue
+        output_locations[name] = DatasetLocation(
+            path=output_path,
+            format="delta",
+            storage_options=storage_options,
+        )
+    missing_outputs = [name for name in view_names if name not in output_locations]
+    if missing_outputs:
+        missing = ", ".join(sorted(missing_outputs))
+        msg = (
+            "Semantic outputs require explicit dataset locations. "
+            f"Missing locations for: {missing}."
+        )
+        raise ValueError(msg)
+
+    for view_name in view_names:
+        location = apply_delta_store_policy(
+            output_locations[view_name],
+            policy=runtime_profile.delta_store_policy,
+        )
+        if location.format != "delta":
+            msg = f"Semantic output {view_name!r} must be stored as Delta."
+            raise ValueError(msg)
+        df = ctx.table(view_name)
+        schema = arrow_schema_from_df(df)
+        schema_hash = enforce_schema_policy(
+            expected_schema=schema,
+            dataset_location=location,
+            policy=schema_policy,
+        )
+        commit_metadata = {"semantic_schema_hash": schema_hash, "semantic_view": view_name}
+        pipeline.write_view(
+            WriteViewRequest(
+                view_name=view_name,
+                destination=str(location.path),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                format_options={"delta_commit_metadata": commit_metadata},
+            )
+        )
 
 
 def build_cpg_from_inferred_deps(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
     options: CpgBuildOptions | None = None,
 ) -> dict[str, object]:
     """Build CPG and extract dependency information for rustworkx.
@@ -596,6 +684,8 @@ def build_cpg_from_inferred_deps(
         DataFusion session context.
     runtime_profile
         Runtime configuration for building cached view graphs.
+    runtime_config
+        Semantic runtime configuration for cache policy and output locations.
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
 
@@ -607,6 +697,9 @@ def build_cpg_from_inferred_deps(
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
 
     resolved = options or CpgBuildOptions()
+    effective_use_cdf = (
+        resolved.use_cdf if resolved.use_cdf is not None else runtime_config.cdf_enabled
+    )
 
     with stage_span(
         "semantics.build_cpg_from_inferred_deps",
@@ -614,23 +707,29 @@ def build_cpg_from_inferred_deps(
         scope_name=SCOPE_SEMANTICS,
         attributes={
             "codeanatomy.validate_schema": resolved.validate_schema,
-            "codeanatomy.use_cdf": resolved.use_cdf,
+            "codeanatomy.use_cdf": effective_use_cdf,
             "codeanatomy.has_cache_policy": resolved.cache_policy is not None,
         },
     ):
-        build_cpg(ctx, runtime_profile=runtime_profile, options=resolved)
+        build_cpg(
+            ctx,
+            runtime_profile=runtime_profile,
+            runtime_config=runtime_config,
+            options=resolved,
+        )
 
         deps: dict[str, object] = {}
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
-            use_cdf=resolved.use_cdf,
+            use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
         )
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
                 runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
                 cache_policy=resolved.cache_policy,
                 config=resolved.config,
                 input_mapping=input_mapping,
@@ -668,9 +767,7 @@ def _resolve_semantic_input_mapping(
         return dict(resolved_inputs), False
 
     cdf_candidates = tuple(
-        source
-        for canonical, source in resolved_inputs.items()
-        if canonical != "file_line_index_v1"
+        source for canonical, source in resolved_inputs.items() if canonical != "file_line_index_v1"
     )
     resolved_cdf = _resolve_cdf_inputs(
         ctx,

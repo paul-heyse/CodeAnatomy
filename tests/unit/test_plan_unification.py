@@ -101,11 +101,11 @@ def _plan_for_tests(
     bottom_level_costs: dict[str, float] | None = None,
     plan_signature: str = "plan:test",
 ) -> ExecutionPlan:
-    from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from relspec.evidence import EvidenceCatalog
     from relspec.execution_plan import ExecutionPlan
     from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
     from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
+    from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 
     @dataclass(frozen=True)
     class _PlanSnapshotBundle:
@@ -395,16 +395,32 @@ def test_plan_grouping_strategy_orders_by_generation_and_cost() -> None:
 
 def test_task_execution_rejects_plan_signature_mismatch() -> None:
     """Ensure plan signature mismatches fail fast before execution."""
+    from datafusion_engine.dataset.registry import DatasetCatalog
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from engine.runtime import build_engine_runtime
+    from engine.session import EngineSession
+    from extract.extractors.scip.extract import ScipExtractOptions
     from hamilton_pipeline.modules.task_execution import (
         TaskExecutionInputs,
         TaskExecutionSpec,
         execute_task_from_catalog,
     )
+    from hamilton_pipeline.types import RepoScanConfig, RepoScopeConfig
     from relspec.evidence import EvidenceCatalog
     from relspec.runtime_artifacts import RuntimeArtifacts
 
+    engine_session = EngineSession(
+        engine_runtime=build_engine_runtime(runtime_profile=DataFusionRuntimeProfile()),
+        datasets=DatasetCatalog(),
+    )
+    repo_scan_config = RepoScanConfig(
+        repo_root=".",
+        scope_config=RepoScopeConfig(),
+        max_files=0,
+    )
     inputs = TaskExecutionInputs(
         runtime=RuntimeArtifacts(),
+        engine_session=engine_session,
         evidence=EvidenceCatalog(),
         plan_signature="plan:a",
         active_task_names=frozenset({"out_alpha"}),
@@ -415,6 +431,11 @@ def test_task_execution_rejects_plan_signature_mismatch() -> None:
         scan_task_name_by_key={},
         scan_unit_results_by_key={},
         scan_units_hash=None,
+        repo_scan_config=repo_scan_config,
+        incremental_config=None,
+        cache_salt="",
+        scip_index_path=None,
+        scip_extract_options=ScipExtractOptions(),
     )
     spec = TaskExecutionSpec(
         task_name="out_alpha",

@@ -327,6 +327,7 @@ class DataFusionCachePolicy(FingerprintableConfig):
 
     enabled: bool | None = None
     max_columns: int | None = None
+    storage: Literal["memory", "delta_staging"] = "memory"
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for cache policy overrides.
@@ -339,6 +340,7 @@ class DataFusionCachePolicy(FingerprintableConfig):
         return {
             "enabled": self.enabled,
             "max_columns": self.max_columns,
+            "storage": self.storage,
         }
 
     def fingerprint(self) -> str:
@@ -358,6 +360,7 @@ class DataFusionCacheSettings:
 
     enabled: bool
     max_columns: int | None
+    storage: Literal["memory", "delta_staging"]
 
 
 @dataclass(frozen=True)
@@ -2669,6 +2672,15 @@ def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataF
         cache_max_columns=context.cache.max_columns,
     ):
         return df
+    if context.cache.storage == "delta_staging":
+        return _register_delta_cache_for_dataset(context, df)
+    return _register_memory_cache(context, df)
+
+
+def _register_memory_cache(
+    context: DataFusionRegistrationContext,
+    df: DataFrame,
+) -> DataFrame:
     cached = df.cache()
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
     adapter.register_view(
@@ -2680,6 +2692,96 @@ def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataF
     cached_set = _CACHED_DATASETS.setdefault(id(context.ctx), set())
     cached_set.add(context.name)
     return cached
+
+
+def _register_delta_cache_for_dataset(
+    context: DataFusionRegistrationContext,
+    df: DataFrame,
+) -> DataFrame:
+    runtime_profile = context.runtime_profile
+    if runtime_profile is None:
+        return _register_memory_cache(context, df)
+    cache_root = Path(runtime_profile.cache_root()) / "dataset_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    from datafusion_engine.tables.spec import table_spec_from_location
+
+    cache_key = table_spec_from_location(
+        context.name,
+        context.location,
+    ).cache_key()
+    safe_name = context.name.replace("/", "_").replace(":", "_")
+    cache_path = str(cache_root / f"{safe_name}__{cache_key}")
+    schema = arrow_schema_from_df(df)
+    schema_hash = schema_identity_hash(schema)
+    partition_by = _dataset_cache_partition_by(schema, location=context.location)
+    from datafusion_engine.io.write import (
+        WriteFormat,
+        WriteMode,
+        WritePipeline,
+        WriteRequest,
+    )
+
+    pipeline = WritePipeline(context.ctx, runtime_profile=runtime_profile)
+    result = pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=cache_path,
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            partition_by=partition_by,
+        )
+    )
+    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.registry import (
+        record_cache_inventory,
+        register_cached_delta_table,
+    )
+    from datafusion_engine.dataset.registry import DatasetLocation
+
+    location = DatasetLocation(path=cache_path, format="delta")
+    register_cached_delta_table(
+        context.ctx,
+        runtime_profile,
+        name=context.name,
+        location=location,
+        snapshot_version=result.delta_result.version if result.delta_result else None,
+    )
+    record_cache_inventory(
+        runtime_profile,
+        entry=CacheInventoryEntry(
+            view_name=context.name,
+            cache_policy="dataset_delta_staging",
+            cache_path=cache_path,
+            plan_fingerprint=None,
+            plan_identity_hash=cache_key,
+            schema_identity_hash=schema_hash,
+            snapshot_version=result.delta_result.version if result.delta_result else None,
+            snapshot_timestamp=None,
+            partition_by=partition_by,
+        ),
+        ctx=context.ctx,
+    )
+    return context.ctx.table(context.name)
+
+
+def _dataset_cache_partition_by(
+    schema: pa.Schema,
+    *,
+    location: DatasetLocation,
+) -> tuple[str, ...]:
+    from datafusion_engine.dataset.registry import resolve_delta_write_policy
+
+    policy_partition_by: tuple[str, ...] = ()
+    policy = resolve_delta_write_policy(location)
+    if policy is not None:
+        policy_partition_by = tuple(str(name) for name in policy.partition_by)
+    available = set(schema.names)
+    if policy_partition_by:
+        missing = [name for name in policy_partition_by if name not in available]
+        if missing:
+            msg = f"Delta partition_by columns missing from schema: {sorted(missing)}."
+            raise ValueError(msg)
+    return tuple(name for name in policy_partition_by if name in available)
 
 
 def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
@@ -2733,6 +2835,7 @@ def _resolve_cache_policy(
 ) -> DataFusionCacheSettings:
     enabled = cache_policy.enabled if cache_policy is not None else None
     max_columns = cache_policy.max_columns if cache_policy is not None else None
+    storage = cache_policy.storage if cache_policy is not None else "memory"
     if runtime_profile is not None:
         if enabled is None:
             enabled = runtime_profile.cache_enabled
@@ -2742,7 +2845,11 @@ def _resolve_cache_policy(
         enabled = True
     if max_columns is None:
         max_columns = DEFAULT_CACHE_MAX_COLUMNS
-    return DataFusionCacheSettings(enabled=options.cache and enabled, max_columns=max_columns)
+    return DataFusionCacheSettings(
+        enabled=options.cache and enabled,
+        max_columns=max_columns,
+        storage=storage,
+    )
 
 
 def _call_register(

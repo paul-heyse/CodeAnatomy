@@ -154,6 +154,7 @@ class RelationOptions:
     filter_sql: str | None = None
     origin: str = "cst"
     use_cdf: bool = False
+    output_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -738,6 +739,7 @@ class SemanticCompiler:
                     CDFJoinSpec,
                     build_incremental_join,
                     incremental_join_enabled,
+                    merge_incremental_results,
                 )
 
                 if incremental_join_enabled(left_info.df, right_info.df):
@@ -771,6 +773,13 @@ class SemanticCompiler:
                         right_df=right_info.df,
                         join_builder=_join_builder,
                     )
+                    if options.output_name is not None:
+                        joined = merge_incremental_results(
+                            self.ctx,
+                            incremental_df=joined,
+                            base_table=options.output_name,
+                            key_columns=key_columns,
+                        )
                     left_sem = left_info.sem.prefixed("left__")
                     right_sem = right_info.sem.prefixed("right__")
                 else:

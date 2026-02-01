@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import ModuleType
 
-    from datafusion.common import (  # type: ignore[import]
+    from datafusion.common import (
         NullTreatment,
     )
     from datafusion.plan import LogicalPlan

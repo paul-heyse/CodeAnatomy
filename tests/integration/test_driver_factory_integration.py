@@ -25,11 +25,11 @@ from hamilton_pipeline.driver_factory import (
     ViewGraphContext,
     build_driver,
 )
-from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import ExecutionPlan
 from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
 from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
+from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import SessionRuntime

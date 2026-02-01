@@ -31,6 +31,7 @@ SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionSnapshot
     from datafusion_engine.dataset.registry import DatasetLocation
+    from semantics.types import AnnotatedSchema
 
 
 ConstraintType = Literal["pk", "not_null", "check", "unique"]
@@ -408,6 +409,8 @@ class SchemaContract:
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT
     schema_metadata: dict[bytes, bytes] = field(default_factory=dict)
     enforce_columns: bool = True
+    annotated_schema: AnnotatedSchema | None = None
+    enforce_semantic_types: bool = False
 
     @classmethod
     def from_arrow_schema(
@@ -447,6 +450,56 @@ class SchemaContract:
             columns=columns,
             schema_metadata=metadata,
             **kwargs,
+        )
+
+    @classmethod
+    def from_annotated_schema(
+        cls,
+        table_name: str,
+        annotated: AnnotatedSchema,
+        *,
+        enforce_columns: bool = False,
+        enforce_semantic_types: bool = True,
+    ) -> SchemaContract:
+        """Create from AnnotatedSchema with semantic type enforcement.
+
+        Parameters
+        ----------
+        table_name
+            Name for table.
+        annotated
+            AnnotatedSchema providing columns with semantic types.
+        enforce_columns
+            Whether to enforce column presence and types.
+        enforce_semantic_types
+            Whether to enforce semantic type matching.
+
+        Returns
+        -------
+        SchemaContract
+            Contract with annotated schema for semantic validation.
+        """
+        columns = tuple(
+            FieldSpec(
+                name=col.name,
+                dtype=col.arrow_type,
+                nullable=col.is_nullable,
+            )
+            for col in annotated
+        )
+        schema = annotated.to_arrow()
+        metadata = dict(schema.metadata or {})
+        metadata.setdefault(
+            SCHEMA_ABI_FINGERPRINT_META,
+            schema_identity_hash(schema).encode("utf-8"),
+        )
+        return cls(
+            table_name=table_name,
+            columns=columns,
+            schema_metadata=metadata,
+            enforce_columns=enforce_columns,
+            annotated_schema=annotated,
+            enforce_semantic_types=enforce_semantic_types,
         )
 
     def to_arrow_schema(self) -> pa.Schema:
@@ -567,6 +620,7 @@ class SchemaContract:
         if self.evolution_policy == EvolutionPolicy.STRICT:
             violations.extend(self._extra_column_violations(actual_cols, expected_cols))
         violations.extend(self._metadata_violations(schema))
+        violations.extend(self._semantic_type_violations(schema))
         return violations
 
     def _column_maps(self, schema: pa.Schema) -> tuple[dict[str, pa.Field], dict[str, FieldSpec]]:
@@ -672,6 +726,32 @@ class SchemaContract:
                     actual=actual_text,
                 )
             )
+        return violations
+
+    def _semantic_type_violations(self, schema: pa.Schema) -> list[ValidationViolation]:
+        if not self.enforce_semantic_types or self.annotated_schema is None:
+            return []
+        from semantics.types import AnnotatedSchema, SemanticType
+
+        expected = self.annotated_schema
+        actual = AnnotatedSchema.from_arrow_schema(schema)
+        violations: list[ValidationViolation] = []
+        for column in expected:
+            actual_col = actual.get(column.name)
+            if actual_col is None:
+                continue
+            if column.semantic_type == SemanticType.UNKNOWN:
+                continue
+            if actual_col.semantic_type != column.semantic_type:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.SEMANTIC_TYPE_MISMATCH,
+                        table_name=self.table_name,
+                        column_name=column.name,
+                        expected=column.semantic_type.value,
+                        actual=actual_col.semantic_type.value,
+                    )
+                )
         return violations
 
     def schema_from_catalog(self, ctx: SessionContext) -> pa.Schema:

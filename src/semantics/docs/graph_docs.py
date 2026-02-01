@@ -48,7 +48,10 @@ def _build_normalization_subgraph() -> list[str]:
 
     lines = ["    subgraph Normalization"]
     lines.extend(
-        [f"        {spec.normalized_name}[{spec.output_name}]" for spec in SEMANTIC_NORMALIZATION_SPECS]
+        [
+            f"        {spec.normalized_name}[{spec.output_name}]"
+            for spec in SEMANTIC_NORMALIZATION_SPECS
+        ]
     )
     scip_output = canonical_output_name("scip_occurrences_norm")
     lines.append(f"        scip_occurrences_norm[{scip_output}]")

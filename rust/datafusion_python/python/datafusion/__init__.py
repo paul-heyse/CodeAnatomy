@@ -23,12 +23,8 @@ See https://datafusion.apache.org/python for more information.
 
 from __future__ import annotations
 
+import importlib.metadata as importlib_metadata
 from typing import Any
-
-try:
-    import importlib.metadata as importlib_metadata
-except ImportError:
-    import importlib_metadata  # type: ignore[import]
 
 # Public submodules
 from . import functions, object_store, substrait, unparser

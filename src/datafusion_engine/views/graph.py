@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -568,7 +567,7 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
         registration.cache,
         policy_label="Delta staging cache",
     )
-    staging_path = _delta_staging_path(registration.node)
+    staging_path = _delta_staging_path(runtime_profile, registration.node)
     plan_fingerprint, plan_identity_hash = _plan_identifiers(registration.node)
     from datafusion_engine.cache.inventory import CacheInventoryEntry
     from datafusion_engine.cache.registry import (
@@ -853,9 +852,10 @@ def _plan_identifiers(node: ViewNode) -> tuple[str | None, str | None]:
 
 
 def _delta_staging_path(
+    runtime_profile: DataFusionRuntimeProfile,
     node: ViewNode,
 ) -> str:
-    cache_root = Path(tempfile.gettempdir()) / "datafusion_view_cache"
+    cache_root = Path(runtime_profile.cache_root()) / "view_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     if node.plan_bundle is not None and node.plan_bundle.plan_identity_hash is not None:
         fingerprint = node.plan_bundle.plan_identity_hash

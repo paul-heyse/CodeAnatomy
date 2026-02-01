@@ -17,7 +17,7 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
-from incremental.registry_specs import dataset_schema as incremental_dataset_schema
+from semantics.incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 

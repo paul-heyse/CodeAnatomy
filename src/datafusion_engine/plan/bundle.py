@@ -26,7 +26,11 @@ from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan.cache import PlanCacheEntry
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.session.runtime import normalize_dataset_locations_for_profile
+from datafusion_engine.session.runtime import (
+    extract_output_locations_for_profile,
+    normalize_dataset_locations_for_profile,
+    semantic_output_locations_for_profile,
+)
 from obs.otel.scopes import SCOPE_PLANNING
 from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaInputPin, PlanArtifacts, PlanProtoStatus
@@ -1591,7 +1595,7 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
     runtime_profile = getattr(session_runtime, "profile", None)
     if runtime_profile is None:
         return locations
-    for name, location in runtime_profile.extract_dataset_locations.items():
+    for name, location in extract_output_locations_for_profile(runtime_profile).items():
         locations.setdefault(
             name,
             apply_delta_store_policy(
@@ -1608,6 +1612,14 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
             ),
         )
     for name, location in normalize_dataset_locations_for_profile(runtime_profile).items():
+        locations.setdefault(
+            name,
+            apply_delta_store_policy(
+                location,
+                policy=runtime_profile.delta_store_policy,
+            ),
+        )
+    for name, location in semantic_output_locations_for_profile(runtime_profile).items():
         locations.setdefault(
             name,
             apply_delta_store_policy(

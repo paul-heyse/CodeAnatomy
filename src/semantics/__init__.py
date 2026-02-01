@@ -7,12 +7,14 @@ determines available operations.
 Usage
 -----
 >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+>>> from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 >>> from semantics.pipeline import build_cpg
 >>>
 >>> profile = DataFusionRuntimeProfile()
 >>> ctx = profile.session_context()
+>>> runtime_config = semantic_runtime_from_profile(profile)
 >>> # ... register extraction tables ...
->>> build_cpg(ctx, runtime_profile=profile)
+>>> build_cpg(ctx, runtime_profile=profile, runtime_config=runtime_config)
 >>> # Outputs are registered with canonical names (e.g., cpg_nodes_v1, cpg_edges_v1).
 """
 

@@ -4,6 +4,8 @@
 
 CodeAnatomy employs Delta Lake as its primary persistent storage layer, combined with a sophisticated incremental processing architecture to minimize recomputation. This system provides ACID-guaranteed versioned storage, efficient Change Data Feed (CDF) tracking for detecting modifications, and intelligent invalidation mechanisms that determine when cached artifacts must be rebuilt.
 
+**Semantic incremental protocol:** The canonical CDF join/merge configuration now lives in `src/semantics/incremental/` (cursor store, CDF reader, merge strategies, config). The legacy `src/incremental/` package remains as a facade and for broader invalidation/runtime tooling, but pipeline-facing configuration should use `semantics.incremental`.
+
 The architecture separates storage concerns (Delta protocol compliance, file pruning, scan optimization) from computation concerns (invalidation detection, state management, incremental updates), creating a layered approach where storage optimizations feed into scheduling decisions while invalidation signals drive selective recomputation.
 
 At its core, Delta Lake provides time-travel capabilities through versioned snapshots and transaction logs, enabling incremental pipelines to track "what changed since last run" with precision. The CDF subsystem transforms Delta's transaction log into queryable change streams, while cursor-based tracking ensures each incremental run processes exactly the delta between the previous state and current state.

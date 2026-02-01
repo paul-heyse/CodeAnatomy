@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from typing import cast
 
 import pytest
@@ -50,8 +51,9 @@ class TestColumnStats:
     def test_frozen(self) -> None:
         """ColumnStats is immutable."""
         stats = ColumnStats(name="test")
-        with pytest.raises(AttributeError):
-            stats.name = "changed"  # type: ignore[misc]
+        attr_name = "name"
+        with pytest.raises(FrozenInstanceError):
+            setattr(stats, attr_name, "changed")
 
 
 class TestViewStats:

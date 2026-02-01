@@ -42,7 +42,7 @@ class LocationInputPlugin(BaseInputSource):
         input_item: str,
         table_name: str,
         **kwargs: Any,  # noqa: ARG002
-    ) -> SqlTable:  # type: ignore[invalid-type-form]
+    ) -> SqlTable:
         """Create a table from the input source."""
         extension = Path(input_item).suffix
         file_format = extension.lstrip(".").lower()

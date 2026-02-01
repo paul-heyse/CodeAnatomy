@@ -7,9 +7,11 @@ view references, and schema caches.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, cast
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from cache.diskcache_factory import (
     DiskCacheProfile,
@@ -18,21 +20,21 @@ from cache.diskcache_factory import (
     evict_cache_tag,
 )
 from core_types import DeterminismTier
-from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.interop import SchemaLike, TableLike
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.session.facade import ExecutionResult, ExecutionResultKind
+from datafusion_engine.session.helpers import deregister_table
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from datafusion import DataFrame, SessionContext
     from diskcache import Cache, FanoutCache
 
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 
-
-class TableLike(Protocol):
-    """Protocol for table-like objects."""
-
-    schema: SchemaLike
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -237,7 +239,7 @@ class RuntimeArtifacts:
     def register_materialized(
         self,
         name: str,
-        table: TableLike,
+        table: TableLike | None,
         *,
         spec: MaterializedTableSpec,
     ) -> MaterializedTable:
@@ -247,8 +249,8 @@ class RuntimeArtifacts:
         ----------
         name : str
             Table name.
-        table : TableLike
-            The materialized table.
+        table : TableLike | None
+            The materialized table when available.
         spec : MaterializedTableSpec
             Metadata describing the table's origin and storage.
 
@@ -257,17 +259,19 @@ class RuntimeArtifacts:
         MaterializedTable
             Metadata for the registered table.
         """
-        self.materialized_tables[name] = table
+        if table is not None:
+            self.materialized_tables[name] = table
 
         # Try to get row count
         row_count = 0
-        to_pyarrow = getattr(table, "to_pyarrow", None)
-        if callable(to_pyarrow):
-            try:
-                pa_table = cast("pa.Table", to_pyarrow())
-                row_count = pa_table.num_rows
-            except (AttributeError, TypeError, ValueError):
-                pass
+        if table is not None:
+            to_pyarrow = getattr(table, "to_pyarrow", None)
+            if callable(to_pyarrow):
+                try:
+                    pa_table = cast("pa.Table", to_pyarrow())
+                    row_count = pa_table.num_rows
+                except (AttributeError, TypeError, ValueError):
+                    pass
 
         metadata = MaterializedTable(
             name=name,
@@ -317,28 +321,43 @@ class RuntimeArtifacts:
         schema_fp = spec.schema_identity_hash
         if schema_fp is None and schema is not None:
             schema_fp = schema_identity_hash(schema)
+        persisted_result = result
+        persisted_spec = spec
+        table_for_materialized = result.table
+        session_runtime = self.execution
+        if session_runtime is not None and session_runtime.profile.runtime_artifact_cache_enabled:
+            persisted = _persist_execution_result(
+                session_runtime,
+                name=name,
+                result=result,
+                spec=spec,
+                schema_identity=schema_fp,
+            )
+            if persisted is not None:
+                persisted_result, persisted_spec = persisted
+                table_for_materialized = None
         artifact = ExecutionArtifact(
             name=name,
             source_task=spec.source_task,
-            result=result,
+            result=persisted_result,
             schema_identity_hash=schema_fp,
             plan_fingerprint=spec.plan_fingerprint,
             plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
-            storage_path=spec.storage_path,
+            storage_path=persisted_spec.storage_path,
         )
         self.execution_artifacts[name] = artifact
-        if result.table is not None:
+        if table_for_materialized is not None or persisted_spec.storage_path is not None:
             self.register_materialized(
                 name,
-                result.table,
+                table_for_materialized,
                 spec=MaterializedTableSpec(
                     source_task=spec.source_task,
                     schema_identity_hash=schema_fp,
                     plan_fingerprint=spec.plan_fingerprint,
                     plan_task_signature=spec.plan_task_signature,
                     plan_signature=spec.plan_signature,
-                    storage_path=spec.storage_path,
+                    storage_path=persisted_spec.storage_path,
                 ),
             )
         return artifact
@@ -554,6 +573,128 @@ def _schema_for_execution_result(result: ExecutionResult) -> SchemaLike | None:
     return None
 
 
+def _persist_execution_result(
+    session_runtime: SessionRuntime,
+    *,
+    name: str,
+    result: ExecutionResult,
+    spec: ExecutionArtifactSpec,
+    schema_identity: str | None,
+) -> tuple[ExecutionResult, ExecutionArtifactSpec] | None:
+    runtime_profile = session_runtime.profile
+    ctx = session_runtime.ctx
+    df, temp_name = _execution_result_df(ctx, result=result)
+    if df is None:
+        return None
+    cache_location = _runtime_artifact_location(
+        runtime_profile,
+        name=name,
+        plan_task_signature=spec.plan_task_signature,
+        plan_signature=spec.plan_signature,
+    )
+    cache_path = Path(str(cache_location.path))
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+
+    pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
+    try:
+        write_result = pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=str(cache_path),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                format_options={
+                    "commit_metadata": {
+                        "operation": "runtime_artifact_cache",
+                        "artifact_name": name,
+                    }
+                },
+            )
+        )
+    except (RuntimeError, TypeError, ValueError, OSError):
+        logger.exception("Runtime artifact delta persistence failed.")
+        return None
+    finally:
+        if temp_name is not None:
+            deregister_table(ctx, temp_name)
+    snapshot_version = write_result.delta_result.version if write_result.delta_result else None
+    from datafusion_engine.cache.inventory import CacheInventoryEntry
+    from datafusion_engine.cache.registry import (
+        record_cache_inventory,
+        register_cached_delta_table,
+    )
+
+    deregister_table(ctx, name)
+    register_cached_delta_table(
+        ctx,
+        runtime_profile,
+        name=name,
+        location=cache_location,
+        snapshot_version=snapshot_version,
+    )
+    record_cache_inventory(
+        runtime_profile,
+        entry=CacheInventoryEntry(
+            view_name=name,
+            cache_policy="runtime_artifact_delta",
+            cache_path=str(cache_path),
+            plan_fingerprint=spec.plan_fingerprint,
+            plan_identity_hash=spec.plan_task_signature,
+            schema_identity_hash=schema_identity,
+            snapshot_version=snapshot_version,
+            snapshot_timestamp=None,
+            partition_by=(),
+        ),
+        ctx=ctx,
+    )
+    updated_result = ExecutionResult.from_dataframe(
+        ctx.table(name),
+        plan_bundle=result.plan_bundle,
+    )
+    updated_spec = replace(spec, storage_path=str(cache_path))
+    return updated_result, updated_spec
+
+
+def _execution_result_df(
+    ctx: SessionContext,
+    *,
+    result: ExecutionResult,
+) -> tuple[DataFrame | None, str | None]:
+    if result.kind == ExecutionResultKind.DATAFRAME and result.dataframe is not None:
+        return result.dataframe, None
+    if result.kind == ExecutionResultKind.TABLE and result.table is not None:
+        temp_name = f"__runtime_artifact_{uuid7_hex()}"
+        from datafusion_engine.io.ingest import datafusion_from_arrow
+
+        df = datafusion_from_arrow(ctx, name=temp_name, value=result.table)
+        return df, temp_name
+    if result.kind == ExecutionResultKind.READER and result.reader is not None:
+        temp_name = f"__runtime_artifact_{uuid7_hex()}"
+        from datafusion_engine.io.ingest import datafusion_from_arrow
+
+        df = datafusion_from_arrow(ctx, name=temp_name, value=result.reader)
+        return df, temp_name
+    return None, None
+
+
+def _runtime_artifact_location(
+    runtime_profile: DataFusionRuntimeProfile,
+    *,
+    name: str,
+    plan_task_signature: str | None,
+    plan_signature: str | None,
+) -> DatasetLocation:
+    from datafusion_engine.dataset.registry import DatasetLocation
+
+    cache_root = Path(runtime_profile.runtime_artifact_root())
+    cache_root.mkdir(parents=True, exist_ok=True)
+    safe_name = name.replace("/", "_").replace(":", "_")
+    signature = plan_task_signature or plan_signature or uuid7_hex()
+    cache_path = cache_root / f"{safe_name}__{signature}"
+    return DatasetLocation(path=str(cache_path), format="delta")
+
+
 def _lookup_rulepack_value(
     values: Mapping[str, object],
     *,
@@ -594,6 +735,9 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
         Summary for observability.
     """
     total_rows = sum(meta.row_count for meta in artifacts.table_metadata.values())
+    materialized_names = sorted(
+        set(artifacts.materialized_tables.keys()) | set(artifacts.table_metadata.keys())
+    )
     execution_kinds: dict[str, int] = {}
     for artifact in artifacts.execution_artifacts.values():
         kind = artifact.result.kind.value
@@ -601,13 +745,13 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
 
     return RuntimeArtifactsSummary(
         total_views=len(artifacts.view_references),
-        total_materialized=len(artifacts.materialized_tables),
+        total_materialized=len(materialized_names),
         total_rows=total_rows,
         total_executions=len(artifacts.execution_artifacts),
         execution_kinds=tuple(sorted(execution_kinds.items())),
         execution_order=tuple(artifacts.execution_order),
         view_names=tuple(sorted(artifacts.view_references.keys())),
-        materialized_names=tuple(sorted(artifacts.materialized_tables.keys())),
+        materialized_names=tuple(materialized_names),
     )
 
 

@@ -126,13 +126,16 @@ src/
 │   ├── row_builder.py       # Row building utilities
 │   └── schema_derivation.py # Schema derivation from templates
 │
-├── normalize/         # Stage 2: Normalization
-│   ├── df_view_builders.py  # DataFusion view definitions
-│   ├── dataset_builders.py  # Schema construction
-│   ├── dataset_specs.py     # Dataset specifications
-│   ├── dataset_templates.py # Dataset templates
-│   ├── dataset_bundles.py   # Dataset bundle creation
-│   └── evidence_specs.py    # Evidence specifications
+├── semantics/         # Stage 2: Semantic catalog + normalization (canonical)
+│   ├── catalog/            # Dataset rows/specs + view builders
+│   ├── incremental/        # CDF cursors, readers, merge strategies
+│   ├── compiler.py         # SemanticCompiler (normalize/relate/union)
+│   ├── pipeline.py         # Semantic pipeline entry points
+│   ├── spec_registry.py    # Declarative normalization/relationship specs
+│   └── naming.py           # Canonical output naming policy
+│
+├── normalize/         # Deprecated facade (re-exports semantics.catalog)
+├── incremental/       # Deprecated facade (re-exports semantics.incremental)
 │
 ├── relspec/           # Stage 3: Task catalog + scheduling
 │   ├── inferred_deps.py     # Dependency inference
@@ -364,7 +367,7 @@ if result.run_bundle_dir:
 ```python
 from graph.product_build import GraphProductBuildRequest, build_graph_product
 from hamilton_pipeline.types import ExecutionMode, ExecutorConfig, ScipIndexConfig
-from incremental.types import IncrementalConfig
+from semantics.incremental import IncrementalConfig
 from core_types import DeterminismTier
 
 result = build_graph_product(
@@ -515,7 +518,7 @@ class DataFusionPlanBundle:
 
 ### Overview
 
-The Normalization and Scheduling subsystem transforms raw extraction outputs into canonical forms and orchestrates execution through inference-driven dependency resolution. Dependencies are automatically inferred by analyzing DataFusion plan artifacts—no manual declarations required.
+The Semantic Catalog and Scheduling subsystem transforms raw extraction outputs into canonical forms and orchestrates execution through inference-driven dependency resolution. The semantic catalog (in `src/semantics/catalog/`) replaces the legacy `normalize` module, which now serves as a facade for backward compatibility. Dependencies are automatically inferred by analyzing DataFusion plan artifacts—no manual declarations required.
 
 ### Key Concepts
 
@@ -552,9 +555,9 @@ class TaskSchedule:
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/normalize/df_view_builders.py` | ~650 | DataFusion view definitions |
-| `src/normalize/dataset_builders.py` | ~400+ | Schema construction |
-| `src/normalize/dataset_specs.py` | ~300+ | Dataset specifications |
+| `src/semantics/catalog/analysis_builders.py` | ~650 | DataFusion view definitions (analysis outputs) |
+| `src/semantics/catalog/dataset_rows.py` | ~400+ | Dataset row registry |
+| `src/semantics/catalog/dataset_specs.py` | ~300+ | Dataset specifications |
 | `src/relspec/inferred_deps.py` | ~250+ | Dependency inference from plans |
 | `src/relspec/rustworkx_graph.py` | ~1200 | Bipartite task graph |
 | `src/relspec/rustworkx_schedule.py` | ~320 | Generation scheduling |

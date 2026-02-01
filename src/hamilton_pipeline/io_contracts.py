@@ -30,8 +30,8 @@ from extract.python.scope import PythonScopePolicy
 from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
 from extract.scanning.repo_scope import RepoScopeOptions
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag, tag_outputs_by_name
-from incremental.types import IncrementalConfig
 from schema_spec.system import DeltaMaintenancePolicy
+from semantics.incremental import IncrementalConfig
 from serde_artifacts import (
     ExtractErrorsArtifact,
     NormalizeOutputsArtifact,

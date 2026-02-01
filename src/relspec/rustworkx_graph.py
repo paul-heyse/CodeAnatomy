@@ -254,6 +254,7 @@ class TaskGraphBuildOptions:
     scan_keys_by_task: Mapping[str, tuple[str, ...]] | None = None
     scan_units_by_evidence_name: Mapping[str, ScanUnit] | None = None
     scan_task_names_by_task: Mapping[str, tuple[str, ...]] | None = None
+    task_kinds: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -291,6 +292,7 @@ def build_task_graph_from_inferred_deps(
         }
     else:
         scan_name_map = dict(resolved.scan_keys_by_task or {})
+    task_kind_map = resolved.task_kinds or {}
     task_nodes = tuple(
         TaskNode(
             name=dep.task_name,
@@ -305,7 +307,10 @@ def build_task_graph_from_inferred_deps(
                 )
             ),
             priority=priority_map.get(dep.task_name, resolved.priority),
-            task_kind="scan" if dep.task_name in scan_unit_map else "view",
+            task_kind=task_kind_map.get(
+                dep.task_name,
+                "scan" if dep.task_name in scan_unit_map else "view",
+            ),
         )
         for dep in deps
     )

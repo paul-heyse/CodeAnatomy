@@ -14,8 +14,12 @@ from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.session.runtime import normalize_dataset_locations_for_profile
-from datafusion_engine.views.registry import ensure_view_graph
+from datafusion_engine.session.runtime import (
+    extract_output_locations_for_profile,
+    normalize_dataset_locations_for_profile,
+    semantic_output_locations_for_profile,
+)
+from datafusion_engine.views.registration import ensure_view_graph
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 
@@ -76,7 +80,7 @@ def plan_with_delta_pins(
         raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
     # Baseline registration ensures UDF platform and registry views exist.
-    ensure_view_graph(ctx, runtime_profile=runtime_profile, include_registry_views=True)
+    ensure_view_graph(ctx, runtime_profile=runtime_profile)
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,
@@ -99,7 +103,6 @@ def plan_with_delta_pins(
         ensure_view_graph(
             ctx,
             runtime_profile=runtime_profile,
-            include_registry_views=True,
             scan_units=scan_planning.scan_units,
         )
     pinned_nodes = _plan_view_nodes(
@@ -193,7 +196,7 @@ def _plan_view_nodes(
 
 def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
-    for name, location in profile.extract_dataset_locations.items():
+    for name, location in extract_output_locations_for_profile(profile).items():
         locations.setdefault(
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )
@@ -202,6 +205,10 @@ def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, Datase
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )
     for name, location in normalize_dataset_locations_for_profile(profile).items():
+        locations.setdefault(
+            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+        )
+    for name, location in semantic_output_locations_for_profile(profile).items():
         locations.setdefault(
             name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
         )

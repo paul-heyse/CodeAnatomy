@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from datafusion_engine.dataset.registry import DatasetCatalog
-from incremental.cdf_cursors import CdfCursorStore
-from incremental.cdf_filters import CdfFilterPolicy
-from incremental.cdf_runtime import read_cdf_changes
-from incremental.delta_context import DeltaAccessContext
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
+from semantics.incremental.cdf_cursors import CdfCursorStore
+from semantics.incremental.cdf_runtime import read_cdf_changes
+from semantics.incremental.cdf_types import CdfFilterPolicy
+from semantics.incremental.delta_context import DeltaAccessContext
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,362 @@
+{
+  "ir_hash": "c4a1ba6782d57833ea1967b7b8a9addb58f6852182757b5d6eaf415b3b86f364",
+  "join_groups": [],
+  "model_hash": "30895c5c4cc8420747d987f8945f01c7e9eb31972d24e04190b5b83270c7afa7",
+  "views": [
+    {
+      "inputs": [
+        "cst_call_args"
+      ],
+      "kind": "normalize",
+      "name": "cst_call_args_norm_v1",
+      "outputs": [
+        "cst_call_args_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_callsites"
+      ],
+      "kind": "normalize",
+      "name": "cst_calls_norm_v1",
+      "outputs": [
+        "cst_calls_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_decorators"
+      ],
+      "kind": "normalize",
+      "name": "cst_decorators_norm_v1",
+      "outputs": [
+        "cst_decorators_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_defs"
+      ],
+      "kind": "normalize",
+      "name": "cst_defs_norm_v1",
+      "outputs": [
+        "cst_defs_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_docstrings"
+      ],
+      "kind": "normalize",
+      "name": "cst_docstrings_norm_v1",
+      "outputs": [
+        "cst_docstrings_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_imports"
+      ],
+      "kind": "normalize",
+      "name": "cst_imports_norm_v1",
+      "outputs": [
+        "cst_imports_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_refs"
+      ],
+      "kind": "normalize",
+      "name": "cst_refs_norm_v1",
+      "outputs": [
+        "cst_refs_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "scip_occurrences",
+        "file_line_index_v1"
+      ],
+      "kind": "scip_normalize",
+      "name": "scip_occurrences_norm_v1",
+      "outputs": [
+        "scip_occurrences_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_calls_norm_v1",
+        "scip_occurrences_norm_v1"
+      ],
+      "kind": "relate",
+      "name": "rel_callsite_symbol_v1",
+      "outputs": [
+        "rel_callsite_symbol_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_defs_norm_v1",
+        "scip_occurrences_norm_v1"
+      ],
+      "kind": "relate",
+      "name": "rel_def_symbol_v1",
+      "outputs": [
+        "rel_def_symbol_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_imports_norm_v1",
+        "scip_occurrences_norm_v1"
+      ],
+      "kind": "relate",
+      "name": "rel_import_symbol_v1",
+      "outputs": [
+        "rel_import_symbol_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_refs_norm_v1",
+        "scip_occurrences_norm_v1"
+      ],
+      "kind": "relate",
+      "name": "rel_name_symbol_v1",
+      "outputs": [
+        "rel_name_symbol_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "union_edges",
+      "name": "semantic_edges_union_v1",
+      "outputs": [
+        "semantic_edges_union_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_refs_norm_v1",
+        "cst_defs_norm_v1",
+        "cst_imports_norm_v1",
+        "cst_calls_norm_v1",
+        "cst_call_args_norm_v1",
+        "cst_docstrings_norm_v1",
+        "cst_decorators_norm_v1"
+      ],
+      "kind": "union_nodes",
+      "name": "semantic_nodes_union_v1",
+      "outputs": [
+        "semantic_nodes_union_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "projection",
+      "name": "relation_output_v1",
+      "outputs": [
+        "relation_output_v1"
+      ]
+    },
+    {
+      "inputs": [],
+      "kind": "diagnostic",
+      "name": "file_coverage_report_v1",
+      "outputs": [
+        "file_coverage_report_v1"
+      ]
+    },
+    {
+      "inputs": [],
+      "kind": "diagnostic",
+      "name": "file_quality_v1",
+      "outputs": [
+        "file_quality_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "diagnostic",
+      "name": "relationship_ambiguity_report_v1",
+      "outputs": [
+        "relationship_ambiguity_report_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "diagnostic",
+      "name": "relationship_candidates_v1",
+      "outputs": [
+        "relationship_candidates_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "diagnostic",
+      "name": "relationship_decisions_v1",
+      "outputs": [
+        "relationship_decisions_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "rel_name_symbol_v1",
+        "rel_def_symbol_v1",
+        "rel_import_symbol_v1",
+        "rel_callsite_symbol_v1"
+      ],
+      "kind": "diagnostic",
+      "name": "relationship_quality_metrics_v1",
+      "outputs": [
+        "relationship_quality_metrics_v1"
+      ]
+    },
+    {
+      "inputs": [],
+      "kind": "diagnostic",
+      "name": "schema_anomalies_v1",
+      "outputs": [
+        "schema_anomalies_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_defs_norm_v1",
+        "rel_def_symbol_v1"
+      ],
+      "kind": "export",
+      "name": "dim_exported_defs_v1",
+      "outputs": [
+        "dim_exported_defs_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cpg_edges_v1"
+      ],
+      "kind": "finalize",
+      "name": "cpg_edges_by_dst_v1",
+      "outputs": [
+        "cpg_edges_by_dst_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cpg_edges_v1"
+      ],
+      "kind": "finalize",
+      "name": "cpg_edges_by_src_v1",
+      "outputs": [
+        "cpg_edges_by_src_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "relation_output_v1"
+      ],
+      "kind": "finalize",
+      "name": "cpg_edges_v1",
+      "outputs": [
+        "cpg_edges_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cst_call_args_norm_v1",
+        "cst_calls_norm_v1",
+        "cst_decorators_norm_v1",
+        "cst_defs_norm_v1",
+        "cst_docstrings_norm_v1",
+        "cst_imports_norm_v1",
+        "cst_refs_norm_v1",
+        "diagnostics_norm",
+        "dim_qualified_names",
+        "repo_files_nodes",
+        "scip_symbols",
+        "symtable_bindings",
+        "symtable_def_sites",
+        "symtable_scopes",
+        "symtable_symbols",
+        "symtable_type_params",
+        "symtable_use_sites",
+        "ts_errors",
+        "ts_missing",
+        "ts_nodes",
+        "type_exprs_norm",
+        "types_norm"
+      ],
+      "kind": "finalize",
+      "name": "cpg_nodes_v1",
+      "outputs": [
+        "cpg_nodes_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cpg_props_v1"
+      ],
+      "kind": "finalize",
+      "name": "cpg_props_map_v1",
+      "outputs": [
+        "cpg_props_map_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "cpg_edges_v1",
+        "cst_calls_norm_v1",
+        "cst_defs_norm_v1",
+        "cst_imports_norm_v1",
+        "cst_refs_norm_v1",
+        "diagnostics_norm",
+        "dim_qualified_names",
+        "repo_files",
+        "scip_external_symbol_information",
+        "scip_symbol_information",
+        "symtable_bindings",
+        "symtable_def_sites",
+        "symtable_scopes",
+        "symtable_symbols",
+        "symtable_type_params",
+        "symtable_use_sites",
+        "ts_errors",
+        "ts_missing",
+        "ts_nodes",
+        "type_exprs_norm",
+        "types_norm"
+      ],
+      "kind": "finalize",
+      "name": "cpg_props_v1",
+      "outputs": [
+        "cpg_props_v1"
+      ]
+    }
+  ]
+}

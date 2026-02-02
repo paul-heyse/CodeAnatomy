@@ -5,11 +5,11 @@ Executes ToolPlans and returns CqResult objects.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
-import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +22,7 @@ from tools.cq.core.scoring import (
     impact_score,
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
-from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_paths
+from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import (
     SgRecord,
     filter_records_by_kind,
@@ -32,6 +32,8 @@ from tools.cq.query.sg_parser import (
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.index.query_cache import QueryCache
+    from tools.cq.index.sqlite_cache import IndexCache
 
 from tools.cq.query.ir import Query, Scope
 
@@ -43,6 +45,7 @@ class ScanContext:
     def_records: list[SgRecord]
     call_records: list[SgRecord]
     interval_index: IntervalIndex
+    file_index: FileIntervalIndex
     calls_by_def: dict[SgRecord, list[SgRecord]]
     all_records: list[SgRecord]
 
@@ -85,12 +88,37 @@ class IntervalIndex:
         return min(candidates, key=lambda r: r.end_line - r.start_line)
 
 
+@dataclass(frozen=True)
+class FileIntervalIndex:
+    """Per-file interval indexes to avoid cross-file attribution."""
+
+    by_file: dict[str, IntervalIndex]
+
+    @classmethod
+    def from_records(cls, records: list[SgRecord]) -> FileIntervalIndex:
+        """Build per-file interval indexes."""
+        grouped = group_records_by_file(records)
+        return cls(
+            by_file={file_path: IntervalIndex.from_records(recs) for file_path, recs in grouped.items()}
+        )
+
+    def find_containing(self, record: SgRecord) -> SgRecord | None:
+        """Find the innermost definition containing the record."""
+        index = self.by_file.get(record.file)
+        if index is None:
+            return None
+        return index.find_containing(record.start_line)
+
+
 def execute_plan(
     plan: ToolPlan,
     query: Query,
     tc: Toolchain,
     root: Path,
     argv: list[str] | None = None,
+    index_cache: IndexCache | None = None,
+    query_cache: QueryCache | None = None,
+    use_cache: bool = True,
 ) -> CqResult:
     """Execute a ToolPlan and return results.
 
@@ -113,12 +141,46 @@ def execute_plan(
         Query results
     """
     started_ms = ms()
+    cache_key: str | None = None
+    cache_files: list[Path] | None = None
+
+    if use_cache and query_cache is not None:
+        cache_files = _collect_cache_files(plan, root)
+        if cache_files:
+            cache_key = _build_query_cache_key(query, plan, root, tc)
+            cached = query_cache.get(cache_key, cache_files)
+            if cached is not None:
+                result = CqResult.from_dict(cached)
+                result.summary["cache"] = {"status": "hit", "key": cache_key}
+                return result
 
     # Dispatch to pattern query executor if this is a pattern query
     if plan.is_pattern_query:
-        return _execute_pattern_query(plan, query, tc, root, argv, started_ms)
+        result = _execute_pattern_query(
+            plan,
+            query,
+            tc,
+            root,
+            argv,
+            started_ms,
+            index_cache,
+        )
+    else:
+        result = _execute_entity_query(
+            plan,
+            query,
+            tc,
+            root,
+            argv,
+            started_ms,
+            index_cache,
+        )
 
-    return _execute_entity_query(plan, query, tc, root, argv, started_ms)
+    if use_cache and query_cache is not None and cache_key and cache_files:
+        query_cache.set(cache_key, result.to_dict(), cache_files)
+        result.summary["cache"] = {"status": "miss", "key": cache_key}
+
+    return result
 
 
 def _execute_entity_query(
@@ -128,6 +190,7 @@ def _execute_entity_query(
     root: Path,
     argv: list[str] | None,
     started_ms: float,
+    index_cache: IndexCache | None,
 ) -> CqResult:
     """Execute an entity-based query."""
     # Get paths to scan
@@ -143,6 +206,8 @@ def _execute_entity_query(
         result = mk_result(run)
         result.summary["error"] = "No files match scope"
         return result
+
+    scope_globs = scope_to_globs(plan.scope)
 
     # Phase 1: File narrowing with ripgrep (optional)
     if plan.rg_pattern and tc.rg_path:
@@ -178,11 +243,14 @@ def _execute_entity_query(
         paths=paths,
         record_types=set(plan.sg_record_types),
         root=root,
+        globs=scope_globs,
+        index_cache=index_cache,
     )
 
     # Phase 3: Build scan context
     def_records = filter_records_by_kind(records, "def")
     interval_index = IntervalIndex.from_records(def_records)
+    file_index = FileIntervalIndex.from_records(def_records)
     call_records = filter_records_by_kind(records, "call")
     calls_by_def = assign_calls_to_defs(interval_index, call_records)
 
@@ -190,6 +258,7 @@ def _execute_entity_query(
         def_records=def_records,
         call_records=call_records,
         interval_index=interval_index,
+        file_index=file_index,
         calls_by_def=calls_by_def,
         all_records=records,
     )
@@ -205,12 +274,28 @@ def _execute_entity_query(
     result = mk_result(run)
 
     # Phase 5: Filter and add findings based on entity type
+    def_candidates = def_records
+    import_candidates = filter_records_by_kind(records, "import")
+    call_candidates = call_records
+
+    if plan.sg_rules:
+        match_spans = _collect_match_spans(plan.sg_rules, paths, root, query, scope_globs)
+        if match_spans:
+            if query.entity in {"function", "class", "method", "decorator"}:
+                def_candidates = _filter_records_by_spans(def_candidates, match_spans)
+            elif query.entity == "import":
+                import_candidates = _filter_records_by_spans(import_candidates, match_spans)
+            elif query.entity == "callsite":
+                call_candidates = _filter_records_by_spans(call_candidates, match_spans)
+
     if query.entity == "import":
-        _process_import_query(records, query, result, root)
+        _process_import_query(import_candidates, query, result, root)
     elif query.entity == "decorator":
-        _process_decorator_query(ctx, query, result, root)
+        _process_decorator_query(ctx, query, result, root, def_candidates)
+    elif query.entity == "callsite":
+        _process_call_query(ctx, query, result, root)
     else:
-        _process_def_query(ctx, query, result, root)
+        _process_def_query(ctx, query, result, root, def_candidates)
 
     result.summary["files_scanned"] = len({r.file for r in records})
 
@@ -233,8 +318,10 @@ def _execute_pattern_query(
     root: Path,
     argv: list[str] | None,
     started_ms: float,
+    _index_cache: IndexCache | None,
 ) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules."""
+    scope_globs = scope_to_globs(plan.scope)
     if not tc.has_sg:
         run = mk_runmeta(
             macro="q",
@@ -262,17 +349,13 @@ def _execute_pattern_query(
         return result
 
     # Execute ast-grep rules
-    findings: list[Finding] = []
-    records: list[SgRecord] = []
-    raw_matches: list[dict] = []
-
-    for rule in plan.sg_rules:
-        rule_findings, rule_records, rule_matches = _execute_ast_grep_rule(
-            rule, paths, root, query
-        )
-        findings.extend(rule_findings)
-        records.extend(rule_records)
-        raw_matches.extend(rule_matches)
+    findings, records, raw_matches = _execute_ast_grep_rules(
+        plan.sg_rules,
+        paths,
+        root,
+        query,
+        scope_globs,
+    )
 
     # Build result
     run = mk_runmeta(
@@ -316,24 +399,27 @@ def _execute_pattern_query(
     return result
 
 
-def _execute_ast_grep_rule(
-    rule: AstGrepRule,
+def _execute_ast_grep_rules(
+    rules: tuple[AstGrepRule, ...],
     paths: list[Path],
     root: Path,
     query: Query | None = None,
+    globs: list[str] | None = None,
 ) -> tuple[list[Finding], list[SgRecord], list[dict]]:
-    """Execute a single ast-grep rule and return findings.
+    """Execute ast-grep rules and return findings.
 
     Parameters
     ----------
-    rule
-        The ast-grep rule to execute
+    rules
+        ast-grep rules to execute
     paths
         Paths to scan
     root
         Repository root
     query
         Optional query for metavar filtering
+    globs
+        Optional glob filters for ast-grep
 
     Returns
     -------
@@ -342,83 +428,93 @@ def _execute_ast_grep_rule(
     """
     from tools.cq.query.metavar import apply_metavar_filters, parse_metavariables
 
+    if not rules:
+        return [], [], []
+
     findings: list[Finding] = []
     records: list[SgRecord] = []
     raw_matches: list[dict] = []
 
-    # Build inline rule YAML
-    rule_dict = _build_inline_rule(rule)
+    inline_rules = _build_inline_rules_yaml(rules)
+    matches = _run_ast_grep_inline_rules(inline_rules, paths, root, globs)
 
-    # Write to temp file and run ast-grep
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
-        import yaml
+    for data in matches:
+        raw_matches.append(data)
 
-        yaml.dump(rule_dict, f, default_flow_style=False)
-        rule_file = Path(f.name)
-
-    try:
-        cmd = [
-            "ast-grep",
-            "scan",
-            "-r",
-            str(rule_file),
-            "--json=stream",
-        ]
-        cmd.extend(str(p) for p in paths)
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=root,
-        )
-
-        if result.returncode != 0:
-            return findings, records, raw_matches
-
-        # Parse JSON stream output
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                raw_matches.append(data)
-
-                # Apply metavar filtering if filters are present
-                if query and query.metavar_filters:
-                    captures = parse_metavariables(data)
-                    if not apply_metavar_filters(captures, query.metavar_filters):
-                        continue  # Skip this match
-
-                finding, record = _match_to_finding(data)
-                if finding:
-                    # Add metavar captures to finding details
-                    if query and query.metavar_filters:
-                        captures = parse_metavariables(data)
-                        finding.details["metavar_captures"] = {
-                            name: cap.text for name, cap in captures.items()
-                        }
-                    findings.append(finding)
-                if record:
-                    records.append(record)
-            except json.JSONDecodeError:
+        if query and query.metavar_filters:
+            captures = parse_metavariables(data)
+            if not apply_metavar_filters(captures, query.metavar_filters):
                 continue
 
-    finally:
-        rule_file.unlink(missing_ok=True)
+        finding, record = _match_to_finding(data)
+        if finding:
+            if query and query.metavar_filters:
+                captures = parse_metavariables(data)
+                finding.details["metavar_captures"] = {
+                    name: cap.text for name, cap in captures.items()
+                }
+            findings.append(finding)
+        if record:
+            records.append(record)
 
     return findings, records, raw_matches
 
 
-def _build_inline_rule(rule: AstGrepRule) -> dict:
-    """Build ast-grep inline rule from AstGrepRule."""
-    rule_config = rule.to_yaml_dict()
-    return {
-        "id": "pattern_query",
-        "language": "python",
-        "rule": rule_config,
-        "message": "Pattern match",
-    }
+def _build_inline_rules_yaml(rules: tuple[AstGrepRule, ...]) -> str:
+    """Build YAML string for ast-grep inline rules."""
+    import yaml
+
+    rule_docs = []
+    for idx, rule in enumerate(rules):
+        rule_docs.append(
+            {
+                "id": f"pattern_{idx}",
+                "language": "python",
+                "rule": rule.to_yaml_dict(),
+                "message": "Pattern match",
+            }
+        )
+    return yaml.dump({"rules": rule_docs}, default_flow_style=False)
+
+
+def _run_ast_grep_inline_rules(
+    inline_rules: str,
+    paths: list[Path],
+    root: Path,
+    globs: list[str] | None,
+) -> list[dict]:
+    """Run ast-grep scan with inline rules and return raw matches."""
+    cmd = [
+        "ast-grep",
+        "scan",
+        "--inline-rules",
+        inline_rules,
+        "--json=stream",
+    ]
+    if globs:
+        for glob in globs:
+            cmd.extend(["--globs", glob])
+    cmd.extend(str(p) for p in paths)
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+
+    if result.returncode != 0:
+        return []
+
+    matches: list[dict] = []
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        try:
+            matches.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return matches
 
 
 def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
@@ -464,14 +560,219 @@ def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
     return finding, record
 
 
-def _process_import_query(
+def _collect_match_spans(
+    rules: tuple[AstGrepRule, ...],
+    paths: list[Path],
+    root: Path,
+    query: Query,
+    globs: list[str] | None,
+) -> dict[str, list[tuple[int, int]]]:
+    """Collect matched spans for relational constraints."""
+    inline_rules = _build_inline_rules_yaml(rules)
+    matches = _run_ast_grep_inline_rules(inline_rules, paths, root, globs)
+
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for data in matches:
+        range_data = data.get("range", {})
+        start = range_data.get("start", {})
+        end = range_data.get("end", {})
+        file_path = data.get("file")
+        if not file_path:
+            continue
+        start_line = start.get("line", 0) + 1
+        end_line = end.get("line", 0) + 1
+        spans.setdefault(file_path, []).append((start_line, end_line))
+
+    if not spans:
+        return spans
+
+    if not query.metavar_filters:
+        return spans
+
+    from tools.cq.query.metavar import apply_metavar_filters, parse_metavariables
+
+    filtered: dict[str, list[tuple[int, int]]] = {}
+    for data in matches:
+        if not data.get("file"):
+            continue
+        captures = parse_metavariables(data)
+        if not apply_metavar_filters(captures, query.metavar_filters):
+            continue
+        range_data = data.get("range", {})
+        start = range_data.get("start", {})
+        end = range_data.get("end", {})
+        file_path = data.get("file", "")
+        start_line = start.get("line", 0) + 1
+        end_line = end.get("line", 0) + 1
+        filtered.setdefault(file_path, []).append((start_line, end_line))
+
+    return filtered
+
+
+def _filter_records_by_spans(
     records: list[SgRecord],
+    spans: dict[str, list[tuple[int, int]]],
+) -> list[SgRecord]:
+    """Filter records to those overlapping matched spans."""
+    if not spans:
+        return records
+
+    filtered: list[SgRecord] = []
+    for record in records:
+        ranges = spans.get(record.file)
+        if not ranges:
+            continue
+        for start_line, end_line in ranges:
+            if start_line <= record.start_line <= end_line:
+                filtered.append(record)
+                break
+    return filtered
+
+
+def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
+    """Return a stable key for a record."""
+    return (
+        record.file,
+        record.start_line,
+        record.start_col,
+        record.end_line,
+        record.end_col,
+    )
+
+
+def _build_def_evidence_map(
+    def_records: list[SgRecord],
+    root: Path,
+) -> dict[tuple[str, int, int, int, int], dict[str, object]]:
+    """Build a map of definition records to symtable/bytecode evidence."""
+    from tools.cq.query.enrichment import BytecodeInfo, SymtableInfo, enrich_records
+
+    unique_records: dict[tuple[str, int, int, int, int], SgRecord] = {}
+    for record in def_records:
+        unique_records[_record_key(record)] = record
+
+    if not unique_records:
+        return {}
+
+    enrichment = enrich_records(list(unique_records.values()), root)
+    evidence_map: dict[tuple[str, int, int, int, int], dict[str, object]] = {}
+
+    for record_key, record in unique_records.items():
+        location = f"{record.file}:{record.start_line}:{record.start_col}"
+        info = enrichment.get(location)
+        if not info:
+            continue
+        details: dict[str, object] = {}
+        symtable_info = info.get("symtable_info")
+        if isinstance(symtable_info, SymtableInfo):
+            details["resolved_globals"] = list(symtable_info.globals_used)
+        bytecode_info = info.get("bytecode_info")
+        if isinstance(bytecode_info, BytecodeInfo):
+            details["bytecode_calls"] = list(bytecode_info.call_functions)
+        if details:
+            evidence_map[record_key] = details
+
+    return evidence_map
+
+
+def _apply_call_evidence(
+    details: dict[str, object],
+    evidence: dict[str, object] | None,
+    call_target: str,
+) -> None:
+    """Attach call evidence details to the finding payload."""
+    if not evidence:
+        return
+    resolved_globals = evidence.get("resolved_globals")
+    if isinstance(resolved_globals, list):
+        details["resolved_globals"] = resolved_globals
+        if call_target:
+            details["globals_has_target"] = call_target in resolved_globals
+
+    bytecode_calls = evidence.get("bytecode_calls")
+    if isinstance(bytecode_calls, list):
+        details["bytecode_calls"] = bytecode_calls
+        if call_target:
+            details["bytecode_has_target"] = call_target in bytecode_calls
+
+
+def _collect_cache_files(plan: ToolPlan, root: Path) -> list[Path]:
+    """Collect files relevant for caching."""
+    paths = scope_to_paths(plan.scope, root)
+    globs = scope_to_globs(plan.scope)
+    files = _expand_scope_files(paths, root)
+    return _filter_scope_files(files, root, globs)
+
+
+def _expand_scope_files(paths: list[Path], root: Path) -> list[Path]:
+    """Expand scope paths to python files."""
+    files: list[Path] = []
+    for path in paths:
+        full_path = path if path.is_absolute() else root / path
+        if full_path.is_file():
+            files.append(full_path)
+        elif full_path.is_dir():
+            files.extend(full_path.rglob("*.py"))
+    return files
+
+
+def _filter_scope_files(
+    files: list[Path],
+    root: Path,
+    globs: list[str],
+) -> list[Path]:
+    """Filter files by include/exclude globs."""
+    if not globs:
+        return files
+    has_includes = any(not glob.startswith("!") for glob in globs)
+    filtered: list[Path] = []
+    for file_path in files:
+        rel_path = file_path.relative_to(root).as_posix()
+        include = not has_includes
+        for glob in globs:
+            negated = glob.startswith("!")
+            pattern = glob[1:] if negated else glob
+            if Path(rel_path).match(pattern):
+                include = not negated
+        if include:
+            filtered.append(file_path)
+    return filtered
+
+
+def _build_query_cache_key(
+    query: Query,
+    plan: ToolPlan,
+    root: Path,
+    tc: Toolchain,
+) -> str:
+    """Build a stable cache key for a query execution."""
+    plan_signature = {
+        "rg_pattern": plan.rg_pattern,
+        "scope": asdict(plan.scope),
+        "sg_record_types": sorted(plan.sg_record_types),
+        "need_symtable": plan.need_symtable,
+        "need_bytecode": plan.need_bytecode,
+        "expand_ops": [asdict(exp) for exp in plan.expand_ops],
+        "is_pattern_query": plan.is_pattern_query,
+        "sg_rules": [rule.to_yaml_dict() for rule in plan.sg_rules],
+    }
+    payload = {
+        "query": asdict(query),
+        "plan": plan_signature,
+        "root": str(root),
+        "toolchain": tc.to_dict(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _process_import_query(
+    import_records: list[SgRecord],
     query: Query,
     result: CqResult,
     root: Path,
 ) -> None:
     """Process an import entity query."""
-    import_records = filter_records_by_kind(records, "import")
     matching_imports = _filter_to_matching(import_records, query)
 
     for import_record in matching_imports:
@@ -497,9 +798,11 @@ def _process_def_query(
     query: Query,
     result: CqResult,
     root: Path,
+    def_candidates: list[SgRecord] | None = None,
 ) -> None:
     """Process a definition entity query."""
-    matching_defs = _filter_to_matching(ctx.def_records, query)
+    candidate_records = def_candidates if def_candidates is not None else ctx.def_records
+    matching_defs = _filter_to_matching(candidate_records, query)
     matching_records = list(matching_defs)  # Keep copy for scope filtering
 
     for def_record in matching_defs:
@@ -519,15 +822,34 @@ def _process_def_query(
     # Add sections based on query fields
     if "callers" in query.fields:
         callers_section = _build_callers_section(
-            matching_defs, ctx.call_records, ctx.interval_index
+            matching_defs,
+            ctx.call_records,
+            ctx.file_index,
+            root,
         )
         if callers_section.findings:
             result.sections.append(callers_section)
 
+    if "callees" in query.fields:
+        callees_section = _build_callees_section(matching_defs, ctx.calls_by_def, root)
+        if callees_section.findings:
+            result.sections.append(callees_section)
+
+    if "imports" in query.fields:
+        imports_section = _build_imports_section(matching_defs, ctx.all_records)
+        if imports_section.findings:
+            result.sections.append(imports_section)
+
     if "hazards" in query.fields:
-        hazards_section = _build_hazards_section(matching_defs, ctx.all_records)
+        hazards_section = _build_hazards_section(
+            matching_defs,
+            root,
+            scope_to_globs(query.scope),
+        )
         if hazards_section.findings:
             result.sections.append(hazards_section)
+
+    _append_expander_sections(result, matching_defs, ctx, root, query)
 
     result.summary["total_defs"] = len(ctx.def_records)
     result.summary["total_calls"] = len(ctx.call_records)
@@ -539,6 +861,7 @@ def _process_decorator_query(
     query: Query,
     result: CqResult,
     root: Path,
+    def_candidates: list[SgRecord] | None = None,
 ) -> None:
     """Process a decorator entity query."""
     from tools.cq.query.enrichment import enrich_with_decorators
@@ -546,7 +869,8 @@ def _process_decorator_query(
     # Look for decorated definitions
     matching_defs: list[SgRecord] = []
 
-    for def_record in ctx.def_records:
+    candidate_records = def_candidates if def_candidates is not None else ctx.def_records
+    for def_record in candidate_records:
         # Skip non-function/class definitions
         if def_record.kind not in (
             "function",
@@ -608,6 +932,97 @@ def _process_decorator_query(
     result.summary["matches"] = len(result.key_findings)
 
 
+def _process_call_query(
+    ctx: ScanContext,
+    query: Query,
+    result: CqResult,
+    root: Path,
+) -> None:
+    """Process a callsite entity query."""
+    matching_calls = _filter_to_matching(ctx.call_records, query)
+    call_contexts: list[tuple[SgRecord, SgRecord | None]] = []
+    for call_record in matching_calls:
+        containing = ctx.file_index.find_containing(call_record)
+        call_contexts.append((call_record, containing))
+
+    containing_defs = [containing for _, containing in call_contexts if containing is not None]
+    evidence_map = _build_def_evidence_map(containing_defs, root)
+
+    for call_record, containing in call_contexts:
+        details: dict[str, object] = {}
+        call_target = _extract_call_target(call_record)
+        if containing is not None:
+            caller_name = _extract_def_name(containing) or "<module>"
+            details["caller"] = caller_name
+            evidence = evidence_map.get(_record_key(containing))
+            _apply_call_evidence(details, evidence, call_target)
+        finding = _call_to_finding(call_record, extra_details=details)
+        result.key_findings.append(finding)
+
+    result.summary["total_calls"] = len(ctx.call_records)
+    result.summary["matches"] = len(result.key_findings)
+
+
+def _append_expander_sections(
+    result: CqResult,
+    target_defs: list[SgRecord],
+    ctx: ScanContext,
+    root: Path,
+    query: Query,
+) -> None:
+    """Append sections for requested expanders."""
+    if not query.expand:
+        return
+
+    expand_kinds = {expander.kind for expander in query.expand}
+    field_kinds = set(query.fields)
+    if "callers" in expand_kinds and "callers" not in field_kinds:
+        callers_section = _build_callers_section(
+            target_defs,
+            ctx.call_records,
+            ctx.file_index,
+            root,
+        )
+        if callers_section.findings:
+            result.sections.append(callers_section)
+
+    if "callees" in expand_kinds and "callees" not in field_kinds:
+        callees_section = _build_callees_section(
+            target_defs,
+            ctx.calls_by_def,
+            root,
+        )
+        if callees_section.findings:
+            result.sections.append(callees_section)
+
+    if "imports" in expand_kinds and "imports" not in field_kinds:
+        imports_section = _build_imports_section(
+            target_defs,
+            ctx.all_records,
+        )
+        if imports_section.findings:
+            result.sections.append(imports_section)
+
+    if "raises" in expand_kinds:
+        raises_section = _build_raises_section(
+            target_defs,
+            ctx.all_records,
+            ctx.file_index,
+        )
+        if raises_section.findings:
+            result.sections.append(raises_section)
+
+    if "scope" in expand_kinds:
+        scope_section = _build_scope_section(target_defs, root, ctx.calls_by_def)
+        if scope_section.findings:
+            result.sections.append(scope_section)
+
+    if "bytecode_surface" in expand_kinds:
+        bytecode_section = _build_bytecode_surface_section(target_defs, root)
+        if bytecode_section.findings:
+            result.sections.append(bytecode_section)
+
+
 def rg_files_with_matches(
     root: Path,
     pattern: str,
@@ -637,6 +1052,9 @@ def rg_files_with_matches(
     else:
         cmd.append(".")
 
+    if scope.globs:
+        for glob in scope.globs:
+            cmd.extend(["-g", glob])
     for exclude in scope.exclude:
         cmd.extend(["-g", f"!{exclude}"])
 
@@ -755,6 +1173,8 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
         return record.kind in {"function", "async_function"}
     if entity == "module":
         return False  # Module-level would need different handling
+    if entity == "callsite":
+        return record.record == "call"
     if entity == "import":
         return record.kind in import_kinds
     if entity == "decorator":
@@ -768,6 +1188,8 @@ def _matches_name(record: SgRecord, name: str) -> bool:
     # Extract name based on record type
     if record.record == "import":
         extracted_name = _extract_import_name(record)
+    elif record.record == "call":
+        extracted_name = _extract_call_name(record)
     else:
         extracted_name = _extract_def_name(record)
 
@@ -937,7 +1359,8 @@ def _import_to_finding(import_record: SgRecord) -> Finding:
 def _build_callers_section(
     target_defs: list[SgRecord],
     all_calls: list[SgRecord],
-    index: IntervalIndex,
+    index: FileIntervalIndex,
+    root: Path,
 ) -> Section:
     """Build section showing callers of target definitions."""
     findings: list[Finding] = []
@@ -946,13 +1369,20 @@ def _build_callers_section(
     target_names = {_extract_def_name(d) for d in target_defs if _extract_def_name(d)}
 
     # Find calls to target names
+    call_contexts: list[tuple[SgRecord, str, SgRecord | None]] = []
     for call in all_calls:
         call_target = _extract_call_target(call)
         if call_target not in target_names:
             continue
+        containing = index.find_containing(call)
+        call_contexts.append((call, call_target, containing))
 
-        # Find containing definition (the caller)
-        containing = index.find_containing(call.start_line)
+    containing_defs = [
+        containing for _, _, containing in call_contexts if containing is not None
+    ]
+    evidence_map = _build_def_evidence_map(containing_defs, root)
+
+    for call, call_target, containing in call_contexts:
         caller_name = _extract_def_name(containing) if containing else "<module>"
 
         anchor = Anchor(
@@ -961,16 +1391,21 @@ def _build_callers_section(
             col=call.start_col,
         )
 
+        details: dict[str, object] = {
+            "caller": caller_name,
+            "callee": call_target,
+        }
+        if containing is not None:
+            evidence = evidence_map.get(_record_key(containing))
+            _apply_call_evidence(details, evidence, call_target)
+
         findings.append(
             Finding(
                 category="caller",
                 message=f"caller: {caller_name} calls {call_target}",
                 anchor=anchor,
                 severity="info",
-                details={
-                    "caller": caller_name,
-                    "callee": call_target,
-                },
+                details=details,
             )
         )
 
@@ -980,46 +1415,292 @@ def _build_callers_section(
     )
 
 
-def _build_hazards_section(
+def _build_callees_section(
     target_defs: list[SgRecord],
-    all_records: list[SgRecord],
+    calls_by_def: dict[SgRecord, list[SgRecord]],
+    root: Path,
 ) -> Section:
-    """Build section showing potential hazards in target definitions."""
+    """Build section showing callees for target definitions."""
     findings: list[Finding] = []
+    evidence_map = _build_def_evidence_map(target_defs, root)
 
-    # Build index for target defs
-    index = IntervalIndex.from_records(target_defs)
-
-    # Check for hazardous patterns in call records
-    for record in all_records:
-        if record.record != "call":
-            continue
-
-        containing = index.find_containing(record.start_line)
-        if not containing:
-            continue
-
-        hazard = _detect_hazard(record)
-        if hazard:
+    for def_record in target_defs:
+        def_name = _extract_def_name(def_record) or "<unknown>"
+        evidence = evidence_map.get(_record_key(def_record))
+        for call in calls_by_def.get(def_record, []):
+            call_target = _extract_call_target(call)
+            if not call_target:
+                continue
             anchor = Anchor(
-                file=record.file,
-                line=record.start_line,
-                col=record.start_col,
+                file=call.file,
+                line=call.start_line,
+                col=call.start_col,
             )
-
+            details: dict[str, object] = {
+                "caller": def_name,
+                "callee": call_target,
+            }
+            _apply_call_evidence(details, evidence, call_target)
             findings.append(
                 Finding(
-                    category="hazard",
-                    message=f"hazard: {hazard['kind']} - {hazard['reason']}",
+                    category="callee",
+                    message=f"callee: {def_name} calls {call_target}",
                     anchor=anchor,
-                    severity="warning",
-                    details=hazard,
+                    severity="info",
+                    details=details,
                 )
             )
 
     return Section(
+        title="Callees",
+        findings=findings,
+    )
+
+
+def _build_imports_section(
+    target_defs: list[SgRecord],
+    all_records: list[SgRecord],
+) -> Section:
+    """Build section showing imports within target files."""
+    target_files = {record.file for record in target_defs}
+    findings: list[Finding] = []
+
+    for record in all_records:
+        if record.record != "import":
+            continue
+        if record.file not in target_files:
+            continue
+        findings.append(_import_to_finding(record))
+
+    return Section(
+        title="Imports",
+        findings=findings,
+    )
+
+
+def _build_raises_section(
+    target_defs: list[SgRecord],
+    all_records: list[SgRecord],
+    index: FileIntervalIndex,
+) -> Section:
+    """Build section showing raises/excepts within target definitions."""
+    findings: list[Finding] = []
+    target_def_keys = {_record_key(record) for record in target_defs}
+
+    for record in all_records:
+        if record.record not in {"raise", "except"}:
+            continue
+        containing = index.find_containing(record)
+        if containing is None or _record_key(containing) not in target_def_keys:
+            continue
+        category = "raise" if record.record == "raise" else "except"
+        anchor = Anchor(
+            file=record.file,
+            line=record.start_line,
+            col=record.start_col,
+        )
+        findings.append(
+            Finding(
+                category=category,
+                message=f"{category}: {record.text.strip()}",
+                anchor=anchor,
+                severity="info",
+                details={
+                    "context_def": _extract_def_name(containing) or "<module>",
+                },
+            )
+        )
+
+    return Section(
+        title="Raises",
+        findings=findings,
+    )
+
+
+def _build_scope_section(
+    target_defs: list[SgRecord],
+    root: Path,
+    calls_by_def: dict[SgRecord, list[SgRecord]],
+) -> Section:
+    """Build section showing scope details for target definitions."""
+    from tools.cq.query.enrichment import SymtableEnricher
+
+    findings: list[Finding] = []
+    enricher = SymtableEnricher(root)
+
+    for def_record in target_defs:
+        base_finding = _def_to_finding(def_record, calls_by_def.get(def_record, []))
+        scope_info = enricher.enrich_function_finding(base_finding, def_record)
+        if not scope_info:
+            continue
+        def_name = _extract_def_name(def_record) or "<unknown>"
+        free_vars = scope_info.get("free_vars", [])
+        cell_vars = scope_info.get("cell_vars", [])
+        label = "closure" if scope_info.get("is_closure") else "toplevel"
+        message = f"scope: {def_name} ({label}) free_vars={len(free_vars)} cell_vars={len(cell_vars)}"
+        findings.append(
+            Finding(
+                category="scope",
+                message=message,
+                anchor=base_finding.anchor,
+                severity="info",
+                details=scope_info,
+            )
+        )
+
+    return Section(
+        title="Scope",
+        findings=findings,
+    )
+
+
+def _build_bytecode_surface_section(
+    target_defs: list[SgRecord],
+    root: Path,
+) -> Section:
+    """Build section showing bytecode surface info for target definitions."""
+    from tools.cq.query.enrichment import enrich_records
+
+    findings: list[Finding] = []
+    enrichment = enrich_records(target_defs, root)
+
+    for record in target_defs:
+        location = f"{record.file}:{record.start_line}:{record.start_col}"
+        info = enrichment.get(location, {})
+        bytecode_info = info.get("bytecode_info")
+        if bytecode_info is None:
+            continue
+        def_name = _extract_def_name(record) or "<unknown>"
+        details = {
+            "globals": list(bytecode_info.load_globals),
+            "attrs": list(bytecode_info.load_attrs),
+            "calls": list(bytecode_info.call_functions),
+        }
+        anchor = Anchor(
+            file=record.file,
+            line=record.start_line,
+            col=record.start_col,
+        )
+        message = (
+            f"bytecode: {def_name} globals={len(details['globals'])} "
+            f"attrs={len(details['attrs'])} calls={len(details['calls'])}"
+        )
+        findings.append(
+            Finding(
+                category="bytecode_surface",
+                message=message,
+                anchor=anchor,
+                severity="info",
+                details=details,
+            )
+        )
+
+    return Section(
+        title="Bytecode Surface",
+        findings=findings,
+    )
+
+
+def _build_hazards_section(
+    target_defs: list[SgRecord],
+    root: Path,
+    globs: list[str] | None,
+) -> Section:
+    """Build section showing potential hazards in target definitions."""
+    from tools.cq.query.hazards import HazardDetector
+
+    findings: list[Finding] = []
+    if not target_defs:
+        return Section(title="Hazards", findings=findings)
+    detector = HazardDetector()
+    inline_rules = detector.build_inline_rules_yaml()
+    scan_paths = [root / record.file for record in target_defs]
+    hazard_matches = _run_ast_grep_inline_rules(
+        inline_rules,
+        scan_paths,
+        root,
+        globs,
+    )
+
+    target_index = FileIntervalIndex.from_records(target_defs)
+    target_def_keys = {_record_key(record) for record in target_defs}
+
+    for data in hazard_matches:
+        rule_id = data.get("ruleId", "")
+        if not rule_id.startswith("hazard_"):
+            continue
+        hazard_id = rule_id.removeprefix("hazard_")
+        spec = detector.get_spec(hazard_id)
+        if spec is None:
+            continue
+        range_data = data.get("range", {})
+        start = range_data.get("start", {})
+        end = range_data.get("end", {})
+        file_path = data.get("file", "")
+        record = SgRecord(
+            record="call",
+            kind="hazard",
+            file=file_path,
+            start_line=start.get("line", 0) + 1,
+            start_col=start.get("column", 0),
+            end_line=end.get("line", 0) + 1,
+            end_col=end.get("column", 0),
+            text=data.get("text", ""),
+            rule_id=rule_id,
+        )
+        containing = target_index.find_containing(record)
+        if containing is None or _record_key(containing) not in target_def_keys:
+            continue
+        anchor = Anchor(
+            file=file_path,
+            line=record.start_line,
+            col=record.start_col,
+            end_line=record.end_line,
+            end_col=record.end_col,
+        )
+        findings.append(
+            Finding(
+                category="hazard",
+                message=f"hazard: {spec.id} - {spec.message}",
+                anchor=anchor,
+                severity=spec.severity.value,
+                details={
+                    "kind": spec.id,
+                    "category": spec.category.value,
+                    "confidence_penalty": spec.confidence_penalty,
+                },
+            )
+        )
+
+    return Section(
         title="Hazards",
         findings=findings,
+    )
+
+
+def _call_to_finding(
+    record: SgRecord,
+    *,
+    extra_details: dict[str, object] | None = None,
+) -> Finding:
+    """Convert a call record to a Finding."""
+    call_target = _extract_call_target(record) or "<unknown>"
+    anchor = Anchor(
+        file=record.file,
+        line=record.start_line,
+        col=record.start_col,
+        end_line=record.end_line,
+        end_col=record.end_col,
+    )
+    details = {"text": record.text.strip()}
+    if extra_details:
+        details.update(extra_details)
+    return Finding(
+        category="callsite",
+        message=f"call: {call_target}",
+        anchor=anchor,
+        severity="info",
+        details=details,
     )
 
 
@@ -1041,29 +1722,7 @@ def _extract_call_target(call: SgRecord) -> str:
     return ""
 
 
-def _detect_hazard(call: SgRecord) -> dict | None:
-    """Detect potential hazards in a call.
-
-    Returns hazard dict or None if no hazard detected.
-    """
-    text = call.text
-
-    # Dynamic dispatch hazard: getattr, __getattr__
-    if "getattr" in text.lower():
-        return {
-            "kind": "dynamic_dispatch",
-            "reason": "getattr usage may resolve dynamically",
-            "confidence": 0.50,
-        }
-
-    # Forwarding hazard: *args, **kwargs in call
-    if "*" in text and "(" in text:
-        match = re.search(r"\(\s*\*", text)
-        if match:
-            return {
-                "kind": "forwarding",
-                "reason": "argument forwarding may obscure call target",
-                "confidence": 0.70,
-            }
-
-    return None
+def _extract_call_name(call: SgRecord) -> str | None:
+    """Extract the name for callsite matching."""
+    target = _extract_call_target(call)
+    return target or None

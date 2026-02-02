@@ -11,9 +11,9 @@ The entire pipeline in ~50 lines:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -43,10 +43,13 @@ from semantics.incremental.metadata import (
 )
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
+from semantics.naming import canonical_output_name
 from semantics.quality import QualityRelationshipSpec
+from semantics.registry import SEMANTIC_MODEL
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
 from semantics.specs import RelationshipSpec
 from utils.env_utils import env_value
+from utils.hashing import hash_msgpack_canonical
 from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -58,8 +61,9 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from semantics.adapters import RelationshipProjectionOptions
     from semantics.config import SemanticConfig
-    from semantics.ir import SemanticIRJoinGroup
+    from semantics.ir import SemanticIR, SemanticIRJoinGroup
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -86,6 +90,7 @@ class CpgBuildOptions:
     use_cdf: bool | None = None
     cdf_inputs: Mapping[str, str] | None = None
     materialize_outputs: bool = True
+    requested_outputs: Collection[str] | None = None
     schema_policy: SchemaEvolutionPolicy = field(default_factory=SchemaEvolutionPolicy)
 
 
@@ -100,6 +105,20 @@ class CpgViewNodesRequest:
     config: SemanticConfig | None
     input_mapping: Mapping[str, str]
     use_cdf: bool
+    requested_outputs: Collection[str] | None
+    semantic_ir: SemanticIR | None
+
+
+@dataclass(frozen=True)
+class CpgViewSpecsRequest:
+    """Inputs required to build semantic view specs."""
+
+    input_mapping: Mapping[str, str]
+    config: SemanticConfig | None
+    use_cdf: bool
+    runtime_profile: DataFusionRuntimeProfile | None
+    requested_outputs: Collection[str] | None
+    semantic_ir: SemanticIR | None
 
 
 @dataclass(frozen=True)
@@ -185,11 +204,14 @@ def _default_semantic_cache_policy(
 ) -> dict[str, CachePolicy]:
     resolved: dict[str, CachePolicy] = {}
     for name in view_names:
-        if name in {"cpg_nodes_v1", "cpg_edges_v1"}:
+        if name.startswith("cpg_"):
             if runtime_config.output_path(name) is not None:
                 resolved[name] = "delta_output"
             else:
                 resolved[name] = "delta_staging"
+            continue
+        if name in {"relation_output_v1", "dim_exported_defs_v1"}:
+            resolved[name] = "delta_staging"
             continue
         if name in {"semantic_nodes_union_v1", "semantic_edges_union_v1"}:
             resolved[name] = "delta_staging"
@@ -209,6 +231,8 @@ def _bundle_for_builder(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     builder: DataFrameBuilder,
+    view_name: str,
+    semantic_ir: SemanticIR | None,
 ) -> DataFusionPlanBundle:
     """Build a plan bundle for a DataFrame builder.
 
@@ -221,7 +245,7 @@ def _bundle_for_builder(
 
     session_runtime = runtime_profile.session_runtime()
     df = builder(ctx)
-    return build_plan_bundle(
+    bundle = build_plan_bundle(
         ctx,
         df,
         options=PlanBundleOptions(
@@ -230,6 +254,21 @@ def _bundle_for_builder(
             session_runtime=session_runtime,
         ),
     )
+    if semantic_ir is None:
+        return bundle
+    model_hash = semantic_ir.model_hash
+    ir_hash = semantic_ir.ir_hash
+    if model_hash is None or ir_hash is None:
+        return bundle
+    base_identity = bundle.plan_identity_hash or bundle.plan_fingerprint
+    cache_payload = {
+        "base_plan_hash": base_identity,
+        "view_name": view_name,
+        "semantic_model_hash": model_hash,
+        "semantic_ir_hash": ir_hash,
+    }
+    semantic_cache_hash = hash_msgpack_canonical(cache_payload)
+    return replace(bundle, plan_identity_hash=semantic_cache_hash)
 
 
 def _normalize_builder(
@@ -351,6 +390,112 @@ def _relationship_builder(
     return _builder
 
 
+def _projected_relationship_builder(
+    builder: DataFrameBuilder,
+    *,
+    options: RelationshipProjectionOptions,
+) -> DataFrameBuilder:
+    def _build(inner_ctx: SessionContext) -> DataFrame:
+        from semantics.adapters import project_semantic_to_legacy
+
+        return project_semantic_to_legacy(builder(inner_ctx), options=options)
+
+    return _build
+
+
+def _relation_output_builder(
+    *,
+    relationship_names: Sequence[str],
+    relationship_by_name: Mapping[str, QualityRelationshipSpec],
+    projection_options: Mapping[str, RelationshipProjectionOptions],
+) -> DataFrameBuilder:
+    def _builder(inner_ctx: SessionContext) -> DataFrame:
+        import pyarrow as pa
+        from datafusion import lit
+
+        from semantics.catalog.projections import RelationOutputSpec, relation_output_projection
+
+        frames: list[DataFrame] = []
+        for rel_name in sorted(relationship_names):
+            if rel_name not in projection_options:
+                msg = f"Missing projection options for relationship {rel_name!r}."
+                raise KeyError(msg)
+            rel_df = inner_ctx.table(rel_name)
+            schema_names = set(rel_df.schema().names)
+            for col_name, dtype in (
+                ("binding_kind", pa.string()),
+                ("def_site_kind", pa.string()),
+                ("use_kind", pa.string()),
+                ("reason", pa.string()),
+                ("diag_source", pa.string()),
+                ("severity", pa.string()),
+                ("ambiguity_group_id", pa.string()),
+                ("qname_source", pa.string()),
+            ):
+                if col_name not in schema_names:
+                    rel_df = rel_df.with_column(col_name, lit(None).cast(dtype))
+                    schema_names.add(col_name)
+            options = projection_options[rel_name]
+            spec = relationship_by_name.get(rel_name)
+            origin = spec.origin if spec is not None else "semantic_compiler"
+            output_spec = RelationOutputSpec(
+                src_col=options.entity_id_alias,
+                dst_col="symbol",
+                kind=str(options.edge_kind),
+                origin=origin,
+                qname_source_col="qname_source",
+                ambiguity_group_col="ambiguity_group_id",
+            )
+            frames.append(relation_output_projection(rel_df, output_spec))
+        if not frames:
+            msg = "No relationship views available for relation_output_v1."
+            raise ValueError(msg)
+        result = frames[0]
+        for frame in frames[1:]:
+            result = result.union(frame)
+        return result
+
+    return _builder
+
+
+def _finalize_df_to_contract(
+    ctx: SessionContext,
+    *,
+    df: DataFrame,
+    view_name: str,
+) -> DataFrame:
+    from datafusion import col, lit
+
+    from datafusion_engine.expr.cast import safe_cast
+    from semantics.catalog.dataset_specs import dataset_spec
+
+    _ = ctx
+    spec = dataset_spec(view_name)
+    contract = spec.contract()
+    target_schema = contract.schema
+    existing = set(df.schema().names)
+    selections = [
+        (
+            safe_cast(col(field.name), field.type).alias(field.name)
+            if field.name in existing
+            else safe_cast(lit(None), field.type).alias(field.name)
+        )
+        for field in target_schema
+    ]
+    return df.select(*selections)
+
+
+def _finalize_output_builder(
+    view_name: str,
+    builder: DataFrameBuilder,
+) -> DataFrameBuilder:
+    def _builder(inner_ctx: SessionContext) -> DataFrame:
+        df = builder(inner_ctx)
+        return _finalize_df_to_contract(inner_ctx, df=df, view_name=view_name)
+
+    return _builder
+
+
 def _join_group_builder(
     group: SemanticIRJoinGroup,
     *,
@@ -449,12 +594,134 @@ def _ordered_semantic_specs(
     return tuple(ordered)
 
 
-def _cpg_view_specs(
+def _resolve_requested_outputs(
+    requested_outputs: Collection[str] | None,
+) -> set[str] | None:
+    if requested_outputs is None:
+        return {spec.name for spec in SEMANTIC_MODEL.outputs if spec.kind == "table"}
+    return {canonical_output_name(name) for name in requested_outputs}
+
+
+def _incremental_requested_outputs(
+    ctx: SessionContext,
     *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
     input_mapping: Mapping[str, str],
-    config: SemanticConfig | None,
     use_cdf: bool,
-    runtime_profile: DataFusionRuntimeProfile | None,
+    requested_outputs: Collection[str] | None,
+) -> set[str] | None:
+    if requested_outputs is not None or not use_cdf:
+        return None
+    changed_inputs = _cdf_changed_inputs(
+        ctx,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        input_mapping=input_mapping,
+    )
+    if changed_inputs is None:
+        return None
+    if not changed_inputs:
+        return set()
+    return _outputs_from_changed_inputs(changed_inputs)
+
+
+def _cdf_changed_inputs(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    runtime_config: SemanticRuntimeConfig,
+    input_mapping: Mapping[str, str],
+) -> set[str] | None:
+    from semantics.incremental.cdf_cursors import CdfCursorStore
+    from storage.deltalake import delta_cdf_enabled, delta_table_version
+
+    _ = ctx
+    cursor_store = runtime_config.cdf_cursor_store or runtime_profile.cdf_cursor_store
+    if cursor_store is None:
+        return None
+    if not isinstance(cursor_store, CdfCursorStore):
+        return None
+    changed: set[str] = set()
+    for canonical, source in input_mapping.items():
+        if canonical == "file_line_index_v1":
+            continue
+        location = runtime_profile.dataset_location(canonical)
+        if location is None:
+            location = runtime_profile.dataset_location(source)
+        if location is None:
+            continue
+        storage_options = dict(location.storage_options)
+        log_options = dict(location.delta_log_storage_options)
+        if not _cdf_enabled_for_location(
+            location,
+            storage_options=storage_options,
+            log_storage_options=log_options,
+            cdf_enabled_fn=delta_cdf_enabled,
+        ):
+            continue
+        latest_version = delta_table_version(
+            str(location.path),
+            storage_options=storage_options,
+            log_storage_options=log_options,
+        )
+        if latest_version is None:
+            continue
+        cursor = cursor_store.load_cursor(canonical)
+        if cursor is None or latest_version > cursor.last_version:
+            changed.add(canonical)
+    return changed
+
+
+def _cdf_enabled_for_location(
+    location: DatasetLocation,
+    *,
+    storage_options: Mapping[str, str],
+    log_storage_options: Mapping[str, str],
+    cdf_enabled_fn: Callable[..., bool],
+) -> bool:
+    if location.delta_cdf_options is not None:
+        return True
+    if location.datafusion_provider == "delta_cdf":
+        return True
+    return cdf_enabled_fn(
+        str(location.path),
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+
+
+def _outputs_from_changed_inputs(changed_inputs: Collection[str]) -> set[str]:
+    from semantics.ir_pipeline import compile_semantics
+
+    compiled = compile_semantics(SEMANTIC_MODEL)
+    impacted_views = _views_downstream_of_inputs(compiled.views, changed_inputs)
+    output_names = {spec.name for spec in SEMANTIC_MODEL.outputs}
+    return {name for name in impacted_views if name in output_names}
+
+
+def _views_downstream_of_inputs(
+    views: Sequence[SemanticIRView],
+    seeds: Collection[str],
+) -> set[str]:
+    dependents: dict[str, list[str]] = {}
+    for view in views:
+        for dep in view.inputs:
+            dependents.setdefault(dep, []).append(view.name)
+    impacted: set[str] = set()
+    stack = list(seeds)
+    while stack:
+        current = stack.pop()
+        for view_name in dependents.get(current, ()):
+            if view_name in impacted:
+                continue
+            impacted.add(view_name)
+            stack.append(view_name)
+    return impacted
+
+
+def _cpg_view_specs(
+    request: CpgViewSpecsRequest,
 ) -> list[tuple[str, DataFrameBuilder]]:
     """Build view specs for the CPG pipeline.
 
@@ -467,14 +734,8 @@ def _cpg_view_specs(
 
     Parameters
     ----------
-    input_mapping
-        Mapping of canonical input names to registered table names.
-    config
-        Optional semantic configuration.
-    use_cdf
-        Whether to enable CDF-aware incremental joins.
-    runtime_profile
-        Runtime profile required to build CPG output views.
+    request
+        Inputs required to build semantic view specs.
 
     Returns
     -------
@@ -487,42 +748,76 @@ def _cpg_view_specs(
         Raised when the runtime profile is unavailable.
 
     """
+    from relspec.view_defs import (
+        DEFAULT_REL_TASK_PRIORITY,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+    )
+    from semantics.catalog.projections import (
+        SemanticProjectionConfig,
+        semantic_projection_options,
+    )
     from semantics.ir_pipeline import build_semantic_ir
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
         SEMANTIC_NORMALIZATION_SPECS,
+        SemanticSpecIndex,
         normalization_spec_for_output,
-        semantic_spec_index,
     )
 
     normalization_by_output = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
     relationship_by_name = {spec.name: spec for spec in RELATIONSHIP_SPECS}
-    ir = build_semantic_ir()
+    semantic_ir = request.semantic_ir
+    if semantic_ir is None:
+        resolved_outputs = _resolve_requested_outputs(request.requested_outputs)
+        semantic_ir = build_semantic_ir(outputs=resolved_outputs)
+    ir = semantic_ir
     join_groups_by_name = {group.name: group for group in ir.join_groups}
     join_group_by_relationship = {
         rel_name: group for group in ir.join_groups for rel_name in group.relationship_names
     }
+    projection_options = semantic_projection_options(
+        SemanticProjectionConfig(
+            default_priority=DEFAULT_REL_TASK_PRIORITY,
+            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
+            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
+            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
+            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
+            relationship_specs=RELATIONSHIP_SPECS,
+        )
+    )
 
-    if runtime_profile is None:
+    if request.runtime_profile is None:
         msg = "Runtime profile is required for CPG output views."
         raise ValueError(msg)
 
     context = _SemanticSpecContext(
         normalization_by_output=normalization_by_output,
         relationship_by_name=relationship_by_name,
-        input_mapping=input_mapping,
-        config=config,
-        use_cdf=use_cdf,
+        input_mapping=request.input_mapping,
+        config=request.config,
+        use_cdf=request.use_cdf,
         normalization_spec_for_output=normalization_spec_for_output,
         join_groups_by_name=join_groups_by_name,
         join_group_by_relationship=join_group_by_relationship,
+        projection_options=projection_options,
+        runtime_profile=request.runtime_profile,
     )
-    view_specs = _semantic_view_specs(
-        ordered_specs=_ordered_semantic_specs(semantic_spec_index()),
+    spec_index = tuple(
+        SemanticSpecIndex(
+            name=view.name,
+            kind=view.kind,
+            inputs=view.inputs,
+            outputs=view.outputs,
+        )
+        for view in ir.views
+    )
+    return _semantic_view_specs(
+        ordered_specs=_ordered_semantic_specs(spec_index),
         context=context,
     )
-    view_specs.extend(_cpg_output_view_specs(runtime_profile))
-    return view_specs
 
 
 @dataclass(frozen=True)
@@ -535,6 +830,8 @@ class _SemanticSpecContext:
     normalization_spec_for_output: Callable[[str], SemanticNormalizationSpec | None]
     join_groups_by_name: Mapping[str, SemanticIRJoinGroup]
     join_group_by_relationship: Mapping[str, SemanticIRJoinGroup]
+    projection_options: Mapping[str, RelationshipProjectionOptions]
+    runtime_profile: DataFusionRuntimeProfile
 
 
 def _semantic_view_specs(
@@ -552,52 +849,163 @@ def _semantic_view_specs(
     return view_specs
 
 
+def _builder_for_normalize_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    norm_spec = context.normalization_by_output.get(
+        spec.name
+    ) or context.normalization_spec_for_output(spec.name)
+    if norm_spec is None:
+        msg = f"Missing normalization spec for output {spec.name!r}."
+        raise KeyError(msg)
+    return _normalize_spec_builder(
+        norm_spec,
+        input_mapping=context.input_mapping,
+        config=context.config,
+    )
+
+
+def _builder_for_scip_normalize_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = spec
+    return _scip_norm_builder(
+        _input_table(context.input_mapping, "scip_occurrences"),
+        line_index_table=_input_table(context.input_mapping, "file_line_index_v1"),
+    )
+
+
+def _builder_for_join_group_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    join_group = context.join_groups_by_name.get(spec.name)
+    if join_group is None:
+        msg = f"Missing join group spec for output {spec.name!r}."
+        raise KeyError(msg)
+    return _join_group_builder(join_group, config=context.config)
+
+
+def _builder_for_relate_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    rel_spec = context.relationship_by_name.get(spec.name)
+    if rel_spec is None:
+        msg = f"Missing relationship spec for output {spec.name!r}."
+        raise KeyError(msg)
+    join_group = context.join_group_by_relationship.get(spec.name)
+    builder = _relationship_builder(
+        rel_spec,
+        config=context.config,
+        use_cdf=context.use_cdf,
+        join_group=join_group,
+    )
+    options = context.projection_options.get(spec.name)
+    if options is None:
+        msg = f"Missing projection options for relationship {spec.name!r}."
+        raise KeyError(msg)
+    return _projected_relationship_builder(builder, options=options)
+
+
+def _builder_for_union_edges_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    return _union_edges_builder(list(spec.inputs), config=context.config)
+
+
+def _builder_for_union_nodes_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    return _union_nodes_builder(list(spec.inputs), config=context.config)
+
+
+def _builder_for_projection_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    builder = _relation_output_builder(
+        relationship_names=tuple(context.relationship_by_name),
+        relationship_by_name=context.relationship_by_name,
+        projection_options=context.projection_options,
+    )
+    return _finalize_output_builder(spec.name, builder)
+
+
+def _builder_for_diagnostic_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = context
+    builders = semantic_diagnostic_view_builders()
+    builder = builders.get(spec.name)
+    if builder is None:
+        msg = f"Missing diagnostic builder for output {spec.name!r}."
+        raise KeyError(msg)
+    return _finalize_output_builder(spec.name, builder)
+
+
+def _builder_for_export_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = context
+    if spec.name == "dim_exported_defs_v1":
+        from semantics.incremental.export_builders import exported_defs_df_builder
+
+        return _finalize_output_builder(spec.name, exported_defs_df_builder)
+    msg = f"Unsupported export output {spec.name!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_finalize_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    cpg_builders = dict(_cpg_output_view_specs(context.runtime_profile))
+    builder = cpg_builders.get(spec.name)
+    if builder is None:
+        msg = f"Missing finalize builder for output {spec.name!r}."
+        raise KeyError(msg)
+    return _finalize_output_builder(spec.name, builder)
+
+
+def _builder_for_artifact_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = context
+    msg = f"Unsupported artifact spec output: {spec.name!r}."
+    raise ValueError(msg)
+
+
 def _builder_for_semantic_spec(
     spec: SemanticSpecIndex,
     *,
     context: _SemanticSpecContext,
 ) -> DataFrameBuilder:
-    if spec.kind == "normalize":
-        norm_spec = context.normalization_by_output.get(
-            spec.name
-        ) or context.normalization_spec_for_output(spec.name)
-        if norm_spec is None:
-            msg = f"Missing normalization spec for output {spec.name!r}."
-            raise KeyError(msg)
-        return _normalize_spec_builder(
-            norm_spec,
-            input_mapping=context.input_mapping,
-            config=context.config,
-        )
-    if spec.kind == "scip_normalize":
-        return _scip_norm_builder(
-            _input_table(context.input_mapping, "scip_occurrences"),
-            line_index_table=_input_table(context.input_mapping, "file_line_index_v1"),
-        )
-    if spec.kind == "join_group":
-        join_group = context.join_groups_by_name.get(spec.name)
-        if join_group is None:
-            msg = f"Missing join group spec for output {spec.name!r}."
-            raise KeyError(msg)
-        return _join_group_builder(join_group, config=context.config)
-    if spec.kind == "relate":
-        rel_spec = context.relationship_by_name.get(spec.name)
-        if rel_spec is None:
-            msg = f"Missing relationship spec for output {spec.name!r}."
-            raise KeyError(msg)
-        join_group = context.join_group_by_relationship.get(spec.name)
-        return _relationship_builder(
-            rel_spec,
-            config=context.config,
-            use_cdf=context.use_cdf,
-            join_group=join_group,
-        )
-    if spec.kind == "union_edges":
-        return _union_edges_builder(list(spec.inputs), config=context.config)
-    if spec.kind == "union_nodes":
-        return _union_nodes_builder(list(spec.inputs), config=context.config)
-    msg = f"Unsupported semantic spec kind: {spec.kind!r}."
-    raise ValueError(msg)
+    handlers: dict[str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]] = {
+        "normalize": _builder_for_normalize_spec,
+        "scip_normalize": _builder_for_scip_normalize_spec,
+        "join_group": _builder_for_join_group_spec,
+        "relate": _builder_for_relate_spec,
+        "union_edges": _builder_for_union_edges_spec,
+        "union_nodes": _builder_for_union_nodes_spec,
+        "projection": _builder_for_projection_spec,
+        "diagnostic": _builder_for_diagnostic_spec,
+        "export": _builder_for_export_spec,
+        "finalize": _builder_for_finalize_spec,
+        "artifact": _builder_for_artifact_spec,
+    }
+    handler = handlers.get(spec.kind)
+    if handler is None:
+        msg = f"Unsupported semantic spec kind: {spec.kind!r}."
+        raise ValueError(msg)
+    return handler(spec, context)
 
 
 def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
@@ -607,7 +1015,15 @@ def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
 def _cpg_output_view_specs(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> list[tuple[str, DataFrameBuilder]]:
-    from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df
+    from cpg.view_builders_df import (
+        build_cpg_edges_by_dst_df,
+        build_cpg_edges_by_src_df,
+        build_cpg_edges_df,
+        build_cpg_nodes_df,
+        build_cpg_props_df,
+        build_cpg_props_map_df,
+    )
+    from semantics.naming import canonical_output_name
 
     session_runtime = runtime_profile.session_runtime()
 
@@ -620,12 +1036,28 @@ def _cpg_output_view_specs(
 
     return [
         (
-            "cpg_nodes_v1",
+            canonical_output_name("cpg_nodes"),
             _wrap_cpg_builder(build_cpg_nodes_df),
         ),
         (
-            "cpg_edges_v1",
+            canonical_output_name("cpg_edges"),
             _wrap_cpg_builder(build_cpg_edges_df),
+        ),
+        (
+            canonical_output_name("cpg_props"),
+            _wrap_cpg_builder(build_cpg_props_df),
+        ),
+        (
+            canonical_output_name("cpg_props_map"),
+            _wrap_cpg_builder(build_cpg_props_map_df),
+        ),
+        (
+            canonical_output_name("cpg_edges_by_src"),
+            _wrap_cpg_builder(build_cpg_edges_by_src_df),
+        ),
+        (
+            canonical_output_name("cpg_edges_by_dst"),
+            _wrap_cpg_builder(build_cpg_edges_by_dst_df),
         ),
     ]
 
@@ -634,10 +1066,14 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     from datafusion_engine.views.graph import ViewNode
 
     view_specs = _cpg_view_specs(
-        input_mapping=request.input_mapping,
-        config=request.config,
-        use_cdf=request.use_cdf,
-        runtime_profile=request.runtime_profile,
+        CpgViewSpecsRequest(
+            input_mapping=request.input_mapping,
+            config=request.config,
+            use_cdf=request.use_cdf,
+            runtime_profile=request.runtime_profile,
+            requested_outputs=request.requested_outputs,
+            semantic_ir=request.semantic_ir,
+        )
     )
     resolved_cache = request.cache_policy
     if resolved_cache is None:
@@ -660,11 +1096,213 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
                     request.ctx,
                     runtime_profile=request.runtime_profile,
                     builder=builder,
+                    view_name=name,
+                    semantic_ir=request.semantic_ir,
                 ),
                 cache_policy=_cache_policy_for(name, normalized_cache),
             )
         )
     return nodes
+
+
+def _record_semantic_compile_artifacts(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    semantic_ir: SemanticIR,
+    requested_outputs: Collection[str] | None,
+    plan_bundles: Mapping[str, DataFusionPlanBundle] | None = None,
+) -> None:
+    from datafusion_engine.identity import schema_identity_hash
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+
+    if semantic_ir.model_hash is None or semantic_ir.ir_hash is None:
+        return
+
+    payload = {
+        "semantic_model_hash": semantic_ir.model_hash,
+        "semantic_ir_hash": semantic_ir.ir_hash,
+        "view_count": len(semantic_ir.views),
+        "join_group_count": len(semantic_ir.join_groups),
+        "requested_outputs": tuple(sorted(requested_outputs or ())),
+    }
+    record_artifact(runtime_profile, "semantic_ir_fingerprint_v1", payload)
+
+    explain_payload = {
+        "semantic_model_hash": semantic_ir.model_hash,
+        "semantic_ir_hash": semantic_ir.ir_hash,
+        "views": [
+            {
+                "name": view.name,
+                "kind": view.kind,
+                "inputs": view.inputs,
+                "outputs": view.outputs,
+            }
+            for view in semantic_ir.views
+        ],
+        "join_groups": [
+            {
+                "name": group.name,
+                "left_view": group.left_view,
+                "right_view": group.right_view,
+                "left_on": group.left_on,
+                "right_on": group.right_on,
+                "how": group.how,
+                "relationship_names": group.relationship_names,
+            }
+            for group in semantic_ir.join_groups
+        ],
+    }
+    record_artifact(runtime_profile, "semantic_explain_plan_v1", explain_payload)
+
+    view_stats = _view_plan_stats(semantic_ir, plan_bundles=plan_bundles)
+    if view_stats:
+        record_artifact(
+            runtime_profile,
+            "semantic_view_plan_stats_v1",
+            {
+                "semantic_model_hash": semantic_ir.model_hash,
+                "semantic_ir_hash": semantic_ir.ir_hash,
+                "views": view_stats,
+            },
+        )
+    report = _semantic_explain_markdown(
+        semantic_ir,
+        view_stats=view_stats,
+    )
+    record_artifact(
+        runtime_profile,
+        "semantic_explain_plan_report_v1",
+        {
+            "semantic_model_hash": semantic_ir.model_hash,
+            "semantic_ir_hash": semantic_ir.ir_hash,
+            "markdown": report,
+        },
+    )
+
+    for group in semantic_ir.join_groups:
+        if not ctx.table_exist(group.name):
+            continue
+        join_df = ctx.table(group.name)
+        row_count = dataframe_row_count(join_df)
+        schema_hash = schema_identity_hash(arrow_schema_from_df(join_df))
+        left_count = None
+        right_count = None
+        if ctx.table_exist(group.left_view):
+            left_count = dataframe_row_count(ctx.table(group.left_view))
+        if ctx.table_exist(group.right_view):
+            right_count = dataframe_row_count(ctx.table(group.right_view))
+        selectivity = None
+        if left_count and right_count:
+            denom = left_count * right_count
+            if denom:
+                selectivity = row_count / denom
+        record_artifact(
+            runtime_profile,
+            "semantic_join_group_stats_v1",
+            {
+                "join_group": group.name,
+                "left_view": group.left_view,
+                "right_view": group.right_view,
+                "row_count": row_count,
+                "left_row_count": left_count,
+                "right_row_count": right_count,
+                "selectivity": selectivity,
+                "schema_hash": schema_hash,
+                "semantic_model_hash": semantic_ir.model_hash,
+                "semantic_ir_hash": semantic_ir.ir_hash,
+            },
+        )
+
+
+def _view_plan_stats(
+    semantic_ir: SemanticIR,
+    *,
+    plan_bundles: Mapping[str, DataFusionPlanBundle] | None,
+) -> list[dict[str, object]]:
+    if not plan_bundles:
+        return []
+    rows: list[dict[str, object]] = []
+    for view in semantic_ir.views:
+        bundle = plan_bundles.get(view.name)
+        if bundle is None:
+            continue
+        schema_hash = schema_identity_hash(arrow_schema_from_df(bundle.df))
+        rows.append(
+            {
+                "name": view.name,
+                "kind": view.kind,
+                "inputs": view.inputs,
+                "outputs": view.outputs,
+                "plan_fingerprint": bundle.plan_fingerprint,
+                "plan_identity_hash": bundle.plan_identity_hash,
+                "required_udfs": tuple(bundle.required_udfs),
+                "required_rewrite_tags": tuple(bundle.required_rewrite_tags),
+                "schema_hash": schema_hash,
+            }
+        )
+    return rows
+
+
+def _semantic_explain_markdown(
+    semantic_ir: SemanticIR,
+    *,
+    view_stats: Sequence[Mapping[str, object]],
+) -> str:
+    lines: list[str] = [
+        "# Semantic Explain Plan",
+        "",
+        f"- semantic_model_hash: {semantic_ir.model_hash}",
+        f"- semantic_ir_hash: {semantic_ir.ir_hash}",
+        f"- view_count: {len(semantic_ir.views)}",
+        f"- join_group_count: {len(semantic_ir.join_groups)}",
+        "",
+        "## Views",
+        "| name | kind | inputs | outputs | plan_fingerprint |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    stats_by_name = {row.get("name"): row for row in view_stats}
+    for view in semantic_ir.views:
+        stats = stats_by_name.get(view.name, {})
+        plan_fingerprint = stats.get("plan_fingerprint") or ""
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    view.name,
+                    view.kind,
+                    ", ".join(view.inputs),
+                    ", ".join(view.outputs),
+                    str(plan_fingerprint),
+                ]
+            )
+            + " |"
+        )
+    if semantic_ir.join_groups:
+        lines.extend(
+            [
+                "",
+                "## Join Groups",
+                "| name | left_view | right_view | how | relationships |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for group in semantic_ir.join_groups:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        group.name,
+                        group.left_view,
+                        group.right_view,
+                        str(group.how),
+                        ", ".join(group.relationship_names),
+                    ]
+                )
+                + " |"
+            )
+    return "\n".join(lines)
 
 
 def build_cpg(
@@ -739,8 +1377,23 @@ def build_cpg(
             ViewGraphRuntimeOptions,
             register_view_graph,
         )
+        from semantics.ir_pipeline import build_semantic_ir
 
         snapshot = rust_udf_snapshot(ctx)
+        resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
+        incremental_outputs = _incremental_requested_outputs(
+            ctx,
+            runtime_profile=runtime_profile,
+            runtime_config=runtime_config,
+            input_mapping=input_mapping,
+            use_cdf=use_cdf,
+            requested_outputs=resolved.requested_outputs,
+        )
+        if incremental_outputs is not None:
+            resolved_outputs = incremental_outputs
+        semantic_ir = build_semantic_ir(
+            outputs=resolved_outputs,
+        )
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -750,6 +1403,8 @@ def build_cpg(
                 config=resolved.config,
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
+                requested_outputs=resolved_outputs,
+                semantic_ir=semantic_ir,
             )
         )
         register_view_graph(
@@ -763,22 +1418,35 @@ def build_cpg(
                 validate_schema=resolved.validate_schema,
             ),
         )
+        plan_bundles = {node.name: node.plan_bundle for node in nodes}
+        _record_semantic_compile_artifacts(
+            ctx,
+            runtime_profile=runtime_profile,
+            semantic_ir=semantic_ir,
+            requested_outputs=resolved_outputs,
+            plan_bundles=plan_bundles,
+        )
         if resolved.materialize_outputs:
             _materialize_semantic_outputs(
                 ctx,
                 runtime_profile=runtime_profile,
                 runtime_config=runtime_config,
                 schema_policy=resolved.schema_policy,
+                requested_outputs=resolved_outputs,
             )
         _emit_semantic_quality_diagnostics(
             ctx,
             runtime_profile=runtime_profile,
             runtime_config=runtime_config,
             schema_policy=resolved.schema_policy,
+            requested_outputs=resolved_outputs,
         )
 
 
-def _semantic_output_view_names() -> list[str]:
+def _semantic_output_view_names(
+    *,
+    requested_outputs: Collection[str] | None = None,
+) -> list[str]:
     """Return semantic output view names.
 
     Returns
@@ -789,10 +1457,14 @@ def _semantic_output_view_names() -> list[str]:
     from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.naming import SEMANTIC_VIEW_NAMES
 
-    view_names = list(SEMANTIC_VIEW_NAMES)
-    if RELATION_OUTPUT_NAME not in view_names:
-        view_names.append(RELATION_OUTPUT_NAME)
-    return view_names
+    if requested_outputs is None:
+        view_names = list(SEMANTIC_VIEW_NAMES)
+        if RELATION_OUTPUT_NAME not in view_names:
+            view_names.append(RELATION_OUTPUT_NAME)
+        return view_names
+
+    resolved = {canonical_output_name(name) for name in requested_outputs}
+    return [spec.name for spec in SEMANTIC_MODEL.outputs if spec.name in resolved]
 
 
 def _ensure_canonical_output_locations(runtime_config: SemanticRuntimeConfig) -> None:
@@ -979,10 +1651,11 @@ def _materialize_semantic_outputs(
     runtime_profile: DataFusionRuntimeProfile,
     runtime_config: SemanticRuntimeConfig,
     schema_policy: SchemaEvolutionPolicy,
+    requested_outputs: Collection[str] | None,
 ) -> None:
     from datafusion_engine.io.write import WritePipeline
 
-    view_names = _semantic_output_view_names()
+    view_names = _semantic_output_view_names(requested_outputs=requested_outputs)
     _ensure_canonical_output_locations(runtime_config)
     output_locations = _semantic_output_locations(view_names, runtime_config)
     _ensure_semantic_output_locations(view_names, output_locations)
@@ -1154,13 +1827,22 @@ def _emit_semantic_quality_view(
         )
 
 
-def _emit_semantic_quality_views(context: _SemanticDiagnosticsContext) -> None:
+def _emit_semantic_quality_views(
+    context: _SemanticDiagnosticsContext,
+    *,
+    requested_outputs: Collection[str] | None,
+) -> None:
     builders = semantic_diagnostic_view_builders()
-    for view_name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
+    view_names = SEMANTIC_DIAGNOSTIC_VIEW_NAMES
+    if requested_outputs is not None:
+        resolved = {canonical_output_name(name) for name in requested_outputs}
+        view_names = tuple(name for name in view_names if name in resolved)
+    for view_name in view_names:
         builder = builders.get(view_name)
         if builder is None:
             continue
-        _emit_semantic_quality_view(context, view_name=view_name, builder=builder)
+        finalized = _finalize_output_builder(view_name, builder)
+        _emit_semantic_quality_view(context, view_name=view_name, builder=finalized)
 
 
 def _emit_semantic_quality_diagnostics(
@@ -1169,6 +1851,7 @@ def _emit_semantic_quality_diagnostics(
     runtime_profile: DataFusionRuntimeProfile,
     runtime_config: SemanticRuntimeConfig,
     schema_policy: SchemaEvolutionPolicy,
+    requested_outputs: Collection[str] | None,
 ) -> None:
     if not runtime_profile.emit_semantic_quality_diagnostics:
         return
@@ -1181,7 +1864,7 @@ def _emit_semantic_quality_diagnostics(
     if context is None:
         return
     with _run_context_guard():
-        _emit_semantic_quality_views(context)
+        _emit_semantic_quality_views(context, requested_outputs=requested_outputs)
 
 
 def build_cpg_from_inferred_deps(
@@ -1212,6 +1895,7 @@ def build_cpg_from_inferred_deps(
         Mapping of view names to dependency information.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
+    from semantics.ir_pipeline import build_semantic_ir
 
     resolved = options or CpgBuildOptions()
     effective_use_cdf = (
@@ -1242,6 +1926,18 @@ def build_cpg_from_inferred_deps(
             use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
         )
+        resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
+        incremental_outputs = _incremental_requested_outputs(
+            ctx,
+            runtime_profile=runtime_profile,
+            runtime_config=runtime_config,
+            input_mapping=input_mapping,
+            use_cdf=use_cdf,
+            requested_outputs=resolved.requested_outputs,
+        )
+        if incremental_outputs is not None:
+            resolved_outputs = incremental_outputs
+        semantic_ir = build_semantic_ir(outputs=resolved_outputs)
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -1251,6 +1947,8 @@ def build_cpg_from_inferred_deps(
                 config=resolved.config,
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
+                requested_outputs=resolved_outputs,
+                semantic_ir=semantic_ir,
             )
         )
         for node in nodes:

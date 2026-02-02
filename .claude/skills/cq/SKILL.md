@@ -130,6 +130,41 @@ Usage: /cq bytecode-surface <FILE_OR_SYMBOL> [--show <globals,attrs,constants,op
 
 Example: /cq bytecode-surface tools/cq/macros/calls.py --show globals,attrs
 
+### Bytecode Queries (dis Module Integration)
+
+Query bytecode instructions directly using Python's `dis` module.
+
+**Instruction Filters:**
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `bytecode.opname=X` | Exact opcode match | `bytecode.opname=LOAD_GLOBAL` |
+| `bytecode.opname=~regex` | Opcode regex match | `bytecode.opname=~^CALL` |
+| `bytecode.is_jump_target=true` | Jump target instructions | Branch points |
+| `bytecode.stack_effect>=N` | Stack effect filter | Net stack changes |
+
+**CFG Visualization:**
+
+| Format | Description |
+|--------|-------------|
+| `--format mermaid-cfg` | Control flow graph as Mermaid |
+| `fields=basic_block_count` | Number of basic blocks |
+
+**Examples:**
+```bash
+# Find functions using LOAD_GLOBAL
+/cq q "entity=function bytecode.opname=LOAD_GLOBAL"
+
+# Find functions with any CALL opcode
+/cq q "entity=function bytecode.opname=~^CALL"
+
+# Find complex control flow (many basic blocks)
+/cq q "entity=function fields=basic_block_count" | grep -E "blocks: [0-9]{2,}"
+
+# Visualize control flow graph
+/cq q "entity=function name=complex_fn" --format mermaid-cfg
+```
+
 ### q - Declarative Entity Queries
 
 The `q` command provides a composable query DSL for finding code entities.
@@ -208,6 +243,152 @@ Pattern queries use ast-grep syntax for structural code matching without false p
 /cq q "pattern='pickle.load(\$X)'"
 ```
 
+### Pattern Objects (Disambiguation)
+
+When a simple pattern has multiple interpretations (e.g., `{ "k": v }` could match dict literals or JSON pair assignments), use pattern objects with `context` and `selector` to disambiguate.
+
+**Syntax:**
+```bash
+/cq q "pattern.context='<containing_pattern>' pattern.selector=<node_kind>"
+```
+
+| Field | Description |
+|-------|-------------|
+| `pattern.context` | The outer pattern providing context |
+| `pattern.selector` | AST node kind to extract (e.g., `pair`, `argument`) |
+
+**Examples:**
+```bash
+# Find JSON-style key-value pairs (not dict literals)
+/cq q "pattern.context='{ \"\$K\": \$V }' pattern.selector=pair"
+
+# Find specific argument positions in calls
+/cq q "pattern.context='func(\$A, \$B)' pattern.selector=argument"
+
+# Extract decorators from decorated functions
+/cq q "pattern.context='@\$D def \$F(\$$$): \$$$' pattern.selector=decorator"
+```
+
+### Strictness Modes
+
+Control how precisely patterns match code structure.
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `cst` | Exact CST match (whitespace-sensitive) | Formatting-aware queries |
+| `smart` | Balances precision and recall (default) | General-purpose |
+| `ast` | Pure AST match (ignores whitespace, parens) | Structure-only matching |
+| `relaxed` | Looser matching for exploration | Finding similar patterns |
+| `signature` | Match function signatures only | API shape queries |
+
+**Examples:**
+```bash
+# Match signatures only (ignore body)
+/cq q "pattern='def \$F(\$A, \$B)' strictness=signature"
+
+# AST-only (ignore formatting differences)
+/cq q "pattern='x + y' strictness=ast"
+```
+
+### Meta-Variable Enhancements
+
+Meta-variables capture code structure in patterns.
+
+| Syntax | Name | Description |
+|--------|------|-------------|
+| `$X` | Single | Match exactly one AST node |
+| `$$X` | Multi-named | Match zero or more nodes, bind to X |
+| `$$$` | Multi-anonymous | Match zero or more nodes (no binding) |
+| `$_X` | Non-capturing | Match one node, no equality enforcement |
+
+**Equality Enforcement:**
+When the same named meta-variable appears multiple times, all captures must match:
+```bash
+# Find self-assignment (x = x)
+/cq q "pattern='\$X = \$X'"
+
+# Find swaps (a, b = b, a)
+/cq q "pattern='\$A, \$B = \$B, \$A'"
+```
+
+**Meta-Variable Filtering:**
+Filter captures with regex patterns:
+
+| Syntax | Description |
+|--------|-------------|
+| `$X=~pattern` | Capture must match regex |
+| `$X=!~pattern` | Capture must NOT match regex |
+
+**Examples:**
+```bash
+# Find getattr with string literal attribute names
+/cq q "pattern='getattr(\$X, \$Y)' \$Y=~'^\"'"
+
+# Find operators that aren't equality
+/cq q "pattern='\$A \$\$OP \$B' \$\$OP=!~'^[=!]'"
+
+# Find function calls starting with 'test_'
+/cq q "pattern='\$F(\$$$)' \$F=~'^test_'"
+```
+
+### Composite Queries (all/any/not)
+
+Combine multiple patterns with logical operators.
+
+| Operator | Syntax | Description |
+|----------|--------|-------------|
+| `all` | `all='p1,p2'` | AND - all patterns must match |
+| `any` | `any='p1,p2'` | OR - at least one pattern matches |
+| `not` | `not='pattern'` | Exclude matches |
+
+**Examples:**
+```bash
+# Find functions with both await and return
+/cq q "entity=function all='await \$X,return \$Y'"
+
+# Find any form of logging
+/cq q "any='logger.\$M(\$$$),print(\$$$),console.log(\$$$)'"
+
+# Find functions without docstrings
+/cq q "entity=function not.has='\"\"\"'"
+
+# Exclude test functions
+/cq q "entity=function name=~^build not.has='@pytest'"
+
+# Complex: async functions that don't use await
+/cq q "entity=function has='async def' not.has='await'"
+```
+
+**Ordered Capture with all:**
+Patterns in `all=` preserve capture order for meta-variables:
+```bash
+# Find where $A is used before being assigned
+/cq q "all='use(\$A)', '\$A = \$B'"
+```
+
+### nthChild Positional Matching
+
+Match elements by their position within a parent.
+
+| Parameter | Description |
+|-----------|-------------|
+| `nthChild=N` | Match exactly the Nth child (1-indexed) |
+| `nthChild='2n+1'` | Match odd-positioned children |
+| `nthChild.reverse=true` | Count from end instead of start |
+| `nthChild.ofRule='...'` | Count only matching siblings |
+
+**Examples:**
+```bash
+# Find first argument in function calls
+/cq q "pattern='\$F(\$ARG)' nthChild=1"
+
+# Find last parameter in definitions
+/cq q "pattern='def \$F(\$$$, \$LAST)' nthChild.reverse=true nthChild=1"
+
+# Find every other decorator
+/cq q "pattern='@\$D' nthChild='2n'"
+```
+
 ### Relational Constraints (Contextual Search)
 
 Find code in specific structural contexts.
@@ -219,6 +400,24 @@ Find code in specific structural contexts.
 | `precedes='$X'` | Before a pattern |
 | `follows='$X'` | After a pattern |
 
+**stopBy Control:**
+Control how far to search for containment:
+
+| Mode | Syntax | Description |
+|------|--------|-------------|
+| `neighbor` | Default | Stop at immediate neighbors |
+| `end` | `inside.stopBy=end` | Search to end of scope |
+| Custom | `inside.stopBy='def \$F'` | Stop at matching pattern |
+
+**Field-Scoped Searches:**
+Limit searches to specific AST fields (only for `inside`/`has`):
+
+| Syntax | Description |
+|--------|-------------|
+| `inside.field=body` | Search only in function body |
+| `has.field=arguments` | Search only in function arguments |
+| `has.field=returns` | Search only in return type annotation |
+
 **Examples:**
 ```bash
 # Find methods inside Config classes
@@ -229,7 +428,18 @@ Find code in specific structural contexts.
 
 # Find functions inside async context managers
 /cq q "entity=function inside='async with \$X'"
+
+# Search to end of containing scope
+/cq q "pattern='return \$X' inside='def \$F' inside.stopBy=end"
+
+# Find only in function body (not decorators/annotations)
+/cq q "pattern='yield \$X' inside='def \$F' inside.field=body"
+
+# Find patterns in decorator arguments only
+/cq q "pattern='\$X' has.field=arguments inside='@\$D(\$$$)'"
 ```
+
+**Validation Note:** The `field` parameter only works with `inside` and `has`, not with `precedes` or `follows`.
 
 ### Scope Filtering (Closure Analysis)
 
@@ -319,7 +529,76 @@ Generate visual representations of code structure.
 
 # Export for Graphviz
 /cq q "entity=function expand=callees" --format dot > graph.dot
+
+# Control flow graph visualization
+/cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
+
+### Security Hazard Catalog
+
+cq includes 30+ builtin hazard patterns for security, correctness, and design issues.
+
+**Hazard Categories:**
+
+| Category | Description | Severity |
+|----------|-------------|----------|
+| `SECURITY` | Code execution, injection, deserialization | ERROR |
+| `CORRECTNESS` | Dynamic dispatch, type confusion | WARNING/INFO |
+| `DESIGN` | Complexity, coupling issues | INFO |
+| `PERFORMANCE` | Anti-patterns affecting speed | INFO |
+
+**Builtin Security Hazards:**
+
+| Pattern | Category | Severity | Description |
+|---------|----------|----------|-------------|
+| `eval($X)` | SECURITY | ERROR | Dynamic code execution |
+| `exec($X)` | SECURITY | ERROR | Dynamic code execution |
+| `compile($X, $Y, 'exec')` | SECURITY | ERROR | Dynamic compilation |
+| `pickle.load($X)` | SECURITY | ERROR | Unsafe deserialization |
+| `pickle.loads($X)` | SECURITY | ERROR | Unsafe deserialization |
+| `yaml.load($X)` | SECURITY | WARNING | Potentially unsafe YAML |
+| `yaml.unsafe_load($X)` | SECURITY | ERROR | Explicitly unsafe YAML |
+| `subprocess.*(shell=True)` | SECURITY | WARNING | Shell injection risk |
+| `os.system($X)` | SECURITY | WARNING | Shell command execution |
+| `os.popen($X)` | SECURITY | WARNING | Shell command execution |
+| `__import__($X)` | SECURITY | WARNING | Dynamic import |
+| `importlib.import_module($X)` | SECURITY | WARNING | Dynamic import |
+
+**Builtin Correctness Hazards:**
+
+| Pattern | Category | Severity | Description |
+|---------|----------|----------|-------------|
+| `getattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute access |
+| `setattr($X, $Y, $Z)` | CORRECTNESS | INFO | Dynamic attribute modification |
+| `delattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute deletion |
+| `globals()` | CORRECTNESS | INFO | Global namespace access |
+| `locals()` | CORRECTNESS | INFO | Local namespace access |
+| `vars($X)` | CORRECTNESS | INFO | Object dict access |
+| `*args, **kwargs` forwarding | CORRECTNESS | INFO | Obscures call signatures |
+
+**Using Hazard Detection:**
+
+```bash
+# Scan for all hazards in functions
+/cq q "entity=function fields=hazards"
+
+# Find specific hazard patterns
+/cq q "pattern='eval(\$X)'"
+/cq q "pattern='pickle.load(\$X)'"
+
+# Security audit of a directory
+/cq q "entity=function in=src/api/ fields=hazards" --severity error
+
+# Find dynamic dispatch patterns
+/cq q "pattern='getattr(\$X, \$Y)' in=src/"
+```
+
+**Confidence Penalty:**
+Hazards apply confidence penalties to findings:
+- `SECURITY/ERROR`: -0.30 confidence penalty
+- `SECURITY/WARNING`: -0.15 confidence penalty
+- `CORRECTNESS/WARNING`: -0.10 confidence penalty
+- `CORRECTNESS/INFO`: -0.05 confidence penalty
 
 ### Cache Management
 

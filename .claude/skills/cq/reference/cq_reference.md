@@ -918,6 +918,200 @@ Patterns use metavariables to capture code structure:
 /cq q "pattern='def \$F(\$_): ...' strictness=signature"
 ```
 
+### Pattern Object Syntax (Deep Dive)
+
+When simple patterns are ambiguous (e.g., `{ "k": v }` matches both dict literals and JSON pairs), use pattern objects for disambiguation.
+
+**Full Syntax:**
+```
+pattern.context='<outer_pattern>' pattern.selector=<node_kind> [pattern.strictness=MODE]
+```
+
+**How It Works:**
+1. `context` provides the outer pattern that establishes scope
+2. `selector` specifies which AST node kind to extract from matches
+3. The system generates an inline YAML rule for ast-grep
+
+**Common Selectors:**
+
+| Selector | Description | Use Case |
+|----------|-------------|----------|
+| `pair` | Key-value pair in dict | JSON/dict entries |
+| `argument` | Function call argument | Specific arg positions |
+| `parameter` | Function definition parameter | Specific param positions |
+| `decorator` | Decorator expression | Extract decorators |
+| `keyword` | Keyword argument | Named arguments |
+| `expression_statement` | Statement expression | Side-effect calls |
+
+**Generated YAML Rule:**
+When using pattern objects, cq generates an inline rule like:
+```yaml
+id: inline_pattern_selector
+language: python
+rule:
+  kind: pair
+  inside:
+    kind: dictionary
+    pattern: '{ "$K": $V }'
+```
+
+**Examples:**
+
+```bash
+# Extract dictionary pairs from specific patterns
+/cq q "pattern.context='{ \"\$K\": \$V, \$$$REST }' pattern.selector=pair"
+
+# Extract first argument from specific function calls
+/cq q "pattern.context='requests.get(\$URL, \$$$)' pattern.selector=argument" nthChild=1
+
+# Extract decorators from async functions
+/cq q "pattern.context='@\$D async def \$F(\$$$)' pattern.selector=decorator"
+```
+
+### Strictness Mode Reference
+
+| Mode | AST Changes Ignored | Whitespace Ignored | Comments Ignored | Use Case |
+|------|---------------------|-------------------|-----------------|----------|
+| `cst` | No | No | No | Exact formatting match |
+| `smart` | Some (parens) | Yes | Yes | General use (default) |
+| `ast` | All | Yes | Yes | Pure structure |
+| `relaxed` | All + some names | Yes | Yes | Exploratory |
+| `signature` | Body | Yes | Yes | API shape only |
+
+**Mode Details:**
+
+**cst (Concrete Syntax Tree):**
+- Whitespace-sensitive matching
+- Preserves original formatting
+- Use for: formatting-aware linting, style checks
+
+**smart (default):**
+- Normalizes parentheses: `(x)` matches `x`
+- Ignores trivial whitespace differences
+- Use for: most queries
+
+**ast (Abstract Syntax Tree):**
+- Purely structural matching
+- `(((x)))` matches `x`
+- Extra parentheses ignored
+- Use for: semantic equivalence
+
+**relaxed:**
+- All `ast` normalizations
+- Some identifier variations allowed
+- Use for: finding similar patterns
+
+**signature:**
+- Matches function signature only
+- Ignores function body entirely
+- Use for: API compatibility checks
+
+### Meta-Variable Reference (Deep Dive)
+
+**Equality Enforcement:**
+
+When a named meta-variable appears multiple times, all captures must be identical:
+
+```bash
+# $X appears twice - must match same value
+/cq q "pattern='\$X = \$X'"       # Finds: x = x, foo = foo
+/cq q "pattern='\$A + \$A'"       # Finds: n + n, but not n + m
+```
+
+**Multi-Capture Behavior:**
+
+| Syntax | Captures | Binding | Equality |
+|--------|----------|---------|----------|
+| `$X` | Exactly 1 node | Named | Enforced |
+| `$$X` | 0 or more nodes | Named | Enforced across all |
+| `$$$` | 0 or more nodes | None | N/A |
+| `$_` | Exactly 1 node | None | Not enforced |
+| `$_X` | Exactly 1 node | Named (no equality) | Not enforced |
+
+**MetaVarFilter Regex Syntax:**
+
+Filters are applied post-match to captured values:
+
+| Syntax | Effect | Example |
+|--------|--------|---------|
+| `$X=~pattern` | Keep if matches | `\$X=~'^test'` |
+| `$X=!~pattern` | Keep if NOT matches | `\$X=!~'_internal$'` |
+
+**Filter Examples:**
+
+```bash
+# Find string literals only
+/cq q "pattern='\$X' \$X=~'^[\"\\']'"
+
+# Find variables not starting with underscore
+/cq q "pattern='\$VAR = \$VALUE' \$VAR=!~'^_'"
+
+# Find numeric comparisons
+/cq q "pattern='\$A \$\$OP \$B' \$\$OP=~'^[<>]'"
+```
+
+### Composite Query Reference (Deep Dive)
+
+**Operator Semantics:**
+
+| Operator | Logic | Short-Circuit | Capture Order |
+|----------|-------|---------------|---------------|
+| `all` | AND | No (all must match) | Preserved |
+| `any` | OR | Yes (first match wins) | First match |
+| `not` | Negation | N/A | N/A |
+
+**all - Ordered Capture:**
+
+Patterns in `all` are matched in order, and meta-variable captures from earlier patterns are available to later patterns:
+
+```bash
+# Match where $A is assigned then used
+/cq q "all='\$A = \$B', 'func(\$A)'"
+```
+
+**any - First Match:**
+
+Returns the first matching pattern:
+
+```bash
+# Match any logging pattern
+/cq q "any='logger.info(\$$$)', 'print(\$$$)', 'console.log(\$$$)'"
+```
+
+**not - Exclusion:**
+
+Can be applied to the main pattern or relational constraints:
+
+```bash
+# Pattern NOT matching
+/cq q "pattern='def \$F' not='def test_'"
+
+# Relational NOT
+/cq q "entity=function not.has='return'"
+/cq q "entity=class not.inside='class \$Parent'"
+```
+
+**Complex Nesting:**
+
+```bash
+# Functions with await but without try/except
+/cq q "entity=function all='await \$X' not.has='try:'"
+
+# Any security hazard in API routes
+/cq q "inside='@app.route' any='eval(\$X)', 'exec(\$X)', 'pickle.load(\$X)'"
+```
+
+**YAML Rule Generation:**
+
+Composite queries generate combined YAML rules:
+```yaml
+id: composite_all
+rule:
+  all:
+    - pattern: 'await $X'
+    - pattern: 'return $Y'
+```
+
 ### Pattern vs Regex
 
 | Aspect | Pattern Query | Grep/Regex |
@@ -1149,6 +1343,126 @@ Joins can be combined with `expand` for transitive analysis:
 
 ---
 
+## Bytecode Introspection API
+
+cq integrates with Python's `dis` module for bytecode-level analysis.
+
+### InstructionFact Fields
+
+Each bytecode instruction is captured as an `InstructionFact`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `opname` | str | Instruction name (e.g., `LOAD_GLOBAL`) |
+| `opcode` | int | Numeric opcode |
+| `arg` | int \| None | Instruction argument |
+| `argval` | Any | Resolved argument value |
+| `argrepr` | str | Human-readable argument |
+| `offset` | int | Byte offset in code |
+| `line_number` | int \| None | Source line (if available) |
+| `is_jump_target` | bool | Is target of a jump |
+| `positions` | tuple | (start_line, end_line, start_col, end_col) |
+| `baseopname` | str | Non-specialized opcode name |
+| `baseopcode` | int | Non-specialized opcode number |
+| `stack_effect` | int | Net stack change |
+| `cache_entries` | int | Cache entries (3.11+) |
+
+### BytecodeIndex Query Methods
+
+The `BytecodeIndex` provides efficient lookups:
+
+| Method | Description |
+|--------|-------------|
+| `by_opname(name)` | Find by exact opcode name |
+| `by_opname_regex(pattern)` | Find by opcode regex |
+| `by_jump_targets()` | All jump target instructions |
+| `by_line(n)` | Instructions on line n |
+| `by_stack_effect_range(min, max)` | By stack effect |
+| `specialized_only()` | Only specialized opcodes |
+
+**Query Syntax:**
+
+```bash
+# Exact opcode match
+/cq q "entity=function bytecode.opname=LOAD_GLOBAL"
+
+# Regex opcode match
+/cq q "entity=function bytecode.opname=~^CALL"
+
+# Jump targets (branch points)
+/cq q "entity=function bytecode.is_jump_target=true"
+
+# Stack effect filtering
+/cq q "entity=function bytecode.stack_effect>=2"
+/cq q "entity=function bytecode.stack_effect<0"
+
+# Specialized opcodes (adaptive interpreter)
+/cq q "entity=function bytecode.specialized=true"
+```
+
+### CFG/DFG Structure
+
+cq can build control flow and data flow graphs from bytecode:
+
+**Basic Block:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | int | Block identifier |
+| `instructions` | list | Instructions in block |
+| `predecessors` | list[int] | Incoming edges |
+| `successors` | list[int] | Outgoing edges |
+| `is_entry` | bool | Entry block |
+| `is_exit` | bool | Exit block (RETURN/RAISE) |
+
+**CFG Edge Types:**
+| Type | Description |
+|------|-------------|
+| `FALL_THROUGH` | Sequential execution |
+| `JUMP_UNCONDITIONAL` | Unconditional branch |
+| `JUMP_CONDITIONAL_TRUE` | Branch if true |
+| `JUMP_CONDITIONAL_FALSE` | Branch if false |
+| `EXCEPTION` | Exception handler edge |
+
+**Visualization:**
+
+```bash
+# Control flow graph as Mermaid
+/cq q "entity=function name=complex_fn" --format mermaid-cfg
+
+# Include block metadata
+/cq q "entity=function name=fn fields=cfg_blocks" --format json
+```
+
+**Complexity Metrics:**
+
+| Field | Description |
+|-------|-------------|
+| `basic_block_count` | Number of basic blocks |
+| `cyclomatic_complexity` | McCabe complexity from CFG |
+| `exception_handler_count` | Exception table entries |
+
+### Exception Table Queries
+
+Python 3.11+ exception tables:
+
+| Field | Description |
+|-------|-------------|
+| `start` | Start offset of try block |
+| `end` | End offset of try block |
+| `target` | Handler offset |
+| `depth` | Nesting depth |
+| `lasti` | Restore LASTI flag |
+
+```bash
+# Find functions with exception handlers
+/cq q "entity=function bytecode.exc_table_exists=true"
+
+# Filter by handler depth
+/cq q "entity=function bytecode.exc_handler.depth>=2"
+```
+
+---
+
 ## Hazard Detection
 
 cq includes builtin hazard detection for security, correctness, design, and performance issues.
@@ -1170,21 +1484,104 @@ cq includes builtin hazard detection for security, correctness, design, and perf
 | `WARNING` | Issues that should be addressed |
 | `INFO` | Informational notes |
 
-### Builtin Hazards
+### Complete Hazard Pattern Catalog
 
-| Pattern | Category | Severity | Message |
-|---------|----------|----------|---------|
-| `eval($X)` | SECURITY | ERROR | Dynamic code execution |
-| `exec($X)` | SECURITY | ERROR | Dynamic code execution |
-| `pickle.load($X)` | SECURITY | ERROR | Unsafe deserialization |
-| `pickle.loads($X)` | SECURITY | ERROR | Unsafe deserialization |
-| `yaml.load($X)` | SECURITY | WARNING | Potentially unsafe YAML load |
-| `subprocess.shell=True` | SECURITY | WARNING | Shell injection risk |
-| `getattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute access |
-| `setattr($X, $Y, $Z)` | CORRECTNESS | INFO | Dynamic attribute modification |
-| `__import__($X)` | CORRECTNESS | WARNING | Dynamic import |
-| `globals()` | CORRECTNESS | INFO | Global namespace access |
-| `locals()` | CORRECTNESS | INFO | Local namespace access |
+**Security Hazards (30+ patterns):**
+
+| Pattern | Severity | Description | OWASP Category |
+|---------|----------|-------------|----------------|
+| `eval($X)` | ERROR | Dynamic code execution | A03:Injection |
+| `exec($X)` | ERROR | Dynamic code execution | A03:Injection |
+| `compile($X, $Y, 'exec')` | ERROR | Dynamic compilation | A03:Injection |
+| `pickle.load($X)` | ERROR | Unsafe deserialization | A08:Integrity |
+| `pickle.loads($X)` | ERROR | Unsafe deserialization | A08:Integrity |
+| `marshal.load($X)` | ERROR | Unsafe deserialization | A08:Integrity |
+| `yaml.load($X)` | WARNING | Potentially unsafe YAML | A08:Integrity |
+| `yaml.unsafe_load($X)` | ERROR | Explicitly unsafe YAML | A08:Integrity |
+| `json.loads($X, object_hook=$Y)` | WARNING | Custom deserializer | A08:Integrity |
+| `subprocess.*(shell=True)` | WARNING | Shell injection risk | A03:Injection |
+| `os.system($X)` | WARNING | Shell command execution | A03:Injection |
+| `os.popen($X)` | WARNING | Shell command execution | A03:Injection |
+| `os.spawn*($X)` | WARNING | Process execution | A03:Injection |
+| `commands.getoutput($X)` | WARNING | Shell execution (legacy) | A03:Injection |
+| `__import__($X)` | WARNING | Dynamic import | A03:Injection |
+| `importlib.import_module($X)` | WARNING | Dynamic import | A03:Injection |
+| `input()` (Python 2) | ERROR | Executes input | A03:Injection |
+| `tempfile.mktemp()` | WARNING | Race condition | A01:Access |
+| `assert $X` | INFO | Disabled with -O | A04:Design |
+| `hashlib.md5($X)` | INFO | Weak hash (non-security) | A02:Crypto |
+| `hashlib.sha1($X)` | INFO | Weak hash (non-security) | A02:Crypto |
+| `random.random()` | INFO | Non-cryptographic PRNG | A02:Crypto |
+| `ssl._create_unverified_context()` | ERROR | SSL bypass | A07:Auth |
+| `urllib.request.urlopen($X, context=None)` | WARNING | No SSL verification | A07:Auth |
+| `requests.get($X, verify=False)` | WARNING | No SSL verification | A07:Auth |
+
+**Correctness Hazards:**
+
+| Pattern | Severity | Description | Issue |
+|---------|----------|-------------|-------|
+| `getattr($X, $Y)` | INFO | Dynamic attribute access | May fail at runtime |
+| `setattr($X, $Y, $Z)` | INFO | Dynamic attribute modification | May violate invariants |
+| `delattr($X, $Y)` | INFO | Dynamic attribute deletion | May break object |
+| `hasattr($X, $Y)` | INFO | Dynamic attribute check | Suppresses exceptions |
+| `globals()` | INFO | Global namespace access | Side effects |
+| `locals()` | INFO | Local namespace access | Read-only in functions |
+| `vars($X)` | INFO | Object __dict__ access | May be read-only |
+| `type($X, $Y, $Z)` | WARNING | Dynamic class creation | Hard to analyze |
+| `*args, **kwargs` forwarding | INFO | Obscures signatures | Hard to trace calls |
+| `functools.partial($F, $$$)` | INFO | Partial application | Hides arguments |
+| `operator.attrgetter($X)` | INFO | Dynamic accessor | Runtime attribute |
+| `operator.methodcaller($X)` | INFO | Dynamic method call | Runtime dispatch |
+
+**Design Hazards:**
+
+| Pattern | Severity | Description | Issue |
+|---------|----------|-------------|-------|
+| `except:` (bare) | WARNING | Catches all exceptions | Including SystemExit |
+| `except Exception:` | INFO | Too broad | Catches unintended |
+| `pass` in except | WARNING | Silent failure | Hides errors |
+| `...` in except | WARNING | Silent failure | Hides errors |
+| `raise` without exception | INFO | Re-raises in except | Context-dependent |
+| `global $X` | INFO | Global state mutation | Side effects |
+| `nonlocal $X` | INFO | Closure mutation | Complex flow |
+| `lambda: $X` in loop | WARNING | Late binding | Common bug |
+| `mutable default arg` | WARNING | Shared state | Common bug |
+
+### HazardDetector API
+
+The `HazardDetector` class provides programmatic hazard detection:
+
+```python
+from tools.cq.query.hazards import HazardDetector, HazardSeverity
+
+detector = HazardDetector()
+
+# Detect hazards in code
+hazards = detector.detect(source_code, filename="example.py")
+
+# Filter by severity
+errors = [h for h in hazards if h.severity == HazardSeverity.ERROR]
+
+# Custom hazard patterns
+detector.add_pattern(
+    pattern="custom_unsafe($X)",
+    category="SECURITY",
+    severity=HazardSeverity.WARNING,
+    message="Custom unsafe function"
+)
+```
+
+### Confidence Penalties
+
+Hazards apply confidence penalties to call site resolution:
+
+| Hazard Type | Penalty | Rationale |
+|-------------|---------|-----------|
+| SECURITY/ERROR | -0.30 | High uncertainty |
+| SECURITY/WARNING | -0.15 | Medium uncertainty |
+| CORRECTNESS/WARNING | -0.10 | May affect resolution |
+| CORRECTNESS/INFO | -0.05 | Minor uncertainty |
+| DESIGN/* | 0.00 | No resolution impact |
 
 ### Using Hazard Detection
 

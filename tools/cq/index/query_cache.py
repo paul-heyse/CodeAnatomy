@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 
 @dataclass
@@ -136,7 +136,7 @@ class QueryCache:
         """)
         conn.commit()
 
-    def get(self, key: str, file_path: Path) -> Any | None:
+    def get(self, key: str, file_paths: Sequence[Path]) -> Any | None:
         """Get cached value if still valid.
 
         Validates cache by comparing stored file hash against current file hash.
@@ -146,15 +146,15 @@ class QueryCache:
         ----------
         key
             Cache key
-        file_path
-            Source file to check hash against
+        file_paths
+            Source files to check hash against
 
         Returns
         -------
         Any | None
             Cached value if valid, None if miss or stale
         """
-        current_hash = _compute_file_hash(file_path)
+        current_hash = _compute_paths_hash(file_paths)
 
         conn = self._get_connection()
         cursor = conn.execute(
@@ -177,7 +177,7 @@ class QueryCache:
 
         return json.loads(cached_value)
 
-    def set(self, key: str, value: Any, file_path: Path) -> None:
+    def set(self, key: str, value: Any, file_paths: Sequence[Path]) -> None:
         """Store value in cache.
 
         Parameters
@@ -186,12 +186,12 @@ class QueryCache:
             Cache key
         value
             Value to cache (must be JSON-serializable)
-        file_path
-            Source file to compute hash from
+        file_paths
+            Source files to compute hash from
         """
-        file_hash = _compute_file_hash(file_path)
+        file_hash = _compute_paths_hash(file_paths)
         value_json = json.dumps(value)
-        file_path_str = str(file_path)
+        file_path_str = ";".join(str(path) for path in file_paths)
 
         conn = self._get_connection()
         conn.execute(
@@ -217,10 +217,22 @@ class QueryCache:
             Number of entries invalidated
         """
         file_path_str = str(file_path)
+        patterns = (
+            file_path_str,
+            f"{file_path_str};%",
+            f"%;{file_path_str};%",
+            f"%;{file_path_str}",
+        )
         conn = self._get_connection()
         cursor = conn.execute(
-            "DELETE FROM cache WHERE file_path = ?",
-            (file_path_str,),
+            """
+            DELETE FROM cache
+            WHERE file_path = ?
+               OR file_path LIKE ?
+               OR file_path LIKE ?
+               OR file_path LIKE ?
+            """,
+            patterns,
         )
         conn.commit()
         return cursor.rowcount
@@ -267,10 +279,13 @@ class QueryCache:
         total_entries = cursor.fetchone()["count"]
 
         # Unique files
-        cursor = conn.execute(
-            "SELECT COUNT(DISTINCT file_path) as count FROM cache"
-        )
-        unique_files = cursor.fetchone()["count"]
+        cursor = conn.execute("SELECT file_path FROM cache")
+        file_paths: set[str] = set()
+        for row in cursor.fetchall():
+            for part in str(row["file_path"]).split(";"):
+                if part:
+                    file_paths.add(part)
+        unique_files = len(file_paths)
 
         # Timestamps
         cursor = conn.execute(
@@ -338,6 +353,16 @@ def _compute_file_hash(file_path: Path) -> str:
     with open(file_path, "rb") as f:
         while chunk := f.read(8192):
             hasher.update(chunk)
+    return hasher.hexdigest()[:16]
+
+
+def _compute_paths_hash(file_paths: Sequence[Path]) -> str:
+    """Compute a combined hash for multiple files."""
+    normalized = sorted({path.resolve() for path in file_paths})
+    hasher = hashlib.sha256()
+    for path in normalized:
+        hasher.update(str(path).encode("utf-8"))
+        hasher.update(_compute_file_hash(path).encode("utf-8"))
     return hasher.hexdigest()[:16]
 
 

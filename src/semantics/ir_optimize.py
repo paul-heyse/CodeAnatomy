@@ -18,6 +18,8 @@ class IRCost:
 
 def order_join_groups(
     join_groups: Sequence[SemanticIRJoinGroup],
+    *,
+    costs: Mapping[str, IRCost] | None = None,
 ) -> tuple[SemanticIRJoinGroup, ...]:
     """Return join groups ordered by a stable heuristic.
 
@@ -26,16 +28,20 @@ def order_join_groups(
     tuple[SemanticIRJoinGroup, ...]
         Ordered join group specs.
     """
-    return tuple(
-        sorted(
-            join_groups,
-            key=lambda group: (
-                len(group.left_on) + len(group.right_on),
-                -len(group.relationship_names),
-                group.name,
-            ),
+
+    def _cost_key(group: SemanticIRJoinGroup) -> tuple[object, ...]:
+        cost = costs.get(group.name) if costs is not None else None
+        row_hint = cost.row_count if cost is not None else None
+        sel_hint = cost.selectivity if cost is not None else None
+        return (
+            row_hint if row_hint is not None else float("inf"),
+            -(sel_hint if sel_hint is not None else 0.0),
+            len(group.left_on) + len(group.right_on),
+            -len(group.relationship_names),
+            group.name,
         )
-    )
+
+    return tuple(sorted(join_groups, key=_cost_key))
 
 
 def _view_dependency_map(views: Sequence[SemanticIRView]) -> dict[str, tuple[str, ...]]:
@@ -91,6 +97,8 @@ def prune_ir(ir: SemanticIR, *, outputs: Collection[str] | None) -> SemanticIR:
         cpg_node_specs=ir.cpg_node_specs,
         cpg_prop_specs=ir.cpg_prop_specs,
         join_groups=tuple(join_groups),
+        model_hash=ir.model_hash,
+        ir_hash=ir.ir_hash,
     )
 
 

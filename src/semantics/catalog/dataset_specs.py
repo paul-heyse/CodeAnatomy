@@ -171,7 +171,8 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
     """
     global _DATASET_ALIASES_CACHE, _ALIASES_TO_NAME_CACHE  # noqa: PLW0603
     if _DATASET_ALIASES_CACHE is None or _ALIASES_TO_NAME_CACHE is None:
-        from semantics.migrations import migration_for
+        from semantics.migrations import migration_for, migration_skeleton
+        from semantics.schema_diff import diff_contract_specs
 
         aliases: dict[str, str] = {}
         reverse: dict[str, str] = {}
@@ -193,16 +194,29 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
                 raise ValueError(msg)
 
             latest_name, _latest_version = max(entries, key=lambda item: item[1] or 0)
+            latest_contract = dataset_spec(latest_name).contract_spec_or_default()
             for name, _version in entries:
                 aliases[name] = alias
                 if name == latest_name:
                     continue
-                if migration_for(name, latest_name) is None:
-                    msg = (
-                        f"Missing migration from {name!r} to {latest_name!r} "
-                        f"for dataset alias {alias!r}."
-                    )
-                    raise ValueError(msg)
+                if migration_for(name, latest_name) is not None:
+                    continue
+                diff = diff_contract_specs(
+                    dataset_spec(name).contract_spec_or_default(),
+                    latest_contract,
+                )
+                if not diff.is_breaking:
+                    continue
+                diff_lines = diff.summary_lines() or ("no schema changes detected",)
+                diff_summary = "\n".join(f"- {line}" for line in diff_lines)
+                skeleton = migration_skeleton(name, latest_name, diff)
+                msg = (
+                    f"Missing migration from {name!r} to {latest_name!r} "
+                    f"for dataset alias {alias!r}.\n"
+                    f"Schema diff:\n{diff_summary}\n\n"
+                    f"Suggested skeleton:\n{skeleton}"
+                )
+                raise ValueError(msg)
             reverse[alias] = latest_name
 
         _DATASET_ALIASES_CACHE = aliases

@@ -52,10 +52,12 @@ if spec.kind == "diagnostic":
 - Any per-pipeline orchestration not reflected in IR.
 
 ### Implementation checklist
-- [ ] Add IR artifact node types for diagnostics/exports.
-- [ ] Emit those nodes from IR compile.
-- [ ] Register artifact nodes via pipeline builder.
-- [ ] Route artifact outputs through contract finalization.
+- [x] Add IR node kinds for diagnostics/exports.
+- [x] Emit diagnostic/export nodes from IR compile.
+- [x] Register diagnostic/export nodes via pipeline builder.
+- [ ] Route diagnostic/export outputs through contract finalization.
+
+**Status**: Partially complete — diagnostics/exports are IR-driven; contract finalization for those outputs is still ad hoc.
 
 ---
 
@@ -91,9 +93,11 @@ optimized = optimize_semantics(ir, outputs=requested_outputs)
 - Fixed, non-pruned IR execution regardless of requested outputs.
 
 ### Implementation checklist
-- [ ] Introduce IR cost model inputs (row counts, selectivity).
-- [ ] Add join reordering for join groups.
-- [ ] Add IR pruning by requested outputs.
+- [x] Introduce IR cost model inputs (row counts, selectivity).
+- [x] Add join reordering for join groups.
+- [x] Add IR pruning by requested outputs.
+
+**Status**: Complete.
 
 ---
 
@@ -124,9 +128,11 @@ joined = joined.select(*[col(c) for c in required_cols])
 - Join rules that allow ambiguous or semantically invalid inputs.
 
 ### Implementation checklist
-- [ ] Add semantic type validations during IR compile.
-- [ ] Enforce column pruning based on semantic usage.
-- [ ] Validate join keys against semantic types.
+- [x] Add semantic type validations during IR compile.
+- [x] Enforce column pruning based on semantic usage.
+- [x] Validate join keys against semantic types.
+
+**Status**: Complete.
 
 ---
 
@@ -156,9 +162,11 @@ record_artifact(runtime_profile, "join_group_stats_v1", payload)
 - Hidden join-fusion logic without surfaced plans/metrics.
 
 ### Implementation checklist
-- [ ] Emit join-group artifacts with fingerprints.
-- [ ] Cache join-group outputs as first-class views.
-- [ ] Add join-group diagnostics (row count, selectivity).
+- [x] Emit join-group artifacts with fingerprints.
+- [x] Cache join-group outputs as first-class views.
+- [x] Add join-group diagnostics (row count, selectivity).
+
+**Status**: Complete.
 
 ---
 
@@ -194,9 +202,11 @@ if spec.kind == "projection":
 - Ad-hoc projections outside the IR.
 
 ### Implementation checklist
-- [ ] Add projection nodes to IR.
-- [ ] Wire projections through finalization.
-- [ ] Ensure contract ordering + nullability deterministic.
+- [x] Add projection nodes to IR.
+- [x] Wire projections through finalization.
+- [x] Ensure contract ordering + nullability deterministic.
+
+**Status**: Complete.
 
 ---
 
@@ -227,9 +237,11 @@ class SemanticModel:
 - Separate registries for outputs outside SemanticModel.
 
 ### Implementation checklist
-- [ ] Add output specs to SemanticModel.
-- [ ] Emit output specs from IR.
-- [ ] Align dataset rows with output specs.
+- [x] Add output specs to SemanticModel.
+- [x] Emit output specs from IR.
+- [x] Align dataset rows with output specs.
+
+**Status**: Complete.
 
 ---
 
@@ -261,7 +273,9 @@ validate_schema_migrations(ir, contracts=current_contracts)
 ### Implementation checklist
 - [ ] Add compile-time schema diffing.
 - [ ] Generate migration skeletons from diffs.
-- [ ] Enforce migration policies per output.
+- [x] Enforce migration policies per output (versioned alias + migration registry checks).
+
+**Status**: Partially complete — migration enforcement exists, but diffing/skeleton generation are not implemented.
 
 ---
 
@@ -291,9 +305,11 @@ record_artifact(runtime_profile, "semantic_ir_fingerprint_v1", payload)
 - Cache keys that omit semantic model/IR fingerprints.
 
 ### Implementation checklist
-- [ ] Add IR + SemanticModel fingerprints.
-- [ ] Attach fingerprints to output artifacts.
-- [ ] Use fingerprints for cache eligibility.
+- [x] Add IR + SemanticModel fingerprints.
+- [x] Attach fingerprints to output artifacts.
+- [x] Use fingerprints for cache eligibility.
+
+**Status**: Complete.
 
 ---
 
@@ -322,9 +338,11 @@ optimized = optimize_semantics(ir, outputs=requested_outputs)
 - Full IR execution when only a subset of outputs is needed.
 
 ### Implementation checklist
-- [ ] Add requested output filtering to IR.
-- [ ] Wire output slicing into pipeline entrypoints.
+- [x] Add requested output filtering to IR.
+- [x] Wire output slicing into pipeline entrypoints.
 - [ ] Connect incremental diff engine to IR pruning.
+
+**Status**: Partially complete — output slicing is live; incremental diff integration is pending.
 
 ---
 
@@ -348,9 +366,11 @@ assert snapshot(ir) == load_golden("semantic_ir.json")
 - Ad-hoc tests that do not validate semantic IR or join groups.
 
 ### Implementation checklist
-- [ ] Add golden IR snapshots.
-- [ ] Add join-group equivalence tests.
-- [ ] Add contract-finalization tests.
+- [x] Add golden IR snapshots.
+- [x] Add join-group equivalence tests.
+- [x] Add contract-finalization tests.
+
+**Status**: Complete.
 
 ---
 
@@ -374,24 +394,26 @@ record_artifact(runtime_profile, "semantic_explain_plan_v1", explain_payload)
 - Unstructured logs without explainable semantic plan artifacts.
 
 ### Implementation checklist
-- [ ] Export IR graph + join group membership.
+- [x] Export IR graph + join group membership.
 - [ ] Export per-view plan stats.
 - [ ] Add UIs or markdown reports to surface explain plans.
+
+**Status**: Partially complete — explain-plan artifacts are emitted; UI/reporting and per-view stats remain.
 
 ---
 
 # Cross‑Cutting Acceptance Gates
 
 - [ ] IR is the single orchestration source for all semantic outputs.
-- [ ] Cost-based optimization + output pruning is in place.
-- [ ] Semantic types are enforced at compile time.
-- [ ] Join groups are materialized, cached, and explainable.
-- [ ] Projections/finalization are explicit IR nodes.
+- [x] Cost-based optimization + output pruning is in place.
+- [x] Semantic types are enforced at compile time.
+- [x] Join groups are materialized, cached, and explainable.
+- [x] Projections/finalization are explicit IR nodes.
 - [ ] Schema evolution requires explicit migrations.
-- [ ] Semantic fingerprints drive caching and provenance.
+- [x] Semantic fingerprints drive caching and provenance.
 - [ ] Output slicing + incremental compilation are available.
-- [ ] Golden tests verify IR + join-group correctness.
-- [ ] Explain plans are exported as artifacts.
+- [x] Golden tests verify IR + join-group correctness.
+- [x] Explain plans are exported as artifacts.
 
 ---
 

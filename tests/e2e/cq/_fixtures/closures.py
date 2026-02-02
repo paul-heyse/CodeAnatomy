@@ -5,8 +5,10 @@ Used for testing scope queries, closure detection, and variable capture analysis
 
 from __future__ import annotations
 
+from collections.abc import Callable
 
-def outer_function(x: int) -> callable:
+
+def outer_function(x: int) -> Callable[[int], int]:
     """Create a closure that captures the input value.
 
     Returns
@@ -29,7 +31,7 @@ def outer_function(x: int) -> callable:
     return inner_closure
 
 
-def generator_closure(items: list[int]) -> callable:
+def generator_closure(items: list[int]) -> Callable[[], int | None]:
     """Create a closure over generator state.
 
     Returns
@@ -63,7 +65,7 @@ class ClosureFactory:
     def __init__(self, multiplier: int) -> None:
         self.multiplier = multiplier
 
-    def create_multiplier(self) -> callable:
+    def create_multiplier(self) -> Callable[[int], int]:
         """Create a closure that captures self.multiplier.
 
         Returns
@@ -86,7 +88,7 @@ class ClosureFactory:
         return multiply
 
 
-def nested_three_levels() -> callable:
+def nested_three_levels() -> Callable[[], Callable[[], str]]:
     """Create a nested closure chain.
 
     Returns
@@ -96,7 +98,7 @@ def nested_three_levels() -> callable:
     """
     level1 = "outer"
 
-    def level_two() -> callable:
+    def level_two() -> Callable[[], str]:
         """Return the next nested closure.
 
         Returns
@@ -132,7 +134,7 @@ def no_closure_function(x: int) -> int:
     return x * 2
 
 
-def closure_with_cells() -> tuple[callable, callable]:
+def closure_with_cells() -> tuple[Callable[[], int], Callable[[], int]]:
     """Return multiple closures sharing cell variables.
 
     Returns

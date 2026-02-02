@@ -168,20 +168,20 @@ def _extract_definition_name(matched_text: str, kind: str) -> str | None:
     matched_text
         The matched source code text
     kind
-        Either 'function_definition' or 'class_definition'
+        Either 'function' or 'class'
 
     Returns
     -------
     str | None
         Extracted name or None if extraction fails
     """
-    if kind == "function_definition" and "def " in matched_text:
+    if kind == "function" and "def " in matched_text:
         name_start = matched_text.find("def ") + 4
         name_end = matched_text.find("(", name_start)
         if name_end > name_start:
             return matched_text[name_start:name_end].strip()
 
-    if kind == "class_definition" and "class " in matched_text:
+    if kind == "class" and "class " in matched_text:
         name_start = matched_text.find("class ") + 6
         # Find either '(' or ':'
         paren_pos = matched_text.find("(", name_start)
@@ -262,20 +262,23 @@ def _enrich_record(
         Enrichment data (may be empty)
     """
     enrichment: dict = {}
+    function_kinds = {"function", "async_function", "function_typeparams"}
+    class_kinds = {"class", "class_bases", "class_typeparams", "class_typeparams_bases"}
 
     # Add symtable info for function/class definitions
-    if record.kind in {"function_definition", "class_definition"}:
+    if record.kind in function_kinds | class_kinds:
         try:
             matched_lines = source.splitlines()[record.start_line - 1 : record.end_line]
             matched_text = "\n".join(matched_lines)
-            name = _extract_definition_name(matched_text, record.kind)
+            kind = "function" if record.kind in function_kinds else "class"
+            name = _extract_definition_name(matched_text, kind)
             if name and name in symtable_map:
                 enrichment["symtable_info"] = symtable_map[name]
         except (IndexError, ValueError):
             pass
 
     # Add bytecode info for function definitions
-    if tree is not None and record.kind == "function_definition":
+    if tree is not None and record.kind in function_kinds:
         bytecode_info = _enrich_with_bytecode(tree, record, file_path)
         if bytecode_info is not None:
             enrichment["bytecode_info"] = bytecode_info

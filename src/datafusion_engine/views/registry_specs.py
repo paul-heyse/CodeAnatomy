@@ -160,15 +160,6 @@ def _semantic_cache_policy_for_row(
     return "none"
 
 
-# Import projection types and functions from semantic catalog
-from semantics.catalog.projections import (
-    SemanticProjectionConfig,
-    relation_output_builder,
-    semantic_projection_options,
-    semantic_view_specs,
-)
-
-
 def _bundle_deps_and_udfs(
     ctx: SessionContext,
     builder: DataFrameBuilder,
@@ -746,60 +737,23 @@ def _semantic_view_specs_for_registration(
     runtime_profile: DataFusionRuntimeProfile,
     runtime_config: SemanticRuntimeConfig,
 ) -> list[tuple[str, DataFrameBuilder]]:
-    from relspec.view_defs import (
-        DEFAULT_REL_TASK_PRIORITY,
-        REL_CALLSITE_SYMBOL_OUTPUT,
-        REL_DEF_SYMBOL_OUTPUT,
-        REL_IMPORT_SYMBOL_OUTPUT,
-        REL_NAME_SYMBOL_OUTPUT,
-        RELATION_OUTPUT_NAME,
-    )
-    from semantics.naming import canonical_output_name
-    from semantics.pipeline import _cpg_view_specs
-    from semantics.spec_registry import RELATIONSHIP_SPECS
+    from semantics.pipeline import CpgViewSpecsRequest, _cpg_view_specs
 
     input_mapping, use_cdf = _validated_semantic_inputs(
         ctx,
         runtime_profile=runtime_profile,
         runtime_config=runtime_config,
     )
-    base_specs = _cpg_view_specs(
-        input_mapping=input_mapping,
-        config=None,
-        use_cdf=use_cdf,
-        runtime_profile=runtime_profile,
-    )
-    projection_options = semantic_projection_options(
-        SemanticProjectionConfig(
-            default_priority=DEFAULT_REL_TASK_PRIORITY,
-            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
-            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
-            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
-            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
-            relationship_specs=RELATIONSHIP_SPECS,
+    return _cpg_view_specs(
+        CpgViewSpecsRequest(
+            input_mapping=input_mapping,
+            config=None,
+            use_cdf=use_cdf,
+            runtime_profile=runtime_profile,
+            requested_outputs=None,
+            semantic_ir=None,
         )
     )
-    view_specs, relationship_builders = semantic_view_specs(
-        base_specs,
-        relationship_specs=RELATIONSHIP_SPECS,
-        projection_options=projection_options,
-    )
-    view_specs.append(
-        (
-            RELATION_OUTPUT_NAME,
-            relation_output_builder(relationship_builders, projection_options),
-        )
-    )
-    canonical_specs: list[tuple[str, DataFrameBuilder]] = []
-    seen_names: set[str] = set()
-    for name, builder in view_specs:
-        canonical = canonical_output_name(name)
-        if canonical in seen_names:
-            msg = f"Duplicate semantic view name after canonicalization: {canonical!r}."
-            raise ValueError(msg)
-        seen_names.add(canonical)
-        canonical_specs.append((canonical, builder))
-    return canonical_specs
 
 
 def _semantics_view_nodes(

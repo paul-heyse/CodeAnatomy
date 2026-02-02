@@ -233,15 +233,15 @@ class TestMergeFieldBundles:
         assert result == ()
 
 
-class TestEntityFamilySpecIntegration:
-    """Tests for EntityFamilySpec integration with NodeFamily."""
+class TestCpgEntitySpecIntegration:
+    """Tests for CpgEntitySpec integration with NodeFamily."""
 
-    def test_entity_family_spec_uses_family_defaults(self) -> None:
-        """Verify EntityFamilySpec resolves columns from family."""
+    def test_cpg_entity_spec_uses_family_defaults(self) -> None:
+        """Verify CpgEntitySpec resolves columns from family."""
         from cpg.kind_catalog import NODE_KIND_PY_FILE
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_PY_FILE,
             id_cols=("file_id",),
@@ -253,12 +253,12 @@ class TestEntityFamilySpecIntegration:
         assert spec.resolved_bend_cols == ("bend",)
         assert spec.resolved_file_id_cols == ("file_id",)
 
-    def test_entity_family_spec_explicit_overrides_family(self) -> None:
+    def test_cpg_entity_spec_explicit_overrides_family(self) -> None:
         """Verify explicit column values override family defaults."""
         from cpg.kind_catalog import NODE_KIND_CST_CALLSITE
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_CST_CALLSITE,
             id_cols=("call_id",),
@@ -274,12 +274,12 @@ class TestEntityFamilySpecIntegration:
         assert spec.resolved_path_cols == ("path",)
         assert spec.resolved_file_id_cols == ("file_id",)
 
-    def test_entity_family_spec_no_family_uses_empty(self) -> None:
+    def test_cpg_entity_spec_no_family_uses_empty(self) -> None:
         """Verify no family falls back to empty tuples."""
         from cpg.kind_catalog import NODE_KIND_PY_FILE
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_PY_FILE,
             id_cols=("file_id",),
@@ -291,12 +291,12 @@ class TestEntityFamilySpecIntegration:
         assert spec.resolved_bend_cols == ()
         assert spec.resolved_file_id_cols == ()
 
-    def test_entity_family_spec_scip_family(self) -> None:
+    def test_cpg_entity_spec_scip_family(self) -> None:
         """Verify SCIP family has no anchoring columns."""
         from cpg.kind_catalog import NODE_KIND_SCIP_SYMBOL
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_SCIP_SYMBOL,
             id_cols=("symbol",),
@@ -308,12 +308,12 @@ class TestEntityFamilySpecIntegration:
         assert spec.resolved_bend_cols == ()
         assert spec.resolved_file_id_cols == ()
 
-    def test_entity_family_spec_treesitter_family(self) -> None:
+    def test_cpg_entity_spec_treesitter_family(self) -> None:
         """Verify TREESITTER family uses start_byte/end_byte."""
         from cpg.kind_catalog import NODE_KIND_TS_NODE
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_TS_NODE,
             id_cols=("ts_node_id",),
@@ -323,19 +323,19 @@ class TestEntityFamilySpecIntegration:
         assert spec.resolved_bstart_cols == ("start_byte",)
         assert spec.resolved_bend_cols == ("end_byte",)
 
-    def test_all_entity_family_specs_have_families(self) -> None:
-        """Verify all ENTITY_FAMILY_SPECS have node_family set."""
-        from cpg.spec_registry import ENTITY_FAMILY_SPECS
+    def test_all_cpg_entity_specs_have_families(self) -> None:
+        """Verify all semantic CPG entity specs have node_family set."""
+        from semantics.registry import SEMANTIC_MODEL
 
-        for spec in ENTITY_FAMILY_SPECS:
+        for spec in SEMANTIC_MODEL.cpg_entity_specs():
             assert spec.node_family is not None, f"Spec {spec.name!r} missing node_family"
 
     def test_node_plan_uses_resolved_cols(self) -> None:
         """Verify to_node_plan uses resolved column values."""
         from cpg.kind_catalog import NODE_KIND_CST_CALLSITE
-        from cpg.spec_registry import EntityFamilySpec
+        from semantics.cpg_entity_specs import CpgEntitySpec
 
-        spec = EntityFamilySpec(
+        spec = CpgEntitySpec(
             name="test",
             node_kind=NODE_KIND_CST_CALLSITE,
             id_cols=("call_id",),

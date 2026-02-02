@@ -138,6 +138,16 @@ def _patch_hamilton_input_string() -> None:
     graph_functions.create_input_string = _safe_input_string
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register shared command-line options for test suites."""
+    parser.addoption(
+        "--update-golden",
+        action="store_true",
+        default=False,
+        help="Update golden snapshot files with current output",
+    )
+
+
 def pytest_sessionstart(session: object) -> None:
     """Initialize diagnostic capture for the pytest session."""
     _DIAG_DIR.mkdir(parents=True, exist_ok=True)

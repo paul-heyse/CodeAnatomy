@@ -9,7 +9,10 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from tools.cq.index.sqlite_cache import IndexCache
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
@@ -62,6 +65,8 @@ def sg_scan(
     record_types: set[str] | None = None,
     config_path: Path | None = None,
     root: Path | None = None,
+    globs: list[str] | None = None,
+    index_cache: IndexCache | None = None,
 ) -> list[SgRecord]:
     """Run ast-grep scan and parse JSON stream output.
 
@@ -76,6 +81,10 @@ def sg_scan(
         Path to sgconfig.yml. If None, uses default location.
     root
         Root directory for relative paths.
+    globs
+        Glob filters for ast-grep (supports ! excludes).
+    index_cache
+        Optional index cache for incremental scanning.
 
     Returns
     -------
@@ -97,7 +106,32 @@ def sg_scan(
         msg = f"ast-grep config not found: {config_path}"
         raise RuntimeError(msg)
 
-    # Build command
+    records: list[SgRecord] = []
+
+    if index_cache is not None:
+        records.extend(
+            _scan_with_cache(
+                paths=paths,
+                root=root,
+                config_path=config_path,
+                record_types=record_types,
+                globs=globs,
+                index_cache=index_cache,
+            )
+        )
+        return records
+
+    return _run_scan(paths, root, config_path, record_types, globs)
+
+
+def _run_scan(
+    paths: list[Path],
+    root: Path,
+    config_path: Path,
+    record_types: set[str] | None,
+    globs: list[str] | None,
+) -> list[SgRecord]:
+    """Run ast-grep scan and return parsed records."""
     cmd = [
         "ast-grep",
         "scan",
@@ -105,9 +139,11 @@ def sg_scan(
         str(config_path),
         "--json=stream",
     ]
+    if globs:
+        for glob in globs:
+            cmd.extend(["--globs", glob])
     cmd.extend(str(p) for p in paths)
 
-    # Run ast-grep
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -119,28 +155,152 @@ def sg_scan(
         msg = f"ast-grep scan failed: {result.stderr}"
         raise RuntimeError(msg)
 
-    # Parse JSON stream
+    return _parse_records_from_output(result.stdout, record_types)
+
+
+def _scan_with_cache(
+    paths: list[Path],
+    root: Path,
+    config_path: Path,
+    record_types: set[str] | None,
+    globs: list[str] | None,
+    index_cache: IndexCache,
+) -> list[SgRecord]:
+    """Run ast-grep scan with index cache support."""
+    files = _expand_paths(paths, root)
+    files = _filter_files_by_globs(files, root, globs)
+
+    cached_records: list[SgRecord] = []
+    files_to_scan: list[Path] = []
+
+    for file_path in files:
+        if index_cache.needs_rescan(file_path):
+            files_to_scan.append(file_path)
+            continue
+        cached = index_cache.retrieve(file_path)
+        if cached is None:
+            files_to_scan.append(file_path)
+            continue
+        cached_records.extend(_records_from_cache(cached))
+
+    scanned_records: list[SgRecord] = []
+    if files_to_scan:
+        scanned_records = _run_scan(files_to_scan, root, config_path, record_types, None)
+        records_by_file = group_records_by_file(scanned_records)
+        for file_path_str, file_records in records_by_file.items():
+            file_path_obj = root / file_path_str
+            records_data = [_record_to_cache_dict(record) for record in file_records]
+            if file_path_obj.exists():
+                index_cache.store(file_path_obj, records_data)
+        for file_path in files_to_scan:
+            if str(file_path.relative_to(root)) not in records_by_file:
+                index_cache.store(file_path, [])
+
+    return _filter_records(cached_records + scanned_records, record_types)
+
+
+def _parse_records_from_output(output: str, record_types: set[str] | None) -> list[SgRecord]:
+    """Parse JSON stream output into records."""
     records: list[SgRecord] = []
-    for line in result.stdout.strip().split("\n"):
+    for line in output.strip().split("\n"):
         if not line:
             continue
-
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
-
         record = _parse_record(data)
         if record is None:
             continue
-
-        # Filter by record type if specified
         if record_types and record.record not in record_types:
             continue
-
         records.append(record)
-
     return records
+
+
+def _filter_records(
+    records: list[SgRecord],
+    record_types: set[str] | None,
+) -> list[SgRecord]:
+    """Filter records by record type."""
+    if record_types is None:
+        return records
+    return [record for record in records if record.record in record_types]
+
+
+def _expand_paths(paths: list[Path], root: Path) -> list[Path]:
+    """Expand input paths to a list of Python files."""
+    files: list[Path] = []
+    for path in paths:
+        full_path = path if path.is_absolute() else root / path
+        if full_path.is_file():
+            files.append(full_path)
+        elif full_path.is_dir():
+            files.extend(full_path.rglob("*.py"))
+    return files
+
+
+def _filter_files_by_globs(
+    files: list[Path],
+    root: Path,
+    globs: list[str] | None,
+) -> list[Path]:
+    """Filter files by glob patterns (supports ! excludes)."""
+    if not globs:
+        return files
+
+    has_includes = any(not glob.startswith("!") for glob in globs)
+    filtered: list[Path] = []
+
+    for file_path in files:
+        rel_path = file_path.relative_to(root).as_posix()
+        include = not has_includes
+        for glob in globs:
+            negated = glob.startswith("!")
+            pattern = glob[1:] if negated else glob
+            if Path(rel_path).match(pattern):
+                include = not negated
+        if include:
+            filtered.append(file_path)
+    return filtered
+
+
+def _record_to_cache_dict(record: SgRecord) -> dict[str, object]:
+    """Convert a record to cache-serializable dict."""
+    return {
+        "record": record.record,
+        "kind": record.kind,
+        "file": record.file,
+        "start_line": record.start_line,
+        "start_col": record.start_col,
+        "end_line": record.end_line,
+        "end_col": record.end_col,
+        "text": record.text,
+        "rule_id": record.rule_id,
+    }
+
+
+def _records_from_cache(records: list[dict[str, object]]) -> list[SgRecord]:
+    """Convert cached record dicts to SgRecord instances."""
+    parsed: list[SgRecord] = []
+    for record in records:
+        record_type = str(record.get("record", ""))
+        if record_type not in {"def", "call", "import", "raise", "except", "assign_ctor"}:
+            continue
+        parsed.append(
+            SgRecord(
+                record=cast(RecordType, record_type),
+                kind=str(record.get("kind", "")),
+                file=str(record.get("file", "")),
+                start_line=int(record.get("start_line", 0)),
+                start_col=int(record.get("start_col", 0)),
+                end_line=int(record.get("end_line", 0)),
+                end_col=int(record.get("end_col", 0)),
+                text=str(record.get("text", "")),
+                rule_id=str(record.get("rule_id", "")),
+            )
+        )
+    return parsed
 
 
 def _parse_record(data: dict) -> SgRecord | None:

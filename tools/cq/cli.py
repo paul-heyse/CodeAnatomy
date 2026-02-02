@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from tools.cq.core.artifacts import save_artifact_json
+from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
 from tools.cq.core.findings_table import apply_filters, build_frame, flatten_result, rehydrate_result
 from tools.cq.core.renderers import (
     render_dot,
@@ -590,13 +591,87 @@ def _cmd_query_cli(args: argparse.Namespace, tc: Toolchain) -> CqResult:
 
     # Compile and execute
     plan = compile_query(query)
-    return execute_plan(
-        plan=plan,
-        query=query,
+    use_cache = not args.no_cache
+    index_cache: IndexCache | None = None
+    query_cache: QueryCache | None = None
+
+    if use_cache:
+        rule_version = tc.sg_version or "unknown"
+        index_cache = IndexCache(root, rule_version)
+        index_cache.initialize()
+        query_cache = QueryCache(root / ".cq" / "cache")
+
+    if index_cache is None or query_cache is None:
+        return execute_plan(
+            plan=plan,
+            query=query,
+            tc=tc,
+            root=root,
+            argv=sys.argv[1:],
+            use_cache=False,
+        )
+
+    with index_cache, query_cache:
+        return execute_plan(
+            plan=plan,
+            query=query,
+            tc=tc,
+            root=root,
+            argv=sys.argv[1:],
+            index_cache=index_cache,
+            query_cache=query_cache,
+            use_cache=use_cache,
+        )
+
+
+def _cmd_report_cli(args: argparse.Namespace, tc: Toolchain) -> CqResult:
+    """Handle report bundle command."""
+    root = args.root or _find_repo_root()
+    try:
+        target = parse_target_spec(args.target)
+    except ValueError as exc:
+        from tools.cq.core.schema import mk_result, mk_runmeta, ms
+
+        started_ms = ms()
+        run = mk_runmeta(
+            "report",
+            argv=sys.argv[1:],
+            root=str(root),
+            started_ms=started_ms,
+            toolchain=tc.to_dict(),
+        )
+        result = mk_result(run)
+        result.summary["error"] = str(exc)
+        return result
+    use_cache = not args.no_cache
+    index_cache: IndexCache | None = None
+    query_cache: QueryCache | None = None
+
+    if use_cache:
+        rule_version = tc.sg_version or "unknown"
+        index_cache = IndexCache(root, rule_version)
+        index_cache.initialize()
+        query_cache = QueryCache(root / ".cq" / "cache")
+
+    ctx = BundleContext(
         tc=tc,
         root=root,
         argv=sys.argv[1:],
+        target=target,
+        in_dir=args.in_dir,
+        param=args.param,
+        signature=args.signature,
+        bytecode_show=args.bytecode_show,
+        use_cache=use_cache,
+        index_cache=index_cache,
+        query_cache=query_cache,
     )
+
+    if index_cache is None or query_cache is None:
+        return run_bundle(args.preset, ctx)
+
+    with index_cache, query_cache:
+        return run_bundle(args.preset, ctx)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -788,12 +863,74 @@ Examples:
         "query_string",
         help='Query string (e.g., "entity=function name=foo")',
     )
-    query_parser.add_argument(
+    query_cache_group = query_parser.add_mutually_exclusive_group()
+    query_cache_group.add_argument(
+        "--cache",
+        dest="no_cache",
+        action="store_false",
+        help="Enable query result caching (default)",
+    )
+    query_cache_group.add_argument(
         "--no-cache",
+        dest="no_cache",
         action="store_true",
         help="Disable query result caching",
     )
+    query_parser.set_defaults(no_cache=False)
     _add_common_args(query_parser)
+
+    # report command - bundled, target-scoped reports
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Run target-scoped report bundles",
+    )
+    report_parser.add_argument(
+        "preset",
+        choices=["refactor-impact", "safety-reliability", "change-propagation", "dependency-health"],
+        help="Report preset to run",
+    )
+    report_parser.add_argument(
+        "--target",
+        required=True,
+        help="Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)",
+    )
+    report_parser.add_argument(
+        "--in",
+        dest="in_dir",
+        default=None,
+        help="Restrict analysis to a directory",
+    )
+    report_parser.add_argument(
+        "--param",
+        default=None,
+        help="Parameter name for impact analysis",
+    )
+    report_parser.add_argument(
+        "--to",
+        dest="signature",
+        default=None,
+        help="Proposed signature for sig-impact analysis",
+    )
+    report_parser.add_argument(
+        "--bytecode-show",
+        default=None,
+        help="Bytecode surface fields to show (globals,attrs,constants,opcodes)",
+    )
+    report_cache_group = report_parser.add_mutually_exclusive_group()
+    report_cache_group.add_argument(
+        "--cache",
+        dest="no_cache",
+        action="store_false",
+        help="Enable query/index caching for report steps (default)",
+    )
+    report_cache_group.add_argument(
+        "--no-cache",
+        dest="no_cache",
+        action="store_true",
+        help="Disable query/index caching for report steps",
+    )
+    report_parser.set_defaults(no_cache=False)
+    _add_common_args(report_parser)
 
     # index command - manage ast-grep scan cache
     index_parser = subparsers.add_parser(
@@ -909,6 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
             "async-hazards": _cmd_async_hazards_cli,
             "bytecode-surface": _cmd_bytecode_cli,
             "q": _cmd_query_cli,
+            "report": _cmd_report_cli,
         }
 
         handler = handlers.get(args.command)

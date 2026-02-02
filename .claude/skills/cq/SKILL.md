@@ -25,6 +25,80 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Security hazards | `/cq q "pattern='eval(\$X)'"` |
 | Cache status | `/cq cache --stats` |
 
+## Global Options
+
+All commands support these global options:
+
+| Option | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| `--root PATH` | `CQ_ROOT` | Auto-detect | Repository root |
+| `--config PATH` | `CQ_CONFIG` | `.cq.toml` | Config file path |
+| `--no-config` | `CQ_NO_CONFIG` | `false` | Skip config loading |
+| `--verbose N` | `CQ_VERBOSE` | `0` | Verbosity (0-3) |
+| `--format FMT` | `CQ_FORMAT` | `md` | Output format |
+| `--artifact-dir PATH` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact directory |
+| `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving artifacts |
+
+### Output Formats
+
+| Format | Description |
+|--------|-------------|
+| `md` | Markdown (default) - optimized for Claude context |
+| `json` | Full JSON - for programmatic use |
+| `both` | Markdown followed by JSON |
+| `summary` | Condensed single-line - for CI |
+| `mermaid` | Mermaid flowchart - call graphs |
+| `mermaid-class` | Mermaid class diagram |
+| `mermaid-cfg` | Control flow graph |
+| `dot` | Graphviz DOT format |
+
+### Examples with Global Options
+
+```bash
+# Use JSON output
+/cq calls build_graph --format json
+
+# Specify custom root
+/cq q "entity=function" --root /path/to/repo
+
+# Verbose output for debugging
+/cq impact foo --param bar --verbose 2
+
+# Skip config file (use defaults only)
+/cq calls foo --no-config
+```
+
+## Configuration
+
+### Config File
+
+Create `.cq.toml` in your repo root:
+
+```toml
+[cq]
+format = "md"
+verbose = 0
+artifact_dir = ".cq/artifacts"
+save_artifact = true
+```
+
+### Environment Variables
+
+All options can be set via environment variables with `CQ_` prefix:
+
+```bash
+export CQ_FORMAT=json
+export CQ_VERBOSE=1
+export CQ_ROOT=/path/to/repo
+```
+
+### Precedence
+
+1. CLI flags (highest)
+2. Environment variables
+3. Config file
+4. Defaults (lowest)
+
 ## Reference Documentation
 
 For detailed information on architecture, scoring, filtering, and troubleshooting:

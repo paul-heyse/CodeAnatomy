@@ -1,13 +1,13 @@
 {
   "determinism_audit": {
     "df_settings_hash": "6aabcb5a7e52beb99047a01d779a2073b74907ac48a12868b994e6a625139a7f",
-    "function_registry_hash": "b64fa30a4b8b875d92b4031ffaa87e9cc3d86c3aed3f522ed164c41154fa61c0",
-    "information_schema_hash": "461099e65ad20f7c5eec7a00b0950c492ff38132780285c81d996822b9b46c37",
-    "plan_fingerprint": "fd570c0f724f740376c6b7bcd4c5bced13efdb1c265bea00be532fa38291afb8",
-    "planning_env_hash": "55ccb977d8bad729257f10460fe0607bf5b26c7f9f973c812fef94c854562de4",
+    "function_registry_hash": "b1397a7058f6da0e851fcfd3266a8c7e2e1964df07b2f282a486722992e6b1cf",
+    "information_schema_hash": "2e93c8119991fd7d4e2cd3b7ffa4fde03719b90ac0abf63f2867eee72ff157b5",
+    "plan_fingerprint": "b1adff2ba9476f51fddcb56b9a09439069fd492b2ea25e646dcfe40d56c05f01",
+    "planning_env_hash": "78916891870ff7f11b1697ea495dad31f7b0ac603d972ad6046d24b17071e8a3",
     "rulepack_hash": "6a4a9f47d0de119c5a184c627e41a58d81f5b84c1024ec64ee3218606d82225e",
-    "schema_contract_hash": "f393c7c45790cb5fbbdfd5e5c4f68ce60f661a460f12a8e028cff42550d60520",
-    "udf_snapshot_hash": "070e7bdb38f16abb2b89ac6327f3066e36723dd044ab4d6ede401d64f077ee78"
+    "schema_contract_hash": "70bdbf5dd3969d10d6e70dc035a0ffdb261762a9674df8597c0aa0a196adad05",
+    "udf_snapshot_hash": "2d5966e233469e0da76e05013992d534b08decb822bd91725514a5a2efeb29fc"
   },
   "df_settings": {
     "datafusion.catalog.create_default_catalog_and_schema": "true",
@@ -454,7 +454,7 @@
     }
   ],
   "explain_verbose_rows": [],
-  "information_schema_hash": "0f57c82b1142d0db8cef61b2d34488163f99c1f9f6602a108511c9c8cfd6a468",
+  "information_schema_hash": "3694fcb98ef97cc19ca06a070e01131839d71c62526de9985e948b8035b9c8b5",
   "information_schema_snapshot": {
     "columns": [
       {
@@ -2922,6 +2922,48 @@
         "syntax_example": "approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROUP (ORDER BY expression)"
       },
       {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "col_to_byte",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "prefixed_hash64",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "prefixed_hash64",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_hash64",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash64",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
         "data_type": "Int8",
         "description": "Computes the bitwise AND of all non-null input values.",
         "function_type": "AGGREGATE",
@@ -3690,6 +3732,34 @@
         "specific_name": "trim",
         "specific_schema": "public",
         "syntax_example": "btrim(str[, trim_str])"
+      },
+      {
+        "data_type": "String",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_hash128",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash128",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "String",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_id",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_id",
+        "specific_schema": "public",
+        "syntax_example": null
       },
       {
         "data_type": "Timestamp(Microsecond, None)",
@@ -20440,6 +20510,18 @@
         "parameter_name": null,
         "rid": 0,
         "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "Int64",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "OUT",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
         "specific_name": "factorial",
         "specific_schema": "public"
       },
@@ -20476,6 +20558,18 @@
         "parameter_name": null,
         "rid": 0,
         "specific_catalog": "datafusion",
+        "specific_name": "prefixed_hash64",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "Int64",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "OUT",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
         "specific_name": "regexp_count",
         "specific_schema": "public"
       },
@@ -20489,6 +20583,18 @@
         "rid": 0,
         "specific_catalog": "datafusion",
         "specific_name": "regexp_instr",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "Int64",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "OUT",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash64",
         "specific_schema": "public"
       },
       {
@@ -21533,6 +21639,18 @@
         "rid": 44,
         "specific_catalog": "datafusion",
         "specific_name": "approx_percentile_cont_with_weight",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "Int64",
+        "is_variadic": false,
+        "ordinal_position": 2,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
         "specific_schema": "public"
       },
       {
@@ -25776,6 +25894,66 @@
         "is_variadic": false,
         "ordinal_position": 1,
         "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "prefixed_hash64",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash128",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash64",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_id",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
         "parameter_mode": "OUT",
         "parameter_name": null,
         "rid": 0,
@@ -26009,6 +26187,30 @@
         "rid": 0,
         "specific_catalog": "datafusion",
         "specific_name": "split_part",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "OUT",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash128",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 1,
+        "parameter_default": null,
+        "parameter_mode": "OUT",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_id",
         "specific_schema": "public"
       },
       {
@@ -27778,6 +27980,30 @@
       {
         "data_type": "String",
         "is_variadic": false,
+        "ordinal_position": 2,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "prefixed_hash64",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 2,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_id",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
         "ordinal_position": 3,
         "parameter_default": null,
         "parameter_mode": "IN",
@@ -27905,6 +28131,18 @@
         "rid": 0,
         "specific_catalog": "datafusion",
         "specific_name": "translate",
+        "specific_schema": "public"
+      },
+      {
+        "data_type": "String",
+        "is_variadic": false,
+        "ordinal_position": 3,
+        "parameter_default": null,
+        "parameter_mode": "IN",
+        "parameter_name": null,
+        "rid": 0,
+        "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
         "specific_schema": "public"
       },
       {
@@ -38092,6 +38330,48 @@
         "syntax_example": "approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROUP (ORDER BY expression)"
       },
       {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "col_to_byte",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "col_to_byte",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "prefixed_hash64",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "prefixed_hash64",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "Int64",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_hash64",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash64",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
         "data_type": "Int8",
         "description": "Computes the bitwise AND of all non-null input values.",
         "function_type": "AGGREGATE",
@@ -38860,6 +39140,34 @@
         "specific_name": "trim",
         "specific_schema": "public",
         "syntax_example": "btrim(str[, trim_str])"
+      },
+      {
+        "data_type": "String",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_hash128",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_hash128",
+        "specific_schema": "public",
+        "syntax_example": null
+      },
+      {
+        "data_type": "String",
+        "description": null,
+        "function_type": "SCALAR",
+        "is_deterministic": false,
+        "routine_catalog": "datafusion",
+        "routine_name": "stable_id",
+        "routine_schema": "public",
+        "routine_type": "FUNCTION",
+        "specific_catalog": "datafusion",
+        "specific_name": "stable_id",
+        "specific_schema": "public",
+        "syntax_example": null
       },
       {
         "data_type": "Timestamp(Microsecond, None)",
@@ -41963,6 +42271,15 @@
         "default_character_set_name": null,
         "default_character_set_schema": null,
         "schema_name": "public",
+        "schema_owner": null,
+        "sql_path": null
+      },
+      {
+        "catalog_name": "datafusion",
+        "default_character_set_catalog": null,
+        "default_character_set_name": null,
+        "default_character_set_schema": null,
+        "schema_name": "views",
         "schema_owner": null,
         "sql_path": null
       }

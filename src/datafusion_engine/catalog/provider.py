@@ -156,7 +156,7 @@ class RegistrySchemaProvider(SchemaProvider):
             )
             record_table_provider_metadata(id(self.ctx), metadata=metadata)
 
-    def deregister_table(self, name: str, cascade: object) -> None:
+    def deregister_table(self, name: str, cascade: object | None = None) -> None:
         """Remove a table from the schema provider.
 
         Parameters

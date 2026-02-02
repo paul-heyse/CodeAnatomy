@@ -12,6 +12,10 @@ from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.types import IncrementalFileChanges
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
+
+require_deltalake()
+require_delta_extension()
 
 
 def _read_delta(path: Path) -> pa.Table:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -13,6 +14,7 @@ from datafusion_engine.sql.options import safe_sql_options_for_profile
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
+    from datafusion_engine.compile.options import DataFusionSqlPolicy
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.tables.param import DataFusionParamBindings
 
@@ -77,6 +79,7 @@ def safe_sql(
     """
     options = _resolve_sql_options(sql_options, runtime_profile=runtime_profile)
     resolved = _resolve_bindings(bindings)
+    _preflight_sql(sql, runtime_profile=runtime_profile)
     df = _execute_sql(ctx, sql, options=options, bindings=resolved)
     if df is None:
         msg = "SQL execution did not return a DataFusion DataFrame."
@@ -216,6 +219,73 @@ def _execute_sql(
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = "SQL execution failed under safe options."
         raise ValueError(msg) from exc
+
+
+_SQL_DDL_PREFIXES: tuple[str, ...] = ("create", "alter", "drop", "truncate")
+_SQL_DML_PREFIXES: tuple[str, ...] = ("insert", "update", "delete", "merge", "copy")
+_SQL_STATEMENT_PREFIXES: tuple[str, ...] = ("explain", "analyze", "vacuum", "optimize")
+_NAMED_ARG_PATTERN = re.compile(r"(?:[@:$][A-Za-z_][A-Za-z0-9_]*|\b[A-Za-z_][A-Za-z0-9_]*\s*=>)")
+
+
+def _preflight_sql(
+    sql: str,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    policy = _resolved_sql_policy(runtime_profile)
+    head = _sql_head(sql)
+    if not policy.allow_ddl and _sql_starts_with(head, _SQL_DDL_PREFIXES):
+        msg = "SQL execution failed under safe options: DDL statements are disabled."
+        raise ValueError(msg)
+    if not policy.allow_dml and _sql_starts_with(head, _SQL_DML_PREFIXES):
+        msg = "SQL execution failed under safe options: DML statements are disabled."
+        raise ValueError(msg)
+    if not policy.allow_statements and _sql_starts_with(head, _SQL_STATEMENT_PREFIXES):
+        msg = "SQL execution failed under safe options: statements are disabled."
+        raise ValueError(msg)
+    if _contains_named_args(sql):
+        allow_named_args = (
+            runtime_profile is not None
+            and runtime_profile.enable_expr_planners
+            and runtime_profile.expr_planner_hook is not None
+        )
+        if not allow_named_args:
+            msg = "SQL execution failed under safe options: named arguments."
+            raise ValueError(msg)
+
+
+def _resolved_sql_policy(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionSqlPolicy:
+    from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_policy
+
+    default = DataFusionSqlPolicy(allow_ddl=False, allow_dml=False, allow_statements=False)
+    if runtime_profile is None:
+        return default
+    if runtime_profile.sql_policy is not None:
+        return runtime_profile.sql_policy
+    if runtime_profile.sql_policy_name is None:
+        return default
+    return resolve_sql_policy(runtime_profile.sql_policy_name, fallback=default)
+
+
+def _sql_head(sql: str) -> str:
+    head = sql.lstrip()
+    while head.startswith("--"):
+        _, _, remainder = head.partition("\n")
+        head = remainder.lstrip()
+    if head.startswith("/*"):
+        _, _, remainder = head.partition("*/")
+        head = remainder.lstrip()
+    return head.lower()
+
+
+def _sql_starts_with(sql_head: str, prefixes: tuple[str, ...]) -> bool:
+    return any(sql_head.startswith(prefix) for prefix in prefixes)
+
+
+def _contains_named_args(sql: str) -> bool:
+    return _NAMED_ARG_PATTERN.search(sql) is not None
 
 
 __all__ = ["SqlBindings", "safe_sql"]

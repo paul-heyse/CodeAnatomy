@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Mapping, Sequence
 
+import msgspec
 from opentelemetry import _logs, trace
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.trace import Span
@@ -14,6 +14,7 @@ from opentelemetry.util.types import AttributeValue
 from obs.otel.attributes import normalize_attributes, normalize_log_attributes
 from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_DIAGNOSTICS
+from serde_msgspec import JSON_ENCODER
 
 _LOGGER = logging.getLogger(SCOPE_DIAGNOSTICS)
 
@@ -85,8 +86,8 @@ class OtelDiagnosticsSink:
 
 def _serialize_payload(payload: object) -> str:
     try:
-        return json.dumps(payload, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+        return JSON_ENCODER.encode(payload).decode("utf-8")
+    except (msgspec.EncodeError, TypeError, ValueError):
         return str(payload)
 
 

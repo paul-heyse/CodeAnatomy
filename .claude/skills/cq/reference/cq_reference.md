@@ -10,8 +10,25 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                           CLI Layer                               │
-│  scripts/cq → tools/cq/cli.py → argparse + dispatch               │
+│                      CLI Layer (Cyclopts)                        │
+│  tools/cq/cli_app/app.py → meta-app launcher → command dispatch  │
+│  Global options: --root, --format, --verbose, etc.               │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        Context Layer                             │
+│  cli_app/context.py → CliContext (toolchain, root, format, etc.) │
+│  cli_app/config.py → Config chain (TOML + env vars + CLI)        │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      Command Modules                             │
+│  commands/analysis.py → impact, calls, imports, etc.             │
+│  commands/query.py → q command                                   │
+│  commands/report.py → report command                             │
+│  commands/admin.py → index, cache                                │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -40,6 +57,80 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  core/toolchain.py    - External tool detection (rg, sg)          │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+## Global Options Reference
+
+All cq commands accept these global options, handled by the meta-app launcher.
+
+### Option Details
+
+| Option | Type | Env Var | Default | Description |
+|--------|------|---------|---------|-------------|
+| `--root` | Path | `CQ_ROOT` | Auto-detect | Repository root path. Auto-detects from current directory if not specified. |
+| `--config` | Path | `CQ_CONFIG` | `.cq.toml` | Path to TOML config file. |
+| `--no-config` | bool | `CQ_NO_CONFIG` | `false` | Skip loading config file entirely. |
+| `--verbose`, `-v` | int | `CQ_VERBOSE` | `0` | Verbosity level (0=quiet, 1=info, 2=debug, 3=trace). |
+| `--format` | enum | `CQ_FORMAT` | `md` | Output format. See Output Formats below. |
+| `--artifact-dir` | Path | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Directory for saving JSON artifacts. |
+| `--no-save-artifact` | bool | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving JSON artifacts. |
+
+### Output Formats
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `md` | Markdown with sections and code blocks | Claude context (default) |
+| `json` | Full structured JSON | Programmatic processing |
+| `both` | Markdown followed by JSON block | Debugging |
+| `summary` | Single-line summary | CI/CD integration |
+| `mermaid` | Mermaid flowchart syntax | Call graph visualization |
+| `mermaid-class` | Mermaid class diagram syntax | Class hierarchy visualization |
+| `mermaid-cfg` | Mermaid control flow graph | Function CFG visualization |
+| `dot` | Graphviz DOT syntax | Complex graph export |
+
+### Configuration Precedence
+
+Options are resolved in this order (highest priority first):
+
+1. **CLI flags** - Explicit command-line arguments
+2. **Environment variables** - `CQ_*` prefixed variables
+3. **Config file** - TOML file (`.cq.toml` or `--config` path)
+4. **Defaults** - Built-in default values
+
+### Config File Format
+
+Create `.cq.toml` in your repository root:
+
+```toml
+[cq]
+# Output format (md, json, both, summary, mermaid, mermaid-class, mermaid-cfg, dot)
+format = "md"
+
+# Verbosity level (0-3)
+verbose = 0
+
+# Artifact directory
+artifact_dir = ".cq/artifacts"
+
+# Save artifacts by default
+save_artifact = true
+
+# Default root (usually auto-detected)
+# root = "/path/to/repo"
+```
+
+### Environment Variable Reference
+
+| Variable | Type | Example |
+|----------|------|---------|
+| `CQ_ROOT` | path | `/home/user/project` |
+| `CQ_CONFIG` | path | `/home/user/.cq.toml` |
+| `CQ_NO_CONFIG` | bool | `true`, `1`, `yes` |
+| `CQ_VERBOSE` | int | `0`, `1`, `2`, `3` |
+| `CQ_FORMAT` | string | `md`, `json`, `mermaid` |
+| `CQ_ARTIFACT_DIR` | path | `.cq/artifacts` |
+| `CQ_NO_SAVE_ARTIFACT` | bool | `true`, `1`, `yes` |
+
+---
 
 ## Schema Definitions
 

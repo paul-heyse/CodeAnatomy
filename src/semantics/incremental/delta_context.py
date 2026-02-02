@@ -8,7 +8,10 @@ from pathlib import Path
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_delta_feature_gate,
@@ -162,7 +165,7 @@ def register_delta_df(
         context.runtime.session_runtime().ctx,
         name=name,
         location=location,
-        runtime_profile=context.runtime.profile,
+        options=DatasetRegistrationOptions(runtime_profile=context.runtime.profile),
     )
 
 

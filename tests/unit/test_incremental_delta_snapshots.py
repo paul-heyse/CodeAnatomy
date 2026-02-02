@@ -14,6 +14,10 @@ from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.snapshot import write_repo_snapshot
 from semantics.incremental.state_store import StateStore
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
+
+require_deltalake()
+require_delta_extension()
 
 
 def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:

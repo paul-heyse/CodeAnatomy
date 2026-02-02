@@ -23,16 +23,20 @@ def ensure_semantic_views_registered(
     ctx
         DataFusion session context.
     view_names
-        Optional list of view names to check. Defaults to SEMANTIC_VIEW_NAMES.
+        Optional list of view names to check. Defaults to semantic model outputs.
 
     Raises
     ------
     ValueError
         If any required semantic views are missing from the session.
     """
-    from semantics.naming import SEMANTIC_VIEW_NAMES
+    from semantics.registry import SEMANTIC_MODEL
 
-    names = tuple(view_names) if view_names is not None else SEMANTIC_VIEW_NAMES
+    names = (
+        tuple(view_names)
+        if view_names is not None
+        else tuple(spec.name for spec in SEMANTIC_MODEL.outputs)
+    )
     missing = [name for name in names if not ctx.table_exist(name)]
     if missing:
         msg = f"Semantic views missing from session: {sorted(missing)}"
@@ -52,9 +56,9 @@ def is_semantic_view(view_name: str) -> bool:
     bool
         True if the view is a semantic view managed by the semantics layer.
     """
-    from semantics.naming import SEMANTIC_VIEW_NAMES
+    from semantics.registry import SEMANTIC_MODEL
 
-    return view_name in SEMANTIC_VIEW_NAMES
+    return view_name in {spec.name for spec in SEMANTIC_MODEL.outputs}
 
 
 __all__ = ["ensure_semantic_views_registered", "is_semantic_view"]

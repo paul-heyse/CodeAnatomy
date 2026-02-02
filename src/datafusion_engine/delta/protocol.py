@@ -200,33 +200,24 @@ def _protocol_snapshot(
     if snapshot is None:
         return None
     if isinstance(snapshot, DeltaProtocolSnapshot):
-        if (
-            snapshot.min_reader_version is None
-            and snapshot.min_writer_version is None
-            and not snapshot.reader_features
-            and not snapshot.writer_features
-        ):
-            return None
-        return snapshot
-    if not isinstance(snapshot, Mapping):
+        resolved = snapshot
+    elif isinstance(snapshot, Mapping):
+        try:
+            resolved = msgspec.convert(snapshot, type=DeltaProtocolSnapshot, strict=False)
+        except msgspec.ValidationError:
+            resolved = None
+    else:
+        resolved = None
+    if resolved is None:
         return None
-    min_reader_version = coerce_int(snapshot.get("min_reader_version"))
-    min_writer_version = coerce_int(snapshot.get("min_writer_version"))
-    reader_features = tuple(_feature_set(snapshot.get("reader_features")))
-    writer_features = tuple(_feature_set(snapshot.get("writer_features")))
     if (
-        min_reader_version is None
-        and min_writer_version is None
-        and not reader_features
-        and not writer_features
+        resolved.min_reader_version is None
+        and resolved.min_writer_version is None
+        and not resolved.reader_features
+        and not resolved.writer_features
     ):
         return None
-    return DeltaProtocolSnapshot(
-        min_reader_version=min_reader_version,
-        min_writer_version=min_writer_version,
-        reader_features=reader_features,
-        writer_features=writer_features,
-    )
+    return resolved
 
 
 def _feature_set(value: object) -> set[str]:

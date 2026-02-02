@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from typing import cast
 
 import msgspec
 
@@ -34,7 +35,7 @@ from serde_artifacts import (
     ViewCacheArtifactEnvelope,
     WriteArtifactRow,
 )
-from serde_msgspec import dumps_msgpack
+from serde_msgspec import dumps_msgpack, json_default
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from utils.hashing import hash_sha256_hex
 
@@ -222,6 +223,7 @@ def schema_contract_payload() -> dict[str, object]:
     return {
         "schemas": schemas,
         "components": components,
+        "contract_index": schema_contract_index(),
     }
 
 
@@ -245,8 +247,27 @@ def openapi_contract_payload() -> dict[str, object]:
         "paths": {},
         "components": {"schemas": components},
         "x-codeanatomy-root-schemas": root_schemas,
+        "x-codeanatomy-contract-index": schema_contract_index(),
         "x-codeanatomy-schema-hash": schema_contract_hash(),
     }
+
+
+def _schema_enc_hook(obj: object) -> object:
+    try:
+        return json_default(obj)
+    except TypeError:
+        return str(obj)
+
+
+def schema_contract_index() -> list[dict[str, object]]:
+    """Return a structured contract index from msgspec.inspect."""
+    type_info = msgspec.inspect.multi_type_info(SCHEMA_TYPES)
+    entries: list[dict[str, object]] = []
+    for schema_type, info in zip(SCHEMA_TYPES, type_info, strict=False):
+        payload = msgspec.to_builtins(info, str_keys=True, enc_hook=_schema_enc_hook)
+        entries.append({"name": schema_type.__name__, "type_info": payload})
+    entries.sort(key=lambda item: cast("str", item.get("name", "")))
+    return entries
 
 
 def schema_contract_hash() -> str:
@@ -280,6 +301,7 @@ __all__ = [
     "openapi_contract_payload",
     "schema_components",
     "schema_contract_hash",
+    "schema_contract_index",
     "schema_contract_payload",
     "write_openapi_docs",
     "write_schema_docs",

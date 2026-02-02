@@ -13,6 +13,10 @@ from semantics.incremental.delta_updates import OverwriteDatasetSpec, write_over
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
 from tests.test_helpers.diagnostics import diagnostic_profile
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
+
+require_deltalake()
+require_delta_extension()
 
 EXPECTED_ROW_COUNT = 2
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING
 from hamilton.lifecycle import api as lifecycle_api
 
 from core_types import JsonValue
+from serde_msgspec import JSON_ENCODER, StructBaseCompat
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -41,12 +41,11 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
         self._start_time = time.monotonic()
         _append_event(
             self._path,
-            {
-                "event": "graph_start",
-                "run_id": run_id,
-                "plan_signature": self.plan_signature,
-                "timestamp_ms": int(time.time() * 1000),
-            },
+            GraphStartEvent(
+                run_id=run_id,
+                plan_signature=self.plan_signature,
+                timestamp_ms=int(time.time() * 1000),
+            ),
         )
         self._event_count += 1
 
@@ -67,15 +66,14 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
             duration_ms = int((time.monotonic() - self._start_time) * 1000)
         _append_event(
             path,
-            {
-                "event": "graph_finish",
-                "run_id": run_id,
-                "plan_signature": self.plan_signature,
-                "timestamp_ms": int(time.time() * 1000),
-                "duration_ms": duration_ms,
-                "success": bool(success),
-                "error": str(error) if error is not None else None,
-            },
+            GraphFinishEvent(
+                run_id=run_id,
+                plan_signature=self.plan_signature,
+                timestamp_ms=int(time.time() * 1000),
+                duration_ms=duration_ms,
+                success=bool(success),
+                error=str(error) if error is not None else None,
+            ),
         )
         self._event_count += 1
         from datafusion_engine.lineage.diagnostics import record_artifact
@@ -106,12 +104,31 @@ def _resolve_log_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
         return Path(cache_path).expanduser() / "structured_logs" / f"{run_id}.jsonl"
     return Path("build") / "structured_logs" / f"{run_id}.jsonl"
 
+class StructuredLogEvent(StructBaseCompat, tag=True, tag_field="event"):
+    """Base structured log event."""
 
-def _append_event(path: Path, payload: Mapping[str, object]) -> None:
+    run_id: str
+    plan_signature: str
+    timestamp_ms: int
+
+
+class GraphStartEvent(StructuredLogEvent, tag="graph_start"):
+    """Graph-start log event."""
+
+
+class GraphFinishEvent(StructuredLogEvent, tag="graph_finish"):
+    """Graph-finish log event."""
+
+    duration_ms: int | None = None
+    success: bool = True
+    error: str | None = None
+
+
+def _append_event(path: Path, payload: StructuredLogEvent) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
-        handle.write("\n")
+    data = JSON_ENCODER.encode_lines([payload])
+    with path.open("ab") as handle:
+        handle.write(data)
 
 
 __all__ = ["StructuredLogHook"]

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from semantics.catalog.dataset_registry import DatasetRegistrySpec
+from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
 from semantics.ir_optimize import IRCost, order_join_groups, prune_ir
 from semantics.naming import canonical_output_name
@@ -18,15 +20,16 @@ if TYPE_CHECKING:
 _KIND_ORDER: Mapping[str, int] = {
     "normalize": 0,
     "scip_normalize": 1,
-    "join_group": 2,
-    "relate": 3,
-    "union_edges": 4,
-    "union_nodes": 5,
-    "projection": 6,
-    "diagnostic": 7,
-    "export": 8,
-    "finalize": 9,
-    "artifact": 10,
+    "symtable": 2,
+    "join_group": 3,
+    "relate": 4,
+    "union_edges": 5,
+    "union_nodes": 6,
+    "projection": 7,
+    "diagnostic": 8,
+    "export": 9,
+    "finalize": 10,
+    "artifact": 11,
 }
 _MIN_JOIN_GROUP_SIZE = 2
 MIN_VERSIONED_ALIAS_COUNT: Final[int] = 2
@@ -248,7 +251,7 @@ def _metadata_float(meta: Mapping[bytes, bytes], key: bytes) -> float | None:
     return None
 
 
-def _cost_hints_from_rows(rows: Sequence[object]) -> dict[str, IRCost]:
+def _cost_hints_from_rows(rows: Sequence[SemanticDatasetRow]) -> dict[str, IRCost]:
     hints: dict[str, IRCost] = {}
     for row in rows:
         name = getattr(row, "name", None)
@@ -264,6 +267,276 @@ def _cost_hints_from_rows(rows: Sequence[object]) -> dict[str, IRCost]:
             selectivity=selectivity,
         )
     return hints
+
+
+def _row_from_registry_spec(
+    spec: DatasetRegistrySpec,
+    *,
+    fields: tuple[str, ...] | None = None,
+) -> SemanticDatasetRow:
+    resolved_fields = fields if fields is not None else spec.fields
+    return SemanticDatasetRow(
+        name=spec.name,
+        version=spec.version,
+        bundles=spec.bundles,
+        fields=resolved_fields,
+        category=spec.category,
+        supports_cdf=spec.supports_cdf,
+        partition_cols=spec.partition_cols,
+        merge_keys=spec.merge_keys,
+        join_keys=spec.join_keys,
+        template=spec.template,
+        view_builder=spec.view_builder,
+        kind=spec.kind,
+        semantic_id=spec.semantic_id,
+        entity=spec.entity,
+        grain=spec.grain,
+        stability=spec.stability,
+        schema_ref=spec.schema_ref,
+        materialization=spec.materialization,
+        materialized_name=spec.materialized_name,
+        metadata_extra=spec.metadata_extra,
+        register_view=spec.register_view,
+        source_dataset=spec.source_dataset,
+        role=spec.role,
+    )
+
+
+def _build_normalize_rows() -> tuple[SemanticDatasetRow, ...]:
+    from semantics.catalog.normalize_registry import NORMALIZE_DATASETS
+
+    return tuple(_row_from_registry_spec(spec) for spec in NORMALIZE_DATASETS)
+
+
+def _build_semantic_normalization_rows(
+    model: SemanticModel,
+) -> tuple[SemanticDatasetRow, ...]:
+    return tuple(
+        SemanticDatasetRow(
+            name=spec.output_name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=("file_identity", "span"),
+            fields=(spec.spec.entity_id.out_col,),
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=(spec.spec.entity_id.out_col,),
+            join_keys=(spec.spec.entity_id.out_col,),
+            template="semantic_normalize",
+            view_builder=f"{spec.source_table}_norm_df_builder",
+            register_view=True,
+            source_dataset=spec.source_table,
+        )
+        for spec in model.normalization_specs
+    )
+
+
+def _build_relationship_rows(
+    model: SemanticModel,
+) -> tuple[SemanticDatasetRow, ...]:
+    from relspec.view_defs import (
+        DEFAULT_REL_TASK_PRIORITY,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+    )
+    from semantics.catalog.projections import (
+        SemanticProjectionConfig,
+        semantic_projection_options,
+    )
+
+    projection_options = semantic_projection_options(
+        SemanticProjectionConfig(
+            default_priority=DEFAULT_REL_TASK_PRIORITY,
+            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
+            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
+            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
+            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
+            relationship_specs=model.relationship_specs,
+        )
+    )
+    feature_fields = tuple(
+        f"feat_{name}"
+        for name in sorted(
+            {feature.name for spec in model.relationship_specs for feature in spec.signals.features}
+        )
+    )
+    max_hard = max((len(spec.signals.hard) for spec in model.relationship_specs), default=0)
+    hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
+
+    def _relationship_fields(entity_id_alias: str) -> tuple[str, ...]:
+        return (
+            entity_id_alias,
+            "symbol",
+            "symbol_roles",
+            "path",
+            "edge_owner_file_id",
+            "bstart",
+            "bend",
+            "resolution_method",
+            "confidence",
+            "score",
+            "task_name",
+            "task_priority",
+            *hard_fields,
+            *feature_fields,
+        )
+
+    rows: list[SemanticDatasetRow] = []
+    for spec in model.relationship_specs:
+        options = projection_options[spec.name]
+        join_keys = (options.entity_id_alias, "symbol")
+        rows.append(
+            SemanticDatasetRow(
+                name=spec.name,
+                version=SEMANTIC_SCHEMA_VERSION,
+                bundles=(),
+                fields=_relationship_fields(options.entity_id_alias),
+                category="semantic",
+                supports_cdf=True,
+                partition_cols=(),
+                merge_keys=join_keys,
+                join_keys=join_keys,
+                template="semantic_relationship",
+                view_builder=f"{spec.name.replace('_v1', '')}_df_builder",
+                register_view=True,
+                source_dataset=None,
+            )
+        )
+    return tuple(rows)
+
+
+def _build_singleton_rows() -> tuple[SemanticDatasetRow, ...]:
+    from semantics.catalog.semantic_singletons_registry import SEMANTIC_SINGLETON_DATASETS
+
+    return tuple(_row_from_registry_spec(spec) for spec in SEMANTIC_SINGLETON_DATASETS)
+
+
+def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
+    from semantics.catalog.diagnostics_registry import DIAGNOSTIC_DATASETS
+    from semantics.registry import RELATIONSHIP_SPECS
+
+    feature_fields = tuple(
+        f"feat_{name}"
+        for name in sorted(
+            {feature.name for spec in RELATIONSHIP_SPECS for feature in spec.signals.features}
+        )
+    )
+    max_hard = max((len(spec.signals.hard) for spec in RELATIONSHIP_SPECS), default=0)
+    hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
+    dynamic_fields = {
+        "relationship_candidates_v1",
+        "relationship_decisions_v1",
+    }
+    rows: list[SemanticDatasetRow] = []
+    for spec in DIAGNOSTIC_DATASETS:
+        fields = spec.fields
+        if spec.name in dynamic_fields:
+            fields = (*fields, *hard_fields, *feature_fields)
+        rows.append(_row_from_registry_spec(spec, fields=fields))
+    return tuple(rows)
+
+
+def _build_export_rows() -> tuple[SemanticDatasetRow, ...]:
+    from semantics.catalog.export_registry import EXPORT_DATASETS
+
+    return tuple(_row_from_registry_spec(spec) for spec in EXPORT_DATASETS)
+
+
+def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
+    from cpg.emit_specs import cpg_output_specs
+
+    rows: list[SemanticDatasetRow] = []
+    for spec in cpg_output_specs():
+        canonical = canonical_output_name(spec.name)
+        source_dataset = canonical_output_name(spec.source_dataset) if spec.source_dataset else None
+        rows.append(
+            SemanticDatasetRow(
+                name=canonical,
+                version=SEMANTIC_SCHEMA_VERSION,
+                bundles=spec.bundles,
+                fields=spec.fields,
+                category="semantic",
+                supports_cdf=True,
+                partition_cols=spec.partition_cols,
+                merge_keys=spec.merge_keys,
+                join_keys=spec.join_keys,
+                template=spec.template,
+                view_builder=spec.view_builder,
+                register_view=True,
+                source_dataset=source_dataset,
+                entity=spec.entity,
+                grain=spec.grain,
+                stability="design",
+                materialization="delta",
+                materialized_name=f"semantic.{canonical}",
+            )
+        )
+    return tuple(rows)
+
+
+def _build_semantic_dataset_rows(model: SemanticModel) -> tuple[SemanticDatasetRow, ...]:
+    rows: list[SemanticDatasetRow] = []
+    rows.extend(_build_input_rows())
+    rows.extend(_build_normalize_rows())
+    rows.extend(_build_semantic_normalization_rows(model))
+    rows.extend(_build_singleton_rows())
+    rows.extend(_build_relationship_rows(model))
+    rows.extend(_build_diagnostic_rows())
+    rows.extend(_build_export_rows())
+    rows.extend(_build_cpg_output_rows())
+    return tuple(rows)
+
+
+def _input_dataset_names() -> tuple[str, ...]:
+    from semantics.registry import SEMANTIC_TABLE_SPECS
+
+    names = tuple(spec.table for spec in SEMANTIC_TABLE_SPECS.values())
+    extras = ("scip_occurrences", "file_line_index_v1")
+    return tuple(dict.fromkeys((*names, *extras)))
+
+
+def _input_schema_fields(name: str) -> tuple[str, ...]:
+    from datafusion_engine.extract.registry import dataset_schema
+
+    schema = dataset_schema(name)
+    return tuple(getattr(schema, "names", ()))
+
+
+def _build_input_rows() -> tuple[SemanticDatasetRow, ...]:
+    return tuple(
+        SemanticDatasetRow(
+            name=name,
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=_input_schema_fields(name),
+            category="analysis",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=None,
+            join_keys=(),
+            template=None,
+            view_builder=None,
+            kind="table",
+            semantic_id=None,
+            entity=None,
+            grain=None,
+            stability="design",
+            schema_ref=None,
+            materialization=None,
+            materialized_name=None,
+            metadata_extra={},
+            register_view=False,
+            source_dataset=name,
+            role="input",
+        )
+        for name in _input_dataset_names()
+    )
+
+
+def _dataset_rows_for_model(model: SemanticModel) -> tuple[SemanticDatasetRow, ...]:
+    return _build_semantic_dataset_rows(model)
 
 
 def compile_semantics(model: SemanticModel) -> SemanticIR:
@@ -295,6 +568,40 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
             kind="scip_normalize",
             inputs=("scip_occurrences", "file_line_index_v1"),
             outputs=(scip_norm,),
+        )
+    )
+    views.extend(
+        (
+            SemanticIRView(
+                name="symtable_bindings",
+                kind="symtable",
+                inputs=("symtable_scopes", "symtable_symbols"),
+                outputs=("symtable_bindings",),
+            ),
+            SemanticIRView(
+                name="symtable_def_sites",
+                kind="symtable",
+                inputs=("symtable_bindings", "cst_defs"),
+                outputs=("symtable_def_sites",),
+            ),
+            SemanticIRView(
+                name="symtable_use_sites",
+                kind="symtable",
+                inputs=("symtable_bindings", "cst_refs"),
+                outputs=("symtable_use_sites",),
+            ),
+            SemanticIRView(
+                name="symtable_type_params",
+                kind="symtable",
+                inputs=("symtable_scopes",),
+                outputs=("symtable_type_params",),
+            ),
+            SemanticIRView(
+                name="symtable_type_param_edges",
+                kind="symtable",
+                inputs=("symtable_scope_edges", "symtable_scopes"),
+                outputs=("symtable_type_param_edges",),
+            ),
         )
     )
     views.extend(
@@ -467,7 +774,7 @@ def optimize_semantics(
         relationship_specs,
         existing_names=set(seen),
     )
-    cost_hints = _cost_hints_from_rows(SEMANTIC_MODEL.dataset_rows())
+    cost_hints = _cost_hints_from_rows(_dataset_rows_for_model(SEMANTIC_MODEL))
     ordered_join_groups = order_join_groups(join_groups, costs=cost_hints)
     join_view_lookup = {view.name: view for view in join_group_views}
     ordered_join_group_views = tuple(
@@ -554,7 +861,7 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
     SemanticIR
         Emitted semantic IR artifacts.
     """
-    dataset_rows = SEMANTIC_MODEL.dataset_rows()
+    dataset_rows = _dataset_rows_for_model(SEMANTIC_MODEL)
     _validate_schema_migrations(dataset_rows)
     model_hash = semantic_model_fingerprint(SEMANTIC_MODEL)
     ir_hash = semantic_ir_fingerprint(ir)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from hamilton.function_modifiers import source
 from hamilton.io import materialization
@@ -13,10 +13,11 @@ from hamilton.io.data_adapters import DataSaver
 from hamilton.registry import register_adapter
 
 from datafusion_engine.tables.param import ParamTableArtifact
-from hamilton_pipeline.io_contracts import delta_output_specs
-
-if TYPE_CHECKING:
-    from hamilton_pipeline.io_contracts import OutputPlanContext, OutputRuntimeContext
+from hamilton_pipeline.io_contracts import (
+    OutputPlanContext,
+    OutputRuntimeContext,
+    delta_output_specs,
+)
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,7 @@ def build_hamilton_materializers() -> list[materialization.MaterializerFactory]:
             for spec in delta_output_specs()
         ],
         materialization.to.codeanatomy_param_table_summary(
-            id="materialize_param_tables",
+            id="materialize_param_tables_summary",
             dependencies=["param_table_artifacts"],
             output_runtime_context=source("output_runtime_context"),
             materialization="delta",

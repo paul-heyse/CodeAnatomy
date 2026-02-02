@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import logging
 import os
@@ -608,10 +609,29 @@ def configure_otel(
     return providers
 
 
+def reset_providers_for_tests() -> None:
+    """Reset global providers for test isolation."""
+    _STATE["providers"] = None
+    from opentelemetry._logs import _internal as logs_internal
+    from opentelemetry.metrics import _internal as metrics_internal
+
+    with contextlib.suppress(AttributeError):
+        trace._TRACER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
+    with contextlib.suppress(AttributeError):
+        metrics_internal._METER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
+    with contextlib.suppress(AttributeError):
+        logs_internal._LOGGER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
+    trace._TRACER_PROVIDER = None  # noqa: SLF001
+    metrics_internal._METER_PROVIDER = None  # noqa: SLF001
+    logs_internal._LOGGER_PROVIDER = None  # noqa: SLF001
+    reset_metrics_registry()
+
+
 __all__ = [
     "ConfiguredMeterProvider",
     "OtelBootstrapOptions",
     "OtelProviders",
     "build_meter_provider",
     "configure_otel",
+    "reset_providers_for_tests",
 ]

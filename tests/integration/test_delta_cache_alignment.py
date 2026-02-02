@@ -8,7 +8,11 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset.registration import DataFusionCachePolicy, register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DataFusionCachePolicy,
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.facade import ExecutionResult
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -16,10 +20,15 @@ from datafusion_engine.tables.spec import table_spec_from_location
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts
 from tests.test_helpers.delta_commit import latest_commit_metadata
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
-from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
+from tests.test_helpers.optional_deps import (
+    require_datafusion_udfs,
+    require_delta_extension,
+    require_deltalake,
+)
 
 require_datafusion_udfs()
 require_deltalake()
+require_delta_extension()
 try:
     _internal = importlib.import_module("datafusion._internal")
 except ImportError:
@@ -53,8 +62,10 @@ def test_dataset_delta_cache_registration(tmp_path: Path) -> None:
         ctx,
         name="source",
         location=location,
-        cache_policy=cache_policy,
-        runtime_profile=runtime_profile,
+        options=DatasetRegistrationOptions(
+            cache_policy=cache_policy,
+            runtime_profile=runtime_profile,
+        ),
     )
     assert df.to_arrow_table().num_rows == 2
     cache_key = table_spec_from_location("source", location).cache_key()

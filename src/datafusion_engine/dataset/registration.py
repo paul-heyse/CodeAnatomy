@@ -33,6 +33,7 @@ import importlib
 import inspect
 import logging
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -174,7 +175,28 @@ _TREE_SITTER_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
     ("file_id", "ascending"),
 )
 
+_DDL_TYPE_ALIASES: dict[str, str] = {
+    "Int8": "TINYINT",
+    "Int16": "SMALLINT",
+    "Int32": "INT",
+    "Int64": "BIGINT",
+    "UInt8": "TINYINT",
+    "UInt16": "SMALLINT",
+    "UInt32": "INT",
+    "UInt64": "BIGINT",
+    "Float32": "FLOAT",
+    "Float64": "DOUBLE",
+    "Utf8": "VARCHAR",
+    "LargeUtf8": "VARCHAR",
+    "Boolean": "BOOLEAN",
+}
+
 logger = logging.getLogger(__name__)
+
+
+def _sql_type_name(dtype: pa.DataType) -> str:
+    dtype_name = _datafusion_type_name(dtype)
+    return _DDL_TYPE_ALIASES.get(dtype_name, dtype_name)
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -244,7 +266,7 @@ class DatasetInputSource:
             self._ctx,
             name=table_name,
             location=location,
-            runtime_profile=self._runtime_profile,
+            options=DatasetRegistrationOptions(runtime_profile=self._runtime_profile),
         )
 
 
@@ -729,7 +751,7 @@ def _ddl_column_definitions(
     filtered_keys = tuple(name for name in key_fields if name in available_names)
     lines: list[str] = []
     for field in schema:
-        dtype_name = _datafusion_type_name(field.type)
+        dtype_name = _sql_type_name(field.type)
         fragments = [_ddl_identifier(field.name), dtype_name]
         if not field.nullable or field.name in required_set:
             fragments.append("NOT NULL")
@@ -1060,13 +1082,21 @@ def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec |
     return dataset_spec_from_schema(name, schema)
 
 
+@dataclass(frozen=True)
+class DatasetRegistrationOptions:
+    """Configure DataFusion dataset registration."""
+
+    cache_policy: DataFusionCachePolicy | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    overwrite: bool = True
+
+
 def register_dataset_df(
     ctx: SessionContext,
     *,
     name: str,
     location: DatasetLocation,
-    cache_policy: DataFusionCachePolicy | None = None,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
+    options: DatasetRegistrationOptions | None = None,
 ) -> DataFrame:
     """Register a dataset location with DataFusion and return a DataFrame.
 
@@ -1076,20 +1106,48 @@ def register_dataset_df(
         DataFusion DataFrame for the registered dataset.
 
     """
+    from datafusion_engine.session.helpers import deregister_table
     from datafusion_engine.tables.registration import (
         TableRegistrationRequest,
         register_table,
     )
 
-    return register_table(
+    resolved = options or DatasetRegistrationOptions()
+    existing = False
+    if resolved.overwrite:
+        from datafusion_engine.schema.introspection import table_names_snapshot
+
+        existing = name in table_names_snapshot(ctx)
+        deregister_table(ctx, name)
+    df = register_table(
         ctx,
         TableRegistrationRequest(
             name=name,
             location=location,
-            cache_policy=cache_policy,
-            runtime_profile=runtime_profile,
+            cache_policy=resolved.cache_policy,
+            runtime_profile=resolved.runtime_profile,
         ),
     )
+    scan = location.datafusion_scan
+    if (
+        existing
+        and scan is not None
+        and scan.listing_mutable
+        and resolved.runtime_profile is not None
+    ):
+        from datafusion_engine.lineage.diagnostics import record_artifact
+
+        record_artifact(
+            resolved.runtime_profile,
+            "datafusion_listing_refresh_v1",
+            {
+                "name": name,
+                "path": str(location.path),
+                "format": location.format,
+                "event_time_unix_ms": int(time.time() * 1000),
+            },
+        )
+    return df
 
 
 @dataclass(frozen=True)
@@ -1153,7 +1211,7 @@ def register_dataset_spec(
         ctx,
         name=registration.name,
         location=location,
-        runtime_profile=runtime_profile,
+        options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
     )
 
 
@@ -1971,7 +2029,7 @@ def _projection_exprs_for_schema(
     defaults = _expected_column_defaults(expected_schema)
     projection_exprs: list[str] = []
     for field in expected_schema:
-        dtype_name = _datafusion_type_name(field.type)
+        dtype_name = _sql_type_name(field.type)
         if field.name in actual:
             cast_expr = f"cast({field.name} as {dtype_name})"
             default_value = defaults.get(field.name)
@@ -2942,6 +3000,7 @@ __all__ = [
     "DataFusionRegistryOptions",
     "DatasetInputSource",
     "DatasetRegistration",
+    "DatasetRegistrationOptions",
     "dataset_input_plugin",
     "input_plugin_prefixes",
     "register_dataset_df",

@@ -10,6 +10,8 @@ from datafusion_engine.extract.bundles import dataset_name_for_output
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from semantics.catalog.dataset_rows import SemanticDatasetRow
+
 
 @dataclass(frozen=True)
 class SemanticInputSpec:
@@ -34,75 +36,38 @@ def _fallback_names(output: str) -> tuple[str, ...]:
         dataset = dataset_name_for_output(output)
     except KeyError:
         dataset = None
+    candidates.append(output)
     if dataset is not None and dataset != output:
         candidates.append(dataset)
+    if output.endswith("_v1"):
+        candidates.append(output.removesuffix("_v1"))
+        return tuple(dict.fromkeys(candidates))
     versioned = f"{output}_v1"
-    if versioned != output:
-        try:
-            dataset_versioned = dataset_name_for_output(versioned)
-        except KeyError:
-            dataset_versioned = None
-        if dataset_versioned is not None and dataset_versioned not in candidates:
-            candidates.append(dataset_versioned)
-    return tuple(candidates)
+    candidates.append(versioned)
+    try:
+        dataset_versioned = dataset_name_for_output(versioned)
+    except KeyError:
+        dataset_versioned = None
+    if dataset_versioned is not None and dataset_versioned not in candidates:
+        candidates.append(dataset_versioned)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _semantic_input_rows() -> tuple[SemanticDatasetRow, ...]:
+    from semantics.catalog.dataset_rows import get_all_dataset_rows
+
+    return tuple(row for row in get_all_dataset_rows() if row.role == "input")
 
 
 # Canonical input specifications
-SEMANTIC_INPUT_SPECS: Final[tuple[SemanticInputSpec, ...]] = (
+SEMANTIC_INPUT_SPECS: Final[tuple[SemanticInputSpec, ...]] = tuple(
     SemanticInputSpec(
-        canonical_name="cst_refs",
-        extraction_source="cst_refs",
+        canonical_name=row.name,
+        extraction_source=row.source_dataset or row.name,
         required=True,
-        fallback_names=_fallback_names("cst_refs"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_defs",
-        extraction_source="cst_defs",
-        required=True,
-        fallback_names=_fallback_names("cst_defs"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_imports",
-        extraction_source="cst_imports",
-        required=True,
-        fallback_names=_fallback_names("cst_imports"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_callsites",
-        extraction_source="cst_callsites",
-        required=True,
-        fallback_names=_fallback_names("cst_callsites"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_call_args",
-        extraction_source="cst_call_args",
-        required=True,
-        fallback_names=_fallback_names("cst_call_args"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_docstrings",
-        extraction_source="cst_docstrings",
-        required=True,
-        fallback_names=_fallback_names("cst_docstrings"),
-    ),
-    SemanticInputSpec(
-        canonical_name="cst_decorators",
-        extraction_source="cst_decorators",
-        required=True,
-        fallback_names=_fallback_names("cst_decorators"),
-    ),
-    SemanticInputSpec(
-        canonical_name="scip_occurrences",
-        extraction_source="scip_occurrences",
-        required=True,
-        fallback_names=_fallback_names("scip_occurrences"),
-    ),
-    SemanticInputSpec(
-        canonical_name="file_line_index_v1",
-        extraction_source="file_line_index_v1",
-        required=True,  # Required for SCIP byte offset conversion
-        fallback_names=_fallback_names("file_line_index_v1"),
-    ),
+        fallback_names=_fallback_names(row.source_dataset or row.name),
+    )
+    for row in _semantic_input_rows()
 )
 
 

@@ -68,16 +68,18 @@ class _SemanticExtensionType(pa.ExtensionType):
         self._info = info
         super().__init__(info.storage_type, info.extension_name)
 
-    def arrow_ext_serialize(self) -> bytes:
+    def __arrow_ext_serialize__(self) -> bytes:  # noqa: PLW3201
         return self._info.name.encode("utf-8")
 
     @classmethod
-    def arrow_ext_deserialize(
+    def __arrow_ext_deserialize__(  # noqa: PLW3201
         cls,
         _storage_type: pa.DataType,
-        serialized: bytes,
+        serialized: object,
+        *_args: object,
     ) -> pa.ExtensionType:
-        name = serialized.decode("utf-8")
+        payload = _coerce_extension_payload(serialized, _args)
+        name = payload.decode("utf-8")
         if name == SPAN_TYPE_INFO.name:
             return _SemanticExtensionType(SPAN_TYPE_INFO)
         if name == BYTE_SPAN_TYPE_INFO.name:
@@ -92,10 +94,17 @@ class _SemanticExtensionType(pa.ExtensionType):
         raise ValueError(msg)
 
 
-_SemanticExtensionType.__arrow_ext_serialize__ = _SemanticExtensionType.arrow_ext_serialize
-_SemanticExtensionType.__arrow_ext_deserialize__ = classmethod(
-    _SemanticExtensionType.arrow_ext_deserialize
-)
+def _coerce_extension_payload(
+    serialized: object,
+    extra_args: tuple[object, ...],
+) -> bytes:
+    if isinstance(serialized, (bytes, bytearray, memoryview)):
+        return bytes(serialized)
+    for value in extra_args:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value)
+    msg = "Semantic extension payload was not provided as bytes."
+    raise TypeError(msg)
 
 
 def register_semantic_extension_types() -> None:

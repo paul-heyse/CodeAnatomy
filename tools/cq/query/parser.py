@@ -339,11 +339,7 @@ def _parse_relational_constraints(tokens: dict[str, str]) -> tuple[RelationalCon
         pattern = tokens.get(op)
         if pattern:
             # Try dot notation first, then underscore, then global
-            stop_by = (
-                tokens.get(f"{op}.stopBy")
-                or tokens.get(f"{op}_stop_by")
-                or global_stop_by
-            )
+            stop_by = tokens.get(f"{op}.stopBy") or tokens.get(f"{op}_stop_by") or global_stop_by
             field_name = (
                 tokens.get(f"{op}.field")
                 or tokens.get(f"{op}_field")

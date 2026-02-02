@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 # Cache configuration constants
 INDEX_DIR = ".cq"
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 @dataclass
@@ -201,6 +201,8 @@ class IndexCache:
         records : Sequence[dict[str, object]]
             Scan records to cache (must be JSON-serializable).
         """
+        if not file_path.exists():
+            return
         file_path_str = str(file_path.relative_to(self.repo_root))
         content_hash = compute_file_hash(file_path)
         mtime = file_path.stat().st_mtime

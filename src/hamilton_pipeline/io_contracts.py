@@ -119,16 +119,6 @@ _DELTA_OUTPUT_SPECS: tuple[OutputMaterializationSpec, ...] = (
         materialized_name="semantic.cpg_props_v1",
     ),
     OutputMaterializationSpec(
-        table_node="cpg_nodes_quality",
-        dataset_name="cpg_nodes_quality",
-        materialized_name="semantic.cpg_nodes_quality_v1",
-    ),
-    OutputMaterializationSpec(
-        table_node="cpg_props_quality",
-        dataset_name="cpg_props_quality",
-        materialized_name="semantic.cpg_props_quality_v1",
-    ),
-    OutputMaterializationSpec(
         table_node="cpg_props_map",
         dataset_name="cpg_props_map",
         materialized_name="semantic.cpg_props_map_v1",
@@ -396,8 +386,6 @@ class PrimaryOutputs:
     cpg_nodes: DataSaverDict
     cpg_edges: DataSaverDict
     cpg_props: DataSaverDict
-    cpg_nodes_quality: DataSaverDict
-    cpg_props_quality: DataSaverDict
 
 
 @dataclass(frozen=True)
@@ -758,8 +746,6 @@ _OUTPUT_PLAN_FINGERPRINTS: dict[str, str] = {
     "cpg_nodes": "cpg_nodes",
     "cpg_edges": "cpg_edges",
     "cpg_props": "cpg_props",
-    "cpg_nodes_quality": "cpg_nodes_quality",
-    "cpg_props_quality": "cpg_props_quality",
     "cpg_props_map": "cpg_props_map",
     "cpg_edges_by_src": "cpg_edges_by_src",
     "cpg_edges_by_dst": "cpg_edges_by_dst",
@@ -901,10 +887,8 @@ _CPG_EDGES_BY_DST_WRITE_POLICY = DeltaWritePolicy(
 )
 _CPG_MAINTENANCE_POLICIES: dict[str, DeltaMaintenancePolicy] = {
     "cpg_nodes": _maintenance_policy(("file_id", "node_id", "bstart")),
-    "cpg_nodes_quality": _maintenance_policy(("file_id", "node_id", "bstart")),
     "cpg_edges": _maintenance_policy(("src_node_id", "dst_node_id", "edge_id")),
     "cpg_props": _maintenance_policy(("entity_kind", "entity_id", "prop_key")),
-    "cpg_props_quality": _maintenance_policy(("entity_kind", "entity_id", "prop_key")),
     "cpg_props_map": _maintenance_policy(("entity_kind", "entity_id")),
     "cpg_edges_by_src": _maintenance_policy(("src_node_id",)),
     "cpg_edges_by_dst": _maintenance_policy(("dst_node_id",)),
@@ -960,18 +944,6 @@ _CPG_DELTA_WRITE_PARAMS: dict[str, dict[str, ParametrizedDependency]] = {
         table="cpg_edges_by_dst",
         dataset_name="cpg_edges_by_dst",
         write_policy=_CPG_EDGES_BY_DST_WRITE_POLICY,
-    ),
-    "write_cpg_nodes_quality_delta": _delta_write_spec(
-        table="cpg_nodes_quality",
-        dataset_name="cpg_nodes_quality",
-        plan_dataset_name="cpg_nodes",
-        write_policy=_CPG_NODES_WRITE_POLICY,
-    ),
-    "write_cpg_props_quality_delta": _delta_write_spec(
-        table="cpg_props_quality",
-        dataset_name="cpg_props_quality",
-        plan_dataset_name="cpg_props",
-        write_policy=_CPG_PROPS_WRITE_POLICY,
     ),
 }
 
@@ -1146,12 +1118,6 @@ def _run_manifest_output_payloads(
             "rows": primary.cpg_nodes.get("rows"),
         },
         {
-            "name": "cpg_nodes_quality",
-            "path": primary.cpg_nodes_quality.get("path"),
-            "delta_version": primary.cpg_nodes_quality.get("delta_version"),
-            "rows": primary.cpg_nodes_quality.get("rows"),
-        },
-        {
             "name": "cpg_edges",
             "path": primary.cpg_edges.get("path"),
             "delta_version": primary.cpg_edges.get("delta_version"),
@@ -1162,12 +1128,6 @@ def _run_manifest_output_payloads(
             "path": primary.cpg_props.get("path"),
             "delta_version": primary.cpg_props.get("delta_version"),
             "rows": primary.cpg_props.get("rows"),
-        },
-        {
-            "name": "cpg_props_quality",
-            "path": primary.cpg_props_quality.get("path"),
-            "delta_version": primary.cpg_props_quality.get("delta_version"),
-            "rows": primary.cpg_props_quality.get("rows"),
         },
         {
             "name": "cpg_props_map",

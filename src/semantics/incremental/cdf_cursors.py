@@ -15,12 +15,19 @@ from typing import Annotated
 
 import msgspec
 
-from serde_msgspec import StructBaseCompat, StructBaseStrict, dumps_json, loads_json
+from serde_msgspec import StructBaseStrict, dumps_json, loads_json
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
-class CdfCursor(StructBaseCompat, frozen=True):
+class CdfCursor(
+    msgspec.Struct,
+    frozen=False,
+    kw_only=True,
+    omit_defaults=True,
+    repr_omit_defaults=True,
+    forbid_unknown_fields=False,
+):
     """Cursor tracking the last processed Delta table version for CDF reads.
 
     Immutable cursor that records version checkpoints for incremental

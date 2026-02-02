@@ -94,6 +94,10 @@ class MetricsRegistry:
     scan_fragments: GaugeStore
     cache_operation_count: metrics.Counter
     cache_operation_duration: metrics.Histogram
+    dataset_rows_gauge: metrics.ObservableGauge
+    dataset_columns_gauge: metrics.ObservableGauge
+    scan_row_groups_gauge: metrics.ObservableGauge
+    scan_fragments_gauge: metrics.ObservableGauge
 
 
 _REGISTRY_CACHE: dict[str, MetricsRegistry | None] = {"value": None}
@@ -212,6 +216,50 @@ def _registry() -> MetricsRegistry:
     if cached is not None:
         return cached
     meter = _meter()
+    dataset_rows_store = GaugeStore.create(
+        name=_DATASET_ROWS,
+        description="Dataset row counts.",
+        unit="1",
+    )
+    dataset_columns_store = GaugeStore.create(
+        name=_DATASET_COLUMNS,
+        description="Dataset column counts.",
+        unit="1",
+    )
+    scan_row_groups_store = GaugeStore.create(
+        name=_SCAN_ROW_GROUPS,
+        description="Row group counts observed during scans.",
+        unit="1",
+    )
+    scan_fragments_store = GaugeStore.create(
+        name=_SCAN_FRAGMENTS,
+        description="Fragment counts observed during scans.",
+        unit="1",
+    )
+    dataset_rows_gauge = meter.create_observable_gauge(
+        dataset_rows_store.name,
+        callbacks=[dataset_rows_store.observe],
+        description=dataset_rows_store.description,
+        unit=dataset_rows_store.unit,
+    )
+    dataset_columns_gauge = meter.create_observable_gauge(
+        dataset_columns_store.name,
+        callbacks=[dataset_columns_store.observe],
+        description=dataset_columns_store.description,
+        unit=dataset_columns_store.unit,
+    )
+    scan_row_groups_gauge = meter.create_observable_gauge(
+        scan_row_groups_store.name,
+        callbacks=[scan_row_groups_store.observe],
+        description=scan_row_groups_store.description,
+        unit=scan_row_groups_store.unit,
+    )
+    scan_fragments_gauge = meter.create_observable_gauge(
+        scan_fragments_store.name,
+        callbacks=[scan_fragments_store.observe],
+        description=scan_fragments_store.description,
+        unit=scan_fragments_store.unit,
+    )
     registry = MetricsRegistry(
         stage_duration=meter.create_histogram(
             _STAGE_DURATION,
@@ -243,26 +291,10 @@ def _registry() -> MetricsRegistry:
             unit="1",
             description="Error counts emitted by the pipeline.",
         ),
-        dataset_rows=GaugeStore.create(
-            name=_DATASET_ROWS,
-            description="Dataset row counts.",
-            unit="1",
-        ),
-        dataset_columns=GaugeStore.create(
-            name=_DATASET_COLUMNS,
-            description="Dataset column counts.",
-            unit="1",
-        ),
-        scan_row_groups=GaugeStore.create(
-            name=_SCAN_ROW_GROUPS,
-            description="Row group counts observed during scans.",
-            unit="1",
-        ),
-        scan_fragments=GaugeStore.create(
-            name=_SCAN_FRAGMENTS,
-            description="Fragment counts observed during scans.",
-            unit="1",
-        ),
+        dataset_rows=dataset_rows_store,
+        dataset_columns=dataset_columns_store,
+        scan_row_groups=scan_row_groups_store,
+        scan_fragments=scan_fragments_store,
         cache_operation_count=meter.create_counter(
             _CACHE_OPERATION_COUNT,
             unit="1",
@@ -273,30 +305,10 @@ def _registry() -> MetricsRegistry:
             unit="s",
             description="Cache operation duration by policy/scope/result.",
         ),
-    )
-    meter.create_observable_gauge(
-        registry.dataset_rows.name,
-        callbacks=[registry.dataset_rows.observe],
-        description=registry.dataset_rows.description,
-        unit=registry.dataset_rows.unit,
-    )
-    meter.create_observable_gauge(
-        registry.dataset_columns.name,
-        callbacks=[registry.dataset_columns.observe],
-        description=registry.dataset_columns.description,
-        unit=registry.dataset_columns.unit,
-    )
-    meter.create_observable_gauge(
-        registry.scan_row_groups.name,
-        callbacks=[registry.scan_row_groups.observe],
-        description=registry.scan_row_groups.description,
-        unit=registry.scan_row_groups.unit,
-    )
-    meter.create_observable_gauge(
-        registry.scan_fragments.name,
-        callbacks=[registry.scan_fragments.observe],
-        description=registry.scan_fragments.description,
-        unit=registry.scan_fragments.unit,
+        dataset_rows_gauge=dataset_rows_gauge,
+        dataset_columns_gauge=dataset_columns_gauge,
+        scan_row_groups_gauge=scan_row_groups_gauge,
+        scan_fragments_gauge=scan_fragments_gauge,
     )
     _REGISTRY_CACHE["value"] = registry
     return registry

@@ -114,14 +114,6 @@ class BuildOptions:
             group=output_group,
         ),
     ] = None
-    include_quality: Annotated[
-        bool,
-        Parameter(
-            name="--include-quality",
-            help="Include quality metrics in output.",
-            group=output_group,
-        ),
-    ] = True
     include_errors: Annotated[
         bool,
         Parameter(
@@ -740,7 +732,6 @@ def build_command(
         scip_identity_overrides=scip_identity,
         incremental_config=incremental_config,
         incremental_impact_strategy=options.incremental_impact_strategy,
-        include_quality=options.include_quality,
         include_extract_errors=options.include_errors,
         include_manifest=options.include_manifest,
         include_run_bundle=options.include_run_bundle,

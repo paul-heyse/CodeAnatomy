@@ -111,6 +111,7 @@ class HazardSpec:
     inside: str | None = None
     not_inside: str | None = None
     confidence_penalty: float = 0.5
+    kind: str | None = None
 
     def to_ast_grep_rule(self) -> dict:
         """Convert to ast-grep rule format.
@@ -128,8 +129,11 @@ class HazardSpec:
             "severity": self.severity.value,
         }
 
+        if self.kind:
+            rule["rule"]["kind"] = self.kind
+
         if self.inside:
-            rule["rule"]["inside"] = {"pattern": self.inside}
+            rule["rule"]["inside"] = {"pattern": self.inside, "stopBy": "end"}
 
         if self.not_inside:
             rule["rule"]["not"] = {"inside": {"pattern": self.not_inside}}
@@ -284,27 +288,30 @@ BUILTIN_HAZARDS: tuple[HazardSpec, ...] = (
     # Exception handling hazards
     HazardSpec(
         id="bare_except",
-        pattern="except:\n    $$$",
+        pattern="$EXCEPT",
         message="Bare except catches all exceptions including SystemExit",
         category=HazardCategory.DESIGN,
         severity=HazardSeverity.WARNING,
         confidence_penalty=0.6,
+        kind="except_clause",
     ),
     HazardSpec(
         id="broad_except",
-        pattern="except Exception:\n    $$$",
+        pattern="$EXCEPT",
         message="Catching Exception is too broad - catch specific exceptions",
         category=HazardCategory.DESIGN,
         severity=HazardSeverity.INFO,
         confidence_penalty=0.7,
+        kind="except_clause",
     ),
     HazardSpec(
         id="except_pass",
-        pattern="except $E:\n    pass",
+        pattern="$EXCEPT",
         message="Silent exception swallowing hides errors",
         category=HazardCategory.DESIGN,
         severity=HazardSeverity.WARNING,
         confidence_penalty=0.5,
+        kind="except_clause",
     ),
     # Contextual hazards
     HazardSpec(
@@ -313,7 +320,7 @@ BUILTIN_HAZARDS: tuple[HazardSpec, ...] = (
         message="threading.Event.wait blocks inside async function",
         category=HazardCategory.PERFORMANCE,
         severity=HazardSeverity.WARNING,
-        inside="async def $F($$$): $$$",
+        inside="async def $F($$$)",
         confidence_penalty=0.4,
     ),
     HazardSpec(

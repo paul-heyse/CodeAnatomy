@@ -28,6 +28,7 @@ Example
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -184,6 +185,23 @@ def _infer_key_fields(
         if any(lower_name.endswith(suffix) for suffix in suffixes):
             candidates.append(field_name)
     return tuple(candidates)
+
+
+def _is_semantic_output_name(table_name: str) -> bool:
+    try:
+        from semantics.registry import SEMANTIC_MODEL
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return False
+    output_names = {spec.name for spec in SEMANTIC_MODEL.outputs}
+    if table_name in output_names:
+        return True
+    try:
+        from semantics.catalog.dataset_specs import dataset_name_from_alias
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return False
+    with contextlib.suppress(KeyError):
+        return dataset_name_from_alias(table_name) in output_names
+    return False
 
 
 def _resolve_version(identity: dict[str, str], default: int) -> int:
@@ -479,7 +497,18 @@ def populate_contract_from_table(
     -------
     ContractSpec
         Contract specification derived from the table schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when attempting to populate contracts for semantic outputs.
     """
+    if _is_semantic_output_name(table_name):
+        msg = (
+            "Contract population from catalog schemas is disabled for semantic outputs; "
+            "use IR-driven schema specs instead."
+        )
+        raise ValueError(msg)
     schema = schema_from_table(ctx, table_name)
     return populate_contract_from_schema(table_name, schema, options=options)
 
@@ -505,7 +534,18 @@ def populate_contract_from_table_detailed(
     -------
     ContractPopulationResult
         Result containing contract and inference metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised when attempting to populate contracts for semantic outputs.
     """
+    if _is_semantic_output_name(table_name):
+        msg = (
+            "Contract population from catalog schemas is disabled for semantic outputs; "
+            "use IR-driven schema specs instead."
+        )
+        raise ValueError(msg)
     schema = schema_from_table(ctx, table_name)
     return populate_contract_from_schema_detailed(table_name, schema, options=options)
 

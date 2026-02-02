@@ -148,7 +148,9 @@ def test_plan_artifact_extract_fields_expose_plan_nodes() -> None:
 
     module = build_execution_plan_module(
         plan,
-        options=PlanModuleOptions(module_name="hamilton_pipeline.generated_plan_artifacts_test"),
+        plan_module_options=PlanModuleOptions(
+            module_name="hamilton_pipeline.generated_plan_artifacts_test"
+        ),
     )
     drv = driver.Builder().allow_module_overrides().with_modules(module).with_config({}).build()
     result = drv.execute(

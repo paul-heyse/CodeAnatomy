@@ -41,8 +41,10 @@ from datafusion_engine.arrow.interop import (
 )
 from datafusion_engine.arrow.metadata_codec import (
     decode_metadata_list,
+    decode_metadata_payload,
     encode_metadata_list,
     encode_metadata_map,
+    encode_metadata_payload,
 )
 from datafusion_engine.arrow.nested import (
     dictionary_array_from_indices as _dictionary_from_indices,
@@ -52,7 +54,7 @@ from datafusion_engine.arrow.types import (
     MapTypeProtocol,
     StructTypeProtocol,
 )
-from serde_msgspec import dumps_msgpack, loads_msgpack
+from serde_msgspec import loads_msgpack
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
@@ -319,7 +321,7 @@ def extractor_option_defaults_spec(
     """
     if not defaults:
         return SchemaMetadataSpec()
-    payload = dumps_msgpack(_extractor_defaults_payload(defaults))
+    payload = encode_metadata_payload(_extractor_defaults_payload(defaults))
     return SchemaMetadataSpec(schema_metadata={EXTRACTOR_DEFAULTS_META: payload})
 
 
@@ -342,7 +344,7 @@ def extractor_option_defaults_from_metadata(
     payload = metadata.get(EXTRACTOR_DEFAULTS_META)
     if not payload:
         return {}
-    decoded = loads_msgpack(payload, target_type=object, strict=False)
+    decoded = loads_msgpack(decode_metadata_payload(payload), target_type=object, strict=False)
     if not isinstance(decoded, Mapping):
         msg = "extractor_option_defaults metadata must be a mapping payload."
         raise TypeError(msg)
@@ -733,7 +735,7 @@ def ordering_metadata_spec(
     """
     meta = {b"ordering_level": level.value.encode("utf-8")}
     if keys:
-        meta[b"ordering_keys"] = dumps_msgpack(_ordering_keys_payload(keys))
+        meta[b"ordering_keys"] = encode_metadata_payload(_ordering_keys_payload(keys))
     if extra:
         meta.update(extra)
     return SchemaMetadataSpec(schema_metadata=meta)
@@ -1157,7 +1159,7 @@ def metadata_payload(
 
 
 def _ordering_keys_from_payload(payload: bytes) -> tuple[OrderingKey, ...]:
-    decoded = loads_msgpack(payload, target_type=object, strict=False)
+    decoded = loads_msgpack(decode_metadata_payload(payload), target_type=object, strict=False)
     if not isinstance(decoded, Mapping):
         msg = "ordering_keys metadata must be a mapping payload."
         raise TypeError(msg)

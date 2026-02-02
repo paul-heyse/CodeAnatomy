@@ -8,11 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ast_grep_py import SgRoot
+
+from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, mk_result, mk_runmeta, ms
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -23,21 +25,20 @@ from tools.cq.core.scoring import (
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
-from tools.cq.query.sg_parser import (
-    SgRecord,
-    filter_records_by_kind,
-    group_records_by_file,
-    sg_scan,
-)
+from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
+from tools.cq.search import SearchLimits, find_files_with_pattern
 
 if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from ast_grep_py import SgNode
 
+    from tools.cq.core.toolchain import Toolchain
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.query_cache import QueryCache
+from tools.cq.index.repo import resolve_repo_context
+from tools.cq.index.sqlite_cache import IndexCache
 from tools.cq.query.ir import Query, Scope
 
-QUERY_CACHE_VERSION = "3"
+QUERY_CACHE_VERSION = "9"
 
 
 @dataclass
@@ -101,7 +102,9 @@ class FileIntervalIndex:
         """Build per-file interval indexes."""
         grouped = group_records_by_file(records)
         return cls(
-            by_file={file_path: IntervalIndex.from_records(recs) for file_path, recs in grouped.items()}
+            by_file={
+                file_path: IntervalIndex.from_records(recs) for file_path, recs in grouped.items()
+            }
         )
 
     def find_containing(self, record: SgRecord) -> SgRecord | None:
@@ -211,25 +214,8 @@ def _execute_entity_query(
 
     scope_globs = scope_to_globs(plan.scope)
 
-    # Phase 1: File narrowing with ripgrep (optional)
-    if plan.rg_pattern and tc.rg_path:
-        matched_files = rg_files_with_matches(root, plan.rg_pattern, plan.scope)
-        if not matched_files:
-            run = mk_runmeta(
-                macro="q",
-                argv=argv or [],
-                root=str(root),
-                started_ms=started_ms,
-                toolchain=tc.to_dict(),
-            )
-            result = mk_result(run)
-            result.summary["matches"] = 0
-            result.summary["pattern"] = plan.rg_pattern
-            return result
-        paths = matched_files
-
-    # Phase 2: ast-grep scan
-    if not tc.has_sg:
+    # ast-grep scan
+    if not tc.has_sgpy:
         run = mk_runmeta(
             macro="q",
             argv=argv or [],
@@ -303,12 +289,21 @@ def _execute_entity_query(
 
     if plan.explain:
         result.summary["plan"] = {
-            "rg_pattern": plan.rg_pattern,
             "sg_record_types": list(plan.sg_record_types),
             "need_symtable": plan.need_symtable,
             "need_bytecode": plan.need_bytecode,
             "is_pattern_query": plan.is_pattern_query,
         }
+        repo_context = resolve_repo_context(root)
+        repo_index = build_repo_file_index(repo_context)
+        file_result = tabulate_files(
+            repo_index,
+            paths,
+            scope_globs,
+            extensions=(".py",),
+            explain=True,
+        )
+        result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
 
     return result
 
@@ -324,7 +319,7 @@ def _execute_pattern_query(
 ) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules."""
     scope_globs = scope_to_globs(plan.scope)
-    if not tc.has_sg:
+    if not tc.has_sgpy:
         run = mk_runmeta(
             macro="q",
             argv=argv or [],
@@ -349,6 +344,31 @@ def _execute_pattern_query(
         result = mk_result(run)
         result.summary["error"] = "No files match scope"
         return result
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    file_result = tabulate_files(
+        repo_index,
+        paths,
+        scope_globs,
+        extensions=(".py",),
+        explain=plan.explain,
+    )
+    paths = file_result.files
+    if not paths:
+        run = mk_runmeta(
+            macro="q",
+            argv=argv or [],
+            root=str(root),
+            started_ms=started_ms,
+            toolchain=tc.to_dict(),
+        )
+        result = mk_result(run)
+        result.summary["error"] = "No files match scope after filtering"
+        if plan.explain:
+            result.summary["file_filters"] = [
+                asdict(decision) for decision in file_result.decisions
+            ]
+        return result
 
     # Execute ast-grep rules
     findings, records, raw_matches = _execute_ast_grep_rules(
@@ -356,7 +376,7 @@ def _execute_pattern_query(
         paths,
         root,
         query,
-        scope_globs,
+        None,
     )
 
     # Build result
@@ -397,6 +417,7 @@ def _execute_pattern_query(
             "rules_count": len(plan.sg_rules),
             "metavar_filters": len(query.metavar_filters),
         }
+        result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
 
     return result
 
@@ -408,7 +429,7 @@ def _execute_ast_grep_rules(
     query: Query | None = None,
     globs: list[str] | None = None,
 ) -> tuple[list[Finding], list[SgRecord], list[dict]]:
-    """Execute ast-grep rules and return findings.
+    """Execute ast-grep rules using ast-grep-py and return findings.
 
     Parameters
     ----------
@@ -421,14 +442,14 @@ def _execute_ast_grep_rules(
     query
         Optional query for metavar filtering
     globs
-        Optional glob filters for ast-grep
+        Optional glob filters (not used with ast-grep-py, filtering done upstream)
 
     Returns
     -------
     tuple[list[Finding], list[SgRecord], list[dict]]
         Findings, underlying records, and raw match data.
     """
-    from tools.cq.query.metavar import apply_metavar_filters, parse_metavariables
+    from tools.cq.query.metavar import apply_metavar_filters
 
     if not rules:
         return [], [], []
@@ -437,90 +458,160 @@ def _execute_ast_grep_rules(
     records: list[SgRecord] = []
     raw_matches: list[dict] = []
 
-    inline_rules = _build_inline_rules_yaml(rules)
-    matches = _run_ast_grep_inline_rules(inline_rules, paths, root, globs)
+    # Execute rules using ast-grep-py
+    for file_path in paths:
+        try:
+            src = file_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
 
-    for data in matches:
-        raw_matches.append(data)
+        sg_root = SgRoot(src, "python")
+        node = sg_root.root()
+        rel_path = _normalize_match_file(str(file_path), root)
 
-        if query and query.metavar_filters:
-            captures = parse_metavariables(data)
-            if not apply_metavar_filters(captures, query.metavar_filters):
-                continue
+        for idx, rule in enumerate(rules):
+            rule_id = f"pattern_{idx}"
+            pattern = rule.pattern
 
-        finding, record = _match_to_finding(data)
-        if finding:
-            if query and query.metavar_filters:
-                captures = parse_metavariables(data)
-                finding.details["metavar_captures"] = {
-                    name: cap.text for name, cap in captures.items()
+            # Skip if no pattern (kind-only rules handled differently)
+            if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
+                # For kind-only rules, use kind matching
+                if rule.kind:
+                    matches = node.find_all(kind=rule.kind)
+                else:
+                    continue
+            else:
+                matches = node.find_all(pattern=pattern)
+
+            for match in matches:
+                # Build match dict for compatibility
+                range_obj = match.range()
+                match_data = {
+                    "ruleId": rule_id,
+                    "file": rel_path,
+                    "text": match.text(),
+                    "range": {
+                        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
+                        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+                    },
+                    "metaVariables": _extract_match_metavars(match),
                 }
-            findings.append(finding)
-        if record:
-            records.append(record)
+                raw_matches.append(match_data)
+
+                # Apply metavar filters if present
+                if query and query.metavar_filters:
+                    captures = _parse_sgpy_metavariables(match)
+                    if not apply_metavar_filters(captures, query.metavar_filters):
+                        continue
+
+                finding, record = _match_to_finding(match_data)
+                if finding:
+                    if query and query.metavar_filters:
+                        captures = _extract_match_metavars(match)
+                        finding.details["metavar_captures"] = captures
+                    findings.append(finding)
+                if record:
+                    records.append(record)
 
     return findings, records, raw_matches
 
 
-def _build_inline_rules_yaml(rules: tuple[AstGrepRule, ...]) -> str:
-    """Build YAML string for ast-grep inline rules."""
-    import yaml
+def _extract_match_metavars(match: SgNode) -> dict[str, str]:
+    """Extract metavariable captures from an ast-grep-py match.
 
-    rule_docs: list[dict] = []
-    for idx, rule in enumerate(rules):
-        rule_docs.append(
-            {
-                "id": f"pattern_{idx}",
-                "language": "python",
-                "rule": rule.to_yaml_dict(),
-                "message": "Pattern match",
-            }
-        )
+    Parameters
+    ----------
+    match
+        ast-grep-py SgNode match.
 
-    return "\n---\n".join(
-        yaml.safe_dump(rule_doc, sort_keys=False, default_flow_style=False).strip()
-        for rule_doc in rule_docs
-    )
-
-
-def _run_ast_grep_inline_rules(
-    inline_rules: str,
-    paths: list[Path],
-    root: Path,
-    globs: list[str] | None,
-) -> list[dict]:
-    """Run ast-grep scan with inline rules and return raw matches."""
-    cmd = [
-        "ast-grep",
-        "scan",
-        "--inline-rules",
-        inline_rules,
-        "--json=stream",
+    Returns
+    -------
+    dict[str, str]
+        Dictionary of metavariable name to captured text.
+    """
+    metavars: dict[str, str] = {}
+    common_names = [
+        "$FUNC",
+        "$F",
+        "$CLASS",
+        "$METHOD",
+        "$M",
+        "$X",
+        "$Y",
+        "$Z",
+        "$A",
+        "$B",
+        "$OBJ",
+        "$ATTR",
+        "$VAL",
+        "$E",
+        "$NAME",
+        "$MODULE",
+        "$ARGS",
+        "$KWARGS",
+        "$COND",
+        "$VAR",
+        "$P",
+        "$L",
+        "$DECORATOR",
     ]
-    if globs:
-        for glob in globs:
-            cmd.extend(["--globs", glob])
-    cmd.extend(str(p) for p in paths)
+    for name in common_names:
+        captured = match.get_match(name)
+        if captured is not None:
+            metavars[name] = captured.text()
+    return metavars
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=root,
-    )
 
-    if result.returncode != 0:
-        return []
+def _parse_sgpy_metavariables(match: SgNode) -> dict[str, object]:
+    """Parse metavariables from ast-grep-py match for filter application.
 
-    matches: list[dict] = []
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        try:
-            matches.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return matches
+    Parameters
+    ----------
+    match
+        ast-grep-py SgNode match.
+
+    Returns
+    -------
+    dict[str, object]
+        Dictionary of metavariable info for filtering.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class MetavarCapture:
+        text: str
+
+    result: dict[str, object] = {}
+    common_names = [
+        "$FUNC",
+        "$F",
+        "$CLASS",
+        "$METHOD",
+        "$M",
+        "$X",
+        "$Y",
+        "$Z",
+        "$A",
+        "$B",
+        "$OBJ",
+        "$ATTR",
+        "$VAL",
+        "$E",
+        "$NAME",
+        "$MODULE",
+        "$ARGS",
+        "$KWARGS",
+        "$COND",
+        "$VAR",
+        "$P",
+        "$L",
+        "$DECORATOR",
+    ]
+    for name in common_names:
+        captured = match.get_match(name)
+        if captured is not None:
+            result[name] = MetavarCapture(text=captured.text())
+    return result
 
 
 def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
@@ -573,21 +664,57 @@ def _collect_match_spans(
     query: Query,
     globs: list[str] | None,
 ) -> dict[str, list[tuple[int, int]]]:
-    """Collect matched spans for relational constraints."""
-    inline_rules = _build_inline_rules_yaml(rules)
-    matches = _run_ast_grep_inline_rules(inline_rules, paths, root, globs)
+    """Collect matched spans for relational constraints using ast-grep-py."""
+    from tools.cq.query.metavar import apply_metavar_filters
+
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    file_result = tabulate_files(
+        repo_index,
+        paths,
+        globs,
+        extensions=(".py",),
+    )
 
     spans: dict[str, list[tuple[int, int]]] = {}
-    for data in matches:
-        range_data = data.get("range", {})
-        start = range_data.get("start", {})
-        end = range_data.get("end", {})
-        file_path = data.get("file")
-        if not file_path:
+    all_matches: list[tuple[dict, SgNode]] = []
+
+    # Execute rules using ast-grep-py
+    for file_path in file_result.files:
+        try:
+            src = file_path.read_text(encoding="utf-8")
+        except OSError:
             continue
-        start_line = start.get("line", 0) + 1
-        end_line = end.get("line", 0) + 1
-        spans.setdefault(file_path, []).append((start_line, end_line))
+
+        sg_root = SgRoot(src, "python")
+        node = sg_root.root()
+        rel_path = _normalize_match_file(str(file_path), root)
+
+        for rule in rules:
+            pattern = rule.pattern
+            if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
+                if rule.kind:
+                    matches = node.find_all(kind=rule.kind)
+                else:
+                    continue
+            else:
+                matches = node.find_all(pattern=pattern)
+
+            for match in matches:
+                range_obj = match.range()
+                start_line = range_obj.start.line + 1
+                end_line = range_obj.end.line + 1
+                spans.setdefault(rel_path, []).append((start_line, end_line))
+
+                # Store match for filtering
+                match_data = {
+                    "file": rel_path,
+                    "range": {
+                        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
+                        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+                    },
+                }
+                all_matches.append((match_data, match))
 
     if not spans:
         return spans
@@ -595,19 +722,16 @@ def _collect_match_spans(
     if not query.metavar_filters:
         return spans
 
-    from tools.cq.query.metavar import apply_metavar_filters, parse_metavariables
-
+    # Apply metavar filters
     filtered: dict[str, list[tuple[int, int]]] = {}
-    for data in matches:
-        if not data.get("file"):
-            continue
-        captures = parse_metavariables(data)
+    for match_data, sg_match in all_matches:
+        captures = _parse_sgpy_metavariables(sg_match)
         if not apply_metavar_filters(captures, query.metavar_filters):
             continue
-        range_data = data.get("range", {})
+        range_data = match_data.get("range", {})
         start = range_data.get("start", {})
         end = range_data.get("end", {})
-        file_path = data.get("file", "")
+        file_path = match_data.get("file", "")
         start_line = start.get("line", 0) + 1
         end_line = end.get("line", 0) + 1
         filtered.setdefault(file_path, []).append((start_line, end_line))
@@ -644,6 +768,17 @@ def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
         record.end_line,
         record.end_col,
     )
+
+
+def _normalize_match_file(file_path: str, root: Path) -> str:
+    """Normalize match paths to repo-relative POSIX strings."""
+    path = Path(file_path)
+    if path.is_absolute():
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return file_path
+    return path.as_posix()
 
 
 def _build_def_evidence_map(
@@ -706,43 +841,15 @@ def _collect_cache_files(plan: ToolPlan, root: Path) -> list[Path]:
     """Collect files relevant for caching."""
     paths = scope_to_paths(plan.scope, root)
     globs = scope_to_globs(plan.scope)
-    files = _expand_scope_files(paths, root)
-    return _filter_scope_files(files, root, globs)
-
-
-def _expand_scope_files(paths: list[Path], root: Path) -> list[Path]:
-    """Expand scope paths to python files."""
-    files: list[Path] = []
-    for path in paths:
-        full_path = path if path.is_absolute() else root / path
-        if full_path.is_file():
-            files.append(full_path)
-        elif full_path.is_dir():
-            files.extend(full_path.rglob("*.py"))
-    return files
-
-
-def _filter_scope_files(
-    files: list[Path],
-    root: Path,
-    globs: list[str],
-) -> list[Path]:
-    """Filter files by include/exclude globs."""
-    if not globs:
-        return files
-    has_includes = any(not glob.startswith("!") for glob in globs)
-    filtered: list[Path] = []
-    for file_path in files:
-        rel_path = file_path.relative_to(root).as_posix()
-        include = not has_includes
-        for glob in globs:
-            negated = glob.startswith("!")
-            pattern = glob[1:] if negated else glob
-            if Path(rel_path).match(pattern):
-                include = not negated
-        if include:
-            filtered.append(file_path)
-    return filtered
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    result = tabulate_files(
+        repo_index,
+        paths,
+        globs,
+        extensions=(".py",),
+    )
+    return result.files
 
 
 def _build_query_cache_key(
@@ -752,8 +859,15 @@ def _build_query_cache_key(
     tc: Toolchain,
 ) -> str:
     """Build a stable cache key for a query execution."""
+    hazard_rules_hash: str | None = None
+    if "hazards" in query.fields:
+        from tools.cq.query.hazards import HazardDetector
+
+        detector = HazardDetector()
+        hazard_rules_hash = hashlib.sha256(
+            detector.build_inline_rules_yaml().encode("utf-8")
+        ).hexdigest()
     plan_signature = {
-        "rg_pattern": plan.rg_pattern,
         "scope": asdict(plan.scope),
         "sg_record_types": sorted(plan.sg_record_types),
         "need_symtable": plan.need_symtable,
@@ -767,6 +881,7 @@ def _build_query_cache_key(
         "plan": plan_signature,
         "root": str(root),
         "toolchain": tc.to_dict(),
+        "hazard_rules_hash": hazard_rules_hash,
         "cache_version": QUERY_CACHE_VERSION,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
@@ -1034,8 +1149,10 @@ def rg_files_with_matches(
     root: Path,
     pattern: str,
     scope: Scope,
+    *,
+    limits: SearchLimits | None = None,
 ) -> list[Path]:
-    """Use ripgrep to find files matching pattern.
+    """Use rpygrep to find files matching pattern.
 
     Parameters
     ----------
@@ -1045,42 +1162,29 @@ def rg_files_with_matches(
         Regex pattern to search
     scope
         Scope constraints
+    limits
+        Optional search safety limits. Uses scope.max_depth if not provided.
 
     Returns
     -------
     list[Path]
         Files containing matches
     """
-    cmd = ["rg", "--files-with-matches", "-e", pattern, "--type", "py"]
+    # Determine search root from scope
+    search_root = root / scope.in_dir if scope.in_dir else root
 
-    # Add scope constraints
-    if scope.in_dir:
-        cmd.append(scope.in_dir)
-    else:
-        cmd.append(".")
-
-    if scope.globs:
-        for glob in scope.globs:
-            cmd.extend(["-g", glob])
-    for exclude in scope.exclude:
-        cmd.extend(["-g", f"!{exclude}"])
-
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=root,
+    # Build limits from scope or defaults
+    effective_limits = limits or SearchLimits(
+        max_depth=scope.max_depth or 50,
     )
 
-    if result.returncode not in (0, 1):  # 1 means no matches
-        return []
-
-    files: list[Path] = []
-    for line in result.stdout.strip().split("\n"):
-        if line:
-            files.append(root / line)
-
-    return files
+    return find_files_with_pattern(
+        search_root,
+        pattern,
+        include_globs=list(scope.globs) if scope.globs else None,
+        exclude_globs=list(scope.exclude) if scope.exclude else None,
+        limits=effective_limits,
+    )
 
 
 def assign_calls_to_defs(
@@ -1373,15 +1477,20 @@ def _build_callers_section(
     findings: list[Finding] = []
 
     # Get names of target definitions
-    target_names = {_extract_def_name(d) for d in target_defs if _extract_def_name(d)}
+    target_names: set[str] = set()
+    method_targets: set[str] = set()
+    function_targets: set[str] = set()
     class_methods: dict[str, set[str]] = {}
     for def_record in target_defs:
         def_name = _extract_def_name(def_record)
         if not def_name:
             continue
+        target_names.add(def_name)
         enclosing_class = _find_enclosing_class(def_record, index)
         if enclosing_class is None:
+            function_targets.add(def_name)
             continue
+        method_targets.add(def_name)
         class_name = _extract_def_name(enclosing_class)
         if not class_name:
             continue
@@ -1403,11 +1512,12 @@ def _build_callers_section(
                     methods = class_methods.get(caller_class_name, set())
                     if call_target not in methods:
                         continue
+        if receiver is None and call_target in method_targets:
+            if call_target not in function_targets:
+                continue
         call_contexts.append((call, call_target, containing))
 
-    containing_defs = [
-        containing for _, _, containing in call_contexts if containing is not None
-    ]
+    containing_defs = [containing for _, _, containing in call_contexts if containing is not None]
     evidence_map = _build_def_evidence_map(containing_defs, root)
 
     for call, call_target, containing in call_contexts:
@@ -1565,7 +1675,9 @@ def _build_scope_section(
         free_vars = scope_info.get("free_vars", [])
         cell_vars = scope_info.get("cell_vars", [])
         label = "closure" if scope_info.get("is_closure") else "toplevel"
-        message = f"scope: {def_name} ({label}) free_vars={len(free_vars)} cell_vars={len(cell_vars)}"
+        message = (
+            f"scope: {def_name} ({label}) free_vars={len(free_vars)} cell_vars={len(cell_vars)}"
+        )
         findings.append(
             Finding(
                 category="scope",
@@ -1634,21 +1746,50 @@ def _build_hazards_section(
     root: Path,
     globs: list[str] | None,
 ) -> Section:
-    """Build section showing potential hazards in target definitions."""
+    """Build section showing potential hazards in target definitions using ast-grep-py."""
     from tools.cq.query.hazards import HazardDetector
 
     findings: list[Finding] = []
     if not target_defs:
         return Section(title="Hazards", findings=findings)
+
     detector = HazardDetector()
-    inline_rules = detector.build_inline_rules_yaml()
     scan_paths = [root / record.file for record in target_defs]
-    hazard_matches = _run_ast_grep_inline_rules(
-        inline_rules,
-        scan_paths,
-        root,
-        globs,
-    )
+
+    # Execute hazard detection using ast-grep-py
+    hazard_matches: list[dict] = []
+    for file_path in scan_paths:
+        try:
+            src = file_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        sg_root = SgRoot(src, "python")
+        node = sg_root.root()
+        rel_path = _normalize_match_file(str(file_path), root)
+
+        for spec in detector.specs:
+            pattern = spec.pattern
+            if not pattern:
+                continue
+
+            matches = node.find_all(pattern=pattern)
+            for match in matches:
+                range_obj = match.range()
+                hazard_matches.append(
+                    {
+                        "ruleId": f"hazard_{spec.id}",
+                        "file": rel_path,
+                        "text": match.text(),
+                        "range": {
+                            "start": {
+                                "line": range_obj.start.line,
+                                "column": range_obj.start.column,
+                            },
+                            "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+                        },
+                    }
+                )
 
     target_index = FileIntervalIndex.from_records(target_defs)
     target_def_keys = {_record_key(record) for record in target_defs}
@@ -1664,7 +1805,7 @@ def _build_hazards_section(
         range_data = data.get("range", {})
         start = range_data.get("start", {})
         end = range_data.get("end", {})
-        file_path = data.get("file", "")
+        file_path = _normalize_match_file(str(data.get("file", "")), root)
         record = SgRecord(
             record="call",
             kind="hazard",
@@ -1676,6 +1817,15 @@ def _build_hazards_section(
             text=data.get("text", ""),
             rule_id=rule_id,
         )
+        if spec.id == "bare_except":
+            if not re.match(r"except\\s*:\\s", record.text.lstrip()):
+                continue
+        if spec.id == "broad_except":
+            if not re.match(r"except\\s+Exception\\b", record.text.lstrip()):
+                continue
+        if spec.id == "except_pass":
+            if not re.search(r"except[^\\n]*:\\n\\s+pass\\b", record.text):
+                continue
         containing = target_index.find_containing(record)
         if containing is None or _record_key(containing) not in target_def_keys:
             continue

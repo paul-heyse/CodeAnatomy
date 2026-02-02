@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping, Sequence
 
 import msgspec
 
-from serde_msgspec import dumps_msgpack, loads_msgpack
+from serde_msgspec import StructBaseCompat, dumps_msgpack, loads_msgpack
 
 METADATA_PAYLOAD_VERSION: int = 1
+_MSG_PACK_B64_PREFIX = "msgpack_b64:"
+
+
+class MetadataMapEntry(StructBaseCompat, frozen=True):
+    """Key/value entry for metadata map payloads."""
+
+    key: str
+    value: str
+
+
+class MetadataMapPayload(StructBaseCompat, frozen=True):
+    """Versioned metadata map payload."""
+
+    version: int
+    entries: tuple[MetadataMapEntry, ...]
+
+
+class MetadataListPayload(StructBaseCompat, frozen=True):
+    """Versioned metadata list payload."""
+
+    version: int
+    entries: tuple[str, ...]
+
+
+class MetadataScalarEntry(StructBaseCompat, frozen=True):
+    """Key/value entry for scalar metadata payloads."""
+
+    key: str
+    value: object | None
+
+
+class MetadataScalarPayload(StructBaseCompat, frozen=True):
+    """Versioned scalar metadata payload."""
+
+    version: int
+    entries: tuple[MetadataScalarEntry, ...]
 
 
 def encode_metadata_map(entries: Mapping[str, str]) -> bytes:
@@ -24,14 +61,17 @@ def encode_metadata_map(entries: Mapping[str, str]) -> bytes:
     bytes
         MessagePack payload for the mapping.
     """
-    payload = {
-        "version": METADATA_PAYLOAD_VERSION,
-        "entries": [
-            {"key": str(key), "value": str(value) if value is not None else ""}
+    payload = MetadataMapPayload(
+        version=METADATA_PAYLOAD_VERSION,
+        entries=tuple(
+            MetadataMapEntry(
+                key=str(key),
+                value=str(value) if value is not None else "",
+            )
             for key, value in sorted(entries.items(), key=lambda item: str(item[0]))
-        ],
-    }
-    return dumps_msgpack(payload)
+        ),
+    )
+    return encode_metadata_payload(payload)
 
 
 def decode_metadata_map(payload: bytes | None) -> dict[str, str]:
@@ -52,26 +92,13 @@ def decode_metadata_map(payload: bytes | None) -> dict[str, str]:
     TypeError
         Raised when the payload shape is invalid.
     """
-    decoded = _decode_mapping_payload(payload, label="metadata_map")
+    decoded = _decode_payload(payload, target_type=MetadataMapPayload, label="metadata_map")
     if decoded is None:
         return {}
-    entries = decoded.get("entries")
-    if entries is None:
-        return {}
-    if not isinstance(entries, list):
-        msg = "metadata_map entries must be a list."
+    if decoded.version != METADATA_PAYLOAD_VERSION:
+        msg = "metadata_map payload version is unsupported."
         raise TypeError(msg)
-    results: dict[str, str] = {}
-    for item in entries:
-        if not isinstance(item, Mapping):
-            msg = "metadata_map entries must be mappings."
-            raise TypeError(msg)
-        key = item.get("key")
-        value = item.get("value")
-        if key is None:
-            continue
-        results[str(key)] = str(value) if value is not None else ""
-    return results
+    return {entry.key: entry.value for entry in decoded.entries}
 
 
 def encode_metadata_list(entries: Sequence[str]) -> bytes:
@@ -87,11 +114,11 @@ def encode_metadata_list(entries: Sequence[str]) -> bytes:
     bytes
         MessagePack payload for the list.
     """
-    payload = {
-        "version": METADATA_PAYLOAD_VERSION,
-        "entries": [str(item) for item in entries],
-    }
-    return dumps_msgpack(payload)
+    payload = MetadataListPayload(
+        version=METADATA_PAYLOAD_VERSION,
+        entries=tuple(str(item) for item in entries),
+    )
+    return encode_metadata_payload(payload)
 
 
 def decode_metadata_list(payload: bytes | None) -> list[str]:
@@ -112,16 +139,13 @@ def decode_metadata_list(payload: bytes | None) -> list[str]:
     TypeError
         Raised when the payload shape is invalid.
     """
-    decoded = _decode_mapping_payload(payload, label="metadata_list")
+    decoded = _decode_payload(payload, target_type=MetadataListPayload, label="metadata_list")
     if decoded is None:
         return []
-    entries = decoded.get("entries")
-    if entries is None:
-        return []
-    if not isinstance(entries, list):
-        msg = "metadata_list entries must be a list."
+    if decoded.version != METADATA_PAYLOAD_VERSION:
+        msg = "metadata_list payload version is unsupported."
         raise TypeError(msg)
-    return [str(item) for item in entries if item is not None]
+    return [str(item) for item in decoded.entries if item is not None]
 
 
 def encode_metadata_scalar_map(entries: Mapping[str, object]) -> bytes:
@@ -137,14 +161,61 @@ def encode_metadata_scalar_map(entries: Mapping[str, object]) -> bytes:
     bytes
         MessagePack payload for the scalar mapping.
     """
-    payload = {
-        "version": METADATA_PAYLOAD_VERSION,
-        "entries": [
-            {"key": str(key), "value": _normalize_scalar_value(value)}
+    payload = MetadataScalarPayload(
+        version=METADATA_PAYLOAD_VERSION,
+        entries=tuple(
+            MetadataScalarEntry(
+                key=str(key),
+                value=_normalize_scalar_value(value),
+            )
             for key, value in sorted(entries.items(), key=lambda item: str(item[0]))
-        ],
-    }
-    return dumps_msgpack(payload)
+        ),
+    )
+    return encode_metadata_payload(payload)
+
+
+def encode_metadata_payload(payload: object) -> bytes:
+    """Encode a payload into UTF-8 safe MessagePack bytes.
+
+    Parameters
+    ----------
+    payload
+        Arbitrary metadata payload to encode.
+
+    Returns
+    -------
+    bytes
+        UTF-8 safe MessagePack payload prefixed for decoding.
+    """
+    raw = dumps_msgpack(payload)
+    encoded = base64.b64encode(raw).decode("utf-8")
+    return f"{_MSG_PACK_B64_PREFIX}{encoded}".encode()
+
+
+def decode_metadata_payload(payload: bytes) -> bytes:
+    """Decode UTF-8 safe MessagePack bytes into raw MessagePack bytes.
+
+    Parameters
+    ----------
+    payload
+        UTF-8 safe metadata payload to decode.
+
+    Returns
+    -------
+    bytes
+        Raw MessagePack payload bytes.
+    """
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return payload
+    if not text.startswith(_MSG_PACK_B64_PREFIX):
+        return payload
+    encoded = text[len(_MSG_PACK_B64_PREFIX) :]
+    try:
+        return base64.b64decode(encoded)
+    except (ValueError, TypeError):
+        return payload
 
 
 def decode_metadata_scalar_map(payload: bytes | None) -> dict[str, object]:
@@ -165,37 +236,40 @@ def decode_metadata_scalar_map(payload: bytes | None) -> dict[str, object]:
     TypeError
         Raised when the payload shape is invalid.
     """
-    decoded = _decode_mapping_payload(payload, label="metadata_scalar_map")
+    decoded = _decode_payload(
+        payload,
+        target_type=MetadataScalarPayload,
+        label="metadata_scalar_map",
+    )
     if decoded is None:
         return {}
-    entries = decoded.get("entries")
-    if entries is None:
-        return {}
-    if not isinstance(entries, list):
-        msg = "metadata_scalar_map entries must be a list."
+    if decoded.version != METADATA_PAYLOAD_VERSION:
+        msg = "metadata_scalar_map payload version is unsupported."
         raise TypeError(msg)
-    results: dict[str, object] = {}
-    for item in entries:
-        if not isinstance(item, Mapping):
-            msg = "metadata_scalar_map entries must be mappings."
-            raise TypeError(msg)
-        key = item.get("key")
-        if key is None:
-            continue
-        results[str(key)] = item.get("value")
-    return results
+    return {entry.key: entry.value for entry in decoded.entries}
 
 
-def _decode_mapping_payload(
+def _decode_payload[
+    T,
+](
     payload: bytes | None,
     *,
+    target_type: type[T],
     label: str,
-) -> Mapping[str, object] | None:
+) -> T | None:
     if not payload:
         return None
-    decoded = loads_msgpack(payload, target_type=object, strict=False)
-    if not isinstance(decoded, Mapping):
-        msg = f"{label} payload must contain a mapping."
+    try:
+        decoded = loads_msgpack(
+            decode_metadata_payload(payload),
+            target_type=target_type,
+            strict=False,
+        )
+    except msgspec.ValidationError as exc:
+        msg = f"{label} payload must be a {target_type.__name__}."
+        raise TypeError(msg) from exc
+    if not isinstance(decoded, target_type):
+        msg = f"{label} payload must be a {target_type.__name__}."
         raise TypeError(msg)
     return decoded
 
@@ -217,8 +291,10 @@ __all__ = [
     "METADATA_PAYLOAD_VERSION",
     "decode_metadata_list",
     "decode_metadata_map",
+    "decode_metadata_payload",
     "decode_metadata_scalar_map",
     "encode_metadata_list",
     "encode_metadata_map",
+    "encode_metadata_payload",
     "encode_metadata_scalar_map",
 ]

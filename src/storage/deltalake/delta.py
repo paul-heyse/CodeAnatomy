@@ -14,7 +14,7 @@ from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.encoding import apply_encoding
-from datafusion_engine.errors import DataFusionEngineError
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
@@ -127,70 +127,23 @@ def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
             DeltaSnapshotRequest,
             delta_snapshot_info,
         )
+    except ImportError as exc:
+        msg = "Delta control-plane support is unavailable."
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
 
-        snapshot_request = DeltaSnapshotRequest(
-            table_uri=request.path,
-            storage_options=storage or None,
-            version=request.version,
-            timestamp=request.timestamp,
-            gate=request.gate,
-        )
+    snapshot_request = DeltaSnapshotRequest(
+        table_uri=request.path,
+        storage_options=storage or None,
+        version=request.version,
+        timestamp=request.timestamp,
+        gate=request.gate,
+    )
+    try:
         return delta_snapshot_info(snapshot_request)
-    except (ImportError, RuntimeError, TypeError, ValueError, DataFusionEngineError):
-        return _fallback_snapshot_info(request, storage)
-
-
-def _fallback_snapshot_info(
-    request: DeltaSnapshotLookup,
-    storage: StorageOptions | None,
-) -> Mapping[str, object] | None:
-    try:
-        from deltalake import DeltaTable
-        from deltalake._internal import DeltaError, DeltaProtocolError
-    except ImportError:
+    except DataFusionEngineError as exc:
+        if exc.kind == ErrorKind.PLUGIN:
+            raise
         return None
-    options = dict(storage or {}) or None
-    try:
-        table = DeltaTable(request.path, version=request.version, storage_options=options)
-    except (DeltaError, DeltaProtocolError, OSError, RuntimeError, TypeError, ValueError):
-        return None
-    protocol = table.protocol()
-    metadata = table.metadata()
-    history = table.history(1)
-    snapshot_timestamp = None
-    if history:
-        entry = history[0]
-        if isinstance(entry, Mapping):
-            snapshot_timestamp = entry.get("timestamp")
-    schema_json = None
-    try:
-        schema_obj = table.schema()
-        schema_json_fn = getattr(schema_obj, "json", None)
-        schema_json = schema_json_fn() if callable(schema_json_fn) else None
-    except (RuntimeError, TypeError, ValueError):
-        schema_json = None
-    table_properties = None
-    configuration = getattr(metadata, "configuration", None)
-    if isinstance(configuration, Mapping):
-        table_properties = {str(key): str(value) for key, value in configuration.items()}
-    partition_columns = None
-    raw_partitions = getattr(metadata, "partition_columns", None)
-    if isinstance(raw_partitions, Sequence) and not isinstance(
-        raw_partitions,
-        (str, bytes, bytearray),
-    ):
-        partition_columns = [str(value) for value in raw_partitions]
-    return {
-        "version": table.version(),
-        "snapshot_timestamp": snapshot_timestamp,
-        "min_reader_version": getattr(protocol, "min_reader_version", None),
-        "min_writer_version": getattr(protocol, "min_writer_version", None),
-        "reader_features": getattr(protocol, "reader_features", None),
-        "writer_features": getattr(protocol, "writer_features", None),
-        "table_properties": table_properties,
-        "schema_json": schema_json,
-        "partition_columns": partition_columns,
-    }
 
 
 @dataclass(frozen=True)

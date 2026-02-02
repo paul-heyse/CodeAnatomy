@@ -45,7 +45,10 @@ def register_cdf_inputs(
     dict[str, str]
         Mapping from base table names to CDF view names.
     """
-    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registration import (
+        DatasetRegistrationOptions,
+        register_dataset_df,
+    )
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     mapping: dict[str, str] = {}
@@ -57,7 +60,12 @@ def register_cdf_inputs(
         if provider != "delta_cdf":
             continue
         cdf_name = f"{name}__cdf"
-        register_dataset_df(ctx, name=cdf_name, location=location, runtime_profile=runtime_profile)
+        register_dataset_df(
+            ctx,
+            name=cdf_name,
+            location=location,
+            options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
+        )
         cdf_df = ctx.table(cdf_name)
         cleaned = strip_cdf_metadata(cdf_df)
         adapter.register_view(cdf_name, cleaned, overwrite=True, temporary=False)

@@ -12,6 +12,10 @@ from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
+
+require_deltalake()
+require_delta_extension()
 
 
 def _runtime_or_skip() -> IncrementalRuntime:

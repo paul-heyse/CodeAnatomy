@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from functools import cache
 
 import pytest
 
@@ -19,6 +20,16 @@ from semantics.catalog.dataset_rows import (
     get_diagnostic_dataset_rows,
     get_semantic_dataset_rows,
 )
+from semantics.ir_pipeline import build_semantic_ir
+
+
+@cache
+def _ir_rows() -> tuple[SemanticDatasetRow, ...]:
+    return build_semantic_ir().dataset_rows
+
+
+def _ir_rows_by_category(category: DatasetCategory) -> tuple[SemanticDatasetRow, ...]:
+    return tuple(row for row in _ir_rows() if row.category == category)
 
 
 class TestSemanticDatasetRow:
@@ -110,7 +121,7 @@ class TestDatasetRowLookup:
     @pytest.mark.smoke
     def test_dataset_row_found(self) -> None:
         """dataset_row returns row when name exists."""
-        all_rows = get_all_dataset_rows()
+        all_rows = _ir_rows()
         if all_rows:
             first_row = all_rows[0]
             result = dataset_row(first_row.name)
@@ -129,7 +140,7 @@ class TestDatasetRowLookup:
 
     def test_dataset_row_strict_returns_valid(self) -> None:
         """dataset_row with strict=True returns row when found."""
-        all_rows = get_all_dataset_rows()
+        all_rows = _ir_rows()
         if all_rows:
             first_row = all_rows[0]
             result = dataset_row(first_row.name, strict=True)
@@ -141,7 +152,7 @@ class TestDatasetRows:
 
     def test_dataset_rows_returns_matching(self) -> None:
         """dataset_rows returns matching rows."""
-        all_rows = get_all_dataset_rows()
+        all_rows = _ir_rows()
         if len(all_rows) >= 2:
             names = [all_rows[0].name, all_rows[1].name]
             result = dataset_rows(names)
@@ -151,7 +162,7 @@ class TestDatasetRows:
 
     def test_dataset_rows_skips_missing(self) -> None:
         """dataset_rows skips missing names."""
-        all_rows = get_all_dataset_rows()
+        all_rows = _ir_rows()
         if all_rows:
             names = [all_rows[0].name, "nonexistent_xyz_v1"]
             result = dataset_rows(names)
@@ -176,11 +187,13 @@ class TestGetAllDatasetRows:
     def test_returns_nonempty(self) -> None:
         """get_all_dataset_rows returns non-empty result."""
         result = get_all_dataset_rows()
+        assert result == _ir_rows()
         assert len(result) > 0
 
     def test_all_items_are_semantic_dataset_rows(self) -> None:
         """All items in get_all_dataset_rows are SemanticDatasetRow."""
         result = get_all_dataset_rows()
+        assert result == _ir_rows()
         for row in result:
             assert isinstance(row, SemanticDatasetRow)
 
@@ -197,6 +210,7 @@ class TestCategoryFilters:
     def test_get_semantic_dataset_rows(self) -> None:
         """get_semantic_dataset_rows returns only semantic category."""
         result = get_semantic_dataset_rows()
+        assert result == _ir_rows_by_category("semantic")
         assert isinstance(result, tuple)
         for row in result:
             assert row.category == "semantic"
@@ -204,6 +218,7 @@ class TestCategoryFilters:
     def test_get_analysis_dataset_rows(self) -> None:
         """get_analysis_dataset_rows returns only analysis category."""
         result = get_analysis_dataset_rows()
+        assert result == _ir_rows_by_category("analysis")
         assert isinstance(result, tuple)
         for row in result:
             assert row.category == "analysis"
@@ -211,16 +226,17 @@ class TestCategoryFilters:
     def test_get_diagnostic_dataset_rows(self) -> None:
         """get_diagnostic_dataset_rows returns only diagnostic category."""
         result = get_diagnostic_dataset_rows()
+        assert result == _ir_rows_by_category("diagnostic")
         assert isinstance(result, tuple)
         for row in result:
             assert row.category == "diagnostic"
 
     def test_categories_are_exhaustive(self) -> None:
         """All categories combined equal total rows."""
-        all_rows = get_all_dataset_rows()
-        semantic = get_semantic_dataset_rows()
-        analysis = get_analysis_dataset_rows()
-        diagnostic = get_diagnostic_dataset_rows()
+        all_rows = _ir_rows()
+        semantic = _ir_rows_by_category("semantic")
+        analysis = _ir_rows_by_category("analysis")
+        diagnostic = _ir_rows_by_category("diagnostic")
         assert len(all_rows) == len(semantic) + len(analysis) + len(diagnostic)
 
 
@@ -242,7 +258,7 @@ class TestDatasetNames:
     def test_matches_all_dataset_rows(self) -> None:
         """dataset_names matches get_all_dataset_rows."""
         names = dataset_names()
-        rows = get_all_dataset_rows()
+        rows = _ir_rows()
         assert len(names) == len(rows)
         for name, row in zip(names, rows, strict=True):
             assert name == row.name
@@ -254,7 +270,7 @@ class TestDatasetNamesByCategory:
     def test_semantic_category(self) -> None:
         """dataset_names_by_category returns semantic names."""
         names = dataset_names_by_category("semantic")
-        rows = get_semantic_dataset_rows()
+        rows = _ir_rows_by_category("semantic")
         assert len(names) == len(rows)
         for name, row in zip(names, rows, strict=True):
             assert name == row.name
@@ -262,13 +278,13 @@ class TestDatasetNamesByCategory:
     def test_analysis_category(self) -> None:
         """dataset_names_by_category returns analysis names."""
         names = dataset_names_by_category("analysis")
-        rows = get_analysis_dataset_rows()
+        rows = _ir_rows_by_category("analysis")
         assert len(names) == len(rows)
 
     def test_diagnostic_category(self) -> None:
         """dataset_names_by_category returns diagnostic names."""
         names = dataset_names_by_category("diagnostic")
-        rows = get_diagnostic_dataset_rows()
+        rows = _ir_rows_by_category("diagnostic")
         assert len(names) == len(rows)
 
 

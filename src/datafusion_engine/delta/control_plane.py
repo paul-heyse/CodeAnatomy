@@ -20,6 +20,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.arrow.abi import schema_to_dict
+from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.delta.payload import (
     cdf_options_payload,
     commit_payload,
@@ -352,6 +353,14 @@ def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
     if internal_ctx is None:
         msg = "Delta entrypoints require datafusion._internal.SessionContext (use ctx.ctx)."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    compatibility = is_delta_extension_compatible(ctx)
+    if not compatibility.available:
+        msg = "Delta control-plane extension module is unavailable."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    if not compatibility.compatible:
+        details = f" {compatibility.error}" if compatibility.error else ""
+        msg = f"Delta control-plane extension is incompatible.{details}"
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
     return cast("InternalSessionContext", internal_ctx)
 
 
@@ -430,58 +439,6 @@ def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
         "schema": schema_payload,
         "schema_ipc": schema_ipc_b64,
         "has_schema": payload.get("has_schema"),
-    }
-
-
-def _fallback_snapshot_info(
-    request: DeltaSnapshotRequest,
-) -> Mapping[str, object] | None:
-    try:
-        from deltalake import DeltaTable
-        from deltalake._internal import DeltaError, DeltaProtocolError
-    except ImportError:
-        return None
-    options = dict(request.storage_options) if request.storage_options else None
-    try:
-        table = DeltaTable(request.table_uri, version=request.version, storage_options=options)
-    except (DeltaError, DeltaProtocolError, OSError, RuntimeError, TypeError, ValueError):
-        return None
-    protocol = table.protocol()
-    metadata = table.metadata()
-    history = table.history(1)
-    snapshot_timestamp = None
-    if history:
-        entry = history[0]
-        if isinstance(entry, Mapping):
-            snapshot_timestamp = entry.get("timestamp")
-    schema_json = None
-    try:
-        schema_obj = table.schema()
-        schema_json_fn = getattr(schema_obj, "json", None)
-        schema_json = schema_json_fn() if callable(schema_json_fn) else None
-    except (RuntimeError, TypeError, ValueError):
-        schema_json = None
-    table_properties = None
-    configuration = getattr(metadata, "configuration", None)
-    if isinstance(configuration, Mapping):
-        table_properties = {str(key): str(value) for key, value in configuration.items()}
-    partition_columns = None
-    raw_partitions = getattr(metadata, "partition_columns", None)
-    if isinstance(raw_partitions, Sequence) and not isinstance(
-        raw_partitions,
-        (str, bytes, bytearray),
-    ):
-        partition_columns = [str(value) for value in raw_partitions]
-    return {
-        "version": table.version(),
-        "snapshot_timestamp": snapshot_timestamp,
-        "min_reader_version": getattr(protocol, "min_reader_version", None),
-        "min_writer_version": getattr(protocol, "min_writer_version", None),
-        "reader_features": getattr(protocol, "reader_features", None),
-        "writer_features": getattr(protocol, "writer_features", None),
-        "table_properties": table_properties,
-        "schema_json": schema_json,
-        "partition_columns": partition_columns,
     }
 
 
@@ -667,21 +624,11 @@ def delta_snapshot_info(
     Mapping[str, object]
         Snapshot metadata payload from the control plane.
 
-    Raises
-    ------
-    DataFusionEngineError
-        Raised when required extension hooks are unavailable and fallback fails.
-    RuntimeError
-        Raised when extension snapshot retrieval fails unexpectedly.
-    TypeError
-        Raised when extension snapshot retrieval returns invalid payloads.
-    ValueError
-        Raised when extension snapshot retrieval returns invalid payloads.
     """
+    snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    gate_payload = delta_feature_gate_rust_payload(request.gate)
     try:
-        snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
-        storage_payload = list(request.storage_options.items()) if request.storage_options else None
-        gate_payload = delta_feature_gate_rust_payload(request.gate)
         response = snapshot_factory(
             request.table_uri,
             storage_payload,
@@ -692,17 +639,10 @@ def delta_snapshot_info(
             gate_payload[2],
             gate_payload[3],
         )
-        return ensure_mapping(response, label="delta_snapshot_info")
-    except DataFusionEngineError:
-        fallback = _fallback_snapshot_info(request)
-        if fallback is None:
-            raise
-        return fallback
-    except (RuntimeError, TypeError, ValueError):
-        fallback = _fallback_snapshot_info(request)
-        if fallback is None:
-            raise
-        return fallback
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = "Delta snapshot retrieval failed."
+        _raise_engine_error(msg, kind=ErrorKind.DELTA, exc=exc)
+    return ensure_mapping(response, label="delta_snapshot_info")
 
 
 def delta_add_actions(

@@ -5,10 +5,10 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 73,
-        "end_line": 121,
-        "file": "/home/paul/CodeAnatomy/tools/cq/query/executor.py",
-        "line": 88
+        "end_col": 17,
+        "end_line": 187,
+        "file": "tools/cq/query/executor.py",
+        "line": 117
       },
       "category": "definition",
       "details": {
@@ -41,6 +41,6 @@
     "files_scanned": 1,
     "matches": 1,
     "total_calls": 0,
-    "total_defs": 31
+    "total_defs": 54
   }
 }

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -79,19 +79,7 @@ class DataFusionViewArtifact:
             required_udfs=tuple(self.required_udfs),
             referenced_tables=tuple(self.referenced_tables),
         )
-        resolved = cast("dict[str, object]", to_builtins(payload, str_keys=True))
-        schema_describe = resolved.get("schema_describe") or ()
-        resolved["schema_describe"] = list(cast("Iterable[dict[str, object]]", schema_describe))
-        schema_provenance = resolved.get("schema_provenance")
-        schema_provenance_payload: dict[str, object] = {}
-        if schema_provenance is not None:
-            schema_provenance_payload = dict(cast("Mapping[str, object]", schema_provenance))
-        resolved["schema_provenance"] = schema_provenance_payload
-        required_udfs = resolved.get("required_udfs") or ()
-        resolved["required_udfs"] = list(cast("Iterable[str]", required_udfs))
-        referenced_tables = resolved.get("referenced_tables") or ()
-        resolved["referenced_tables"] = list(cast("Iterable[str]", referenced_tables))
-        return resolved
+        return cast("dict[str, object]", to_builtins(payload, str_keys=True))
 
     def diagnostics_payload(self, *, event_time_unix_ms: int) -> dict[str, object]:
         """Return a stable diagnostics payload.

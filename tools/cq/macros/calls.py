@@ -7,7 +7,6 @@ keyword usage, and forwarding behavior.
 from __future__ import annotations
 
 import ast
-import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +29,7 @@ from tools.cq.core.scoring import (
     impact_score,
 )
 from tools.cq.index.def_index import DefIndex
+from tools.cq.search import INTERACTIVE, SearchLimits, find_call_candidates
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -41,7 +41,6 @@ _ARG_TEXT_TRIM = 17
 _KW_TEXT_LIMIT = 15
 _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
-_MIN_RG_PARTS = 2
 
 
 @dataclass
@@ -230,64 +229,46 @@ class CallFinder(ast.NodeVisitor):
 
 
 def _rg_find_candidates(
-    rg_path: str,
     function_name: str,
     root: Path,
-) -> list[tuple[str, int]]:
-    """Use ripgrep to find candidate files/lines.
+    *,
+    limits: SearchLimits | None = None,
+) -> list[tuple[Path, int]]:
+    """Use rpygrep to find candidate files/lines.
+
+    Parameters
+    ----------
+    function_name : str
+        Name of the function to find calls for.
+    root : Path
+        Repository root.
+    limits : SearchLimits | None, optional
+        Search limits, defaults to INTERACTIVE profile.
 
     Returns
     -------
-    list[tuple[str, int]]
-        Candidate (file, line) pairs.
+    list[tuple[Path, int]]
+        Candidate (file, line) pairs with absolute paths.
     """
-    candidates: list[tuple[str, int]] = []
+    limits = limits or INTERACTIVE
     search_name = function_name.rsplit(".", maxsplit=1)[-1]
-
-    try:
-        result = subprocess.run(
-            [
-                rg_path,
-                "--type",
-                "py",
-                "--line-number",
-                "--no-heading",
-                rf"\b{search_name}\s*\(",
-                str(root),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                parts = line.split(":", _MIN_RG_PARTS)
-                if len(parts) >= _MIN_RG_PARTS:
-                    try:
-                        filepath = parts[0]
-                        lineno = int(parts[1])
-                        rel = Path(filepath).relative_to(root)
-                        candidates.append((str(rel), lineno))
-                    except (ValueError, TypeError):
-                        pass
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-
-    return candidates
+    return find_call_candidates(root, search_name, limits=limits)
 
 
-def _group_candidates(candidates: list[tuple[str, int]]) -> dict[str, list[int]]:
+def _group_candidates(candidates: list[tuple[Path, int]]) -> dict[Path, list[int]]:
     """Group candidate matches by file.
 
+    Parameters
+    ----------
+    candidates : list[tuple[Path, int]]
+        List of (file, line) candidate pairs.
+
     Returns
     -------
-    dict[str, list[int]]
+    dict[Path, list[int]]
         Mapping of file to candidate line numbers.
     """
-    by_file: dict[str, list[int]] = {}
+    by_file: dict[Path, list[int]] = {}
     for file, line in candidates:
         by_file.setdefault(file, []).append(line)
     return by_file
@@ -295,10 +276,19 @@ def _group_candidates(candidates: list[tuple[str, int]]) -> dict[str, list[int]]
 
 def _collect_call_sites(
     root: Path,
-    by_file: dict[str, list[int]],
+    by_file: dict[Path, list[int]],
     function_name: str,
 ) -> list[CallSite]:
     """Parse candidate files and collect call sites.
+
+    Parameters
+    ----------
+    root : Path
+        Repository root.
+    by_file : dict[Path, list[int]]
+        Mapping of file paths to candidate line numbers.
+    function_name : str
+        Name of the function to find calls for.
 
     Returns
     -------
@@ -306,16 +296,17 @@ def _collect_call_sites(
         Collected call sites.
     """
     all_sites: list[CallSite] = []
-    for file in by_file:
-        filepath = root / file
+    for filepath in by_file:
         if not filepath.exists():
             continue
         try:
             source = filepath.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=file)
-        except (SyntaxError, OSError, UnicodeDecodeError):
+            # Use relative path for filename in AST for consistent reporting
+            rel_path = str(filepath.relative_to(root))
+            tree = ast.parse(source, filename=rel_path)
+        except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
             continue
-        finder = CallFinder(file, function_name, tree)
+        finder = CallFinder(rel_path, function_name, tree)
         finder.visit(tree)
         all_sites.extend(finder.sites)
     return all_sites
@@ -493,10 +484,9 @@ def cmd_calls(
         Analysis result.
     """
     started = ms()
-    rg_path = tc.require_rg()
 
-    # Find candidates via rg
-    candidates = _rg_find_candidates(rg_path, function_name, root)
+    # Find candidates via rpygrep
+    candidates = _rg_find_candidates(function_name, root)
 
     by_file = _group_candidates(candidates)
     all_sites = _collect_call_sites(root, by_file, function_name)

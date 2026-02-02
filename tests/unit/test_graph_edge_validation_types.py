@@ -33,6 +33,8 @@ def test_validate_edge_requirements_types_metadata() -> None:
     evidence.columns_by_dataset["input_table"] = {"col_a"}
     evidence.types_by_dataset["input_table"] = {"col_a": "string"}
     evidence.metadata_by_dataset["input_table"] = {b"owner": b"normalize"}
+    evidence.sources.add("out_alpha")
+    evidence.metadata_by_dataset["out_alpha"] = {b"plan_fingerprint": b"fp-alpha"}
     assert validate_edge_requirements(graph, task_idx, catalog=evidence) is True
 
 
@@ -43,6 +45,8 @@ def test_validate_edge_requirements_type_mismatch() -> None:
     evidence.columns_by_dataset["input_table"] = {"col_a"}
     evidence.types_by_dataset["input_table"] = {"col_a": "int64"}
     evidence.metadata_by_dataset["input_table"] = {b"owner": b"normalize"}
+    evidence.sources.add("out_alpha")
+    evidence.metadata_by_dataset["out_alpha"] = {b"plan_fingerprint": b"fp-alpha"}
     result = validate_edge_requirements_detailed(graph, task_idx, catalog=evidence)
     assert result.is_valid is False
     assert result.edge_results[0].missing_types == (("col_a", "string"),)
@@ -55,6 +59,8 @@ def test_validate_edge_requirements_metadata_mismatch() -> None:
     evidence.columns_by_dataset["input_table"] = {"col_a"}
     evidence.types_by_dataset["input_table"] = {"col_a": "string"}
     evidence.metadata_by_dataset["input_table"] = {b"owner": b"other"}
+    evidence.sources.add("out_alpha")
+    evidence.metadata_by_dataset["out_alpha"] = {b"plan_fingerprint": b"fp-alpha"}
     result = validate_edge_requirements_detailed(graph, task_idx, catalog=evidence)
     assert result.is_valid is False
     assert result.edge_results[0].missing_metadata == ((b"owner", b"normalize"),)

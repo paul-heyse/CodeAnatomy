@@ -78,9 +78,12 @@ def plan_with_delta_pins(
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."
         raise ValueError(msg)
+    from semantics.ir_pipeline import build_semantic_ir
+
     session_runtime = runtime_profile.session_runtime()
+    semantic_ir = build_semantic_ir()
     # Baseline registration ensures UDF platform and registry views exist.
-    ensure_view_graph(ctx, runtime_profile=runtime_profile)
+    ensure_view_graph(ctx, runtime_profile=runtime_profile, semantic_ir=semantic_ir)
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,
@@ -104,6 +107,7 @@ def plan_with_delta_pins(
             ctx,
             runtime_profile=runtime_profile,
             scan_units=scan_planning.scan_units,
+            semantic_ir=semantic_ir,
         )
     pinned_nodes = _plan_view_nodes(
         ctx,

@@ -36,20 +36,10 @@ SEMANTIC_OUTPUT_NAMES: Final[dict[str, str]] = {
     "cpg_nodes": "cpg_nodes_v1",
     "cpg_edges": "cpg_edges_v1",
     "cpg_props": "cpg_props_v1",
-    "cpg_nodes_quality": "cpg_nodes_quality_v1",
-    "cpg_props_quality": "cpg_props_quality_v1",
     "cpg_props_map": "cpg_props_map_v1",
     "cpg_edges_by_src": "cpg_edges_by_src_v1",
     "cpg_edges_by_dst": "cpg_edges_by_dst_v1",
 }
-
-# Legacy aliases preserved for backward compatibility.
-SEMANTIC_OUTPUT_ALIASES: Final[dict[str, str]] = {
-    "rel_call_symbol": SEMANTIC_OUTPUT_NAMES["rel_callsite_symbol"],
-}
-
-# Tuple of all semantic view names in dependency order
-SEMANTIC_VIEW_NAMES: Final[tuple[str, ...]] = tuple(SEMANTIC_OUTPUT_NAMES.values())
 
 
 def canonical_output_name(internal_name: str) -> str:
@@ -69,9 +59,6 @@ def canonical_output_name(internal_name: str) -> str:
     canonical = SEMANTIC_OUTPUT_NAMES.get(internal_name)
     if canonical is not None:
         return canonical
-    legacy = SEMANTIC_OUTPUT_ALIASES.get(internal_name)
-    if legacy is not None:
-        return legacy
     return internal_name
 
 
@@ -112,9 +99,7 @@ def is_semantic_output(name: str) -> bool:
 
 __all__ = [
     "OUTPUT_VERSION_SUFFIX",
-    "SEMANTIC_OUTPUT_ALIASES",
     "SEMANTIC_OUTPUT_NAMES",
-    "SEMANTIC_VIEW_NAMES",
     "canonical_output_name",
     "internal_name",
     "is_semantic_output",

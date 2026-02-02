@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from hamilton.function_modifiers import inject, resolve_from_config, source
 
+from datafusion_engine.arrow.interop import TableLike
 from extract.extractors.scip.extract import run_scip_python_index
 from extract.extractors.scip.identity import resolve_scip_identity
 from extract.extractors.scip.setup import (
@@ -21,12 +22,7 @@ from hamilton_pipeline.io_contracts import (
     SOURCE_CATALOG_INPUTS,
 )
 from hamilton_pipeline.tag_policy import apply_tag
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from datafusion_engine.arrow.interop import TableLike
-    from hamilton_pipeline.types import ScipIdentityOverrides, ScipIndexConfig
+from hamilton_pipeline.types import ScipIdentityOverrides, ScipIndexConfig
 
 
 @apply_tag(SCIP_INDEX_PATH.tag_policy())

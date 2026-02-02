@@ -137,15 +137,6 @@ class TestPatternQueryPlanning:
         plan = compile_query(query)
         assert plan.sg_rules[0].context == "class $C"
 
-    def test_pattern_query_extracts_rg_pattern(self) -> None:
-        """Pattern query extracts ripgrep prefilter pattern."""
-        query = Query(
-            pattern_spec=PatternSpec(pattern="def build_graph($$$)"),
-        )
-        plan = compile_query(query)
-        # Should extract 'def' as keyword for prefiltering
-        assert plan.rg_pattern == "def"
-
 
 class TestAstGrepRule:
     """Tests for AstGrepRule dataclass."""

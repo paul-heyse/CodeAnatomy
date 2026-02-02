@@ -131,8 +131,12 @@ def _iter_worklist_contexts_raw(request: WorklistRequest) -> Iterable[FileContex
         return
     queue, index = queue_bundle
     if len(queue) > 0:
-        yield from _drain_worklist_queue(queue, index=index)
-        return
+        drained = False
+        for file_ctx in _drain_worklist_queue(queue, index=index):
+            drained = True
+            yield file_ctx
+        if drained:
+            return
     yield from _stream_with_queue(
         runtime_profile,
         repo_files=request.repo_files,
@@ -275,14 +279,17 @@ def _execute_expr_stream(
     return result.dataframe.execute_stream()
 
 
-def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str:
+def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str | None:
     """Return a stable queue name for persistent worklists.
 
     Returns
     -------
-    str
-        Stable queue name derived from the repo and output table.
+    str | None
+        Stable queue name derived from the repo and output table, or ``None``
+        when a repo identifier is not available.
     """
+    if repo_id is None or not str(repo_id).strip():
+        return None
     return stable_cache_label(
         "worklist",
         {"output_table": output_table, "repo_id": repo_id},

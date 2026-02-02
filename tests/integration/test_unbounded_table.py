@@ -8,7 +8,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -49,7 +52,7 @@ def test_unbounded_external_table_read(tmp_path: Path) -> None:
             ctx,
             name="events_unbounded",
             location=location,
-            runtime_profile=profile,
+            options=DatasetRegistrationOptions(runtime_profile=profile),
         )
     except ValueError as exc:
         message = str(exc).lower()

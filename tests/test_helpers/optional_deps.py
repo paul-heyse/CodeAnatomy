@@ -76,3 +76,31 @@ def require_deltalake() -> ModuleType:
         Imported deltalake module.
     """
     return pytest.importorskip("deltalake")
+
+
+def require_delta_extension() -> ModuleType:
+    """Skip tests when Delta DataFusion extensions are unavailable/incompatible.
+
+    Returns
+    -------
+    ModuleType
+        Imported datafusion module.
+    """
+    datafusion = require_datafusion()
+    from datafusion import SessionContext
+
+    from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+
+    ctx = SessionContext()
+    compatibility = is_delta_extension_compatible(ctx)
+    if not compatibility.available:
+        pytest.skip(
+            "Delta extension module unavailable; skipping Delta integration tests.",
+            allow_module_level=True,
+        )
+    if not compatibility.compatible:
+        message = "Delta extension incompatible; skipping Delta integration tests."
+        if compatibility.error:
+            message = f"{message} ({compatibility.error})"
+        pytest.skip(message, allow_module_level=True)
+    return datafusion

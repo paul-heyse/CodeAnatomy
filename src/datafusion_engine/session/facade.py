@@ -418,7 +418,11 @@ class DataFusionExecutionFacade:
 
     def _record_execution_artifact(self, request: _ExecutionArtifactRequest) -> None:
         """Persist an execution artifact row when runtime settings allow it."""
-        if self.runtime_profile is None or request.view_name is None:
+        if (
+            self.runtime_profile is None
+            or request.view_name is None
+            or not self.runtime_profile.capture_plan_artifacts
+        ):
             return
         from datafusion_engine.plan.artifact_store import (
             PlanArtifactBuildRequest,
@@ -719,10 +723,12 @@ class DataFusionExecutionFacade:
             Rust UDF snapshot used for view registration.
         """
         from datafusion_engine.views.registration import ensure_view_graph
+        from semantics.ir_pipeline import build_semantic_ir
 
         return ensure_view_graph(
             self.ctx,
             runtime_profile=self.runtime_profile,
+            semantic_ir=build_semantic_ir(),
         )
 
     def register_dataset(
@@ -756,14 +762,19 @@ class DataFusionExecutionFacade:
         if self.runtime_profile is None:
             msg = "Runtime profile is required for dataset registration."
             raise ValueError(msg)
-        from datafusion_engine.dataset.registration import register_dataset_df
+        from datafusion_engine.dataset.registration import (
+            DatasetRegistrationOptions,
+            register_dataset_df,
+        )
 
         return register_dataset_df(
             self.ctx,
             name=name,
             location=location,
-            cache_policy=cache_policy,
-            runtime_profile=self.runtime_profile,
+            options=DatasetRegistrationOptions(
+                cache_policy=cache_policy,
+                runtime_profile=self.runtime_profile,
+            ),
         )
 
     def schema_introspector(self) -> SchemaIntrospector:

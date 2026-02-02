@@ -15,21 +15,17 @@ _MODULE_NAMES: tuple[str, ...] = (
     "execution_plan",
     "subdags",
     "task_execution",
-    "column_features",
-    "semantic_lineage",
     "outputs",
 )
 
 if TYPE_CHECKING:
     from hamilton_pipeline.modules import (
-        column_features,
         dataloaders,
         execution_plan,
         inputs,
         io_contracts,
         outputs,
         params,
-        semantic_lineage,
         subdags,
         task_execution,
     )
@@ -82,7 +78,6 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "ALL_MODULES",
-    "column_features",
     "dataloaders",
     "execution_plan",
     "inputs",
@@ -90,7 +85,6 @@ __all__ = [
     "load_all_modules",
     "outputs",
     "params",
-    "semantic_lineage",
     "subdags",
     "task_execution",
 ]

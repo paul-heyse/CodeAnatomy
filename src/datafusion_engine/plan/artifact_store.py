@@ -1118,7 +1118,10 @@ def _commit_metadata_for_hamilton_events(rows: Sequence[HamiltonEventRow]) -> di
 
 def _normalized_event_payload(payload: object) -> object:
     if isinstance(payload, Mapping):
-        return {str(key): value for key, value in payload.items()}
+        try:
+            return msgspec.convert(payload, type=dict[str, object], strict=False, str_keys=True)
+        except msgspec.ValidationError:
+            return {str(key): value for key, value in payload.items()}
     return payload
 
 

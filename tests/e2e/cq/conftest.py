@@ -356,8 +356,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
     tc = Toolchain.detect()
 
-    skip_marker = pytest.mark.skip(reason="ast-grep (sg) is not installed")
+    skip_marker = pytest.mark.skip(reason="ast-grep-py is not installed")
 
     for item in items:
-        if "requires_ast_grep" in item.keywords and not tc.has_sg:
+        if "requires_ast_grep" in item.keywords and not tc.has_sgpy:
             item.add_marker(skip_marker)

@@ -9,11 +9,16 @@ import pytest
 
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
-from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+from tests.test_helpers.optional_deps import (
+    require_datafusion,
+    require_delta_extension,
+    require_deltalake,
+)
 
 require_datafusion()
 pytest.importorskip("datafusion_ext")
 require_deltalake()
+require_delta_extension()
 
 
 def _create_cdf_table(path: Path) -> None:
@@ -36,7 +41,10 @@ def _create_cdf_table(path: Path) -> None:
 
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
-    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registration import (
+        DatasetRegistrationOptions,
+        register_dataset_df,
+    )
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.datafusion import extract_lineage
     from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
@@ -54,7 +62,7 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
             format="delta",
             delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),
-        runtime_profile=runtime,
+        options=DatasetRegistrationOptions(runtime_profile=runtime),
     )
     df = ctx.sql("SELECT id FROM cdf_table WHERE id > 1")
     bundle = build_plan_bundle(

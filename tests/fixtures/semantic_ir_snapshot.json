@@ -1,7 +1,201 @@
 {
-  "ir_hash": "c4a1ba6782d57833ea1967b7b8a9addb58f6852182757b5d6eaf415b3b86f364",
+  "dataset_rows": [
+    {
+      "category": "analysis",
+      "name": "cst_refs"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_defs"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_imports"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_callsites"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_call_args"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_docstrings"
+    },
+    {
+      "category": "analysis",
+      "name": "cst_decorators"
+    },
+    {
+      "category": "analysis",
+      "name": "scip_occurrences"
+    },
+    {
+      "category": "analysis",
+      "name": "file_line_index_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "normalize_evidence_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "type_exprs_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "type_nodes_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "py_bc_blocks_norm_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "py_bc_cfg_edges_norm_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "py_bc_instr_norm_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "py_bc_exceptions_norm_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "symtable_scopes_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "symtable_symbols_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "symtable_bindings_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "symtable_def_sites_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "scip_diagnostics_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_refs_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_defs_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_imports_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_calls_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_call_args_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_docstrings_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cst_decorators_norm_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "scip_occurrences_norm_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "file_quality_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "relation_output_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "rel_name_symbol_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "rel_def_symbol_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "rel_import_symbol_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "rel_callsite_symbol_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "relationship_quality_metrics_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "relationship_ambiguity_report_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "relationship_candidates_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "relationship_decisions_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "schema_anomalies_v1"
+    },
+    {
+      "category": "diagnostic",
+      "name": "file_coverage_report_v1"
+    },
+    {
+      "category": "analysis",
+      "name": "dim_exported_defs_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_nodes_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_edges_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_props_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_props_map_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_edges_by_src_v1"
+    },
+    {
+      "category": "semantic",
+      "name": "cpg_edges_by_dst_v1"
+    }
+  ],
+  "ir_hash": "3316141b1010e781bf53160a84a68e77439b78021d26e6415f1e2ccf128dc40c",
   "join_groups": [],
-  "model_hash": "30895c5c4cc8420747d987f8945f01c7e9eb31972d24e04190b5b83270c7afa7",
+  "model_hash": "c7a0c84d96a38cf5e72dd138bb32a6a922f93456b33e66544c41bf4b5e2123ad",
   "views": [
     {
       "inputs": [
@@ -82,6 +276,60 @@
       "name": "scip_occurrences_norm_v1",
       "outputs": [
         "scip_occurrences_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "symtable_scopes",
+        "symtable_symbols"
+      ],
+      "kind": "symtable",
+      "name": "symtable_bindings",
+      "outputs": [
+        "symtable_bindings"
+      ]
+    },
+    {
+      "inputs": [
+        "symtable_bindings",
+        "cst_defs"
+      ],
+      "kind": "symtable",
+      "name": "symtable_def_sites",
+      "outputs": [
+        "symtable_def_sites"
+      ]
+    },
+    {
+      "inputs": [
+        "symtable_scope_edges",
+        "symtable_scopes"
+      ],
+      "kind": "symtable",
+      "name": "symtable_type_param_edges",
+      "outputs": [
+        "symtable_type_param_edges"
+      ]
+    },
+    {
+      "inputs": [
+        "symtable_scopes"
+      ],
+      "kind": "symtable",
+      "name": "symtable_type_params",
+      "outputs": [
+        "symtable_type_params"
+      ]
+    },
+    {
+      "inputs": [
+        "symtable_bindings",
+        "cst_refs"
+      ],
+      "kind": "symtable",
+      "name": "symtable_use_sites",
+      "outputs": [
+        "symtable_use_sites"
       ]
     },
     {

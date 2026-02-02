@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import msgspec
+
+from cli.config_models import RootConfig, RootConfigPatch
 from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
+from serde_msgspec import validation_error_payload
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -30,28 +33,29 @@ def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
     """
     if config_file:
         path = Path(config_file)
-        if path.exists():
-            with path.open("rb") as handle:
-                return cast("dict[str, JsonValue]", tomllib.load(handle))
-        return {}
+        if not path.exists():
+            return {}
+        raw = _read_toml(path)
+        root = _decode_root_config(raw, location=str(path))
+        patched = _apply_root_patch(root, _env_patch())
+        return normalize_config_contents(_config_to_mapping(patched))
 
-    config: dict[str, JsonValue] = {}
+    config: RootConfig | None = None
     codeanatomy_path = _find_in_parents("codeanatomy.toml")
     if codeanatomy_path is not None:
-        with codeanatomy_path.open("rb") as handle:
-            config = cast("dict[str, JsonValue]", tomllib.load(handle))
+        raw = _read_toml(codeanatomy_path)
+        config = _decode_root_config(raw, location=str(codeanatomy_path))
 
     pyproject_path = _find_in_parents("pyproject.toml")
     if pyproject_path is not None:
-        with pyproject_path.open("rb") as handle:
-            pyproject = cast("dict[str, JsonValue]", tomllib.load(handle))
-        tool_section = pyproject.get("tool")
-        if isinstance(tool_section, dict):
-            nested = tool_section.get("codeanatomy")
-            if isinstance(nested, dict):
-                config = cast("dict[str, JsonValue]", nested)
+        raw = _read_toml(pyproject_path)
+        nested = _extract_tool_config(raw)
+        if nested is not None:
+            config = _decode_root_config(nested, location=f"{pyproject_path}:tool.codeanatomy")
 
-    return config
+    resolved = config or RootConfig()
+    patched = _apply_root_patch(resolved, _env_patch())
+    return normalize_config_contents(_config_to_mapping(patched))
 
 
 def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -96,6 +100,7 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
         _copy_key(flat, cache, "policy_profile", "cache_policy_profile")
         _copy_key(flat, cache, "path", "cache_path")
         _copy_key(flat, cache, "log_to_file", "cache_log_to_file")
+        _copy_key(flat, cache, "opt_in", "cache_opt_in")
 
     graph_adapter = config.get("graph_adapter")
     if isinstance(graph_adapter, dict):
@@ -108,6 +113,9 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
         _copy_key(flat, incremental, "state_dir", "incremental_state_dir")
         _copy_key(flat, incremental, "repo_id", "incremental_repo_id")
         _copy_key(flat, incremental, "impact_strategy", "incremental_impact_strategy")
+        _copy_key(flat, incremental, "git_base_ref", "incremental_git_base_ref")
+        _copy_key(flat, incremental, "git_head_ref", "incremental_git_head_ref")
+        _copy_key(flat, incremental, "git_changed_only", "incremental_git_changed_only")
 
     return flat
 
@@ -179,41 +187,44 @@ def _load_explicit_config(values: dict[str, ConfigValue], path: Path) -> None:
     if not path.exists():
         return
     raw = _read_toml(path)
-    _apply_config_values(values, raw, location=str(path), skip_existing=False)
+    root = _decode_root_config(raw, location=str(path))
+    _apply_config_values(values, root, location=str(path), skip_existing=False)
 
 
 def _load_default_configs(values: dict[str, ConfigValue]) -> None:
     codeanatomy_path = _find_in_parents("codeanatomy.toml")
     if codeanatomy_path is not None:
         raw = _read_toml(codeanatomy_path)
-        _apply_config_values(values, raw, location=str(codeanatomy_path), skip_existing=False)
+        root = _decode_root_config(raw, location=str(codeanatomy_path))
+        _apply_config_values(values, root, location=str(codeanatomy_path), skip_existing=False)
 
     pyproject_path = _find_in_parents("pyproject.toml")
     if pyproject_path is None:
         return
     pyproject = _read_toml(pyproject_path)
-    tool_section = pyproject.get("tool")
-    if not isinstance(tool_section, dict):
+    nested = _extract_tool_config(pyproject)
+    if nested is None:
         return
-    nested = tool_section.get("codeanatomy")
-    if not isinstance(nested, dict):
-        return
-    _apply_config_values(values, nested, location=str(pyproject_path), skip_existing=True)
+    root = _decode_root_config(nested, location=f"{pyproject_path}:tool.codeanatomy")
+    _apply_config_values(values, root, location=str(pyproject_path), skip_existing=True)
 
 
 def _read_toml(path: Path) -> dict[str, JsonValue]:
-    with path.open("rb") as handle:
-        return cast("dict[str, JsonValue]", tomllib.load(handle))
+    payload = msgspec.toml.decode(path.read_text(encoding="utf-8"), type=object, strict=True)
+    if not isinstance(payload, dict):
+        msg = f"Expected TOML mapping in {path}, got {type(payload).__name__}."
+        raise TypeError(msg)
+    return cast("dict[str, JsonValue]", payload)
 
 
 def _apply_config_values(
     values: dict[str, ConfigValue],
-    raw: Mapping[str, JsonValue],
+    raw: RootConfig,
     *,
     location: str,
     skip_existing: bool,
 ) -> None:
-    normalized = normalize_config_contents(raw)
+    normalized = normalize_config_contents(_config_to_mapping(raw))
     for key, value in normalized.items():
         if skip_existing and key in values:
             continue
@@ -279,6 +290,8 @@ def _parse_env_value(value: str) -> JsonValue:
         Parsed value (bool, int, or string).
     """
     lower = value.lower()
+    if lower in {"none", "null"}:
+        return None
     if lower in {"true", "1", "yes", "on"}:
         return True
     if lower in {"false", "0", "no", "off"}:
@@ -292,6 +305,52 @@ def _parse_env_value(value: str) -> JsonValue:
     except ValueError:
         pass
     return value
+
+
+def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootConfig:
+    try:
+        return msgspec.convert(raw, type=RootConfig, strict=True)
+    except msgspec.ValidationError as exc:
+        details = validation_error_payload(exc)
+        msg = f"Config validation failed for {location}: {details}"
+        raise ValueError(msg) from exc
+
+
+def _config_to_mapping(config: RootConfig) -> dict[str, JsonValue]:
+    payload = msgspec.to_builtins(config, str_keys=True)
+    return cast("dict[str, JsonValue]", payload)
+
+
+def _extract_tool_config(raw: Mapping[str, JsonValue]) -> dict[str, JsonValue] | None:
+    tool_section = raw.get("tool")
+    if not isinstance(tool_section, dict):
+        return None
+    nested = tool_section.get("codeanatomy")
+    if not isinstance(nested, dict):
+        return None
+    return cast("dict[str, JsonValue]", nested)
+
+
+def _env_patch() -> RootConfigPatch:
+    overrides: dict[str, JsonValue] = {}
+    for key, env_var in _get_env_var_mappings().items():
+        env_value = os.environ.get(env_var)
+        if env_value is None:
+            continue
+        overrides[key] = _parse_env_value(env_value)
+    if not overrides:
+        return RootConfigPatch()
+    return msgspec.convert(overrides, type=RootConfigPatch, strict=True)
+
+
+def _apply_root_patch(base: RootConfig, patch: RootConfigPatch) -> RootConfig:
+    base_payload = _config_to_mapping(base)
+    for field in patch.__struct_fields__:
+        value = getattr(patch, field)
+        if value is msgspec.UNSET:
+            continue
+        base_payload[field] = value
+    return msgspec.convert(base_payload, type=RootConfig, strict=True)
 
 
 __all__ = [

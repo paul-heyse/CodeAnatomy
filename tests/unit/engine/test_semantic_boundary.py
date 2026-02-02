@@ -6,7 +6,7 @@ import pytest
 from datafusion import SessionContext
 
 from engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
-from semantics.naming import SEMANTIC_VIEW_NAMES
+from semantics.registry import SEMANTIC_MODEL
 
 
 def test_ensure_semantic_views_registered_raises_for_missing_view() -> None:
@@ -18,6 +18,6 @@ def test_ensure_semantic_views_registered_raises_for_missing_view() -> None:
 
 def test_is_semantic_view_matches_registry() -> None:
     """Semantic view lookup respects the naming registry."""
-    sample_view = SEMANTIC_VIEW_NAMES[0]
+    sample_view = SEMANTIC_MODEL.outputs[0].name
     assert is_semantic_view(sample_view)
     assert not is_semantic_view("non_semantic_view")

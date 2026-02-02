@@ -28,11 +28,12 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-_SKIP_DIRS: set[str] = {"__pycache__", "venv", ".venv", "build", "dist"}
 _DEFAULT_SHOW = "globals,attrs,constants"
 _MAX_CONST_STR_LEN = 100
 _MAX_SURFACES_DISPLAY = 40
@@ -176,14 +177,15 @@ def _parse_show_set(show: str) -> set[str]:
 
 
 def _iter_search_files(root: Path, max_files: int) -> Iterator[Path]:
-    files_checked = 0
-    for pyfile in root.rglob("*.py"):
-        if files_checked >= max_files:
-            break
-        rel = pyfile.relative_to(root)
-        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel.parts):
-            continue
-        files_checked += 1
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    result = tabulate_files(
+        repo_index,
+        [repo_context.repo_root],
+        None,
+        extensions=(".py",),
+    )
+    for pyfile in result.files[:max_files]:
         yield pyfile
 
 

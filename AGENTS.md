@@ -177,6 +177,19 @@ Pattern queries find structural code patterns without false positives from strin
 - Combining multiple conditions → Composite queries
 - Security hazard detection → Hazard detection (30+ patterns)
 
+### Global Options (All cq Commands)
+
+All `/cq` commands support global options:
+
+| Option | Env Var | Description |
+|--------|---------|-------------|
+| `--format` | `CQ_FORMAT` | Output format (md, json, mermaid, mermaid-class, mermaid-cfg, dot) |
+| `--root` | `CQ_ROOT` | Repository root path |
+| `--verbose` | `CQ_VERBOSE` | Verbosity level (0-3) |
+| `--no-cache` | - | Bypass query cache |
+
+Config file: `.cq.toml` in repo root. See `/cq --help` for full options.
+
 ### Why This Matters
 
 - **AST-based analysis** - No false positives from strings/comments
@@ -205,8 +218,8 @@ uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run 
 
 **In order:**
 1. `ruff format` - Auto-format
-2. `ruff check --fix` - Lint + autofix
-3. `pyrefly check` - Strict type/contract validation (the real gate)
+2. `ruff check --fix` - Lint + autofix. You must run ruff check with the "--fix" argument to apply autofixes, which should always be applied
+3. `pyrefly check` - Strict type/contract validation (the real gate). Never include a " ." after "uv run pyrefly check". The unmodified "uv run pyrefly check" will check the whole repo in the manner that we intend.
 4. `pyright` - IDE-level type checking (basic mode)
 5. `pytest -q` - Unit tests (add `-m "not e2e"` for fast iteration)
 

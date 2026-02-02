@@ -173,8 +173,19 @@ def _field_specs_for_row(row: SemanticDatasetRow) -> list[FieldSpec]:
     list[FieldSpec]
         Field specifications derived from the row fields.
     """
-    # Default to string type for semantic fields
-    # More sophisticated type inference can be added later
+    # Default to string type for semantic fields unless the row is IR input-backed.
+    if row.role == "input":
+        from datafusion_engine.extract.registry import dataset_schema
+
+        try:
+            schema = dataset_schema(row.source_dataset or row.name)
+        except KeyError:
+            schema = None
+        if schema is not None:
+            return [
+                FieldSpec(name=field.name, dtype=field.type, nullable=field.nullable)
+                for field in schema
+            ]
     return [FieldSpec(name=field_name, dtype=pa.string()) for field_name in row.fields]
 
 

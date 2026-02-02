@@ -7,7 +7,6 @@ identifying downstream consumers and potential impacts of changes.
 from __future__ import annotations
 
 import ast
-import subprocess
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +31,7 @@ from tools.cq.core.scoring import (
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
+from tools.cq.search import INTERACTIVE, SearchLimits, find_callers
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 _DEFAULT_MAX_DEPTH = 5
 _SECTION_SITE_LIMIT = 50
 _CALLER_LIMIT = 30
-_RG_SPLIT_PARTS = 2
+
 
 @dataclass
 class TaintedSite:
@@ -290,9 +290,7 @@ def _tainted_formatted(visitor: TaintVisitor, expr: ast.FormattedValue) -> bool:
 
 def _tainted_joined(visitor: TaintVisitor, expr: ast.JoinedStr) -> bool:
     return any(
-        visitor.expr_tainted(val)
-        for val in expr.values
-        if isinstance(val, ast.FormattedValue)
+        visitor.expr_tainted(val) for val in expr.values if isinstance(val, ast.FormattedValue)
     )
 
 
@@ -480,50 +478,38 @@ def _analyze_function(
                     )
 
 
-def _rg_find_callers(
-    rg_path: str,
+def _find_callers_via_search(
     function_name: str,
     root: Path,
+    limits: SearchLimits | None = None,
 ) -> list[tuple[str, int]]:
-    """Use ripgrep to find potential callers of a function.
+    """Use search adapter to find potential callers of a function.
+
+    Parameters
+    ----------
+    function_name : str
+        Function name to search for.
+    root : Path
+        Root directory to search from.
+    limits : SearchLimits | None
+        Search limits (defaults to INTERACTIVE profile).
 
     Returns
     -------
     list[tuple[str, int]]
-        Candidate caller (file, line) pairs.
+        Candidate caller (file, line) pairs with relative paths.
     """
+    limits = limits or INTERACTIVE
     callers: list[tuple[str, int]] = []
 
-    try:
-        result = subprocess.run(
-            [
-                rg_path,
-                "--type",
-                "py",
-                "--line-number",
-                "--no-heading",
-                rf"\b{function_name}\s*\(",
-                str(root),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                # Format: path:line:content
-                parts = line.split(":", _RG_SPLIT_PARTS)
-                if len(parts) >= _RG_SPLIT_PARTS:
-                    filepath = parts[0]
-                    with suppress(ValueError, TypeError):
-                        lineno = int(parts[1])
-                        rel = Path(filepath).relative_to(root)
-                        callers.append((str(rel), lineno))
-    except (subprocess.TimeoutExpired, OSError):
-        pass
+    # Use the adapter's find_callers function
+    results = find_callers(root, function_name, limits=limits)
+
+    # Convert absolute paths to relative paths
+    for abs_path, lineno in results:
+        with suppress(ValueError, TypeError):
+            rel = abs_path.relative_to(root)
+            callers.append((str(rel), lineno))
 
     return callers
 
@@ -713,11 +699,8 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
         )
         all_sites.extend(state.tainted_sites)
 
-    # Also find callers via rg for broader impact
-    rg_path = request.tc.rg_path
-    caller_sites: list[tuple[str, int]] = []
-    if rg_path:
-        caller_sites = _rg_find_callers(rg_path, request.function_name, request.root)
+    # Also find callers via search adapter for broader impact
+    caller_sites = _find_callers_via_search(request.function_name, request.root)
 
     # Build result
     result.summary = {

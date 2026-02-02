@@ -15,7 +15,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.identity import schema_identity_hash
@@ -106,7 +106,7 @@ class CpgViewNodesRequest:
     input_mapping: Mapping[str, str]
     use_cdf: bool
     requested_outputs: Collection[str] | None
-    semantic_ir: SemanticIR | None
+    semantic_ir: SemanticIR
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ class CpgViewSpecsRequest:
     use_cdf: bool
     runtime_profile: DataFusionRuntimeProfile | None
     requested_outputs: Collection[str] | None
-    semantic_ir: SemanticIR | None
+    semantic_ir: SemanticIR
 
 
 @dataclass(frozen=True)
@@ -140,48 +140,6 @@ class SemanticOutputWriteContext:
     runtime_profile: DataFusionRuntimeProfile
     runtime_config: SemanticRuntimeConfig
     schema_policy: SchemaEvolutionPolicy
-
-
-@dataclass(frozen=True)
-class RelateSpec:
-    """Relation specification for semantic joins.
-
-    .. deprecated::
-        Use :class:`semantics.specs.RelationshipSpec` and the
-        ``RELATIONSHIP_SPECS`` registry instead. This class is retained
-        for backward compatibility with existing code.
-    """
-
-    left: str
-    right: str
-    join_type: Literal["overlap", "contains"]
-    filter_sql: str | None
-    origin: str
-
-    @classmethod
-    def from_relationship_spec(
-        cls,
-        spec: RelationshipSpec,
-    ) -> RelateSpec:
-        """Convert a RelationshipSpec to a RelateSpec.
-
-        Parameters
-        ----------
-        spec
-            The declarative relationship specification.
-
-        Returns
-        -------
-        RelateSpec
-            Equivalent RelateSpec for backward compatibility.
-        """
-        return cls(
-            left=spec.left_table,
-            right=spec.right_table,
-            join_type=spec.join_type(),
-            filter_sql=spec.filter_sql,
-            origin=spec.origin,
-        )
 
 
 def _cache_policy_for(
@@ -309,27 +267,6 @@ def _normalize_spec_builder(
         resolved_table = input_mapping.get(spec.source_table, spec.source_table)
         resolved_spec = replace(spec.spec, table=resolved_table)
         return SemanticCompiler(inner_ctx, config=config).normalize_from_spec(resolved_spec)
-
-    return _builder
-
-
-def _relate_builder(
-    spec: RelateSpec,
-    *,
-    config: SemanticConfig | None,
-) -> DataFrameBuilder:
-    def _builder(inner_ctx: SessionContext) -> DataFrame:
-        from semantics.compiler import RelationOptions, SemanticCompiler
-
-        return SemanticCompiler(inner_ctx, config=config).relate(
-            spec.left,
-            spec.right,
-            options=RelationOptions(
-                join_type=spec.join_type,
-                filter_sql=spec.filter_sql,
-                origin=spec.origin,
-            ),
-        )
 
     return _builder
 
@@ -763,7 +700,6 @@ def _cpg_view_specs(
         SemanticProjectionConfig,
         semantic_projection_options,
     )
-    from semantics.ir_pipeline import build_semantic_ir
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
         SEMANTIC_NORMALIZATION_SPECS,
@@ -774,9 +710,6 @@ def _cpg_view_specs(
     normalization_by_output = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
     relationship_by_name = {spec.name: spec for spec in RELATIONSHIP_SPECS}
     semantic_ir = request.semantic_ir
-    if semantic_ir is None:
-        resolved_outputs = _resolve_requested_outputs(request.requested_outputs)
-        semantic_ir = build_semantic_ir(outputs=resolved_outputs)
     ir = semantic_ir
     join_groups_by_name = {group.name: group for group in ir.join_groups}
     join_group_by_relationship = {
@@ -879,6 +812,27 @@ def _builder_for_scip_normalize_spec(
         _input_table(context.input_mapping, "scip_occurrences"),
         line_index_table=_input_table(context.input_mapping, "file_line_index_v1"),
     )
+
+
+def _builder_for_symtable_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = context
+    from datafusion_engine.symtable import views as symtable_views
+
+    builders: dict[str, DataFrameBuilder] = {
+        "symtable_bindings": symtable_views.symtable_bindings_df,
+        "symtable_def_sites": symtable_views.symtable_def_sites_df,
+        "symtable_use_sites": symtable_views.symtable_use_sites_df,
+        "symtable_type_params": symtable_views.symtable_type_params_df,
+        "symtable_type_param_edges": symtable_views.symtable_type_param_edges_df,
+    }
+    builder = builders.get(spec.name)
+    if builder is None:
+        msg = f"Missing symtable builder for output {spec.name!r}."
+        raise KeyError(msg)
+    return builder
 
 
 def _builder_for_join_group_spec(
@@ -995,6 +949,7 @@ def _builder_for_semantic_spec(
     handlers: dict[str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]] = {
         "normalize": _builder_for_normalize_spec,
         "scip_normalize": _builder_for_scip_normalize_spec,
+        "symtable": _builder_for_symtable_spec,
         "join_group": _builder_for_join_group_spec,
         "relate": _builder_for_relate_spec,
         "union_edges": _builder_for_union_edges_spec,
@@ -1463,10 +1418,9 @@ def _semantic_output_view_names(
         Semantic output view names, including the relation output.
     """
     from relspec.view_defs import RELATION_OUTPUT_NAME
-    from semantics.naming import SEMANTIC_VIEW_NAMES
 
     if requested_outputs is None:
-        view_names = list(SEMANTIC_VIEW_NAMES)
+        view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
         if RELATION_OUTPUT_NAME not in view_names:
             view_names.append(RELATION_OUTPUT_NAME)
         return view_names
@@ -2059,7 +2013,6 @@ __all__ = [
     "CPG_INPUT_TABLES",
     "CachePolicy",
     "CpgBuildOptions",
-    "RelateSpec",
     "RelationshipSpec",
     "build_cpg",
     "build_cpg_from_inferred_deps",

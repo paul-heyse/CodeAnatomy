@@ -17,7 +17,7 @@ from opentelemetry import trace as otel_trace
 from core.config_base import FingerprintableConfig
 from core.config_base import config_fingerprint as hash_config_fingerprint
 from core_types import DeterminismTier, JsonValue, parse_determinism_tier
-from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.interop import SchemaLike, TableLike
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.driver_builder import DriverBuilder
@@ -56,7 +56,6 @@ if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewNode
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
-    from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
 
 try:
@@ -66,6 +65,18 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 _DEFAULT_DAG_NAME = "codeintel::semantic_v1"
 _SEMANTIC_VERSION = "v1"
+
+
+def _ensure_hamilton_dataframe_types() -> None:
+    from hamilton import htypes
+    from hamilton import registry as hamilton_registry
+
+    registered = hamilton_registry.get_registered_dataframe_types()
+    if any(
+        htypes.custom_subclass_check(TableLike, df_type) for df_type in registered.values()
+    ):
+        return
+    hamilton_registry.register_types("datafusion", TableLike, None)
 
 
 def default_modules() -> list[ModuleType]:
@@ -216,19 +227,23 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     from cpg.kind_catalog import validate_edge_kind_requirements
     from datafusion_engine.views.registration import ensure_view_graph
     from datafusion_engine.views.registry_specs import view_graph_nodes
+    from semantics.ir_pipeline import build_semantic_ir
 
     session_runtime = profile.session_runtime()
+    semantic_ir = build_semantic_ir()
     # Single registration point: ensure_view_graph registers ALL views including
     # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
     snapshot = ensure_view_graph(
         session_runtime.ctx,
         runtime_profile=profile,
+        semantic_ir=semantic_ir,
     )
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
         session_runtime.ctx,
         snapshot=snapshot,
         runtime_profile=profile,
+        semantic_ir=semantic_ir,
     )
     return ViewGraphContext(
         profile=profile,
@@ -1478,6 +1493,7 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
     DriverBuilder
         Builder wrapper for synchronous drivers.
     """
+    _ensure_hamilton_dataframe_types()
     config_payload = plan_ctx.config_payload
     builder = driver.Builder().allow_module_overrides()
     builder = builder.with_modules(*plan_ctx.modules).with_config(config_payload)
@@ -1514,18 +1530,6 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         config=config_payload,
         context=adapter_context,
     )
-    semantic_registry_hook: SemanticRegistryHook | None = None
-    if bool(config_payload.get("enable_semantic_registry", True)):
-        from hamilton_pipeline.semantic_registry import (
-            SemanticRegistryHook as _SemanticRegistryHook,
-        )
-
-        semantic_registry_hook = _SemanticRegistryHook(
-            profile=plan_ctx.view_ctx.profile,
-            plan_signature=plan_ctx.plan.plan_signature,
-            config=config_payload,
-        )
-        builder = builder.with_adapters(semantic_registry_hook)
     cache_lineage_hook: CacheLineageHook | None = None
     cache_path = config_payload.get("cache_path")
     if isinstance(cache_path, str) and cache_path:
@@ -1553,7 +1557,6 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         builder = builder.with_adapters(graph_snapshot_hook)
     return DriverBuilder(
         builder=builder,
-        semantic_registry_hook=semantic_registry_hook,
         cache_lineage_hook=cache_lineage_hook,
         graph_snapshot_hook=graph_snapshot_hook,
     )

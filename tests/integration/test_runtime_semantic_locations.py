@@ -11,6 +11,7 @@ from datafusion_engine.session.runtime import (
     normalize_dataset_locations_for_profile,
 )
 from semantics.catalog.dataset_specs import dataset_spec
+from semantics.ir_pipeline import build_semantic_ir
 
 
 def _as_schema(value: object) -> pa.Schema:
@@ -25,21 +26,24 @@ def _as_schema(value: object) -> pa.Schema:
     raise TypeError(msg)
 
 
-def test_normalize_locations_use_semantic_catalog(tmp_path: Path) -> None:
-    """Normalize output locations are built from semantic dataset specs."""
+def test_normalize_locations_use_semantic_ir(tmp_path: Path) -> None:
+    """Normalize output locations are derived from IR-emitted dataset rows."""
     profile = DataFusionRuntimeProfile(normalize_output_root=str(tmp_path))
     locations = normalize_dataset_locations_for_profile(profile)
 
-    assert "cst_refs_norm_v1" in locations
-    assert "relation_output_v1" in locations
+    semantic_ir = build_semantic_ir()
+    expected_names = sorted({row.name for row in semantic_ir.dataset_rows})
+    assert expected_names
+    assert set(expected_names).issubset(set(locations))
 
-    relation_location = locations["relation_output_v1"]
-    assert relation_location.dataset_spec is not None
+    sample_name = expected_names[0]
+    sample_location = locations[sample_name]
+    assert sample_location.dataset_spec is not None
 
-    spec = dataset_spec("relation_output_v1")
-    assert relation_location.dataset_spec.name == spec.name
-    assert str(relation_location.path).endswith(str(tmp_path / "relation_output_v1"))
+    spec = dataset_spec(sample_name)
+    assert sample_location.dataset_spec.name == spec.name
+    assert str(sample_location.path).endswith(str(tmp_path / sample_name))
 
     expected_schema = _as_schema(spec.schema())
-    resolved_schema = _as_schema(relation_location.dataset_spec.schema())
+    resolved_schema = _as_schema(sample_location.dataset_spec.schema())
     assert expected_schema.equals(resolved_schema, check_metadata=True)

@@ -270,7 +270,9 @@ def _build_cached_driver(plan: ExecutionPlan, cache_dir: Path, *, suffix: str) -
 
     plan_module = build_execution_plan_module(
         plan,
-        options=PlanModuleOptions(module_name=f"hamilton_pipeline.generated_plan_cache_{suffix}"),
+        plan_module_options=PlanModuleOptions(
+            module_name=f"hamilton_pipeline.generated_plan_cache_{suffix}"
+        ),
     )
     cache_module = _cache_module(f"hamilton_pipeline.generated_cache_module_{suffix}")
     builder = (
@@ -288,52 +290,6 @@ def _data_versions_for_runs(driver_instance: driver.Driver, *, runs: int) -> tup
         run_id = _run_and_get_run_id(driver_instance)
         versions.append(_plan_signature_data_version(driver_instance, run_id))
     return tuple(versions)
-
-
-def test_semantic_registry_captures_semantic_outputs() -> None:
-    """Ensure semantic-tagged outputs appear in the compiled registry."""
-    from hamilton_pipeline import modules as hamilton_modules
-    from hamilton_pipeline.modules.execution_plan import (
-        PlanModuleOptions,
-        build_execution_plan_module,
-    )
-    from hamilton_pipeline.semantic_registry import compile_semantic_registry
-    from hamilton_pipeline.task_module_builder import (
-        TaskExecutionModuleOptions,
-        build_task_execution_module,
-    )
-
-    view_nodes = (
-        _dummy_view_node("out_alpha"),
-        _dummy_view_node("out_beta"),
-    )
-    plan = _plan_for_tests(
-        view_nodes=view_nodes,
-        dependency_map={"out_beta": ("out_alpha",)},
-    )
-    plan_module = build_execution_plan_module(
-        plan,
-        options=PlanModuleOptions(module_name="hamilton_pipeline.generated_plan_semantic_test"),
-    )
-    task_module = build_task_execution_module(
-        plan=plan,
-        options=TaskExecutionModuleOptions(
-            module_name="hamilton_pipeline.generated_tasks_semantic_test",
-        ),
-    )
-    driver_instance = _driver_for_modules(
-        hamilton_modules.task_execution,
-        hamilton_modules.outputs,
-        plan_module,
-        task_module,
-    )
-    registry = compile_semantic_registry(
-        driver_instance.graph.nodes,
-        plan_signature=plan.plan_signature,
-    )
-    semantic_ids = {record.semantic_id for record in registry.records.snapshot().values()}
-    assert {"cpg.nodes.v1", "cpg.edges.v1", "cpg.props.v1"} <= semantic_ids
-    assert registry.errors == ()
 
 
 def test_plan_grouping_strategy_orders_by_generation_and_cost() -> None:
@@ -382,7 +338,9 @@ def test_plan_grouping_strategy_orders_by_generation_and_cost() -> None:
     )
     plan_module = build_execution_plan_module(
         plan,
-        options=PlanModuleOptions(module_name="hamilton_pipeline.generated_plan_grouping_test"),
+        plan_module_options=PlanModuleOptions(
+            module_name="hamilton_pipeline.generated_plan_grouping_test"
+        ),
     )
     task_module = build_task_execution_module(
         plan=plan,

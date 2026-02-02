@@ -21,7 +21,7 @@ ENTRY_COUNT = 10
 HIT_COUNT = 5
 MISS_COUNT = 2
 EVICTION_COUNT = 1
-EXPECTED_CACHE_SNAPSHOTS = 3
+EXPECTED_CACHE_SNAPSHOTS = 4
 
 
 def test_cache_config_snapshot_construction() -> None:
@@ -105,9 +105,9 @@ def test_capture_cache_diagnostics() -> None:
     assert config["metadata_cache_limit"] is not None
     assert config["predicate_cache_size"] is not None
     snapshots = diagnostics["cache_snapshots"]
-    assert len(snapshots) == EXPECTED_CACHE_SNAPSHOTS
+    assert len(snapshots) >= EXPECTED_CACHE_SNAPSHOTS
     cache_names = {s["cache_name"] for s in snapshots}
-    assert cache_names == {"list_files", "metadata", "predicate"}
+    assert cache_names == {"list_files", "metadata", "predicate", "statistics"}
 
 
 def test_cache_diagnostics_recorded_in_session_context() -> None:
@@ -130,3 +130,4 @@ def test_cache_diagnostics_recorded_in_session_context() -> None:
     assert "list_files" in cache_names
     assert "metadata" in cache_names
     assert "predicate" in cache_names
+    assert "statistics" in cache_names

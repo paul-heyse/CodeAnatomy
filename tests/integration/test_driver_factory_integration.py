@@ -142,7 +142,6 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
 
 def _base_config() -> dict[str, JsonValue]:
     return {
-        "enable_semantic_registry": False,
         "enable_hamilton_tracker": False,
         "enable_hamilton_type_checker": False,
         "enable_hamilton_node_diagnostics": False,

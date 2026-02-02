@@ -92,7 +92,7 @@ class OneShotDataset:
         self._scanned = True
         if self.reader is None:
             return self.dataset.scanner(*args, **kwargs)
-        return ds.Scanner.from_batches(self.reader, schema=self.schema, **kwargs)
+        return ds.Scanner.from_batches(self.reader, **kwargs)
 
     def __getattr__(self, name: str) -> object:
         """Delegate missing attributes to the underlying dataset.

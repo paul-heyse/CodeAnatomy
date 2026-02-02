@@ -10,7 +10,6 @@ from hamilton import driver
 if TYPE_CHECKING:
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
-    from hamilton_pipeline.semantic_registry import SemanticRegistryHook
 
 
 @dataclass(frozen=True)
@@ -18,7 +17,6 @@ class DriverBuilder:
     """Synchronous driver builder with optional hook binding."""
 
     builder: driver.Builder
-    semantic_registry_hook: SemanticRegistryHook | None = None
     cache_lineage_hook: CacheLineageHook | None = None
     graph_snapshot_hook: GraphSnapshotHook | None = None
 
@@ -31,8 +29,6 @@ class DriverBuilder:
             Built Hamilton driver instance.
         """
         driver_instance = self.builder.build()
-        if self.semantic_registry_hook is not None:
-            self.semantic_registry_hook.bind_driver(driver_instance)
         if self.cache_lineage_hook is not None:
             self.cache_lineage_hook.bind_driver(driver_instance)
         if self.graph_snapshot_hook is not None:

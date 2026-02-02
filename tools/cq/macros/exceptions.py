@@ -28,11 +28,12 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-_SKIP_DIRS: set[str] = {"__pycache__", "node_modules", "venv", ".venv", "build", "dist"}
 _TOP_EXCEPTION_TYPES = 15
 _BARE_EXCEPT_LIMIT = 20
 _MAX_MESSAGE_LEN = 50
@@ -264,21 +265,16 @@ class ExceptionVisitor(ast.NodeVisitor):
 
 
 def _iter_python_files(root: Path) -> list[Path]:
-    """Collect Python files under root excluding common build dirs.
-
-    Returns
-    -------
-    list[Path]
-        Python file paths.
-    """
-    files: list[Path] = []
-    for pyfile in root.rglob("*.py"):
-        if any(
-            part.startswith(".") or part in _SKIP_DIRS for part in pyfile.relative_to(root).parts
-        ):
-            continue
-        files.append(pyfile)
-    return files
+    """Collect Python files under root using gitignore semantics."""
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    result = tabulate_files(
+        repo_index,
+        [repo_context.repo_root],
+        None,
+        extensions=(".py",),
+    )
+    return result.files
 
 
 def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
@@ -289,10 +285,12 @@ def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
     tuple[list[RaiseSite], list[CatchSite]]
         Raise and catch site lists.
     """
+    repo_context = resolve_repo_context(root)
+    repo_root = repo_context.repo_root
     all_raises: list[RaiseSite] = []
     all_catches: list[CatchSite] = []
-    for pyfile in _iter_python_files(root):
-        rel_str = str(pyfile.relative_to(root))
+    for pyfile in _iter_python_files(repo_root):
+        rel_str = str(pyfile.relative_to(repo_root))
         try:
             source = pyfile.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=rel_str)

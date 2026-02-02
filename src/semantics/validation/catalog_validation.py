@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
+import pyarrow as pa
 from datafusion import col, lit
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from datafusion import SessionContext
+
+    from semantics.specs import SemanticTableSpec
 
 
 @dataclass(frozen=True)
@@ -31,32 +33,7 @@ class SemanticInputValidationResult:
     resolved_tables: Mapping[str, str]
 
 
-SEMANTIC_INPUT_COLUMN_SPECS: Final[tuple[ColumnValidationSpec, ...]] = (
-    ColumnValidationSpec(
-        canonical_name="cst_refs",
-        required_columns=("file_id", "path", "span_start", "span_end", "symbol"),
-    ),
-    ColumnValidationSpec(
-        canonical_name="cst_defs",
-        required_columns=("file_id", "path", "span_start", "span_end", "symbol"),
-    ),
-    ColumnValidationSpec(
-        canonical_name="cst_imports",
-        required_columns=("file_id", "path", "span_start", "span_end", "symbol"),
-    ),
-    ColumnValidationSpec(
-        canonical_name="cst_callsites",
-        required_columns=("file_id", "path", "span_start", "span_end", "symbol"),
-    ),
-    ColumnValidationSpec(
-        canonical_name="scip_occurrences",
-        required_columns=("file_id", "symbol", "line", "character"),
-    ),
-    ColumnValidationSpec(
-        canonical_name="file_line_index_v1",
-        required_columns=("file_id", "path", "line_no", "line_start_byte", "line_end_byte"),
-    ),
-)
+SEMANTIC_INPUT_COLUMN_SPECS: Final[tuple[ColumnValidationSpec, ...]] = ()
 
 
 def _information_schema_tables(ctx: SessionContext) -> set[str]:
@@ -71,18 +48,9 @@ def _information_schema_tables(ctx: SessionContext) -> set[str]:
     -------
     set[str]
         Table names available in information_schema.
-
-    Raises
-    ------
-    ValueError
-        Raised when information_schema tables cannot be queried.
     """
-    try:
-        rows = ctx.table("information_schema.tables").select("table_name").collect()
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = "Failed to query information_schema.tables."
-        raise ValueError(msg) from exc
-    return {row[0] for row in rows if row and isinstance(row[0], str)}
+    rows = _collect_info_schema_column(ctx, "information_schema.tables", "table_name")
+    return {value for value in rows if isinstance(value, str)}
 
 
 def _information_schema_columns(ctx: SessionContext, table_name: str) -> set[str]:
@@ -99,23 +67,50 @@ def _information_schema_columns(ctx: SessionContext, table_name: str) -> set[str
     -------
     set[str]
         Column names for the table.
-
-    Raises
-    ------
-    ValueError
-        Raised when information_schema columns cannot be queried.
     """
+    rows = _collect_info_schema_column(
+        ctx,
+        "information_schema.columns",
+        "column_name",
+        table_filter=table_name,
+    )
+    return {value for value in rows if isinstance(value, str)}
+
+
+def _collect_info_schema_column(
+    ctx: SessionContext,
+    table: str,
+    column: str,
+    *,
+    table_filter: str | None = None,
+) -> list[object]:
     try:
-        rows = (
-            ctx.table("information_schema.columns")
-            .filter(col("table_name") == lit(table_name))
-            .select("column_name")
-            .collect()
-        )
+        df = ctx.table(table)
+        if table_filter is not None:
+            df = df.filter(col("table_name") == lit(table_filter))
+        batches = df.select(column).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to query information_schema.columns for {table_name!r}."
+        msg = f"Failed to query {table}."
         raise ValueError(msg) from exc
-    return {row[0] for row in rows if row and isinstance(row[0], str)}
+    if not batches:
+        return []
+    first = batches[0]
+    if isinstance(first, pa.RecordBatch):
+        table_view = pa.Table.from_batches(cast("Sequence[pa.RecordBatch]", batches))
+        if column not in table_view.column_names:
+            return []
+        return table_view[column].to_pylist()
+    values: list[object] = []
+    for row in batches:
+        if isinstance(row, Mapping):
+            values.append(row.get(column))
+            continue
+        if isinstance(row, Sequence) and not isinstance(row, (str, bytes, bytearray)):
+            if row:
+                values.append(row[0])
+            continue
+        values.append(row)
+    return values
 
 
 def validate_semantic_input_columns(
@@ -140,7 +135,7 @@ def validate_semantic_input_columns(
     SemanticInputValidationResult
         Validation result with missing tables/columns details.
     """
-    resolved_specs = tuple(specs) if specs is not None else SEMANTIC_INPUT_COLUMN_SPECS
+    resolved_specs = tuple(specs) if specs is not None else _semantic_input_column_specs()
     table_names = _information_schema_tables(ctx)
     missing_tables: list[str] = []
     missing_columns: dict[str, tuple[str, ...]] = {}
@@ -163,6 +158,63 @@ def validate_semantic_input_columns(
         missing_columns=missing_columns,
         resolved_tables=resolved_tables,
     )
+
+
+def _semantic_input_column_specs() -> tuple[ColumnValidationSpec, ...]:
+    from datafusion_engine.schema.registry import extract_schema_for
+    from semantics.registry import SEMANTIC_TABLE_SPECS
+
+    specs: list[ColumnValidationSpec] = []
+    for name, table_spec in SEMANTIC_TABLE_SPECS.items():
+        try:
+            schema = extract_schema_for(name)
+        except KeyError:
+            continue
+        required = _required_columns_from_table_spec(table_spec, schema.names)
+        specs.append(ColumnValidationSpec(canonical_name=name, required_columns=required))
+    specs.append(
+        ColumnValidationSpec(
+            canonical_name="scip_occurrences",
+            required_columns=(
+                "path",
+                "symbol",
+                "start_line",
+                "end_line",
+                "start_char",
+                "end_char",
+                "line_base",
+                "col_unit",
+            ),
+        )
+    )
+    specs.append(
+        ColumnValidationSpec(
+            canonical_name="file_line_index_v1",
+            required_columns=("path", "line_no", "line_start_byte", "line_text"),
+        )
+    )
+    return tuple(specs)
+
+
+def _required_columns_from_table_spec(
+    table_spec: SemanticTableSpec,
+    schema_names: Sequence[str],
+) -> tuple[str, ...]:
+    required: list[str] = []
+
+    def _add(name: str | None) -> None:
+        if not name or name not in schema_names:
+            return
+        if name not in required:
+            required.append(name)
+
+    _add("file_id")
+    _add(table_spec.path_col)
+    _add(table_spec.primary_span.start_col)
+    _add(table_spec.primary_span.end_col)
+    for col_name in table_spec.text_cols:
+        _add(col_name)
+    return tuple(required)
 
 
 __all__ = [

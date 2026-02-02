@@ -343,8 +343,6 @@ def _check_required_files(
         "cpg_nodes",
         "cpg_edges",
         "cpg_props",
-        "cpg_nodes_quality",
-        "cpg_props_quality",
         "cpg_edges_error_stats",
         "manifest.json",
     ]

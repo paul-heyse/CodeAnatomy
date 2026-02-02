@@ -45,7 +45,6 @@ def test_nested_view_spec_roundtrip() -> None:
     """Ensure nested view specs round-trip from the DataFusion context."""
     profile = df_profile()
     ctx = profile.session_context()
-    session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
@@ -53,8 +52,10 @@ def test_nested_view_spec_roundtrip() -> None:
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_parse_manifest")
-    view_spec.register(session_runtime, validate=False)
-    actual = _to_arrow_schema(ctx.table(view_spec.name).schema())
+    if view_spec.builder is None:
+        msg = "Nested view spec missing builder."
+        raise AssertionError(msg)
+    actual = _to_arrow_schema(view_spec.builder(ctx).schema())
     assert "file_id" in actual.names
     assert "path" in actual.names
 

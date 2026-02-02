@@ -20,8 +20,6 @@ Build the Code Property Graph for a repository.
 │                                          CODEANATOMY_OUTPUT_DIR] [default: None]                                     │
 │ WORK-DIR --work-dir                      Working directory for intermediate artifacts. [env var:                     │
 │                                          CODEANATOMY_WORK_DIR] [default: None]                                       │
-│ INCLUDE-QUALITY --include-quality        Include quality metrics in output. [default: True]                          │
-│   --no-include-quality                                                                                               │
 │ INCLUDE-ERRORS --include-errors          Include extraction error artifacts. [default: True]                         │
 │   --no-include-errors                                                                                                │
 │ INCLUDE-MANIFEST --include-manifest      Include run manifest in output. [default: True]                             │

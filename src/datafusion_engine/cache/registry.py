@@ -146,12 +146,20 @@ def register_cached_delta_table(
     snapshot_version: int | None,
 ) -> None:
     """Register a Delta cache table with optional snapshot pinning."""
-    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registration import (
+        DatasetRegistrationOptions,
+        register_dataset_df,
+    )
 
     pinned = location
     if snapshot_version is not None:
         pinned = replace(location, delta_version=snapshot_version, delta_timestamp=None)
-    register_dataset_df(ctx, name=name, location=pinned, runtime_profile=profile)
+    register_dataset_df(
+        ctx,
+        name=name,
+        location=pinned,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
+    )
 
 
 def record_cache_inventory(

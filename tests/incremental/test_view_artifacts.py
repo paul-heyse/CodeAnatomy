@@ -27,6 +27,10 @@ from semantics.incremental.invalidations import (
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
 from tests.test_helpers.arrow_seed import register_arrow_table
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
+
+require_deltalake()
+require_delta_extension()
 
 
 @dataclass

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from hamilton_pipeline.io_contracts import (
@@ -17,11 +18,13 @@ from hamilton_pipeline.types import CacheRuntimeContext, OutputConfig
 from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from engine.runtime_profile import RuntimeProfileSpec
     from hamilton_pipeline.io_contracts import DataSaverDict
+else:
+    DataFusionPlanBundle = object
+    RuntimeProfileSpec = object
+    DataSaverDict = object
 
 
 @apply_tag(TagPolicy(layer="inputs", kind="scalar", artifact="run_id"))
@@ -68,7 +71,7 @@ def output_plan_context(
     plan_signature: str,
     plan_artifacts_context: OutputPlanArtifactsContext,
     run_id: str,
-    materialized_outputs: Sequence[str] | None = None,
+    materialized_outputs: tuple[str, ...] | None = None,
 ) -> OutputPlanContext:
     """Build output plan context.
 
@@ -135,8 +138,6 @@ def primary_outputs(
     write_cpg_nodes_delta: DataSaverDict,
     write_cpg_edges_delta: DataSaverDict,
     write_cpg_props_delta: DataSaverDict,
-    write_cpg_nodes_quality_delta: DataSaverDict,
-    write_cpg_props_quality_delta: DataSaverDict,
 ) -> PrimaryOutputs:
     """Bundle primary output artifacts.
 
@@ -148,10 +149,6 @@ def primary_outputs(
         CPG edges output artifact metadata.
     write_cpg_props_delta
         CPG props output artifact metadata.
-    write_cpg_nodes_quality_delta
-        CPG nodes quality output artifact metadata.
-    write_cpg_props_quality_delta
-        CPG props quality output artifact metadata.
 
     Returns
     -------
@@ -162,8 +159,6 @@ def primary_outputs(
         cpg_nodes=write_cpg_nodes_delta,
         cpg_edges=write_cpg_edges_delta,
         cpg_props=write_cpg_props_delta,
-        cpg_nodes_quality=write_cpg_nodes_quality_delta,
-        cpg_props_quality=write_cpg_props_quality_delta,
     )
 
 

@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
+from obs.otel.bootstrap import reset_providers_for_tests
 from obs.otel.metrics import metric_views, reset_metrics_registry
 from obs.otel.sampling import wrap_sampler
 
@@ -37,9 +38,9 @@ class OtelTestHarness:
 
 def _install_logging_handler(logger_provider: LoggerProvider) -> None:
     root = logging.getLogger()
-    for handler in root.handlers:
+    for handler in list(root.handlers):
         if isinstance(handler, LoggingHandler):
-            return
+            root.removeHandler(handler)
     root.addHandler(LoggingHandler(logger_provider=logger_provider))
     if root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
@@ -56,9 +57,7 @@ def get_otel_harness() -> OtelTestHarness:
     OtelTestHarness
         Configured in-memory exporters for traces, metrics, and logs.
     """
-    cached = _HARNESS_CACHE["value"]
-    if cached is not None:
-        return cached
+    reset_providers_for_tests()
     resource = Resource.create({"service.name": "codeanatomy-tests"})
 
     span_exporter = InMemorySpanExporter()

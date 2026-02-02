@@ -47,6 +47,7 @@ else:
         from obs.otel import OtelBootstrapOptions
     except ImportError:
         OtelBootstrapOptions = object
+    DatasetCatalog = object
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -220,14 +221,11 @@ def _semantic_output_catalog(
         return catalog_name, existing_catalogs
 
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
-    from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.catalog.dataset_specs import dataset_spec
-    from semantics.naming import SEMANTIC_VIEW_NAMES
+    from semantics.registry import SEMANTIC_MODEL
 
     catalog = DatasetCatalog()
-    view_names = list(SEMANTIC_VIEW_NAMES)
-    if RELATION_OUTPUT_NAME not in view_names:
-        view_names.append(RELATION_OUTPUT_NAME)
+    view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
     for name in view_names:
         spec = None
         try:
@@ -947,7 +945,7 @@ def cache_context(
 
 @cache(behavior="ignore")
 @apply_tag(TagPolicy(layer="inputs", kind="list"))
-def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> tuple[str, ...]:
+def materialized_outputs(requested_outputs: Sequence[str] | None = None) -> tuple[str, ...]:
     """Return the ordered list of materialized output nodes.
 
     Returns
@@ -955,7 +953,7 @@ def materialized_outputs(materialized_outputs: Sequence[str] | None = None) -> t
     tuple[str, ...]
         Ordered output node names targeted for materialization.
     """
-    return tuple(str(name) for name in materialized_outputs or ())
+    return tuple(str(name) for name in requested_outputs or ())
 
 
 @apply_tag(TagPolicy(layer="inputs", kind="object"))

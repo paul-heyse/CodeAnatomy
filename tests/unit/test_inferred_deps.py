@@ -26,14 +26,19 @@ def test_inferred_deps_creation() -> None:
 
 def test_infer_deps_from_plan_bundle() -> None:
     """Infer dependencies from DataFusion plan bundle."""
+    import pyarrow as pa
+
     from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from tests.test_helpers.arrow_seed import register_arrow_table
 
     # Create a test DataFusion plan
     profile = df_profile()
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()
-    ctx.register_csv("table_a", "tests/fixtures/test.csv", has_header=True)
-    ctx.register_csv("table_b", "tests/fixtures/test2.csv", has_header=True)
+    table_a = pa.table({"id": [1, 2], "x": ["a", "b"]})
+    table_b = pa.table({"id": [1, 2], "y": ["c", "d"]})
+    register_arrow_table(ctx, name="table_a", value=table_a)
+    register_arrow_table(ctx, name="table_b", value=table_b)
 
     # Build a simple query
     df = ctx.sql("SELECT a.x, b.y FROM table_a a JOIN table_b b ON a.id = b.id")

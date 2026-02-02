@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.helpers import deregister_table
@@ -144,7 +147,7 @@ def snapshot_datafusion_caches(
             ctx,
             name=snapshot_name,
             location=location,
-            runtime_profile=runtime_profile,
+            options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
         )
         snapshot_version = result.delta_result.version if result.delta_result else None
         record_cache_snapshot_registry(

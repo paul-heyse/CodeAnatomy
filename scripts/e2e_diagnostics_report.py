@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 
 from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
 from datafusion_engine.identity import schema_identity_hash
@@ -21,7 +22,6 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
-from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 
@@ -310,8 +310,6 @@ def _check_required_files(
         "cpg_nodes",
         "cpg_edges",
         "cpg_props",
-        "cpg_nodes_quality",
-        "cpg_props_quality",
         "cpg_edges_error_stats",
         "manifest.json",
     ]

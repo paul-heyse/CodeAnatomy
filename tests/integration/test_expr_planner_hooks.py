@@ -7,7 +7,8 @@ import importlib.util
 import pytest
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from tests.test_helpers.datafusion_runtime import df_ctx
+from datafusion_engine.sql.guard import safe_sql
+from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -42,7 +43,11 @@ def test_expr_planner_install_records_event() -> None:
 @pytest.mark.integration
 def test_named_argument_sql_is_gated() -> None:
     """Gate named-argument SQL calls when planners are unavailable."""
-    ctx = df_ctx()
-    expected_errors: tuple[type[Exception], ...] = (RuntimeError, TypeError, ValueError)
-    with pytest.raises(expected_errors, match="named arguments"):
-        ctx.sql("SELECT rpad(str => 'a', n => 3, padding_str => 'x')").to_arrow_table()
+    profile = df_profile()
+    ctx = profile.session_context()
+    with pytest.raises(ValueError, match="named arguments"):
+        safe_sql(
+            ctx,
+            "SELECT rpad(str => 'a', n => 3, padding_str => 'x')",
+            runtime_profile=profile,
+        ).to_arrow_table()

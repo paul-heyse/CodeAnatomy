@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.platform import RustUdfPlatformOptions
+    from semantics.ir import SemanticIR
 
 
 def ensure_view_graph(
@@ -25,6 +26,7 @@ def ensure_view_graph(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
     scan_units: Sequence[ScanUnit] = (),
+    semantic_ir: SemanticIR,
 ) -> Mapping[str, object]:
     """Install UDF platform (if needed) and register the semantic view graph.
 
@@ -37,6 +39,8 @@ def ensure_view_graph(
     scan_units
         Optional scan units that pin Delta versions and candidate files
         before view registration.
+    semantic_ir
+        Compiled semantic IR artifact used to define view registration.
 
     Returns
     -------
@@ -69,6 +73,7 @@ def ensure_view_graph(
         ctx,
         snapshot=snapshot,
         runtime_profile=runtime_profile,
+        semantic_ir=semantic_ir,
     )
     try:
         register_view_graph(

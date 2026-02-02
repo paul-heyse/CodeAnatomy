@@ -6,6 +6,7 @@ from pathlib import Path
 
 from hamilton_pipeline.modules.inputs import runtime_profile_spec
 from hamilton_pipeline.types import OutputConfig
+from semantics.registry import SEMANTIC_MODEL
 
 
 def test_runtime_profile_builds_semantic_output_catalog(tmp_path: Path) -> None:
@@ -24,10 +25,12 @@ def test_runtime_profile_builds_semantic_output_catalog(tmp_path: Path) -> None:
     assert profile.semantic_output_catalog_name == "semantic_outputs"
     catalog = profile.registry_catalogs.get("semantic_outputs")
     assert catalog is not None
-    assert catalog.has("cst_refs_norm_v1")
-    assert catalog.has("relation_output_v1")
-    location = catalog.get("cst_refs_norm_v1")
-    assert str(location.path).endswith(str(Path(tmp_path) / "semantic" / "cst_refs_norm_v1"))
+    expected_outputs = {spec.name for spec in SEMANTIC_MODEL.outputs}
+    catalog_names = set(catalog)
+    assert expected_outputs.issubset(catalog_names)
+    sample_view = sorted(expected_outputs)[0]
+    location = catalog.get(sample_view)
+    assert str(location.path).endswith(str(Path(tmp_path) / "semantic" / sample_view))
 
 
 def test_runtime_profile_respects_custom_catalog_name(tmp_path: Path) -> None:
@@ -47,4 +50,6 @@ def test_runtime_profile_respects_custom_catalog_name(tmp_path: Path) -> None:
     assert profile.semantic_output_catalog_name == "custom_semantic_outputs"
     catalog = profile.registry_catalogs.get("custom_semantic_outputs")
     assert catalog is not None
-    assert catalog.has("cpg_edges_v1")
+    expected_outputs = {spec.name for spec in SEMANTIC_MODEL.outputs}
+    catalog_names = set(catalog)
+    assert expected_outputs.issubset(catalog_names)

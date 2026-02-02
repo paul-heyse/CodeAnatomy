@@ -93,6 +93,15 @@ Use `--format mermaid`, `--format mermaid-class`, `--format mermaid-cfg`, or `--
 /cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
+### cq Global Options
+
+All `/cq` commands support `--format` for output control:
+- `md` (default) - Markdown for Claude context
+- `json` - Structured JSON
+- `mermaid` / `mermaid-class` / `mermaid-cfg` - Visual diagrams
+
+Config via `.cq.toml` or `CQ_*` environment variables. See `tools/cq/README.md` for full options.
+
 ## Build & Development Commands
 
 ```bash

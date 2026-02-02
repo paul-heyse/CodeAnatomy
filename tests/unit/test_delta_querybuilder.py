@@ -9,9 +9,10 @@ import pyarrow as pa
 from datafusion import DataFrame, SessionContext, col, lit
 
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
-from tests.test_helpers.optional_deps import require_deltalake
+from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
 
 require_deltalake()
+require_delta_extension()
 
 
 def test_delta_querybuilder_path(tmp_path: Path) -> None:

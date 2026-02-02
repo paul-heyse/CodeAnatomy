@@ -28,6 +28,7 @@ from tools.cq.core.scoring import (
     impact_score,
 )
 from tools.cq.macros.calls import _collect_call_sites, _group_candidates, _rg_find_candidates
+from tools.cq.search import INTERACTIVE, SearchLimits
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -214,12 +215,28 @@ def _classify_call(
 
 
 def _collect_sites(
-    tc: Toolchain,
     root: Path,
     symbol: str,
+    limits: SearchLimits | None = None,
 ) -> list[CallSite]:
-    rg_path = tc.require_rg()
-    candidates = _rg_find_candidates(rg_path, symbol, root)
+    """Collect call sites for a symbol using rpygrep.
+
+    Parameters
+    ----------
+    root : Path
+        Root directory to search from.
+    symbol : str
+        Symbol name to find calls for.
+    limits : SearchLimits | None
+        Search limits (defaults to INTERACTIVE profile).
+
+    Returns
+    -------
+    list[CallSite]
+        Collected call sites.
+    """
+    limits = limits or INTERACTIVE
+    candidates = _rg_find_candidates(symbol, root, limits=limits)
     by_file = _group_candidates(candidates)
     return _collect_call_sites(root, by_file, symbol)
 
@@ -308,7 +325,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     """
     started = ms()
     new_params = _parse_signature(request.to)
-    all_sites = _collect_sites(request.tc, request.root, request.symbol)
+    all_sites = _collect_sites(request.root, request.symbol)
     buckets = _classify_sites(all_sites, new_params)
 
     run = mk_runmeta(

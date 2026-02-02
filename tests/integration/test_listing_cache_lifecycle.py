@@ -8,7 +8,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions
 from tests.test_helpers.diagnostics import diagnostic_profile
@@ -40,13 +43,13 @@ def test_listing_refresh_records_event(tmp_path: Path) -> None:
         ctx,
         name="events",
         location=location,
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     register_dataset_df(
         ctx,
         name="events",
         location=location,
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     refreshes = sink.artifacts_snapshot().get("datafusion_listing_refresh_v1", [])
     assert refreshes

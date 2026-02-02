@@ -27,12 +27,13 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.graph_utils import find_sccs
+from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-_SKIP_DIRS: set[str] = {"__pycache__", "node_modules", "venv", ".venv", "build", "dist"}
 _STDLIB_PREFIXES: set[str] = {
     "os",
     "sys",
@@ -273,20 +274,24 @@ def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str) -> li
 
 
 def _iter_python_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    for pyfile in root.rglob("*.py"):
-        rel = pyfile.relative_to(root)
-        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel.parts):
-            continue
-        files.append(pyfile)
-    return files
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    result = tabulate_files(
+        repo_index,
+        [repo_context.repo_root],
+        None,
+        extensions=(".py",),
+    )
+    return result.files
 
 
 def _collect_imports(root: Path) -> tuple[dict[str, ModuleDeps], list[ImportInfo]]:
+    repo_context = resolve_repo_context(root)
+    repo_root = repo_context.repo_root
     deps: dict[str, ModuleDeps] = {}
     all_imports: list[ImportInfo] = []
-    for pyfile in _iter_python_files(root):
-        rel_str = str(pyfile.relative_to(root))
+    for pyfile in _iter_python_files(repo_root):
+        rel_str = str(pyfile.relative_to(repo_root))
         try:
             source = pyfile.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=rel_str)

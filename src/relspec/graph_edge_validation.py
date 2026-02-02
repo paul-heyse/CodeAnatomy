@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import GraphEdge, GraphNode, TaskGraph, TaskNode
 from utils.validation import find_missing
+
+if TYPE_CHECKING:
+    from datafusion_engine.schema.contracts import SchemaContract
 
 
 @dataclass(frozen=True)
@@ -198,6 +202,7 @@ def validate_edge_requirements_detailed(
         raise TypeError(msg)
 
     task_name = node.payload.name
+    task_kind = node.payload.task_kind
     edge_results: list[EdgeValidationResult] = []
     unsatisfied: list[str] = []
     contract_violations: set[str] = set()
@@ -215,6 +220,21 @@ def validate_edge_requirements_detailed(
         if not is_valid:
             unsatisfied.append(edge_data.name)
         edge_results.append(edge_result)
+
+    if task_kind == "view":
+        for succ_idx in graph.graph.successor_indices(task_idx):
+            edge_data = graph.graph.get_edge_data(task_idx, succ_idx)
+            if not isinstance(edge_data, GraphEdge) or edge_data.kind != "produces":
+                continue
+            edge_result, is_valid, violation_messages = _produced_edge_validation_result(
+                edge_data,
+                task_name=task_name,
+                catalog=catalog,
+            )
+            contract_violations.update(violation_messages)
+            if not is_valid:
+                unsatisfied.append(edge_data.name)
+            edge_results.append(edge_result)
 
     return TaskValidationResult(
         task_name=task_name,
@@ -262,6 +282,41 @@ def _edge_validation_result(
             available_columns=tuple(sorted(available_cols or ())),
             available_types=_sorted_type_pairs(available_types or {}),
             available_metadata=_sorted_metadata_pairs(available_metadata or {}),
+        ),
+        is_valid,
+        violation_messages,
+    )
+
+
+def _produced_edge_validation_result(
+    edge: GraphEdge,
+    *,
+    task_name: str,
+    catalog: EvidenceCatalog,
+) -> tuple[EdgeValidationResult, bool, tuple[str, ...]]:
+    required_metadata = _output_edge_requirements(edge, catalog=catalog)
+    available_metadata = catalog.metadata_by_dataset.get(edge.name) or {}
+    missing_metadata = _missing_required_metadata(required_metadata, available_metadata)
+    violations = catalog.contract_violations_by_dataset.get(edge.name)
+    violation_messages = tuple(str(item) for item in violations) if violations else ()
+    if edge.name not in catalog.contracts_by_dataset:
+        violation_messages = (
+            *violation_messages,
+            f"Missing contract for output dataset {edge.name!r}.",
+        )
+    is_valid = not missing_metadata and not violation_messages
+    available_cols = catalog.columns_by_dataset.get(edge.name) or set()
+    available_types = catalog.types_by_dataset.get(edge.name) or {}
+    return (
+        EdgeValidationResult(
+            source_name=edge.name,
+            target_task=task_name,
+            is_valid=is_valid,
+            missing_metadata=missing_metadata,
+            contract_violations=violation_messages,
+            available_columns=tuple(sorted(available_cols)),
+            available_types=_sorted_type_pairs(available_types),
+            available_metadata=_sorted_metadata_pairs(available_metadata),
         ),
         is_valid,
         violation_messages,
@@ -351,6 +406,37 @@ def _sorted_metadata_pairs(
     items: Mapping[bytes, bytes],
 ) -> tuple[tuple[bytes, bytes], ...]:
     return tuple(sorted(items.items(), key=lambda pair: pair[0]))
+
+
+def _output_edge_requirements(
+    edge: GraphEdge,
+    *,
+    catalog: EvidenceCatalog,
+) -> tuple[tuple[bytes, bytes], ...]:
+    requirements: dict[bytes, bytes] = dict(edge.required_metadata)
+    if edge.plan_fingerprint:
+        requirements[b"plan_fingerprint"] = edge.plan_fingerprint.encode("utf-8")
+    contract = catalog.contracts_by_dataset.get(edge.name)
+    schema_requirement = _schema_hash_requirement(contract)
+    if schema_requirement is not None:
+        key, value = schema_requirement
+        requirements[key] = value
+    return tuple(sorted(requirements.items(), key=lambda item: item[0]))
+
+
+def _schema_hash_requirement(
+    contract: SchemaContract | None,
+) -> tuple[bytes, bytes] | None:
+    if contract is None:
+        return None
+    try:
+        from datafusion_engine.schema.contracts import SCHEMA_ABI_FINGERPRINT_META
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    value = contract.schema_metadata.get(SCHEMA_ABI_FINGERPRINT_META)
+    if isinstance(value, (bytes, bytearray)):
+        return (SCHEMA_ABI_FINGERPRINT_META, bytes(value))
+    return None
 
 
 def ready_tasks_with_column_validation(

@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import ModuleType
+from types import FunctionType, ModuleType
 from typing import TYPE_CHECKING, get_origin, get_type_hints
 
-from hamilton.function_modifiers import cache, check_output, extract_fields
+from hamilton.function_modifiers import cache, extract_fields
 
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.modules import task_execution
@@ -51,7 +51,7 @@ class PlanModuleOptions:
 def build_execution_plan_module(
     plan: ExecutionPlan,
     *,
-    options: PlanModuleOptions | None = None,
+    plan_module_options: PlanModuleOptions | None = None,
 ) -> ModuleType:
     """Build a Hamilton module that provides the execution plan contract.
 
@@ -60,7 +60,7 @@ def build_execution_plan_module(
     ModuleType
         Module containing plan-level nodes for Hamilton execution.
     """
-    resolved = options or PlanModuleOptions()
+    resolved = plan_module_options or PlanModuleOptions()
     module, exports = _create_module(resolved.module_name)
     for name, fn in _plan_node_functions(plan, resolved):
         _register_module_symbol(module, exports, name, fn)
@@ -83,23 +83,25 @@ def _register_module_symbol(
 ) -> None:
     if callable(fn):
         fn.__module__ = module.__name__
-        _normalize_hamilton_annotations(fn, module)
+        _normalize_hamilton_annotations(fn)
     module.__dict__[name] = fn
     exports.append(name)
 
 
-def _normalize_hamilton_annotations(fn: object, module: ModuleType) -> None:
-    annotations = getattr(fn, "__annotations__", None)
+def _normalize_hamilton_annotations(fn: object) -> None:
+    if not isinstance(fn, FunctionType):
+        return
+    annotations = fn.__annotations__
     if not annotations:
         return
     try:
-        resolved = get_type_hints(fn, globalns=module.__dict__, localns=module.__dict__)
+        resolved = get_type_hints(fn, globalns=fn.__globals__, localns=fn.__globals__)
     except (NameError, TypeError, ValueError):
         return
     normalized: dict[str, object] = {}
     for key, value in resolved.items():
         origin = get_origin(value)
-        normalized[key] = origin if origin is not None else value
+        normalized[key] = origin if isinstance(origin, type) else value
     if normalized:
         fn.__annotations__ = normalized
 
@@ -267,7 +269,6 @@ def _plan_signature_value_node(plan_signature: str) -> object:
 
 def _plan_artifacts_node() -> object:
     @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_artifacts"))
-    @check_output(data_type=dict, importance="fail")
     @extract_fields(
         {
             "plan_task_dependency_signature": str,
@@ -336,12 +337,11 @@ def _plan_artifacts_node() -> object:
 
 def _plan_artifact_ids_node() -> object:
     @apply_tag(TagPolicy(layer="plan", kind="mapping", artifact="plan_artifact_ids"))
-    @check_output(data_type=Mapping, importance="fail")
     def plan_artifact_ids(
         execution_plan: ExecutionPlan,
-        run_id: str | None = None,
+        run_id: str,
     ) -> Mapping[str, str]:
-        if run_id is None or not run_id:
+        if not run_id:
             return {}
         bundle = build_plan_artifact_bundle(plan=execution_plan, run_id=run_id)
         return bundle.artifact_ids()
@@ -437,11 +437,13 @@ def _active_task_names_node() -> object:
 
 def _ensure_view_graph(profile: DataFusionRuntimeProfile) -> None:
     from datafusion_engine.views.registration import ensure_view_graph
+    from semantics.ir_pipeline import build_semantic_ir
 
     session = profile.session_context()
     ensure_view_graph(
         session,
         runtime_profile=profile,
+        semantic_ir=build_semantic_ir(),
     )
 
 

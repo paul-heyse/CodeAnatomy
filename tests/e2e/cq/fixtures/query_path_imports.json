@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 24,
-        "end_line": 8,
-        "file": "/home/paul/CodeAnatomy/tools/cq/cli.py",
-        "line": 8
+        "end_line": 9,
+        "file": "tools/cq/cli.py",
+        "line": 9
       },
       "category": "from_import",
       "details": {
@@ -35,6 +35,6 @@
   "summary": {
     "files_scanned": 1,
     "matches": 1,
-    "total_imports": 40
+    "total_imports": 49
   }
 }

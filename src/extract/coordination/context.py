@@ -10,7 +10,7 @@ The row building utilities delegate to the canonical implementations in
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -144,7 +144,10 @@ class ExtractExecutionContext:
         DataFusionRuntimeProfile
             Resolved DataFusion runtime profile.
         """
-        return self.ensure_session().engine_session.datafusion_profile
+        profile = self.ensure_session().engine_session.datafusion_profile
+        if profile.capture_plan_artifacts:
+            return replace(profile, capture_plan_artifacts=False)
+        return profile
 
     def determinism_tier(self) -> DeterminismTier:
         """Return the determinism tier for extract execution.

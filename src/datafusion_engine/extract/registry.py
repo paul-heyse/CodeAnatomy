@@ -57,6 +57,38 @@ _EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
     "span_id",
 )
 
+_REPO_FILE_BLOBS_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("repo_file_id", pa.string()),
+        ("hash", pa.string()),
+        ("path", pa.string()),
+        ("file_sha256", pa.string()),
+        ("abs_path", pa.string()),
+        ("size_bytes", pa.int64()),
+        ("mtime_ns", pa.int64()),
+        ("encoding", pa.string()),
+        ("text", pa.string()),
+        ("bytes", pa.binary()),
+    ]
+)
+_FILE_LINE_INDEX_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("line_no", pa.int64()),
+        ("line_start_byte", pa.int64()),
+        ("line_end_byte", pa.int64()),
+        ("line_text", pa.string()),
+        ("newline_kind", pa.string()),
+    ]
+)
+
+_TYPED_SCHEMA_OVERRIDES: dict[str, pa.Schema] = {
+    "repo_file_blobs_v1": _REPO_FILE_BLOBS_SCHEMA,
+    "file_line_index_v1": _FILE_LINE_INDEX_SCHEMA,
+}
+
 
 def extract_metadata(name: str) -> ExtractMetadata:
     """Return extract metadata for a dataset name.
@@ -78,10 +110,14 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema with string-typed columns for metadata fields.
     """
-    if name == "scip_index_v1":
-        from datafusion_engine.schema.registry import SCIP_INDEX_SCHEMA
+    if name in _TYPED_SCHEMA_OVERRIDES:
+        return _TYPED_SCHEMA_OVERRIDES[name]
+    try:
+        from datafusion_engine.schema.registry import extract_schema_for
 
-        return SCIP_INDEX_SCHEMA
+        return extract_schema_for(name)
+    except KeyError:
+        pass
     row = extract_metadata(name)
     fields = [
         pa.field(column, pa.string()) for column in (*row.fields, *row.row_fields, *row.row_extras)

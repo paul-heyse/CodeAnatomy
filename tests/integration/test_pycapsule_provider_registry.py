@@ -7,17 +7,25 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.spec import ExprSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DatasetSpec
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.diagnostics import diagnostic_profile
-from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
+from tests.test_helpers.optional_deps import (
+    require_datafusion_udfs,
+    require_delta_extension,
+    require_deltalake,
+)
 
 require_datafusion_udfs()
 require_deltalake()
+require_delta_extension()
 
 EXPECTED_ROW_COUNT = 2
 
@@ -40,7 +48,7 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
         ctx,
         name="delta_tbl",
         location=DatasetLocation(path=str(delta_path), format="delta"),
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     df = ctx.sql("SELECT COUNT(*) AS row_count FROM delta_tbl")
     result = df.to_arrow_table()
@@ -78,7 +86,7 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
             format="delta",
             dataset_spec=dataset_spec,
         ),
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     artifacts = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
     entry = next((item for item in artifacts if item.get("name") == "delta_tbl"), None)

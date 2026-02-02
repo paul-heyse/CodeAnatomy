@@ -30,7 +30,6 @@ from datafusion_engine.plan.execution import (
 )
 from datafusion_engine.session.facade import ExecutionResult
 from datafusion_engine.views.registration import ensure_view_graph
-from hamilton_pipeline.modules.subdags import cpg_final_tables
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
@@ -46,6 +45,14 @@ if TYPE_CHECKING:
     from hamilton_pipeline.types import RepoScanConfig
     from semantics.incremental.config import IncrementalConfig
 else:
+    DataFrame = object
+    DataFusionPlanBundle = object
+    DataFusionRuntimeProfile = object
+    SessionRuntime = object
+    ExtractSession = object
+    ScipExtractOptions = object
+    RepoScanConfig = object
+    IncrementalConfig = object
     try:
         from engine.session import EngineSession
     except ImportError:
@@ -481,10 +488,13 @@ def _ensure_scan_overrides(
         and runtime.scan_override_hash != scan_context.scan_units_hash
     )
     if refresh_requested:
+        from semantics.ir_pipeline import build_semantic_ir
+
         ensure_view_graph(
             session,
             runtime_profile=profile,
             scan_units=scan_context.scan_units,
+            semantic_ir=build_semantic_ir(),
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
     return profile
@@ -503,10 +513,13 @@ def _execute_view(
     profile = _ensure_scan_overrides(runtime, scan_context=scan_context)
     session = profile.session_context()
     if not session.table_exist(view_name):
+        from semantics.ir_pipeline import build_semantic_ir
+
         ensure_view_graph(
             session,
             runtime_profile=profile,
             scan_units=scan_context.scan_units,
+            semantic_ir=build_semantic_ir(),
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
@@ -1047,7 +1060,6 @@ __all__ = [
     "TaskExecutionInputs",
     "TaskExecutionRuntimeConfig",
     "TaskExecutionSpec",
-    "cpg_final_tables",
     "execute_task_from_catalog",
     "plan_scan_inputs",
     "runtime_artifacts",

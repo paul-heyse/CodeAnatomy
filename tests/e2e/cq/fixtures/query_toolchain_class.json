@@ -7,7 +7,7 @@
         "col": 0,
         "end_col": 39,
         "end_line": 159,
-        "file": "/home/paul/CodeAnatomy/tools/cq/core/toolchain.py",
+        "file": "tools/cq/core/toolchain.py",
         "line": 14
       },
       "category": "definition",

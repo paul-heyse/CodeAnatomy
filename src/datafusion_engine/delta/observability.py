@@ -19,7 +19,10 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.payload import (
     msgpack_or_none,
@@ -401,7 +404,12 @@ def _ensure_observability_table(
             operation="delta_observability_bootstrap",
         )
     location = DatasetLocation(path=str(table_path), format="delta")
-    register_dataset_df(ctx, name=name, location=location, runtime_profile=profile)
+    register_dataset_df(
+        ctx,
+        name=name,
+        location=location,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
+    )
     return location
 
 

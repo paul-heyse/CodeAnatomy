@@ -33,8 +33,7 @@ def _coerce_str_list(value: object) -> list[str]:
 
 
 def _node_id(name: str) -> str:
-    sanitized = name.replace("-", "_").replace(".", "_").replace("/", "_").replace(":", "_")
-    return sanitized
+    return name.replace("-", "_").replace(".", "_").replace("/", "_").replace(":", "_")
 
 
 def _explain_payload_from_ir(outputs: Sequence[str] | None) -> dict[str, object]:
@@ -109,7 +108,13 @@ def _resolve_report_markdown(
 
 
 def generate_mermaid_diagram(explain_payload: ArtifactPayload) -> str:
-    """Generate a Mermaid flowchart diagram from explain-plan payload."""
+    """Generate a Mermaid flowchart diagram from explain-plan payload.
+
+    Returns
+    -------
+    str
+        Mermaid diagram as a fenced code block.
+    """
     views = explain_payload.get("views")
     if not isinstance(views, Sequence):
         return "```mermaid\nflowchart TD\n```"
@@ -150,12 +155,14 @@ def _format_explain_markdown(explain_payload: ArtifactPayload) -> str:
     views = explain_payload.get("views")
     join_groups = explain_payload.get("join_groups")
 
-    view_rows: list[Mapping[str, object]] = [
-        row for row in views if isinstance(row, Mapping)
-    ] if isinstance(views, Sequence) else []
-    group_rows: list[Mapping[str, object]] = [
-        row for row in join_groups if isinstance(row, Mapping)
-    ] if isinstance(join_groups, Sequence) else []
+    view_rows: list[Mapping[str, object]] = (
+        [row for row in views if isinstance(row, Mapping)] if isinstance(views, Sequence) else []
+    )
+    group_rows: list[Mapping[str, object]] = (
+        [row for row in join_groups if isinstance(row, Mapping)]
+        if isinstance(join_groups, Sequence)
+        else []
+    )
 
     lines: list[str] = [
         "# Semantic Explain Plan",
@@ -196,8 +203,8 @@ def _format_explain_markdown(explain_payload: ArtifactPayload) -> str:
                 "| --- | --- | --- | --- | --- |",
             ]
         )
-        for row in group_rows:
-            lines.append(
+        lines.extend(
+            [
                 "| "
                 + " | ".join(
                     [
@@ -209,7 +216,9 @@ def _format_explain_markdown(explain_payload: ArtifactPayload) -> str:
                     ]
                 )
                 + " |"
-            )
+                for row in group_rows
+            ]
+        )
 
     lines.extend(
         [
@@ -242,6 +251,11 @@ def generate_markdown_docs(
     requested_outputs
         Optional output subset to build an IR-based explain payload when
         artifacts are not provided.
+
+    Returns
+    -------
+    str
+        Markdown documentation for the semantic explain plan.
     """
     report = _resolve_report_markdown(artifacts=artifacts, report_payload=report_payload)
     explain_payload_resolved = _resolve_explain_payload(
@@ -272,6 +286,11 @@ def export_graph_documentation(
 
     When no artifacts are provided, the documentation is generated directly
     from the semantic IR using the requested outputs (if supplied).
+
+    Returns
+    -------
+    str
+        Markdown documentation content.
     """
     content = generate_markdown_docs(
         artifacts=artifacts,

@@ -219,7 +219,11 @@ def initial_evidence_from_views(
         snapshot=snapshot,
     )
     spec_map = {spec.name: spec for spec in dataset_specs or ()}
-    spec_sources = set(spec_map)
+    if nodes:
+        semantic_roles = _semantic_roles_by_name()
+        spec_sources = {name for name in spec_map if semantic_roles.get(name, "input") == "input"}
+    else:
+        spec_sources = set()
     if ctx is not None:
         _validate_udf_info_schema_parity(ctx)
     seed_sources = (requirements.sources | spec_sources) - outputs
@@ -249,7 +253,31 @@ def initial_evidence_from_views(
         )
         if not registered:
             _seed_evidence_from_requirements(evidence, source, requirements)
+    for node in nodes:
+        if task_names is not None and node.name not in task_names:
+            continue
+        _register_view_node_evidence(
+            evidence,
+            node,
+            context=registration_ctx,
+        )
     return evidence
+
+
+def _semantic_output_names() -> set[str]:
+    try:
+        from semantics.registry import SEMANTIC_MODEL
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return set()
+    return {spec.name for spec in SEMANTIC_MODEL.outputs}
+
+
+def _semantic_roles_by_name() -> dict[str, str]:
+    try:
+        from semantics.catalog.dataset_rows import get_all_dataset_rows
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return {}
+    return {row.name: row.role for row in get_all_dataset_rows()}
 
 
 def _merge_required_columns(
@@ -561,6 +589,57 @@ def _register_evidence_source(
         _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
         return True
     return False
+
+
+def _register_view_node_evidence(
+    evidence: EvidenceCatalog,
+    node: ViewNode,
+    *,
+    context: EvidenceRegistrationContext,
+) -> None:
+    plan_bundle = node.plan_bundle
+    if plan_bundle is None:
+        return
+    from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+
+    schema = arrow_schema_from_df(plan_bundle.df)
+    if schema is None:
+        return
+    contract_builder = node.contract_builder
+    if contract_builder is None:
+        evidence.register_schema(node.name, schema)
+    else:
+        contract = contract_builder(schema)
+        evidence.register_contract(
+            node.name,
+            contract,
+            snapshot=context.snapshot,
+            ctx=context.ctx,
+        )
+    metadata = _plan_bundle_metadata(plan_bundle, schema)
+    if metadata:
+        evidence.metadata_by_dataset.setdefault(node.name, {}).update(metadata)
+
+
+def _plan_bundle_metadata(
+    plan_bundle: object,
+    schema: SchemaLike,
+) -> dict[bytes, bytes]:
+    try:
+        from datafusion_engine.identity import schema_identity_hash
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return {}
+    plan_fingerprint = getattr(plan_bundle, "plan_fingerprint", None)
+    if not isinstance(plan_fingerprint, str) or not plan_fingerprint:
+        return {}
+    metadata: dict[bytes, bytes] = {
+        b"schema_identity_hash": schema_identity_hash(schema).encode("utf-8"),
+        b"plan_fingerprint": plan_fingerprint.encode("utf-8"),
+    }
+    plan_identity_hash = getattr(plan_bundle, "plan_identity_hash", None)
+    if isinstance(plan_identity_hash, str) and plan_identity_hash:
+        metadata[b"plan_identity_hash"] = plan_identity_hash.encode("utf-8")
+    return metadata
 
 
 def _merge_provider_metadata(

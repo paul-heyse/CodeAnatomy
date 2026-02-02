@@ -63,7 +63,9 @@ class TestSemanticPipelineIntegration:
         from tests.test_helpers.arrow_seed import register_arrow_table
 
         # Register a required table
-        test_data = pa.table({"path": ["test.py"], "bstart": [0], "bend": [50]})
+        test_data = pa.table(
+            {"file_id": ["file-1"], "path": ["test.py"], "bstart": [0], "bend": [50]}
+        )
         register_arrow_table(datafusion_session, name="cst_refs", value=test_data)
 
         result = validate_semantic_inputs(datafusion_session)
@@ -106,13 +108,21 @@ class TestSemanticPipelineIntegration:
             data: dict[str, list[object]] = {}
             for name in columns:
                 if name in {
-                    "line",
-                    "character",
-                    "span_start",
-                    "span_end",
+                    "bstart",
+                    "bend",
+                    "def_bstart",
+                    "def_bend",
+                    "alias_bstart",
+                    "alias_bend",
+                    "call_bstart",
+                    "call_bend",
+                    "start_line",
+                    "end_line",
+                    "start_char",
+                    "end_char",
+                    "line_base",
                     "line_no",
                     "line_start_byte",
-                    "line_end_byte",
                 }:
                     data[name] = [1]
                 else:
@@ -122,47 +132,58 @@ class TestSemanticPipelineIntegration:
         register_arrow_table(
             datafusion_session,
             name="cst_refs",
-            value=_table(("file_id", "path", "span_start", "span_end", "symbol")),
+            value=_table(("file_id", "path", "bstart", "bend", "ref_text")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_defs",
-            value=_table(("file_id", "path", "span_start", "span_end", "symbol")),
+            value=_table(("file_id", "path", "def_bstart", "def_bend")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_imports",
-            value=_table(("file_id", "path", "span_start", "span_end", "symbol")),
+            value=_table(("file_id", "path", "alias_bstart", "alias_bend")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_callsites",
-            value=_table(("file_id", "path", "span_start", "span_end", "symbol")),
+            value=_table(("file_id", "path", "call_bstart", "call_bend")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_call_args",
-            value=_table(("file_id",)),
+            value=_table(("file_id", "path", "bstart", "bend", "arg_text")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_docstrings",
-            value=_table(("file_id",)),
+            value=_table(("file_id", "path", "bstart", "bend", "docstring")),
         )
         register_arrow_table(
             datafusion_session,
             name="cst_decorators",
-            value=_table(("file_id",)),
+            value=_table(("file_id", "path", "bstart", "bend", "decorator_text")),
         )
         register_arrow_table(
             datafusion_session,
             name="scip_occurrences",
-            value=_table(("file_id", "symbol", "line", "character")),
+            value=_table(
+                (
+                    "path",
+                    "symbol",
+                    "start_line",
+                    "end_line",
+                    "start_char",
+                    "end_char",
+                    "line_base",
+                    "col_unit",
+                )
+            ),
         )
         register_arrow_table(
             datafusion_session,
             name="file_line_index_v1",
-            value=_table(("file_id", "path", "line_no", "line_start_byte", "line_end_byte")),
+            value=_table(("path", "line_no", "line_start_byte", "line_text")),
         )
 
         resolved = require_semantic_inputs(datafusion_session)

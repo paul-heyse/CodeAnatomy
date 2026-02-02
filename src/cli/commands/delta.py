@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
 
+import msgspec
 from cyclopts import Parameter
 
 from cli.groups import restore_target_group
@@ -24,6 +24,7 @@ from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
+from serde_msgspec import JSON_ENCODER_SORTED, StructBaseCompat, json_default
 from storage.deltalake import (
     DeltaVacuumOptions,
     cleanup_delta_log,
@@ -33,8 +34,7 @@ from storage.deltalake import (
 from utils.uuid_factory import uuid7_hex
 
 
-@dataclass(frozen=True)
-class VacuumReport:
+class VacuumReport(StructBaseCompat, frozen=True):
     """Results from a Delta vacuum operation."""
 
     retention_hours: int | None
@@ -46,8 +46,7 @@ class VacuumReport:
     files: list[str]
 
 
-@dataclass(frozen=True)
-class MaintenanceReport:
+class MaintenanceReport(StructBaseCompat, frozen=True):
     """Report payload for Delta maintenance operations."""
 
     path: str
@@ -56,8 +55,7 @@ class MaintenanceReport:
     cleanup_log: bool
 
 
-@dataclass(frozen=True)
-class RestoreReport:
+class RestoreReport(StructBaseCompat, frozen=True):
     """Report payload for Delta restore operations."""
 
     path: str
@@ -66,8 +64,7 @@ class RestoreReport:
     result: object | None
 
 
-@dataclass(frozen=True)
-class CloneReport:
+class CloneReport(StructBaseCompat, frozen=True):
     """Report payload for Delta snapshot clones."""
 
     path: str
@@ -356,7 +353,7 @@ def export_command(
         schema_mode=options.schema_mode,
     )
     report = clone_delta_snapshot(path, target, options=clone_options)
-    payload = json.dumps(asdict(report), indent=2, sort_keys=True)
+    payload = _encode_pretty_json(_report_payload(report))
     _write_text_payload(payload, options.report_path)
     return 0
 
@@ -395,7 +392,7 @@ def restore_command(
         timestamp=options.timestamp,
         result=result,
     )
-    payload = json.dumps(asdict(report), indent=2, sort_keys=True, default=str)
+    payload = _encode_pretty_json(_report_payload(report))
     _write_text_payload(payload, options.report_path)
     return 0
 
@@ -509,16 +506,32 @@ def _parse_int_list(value: str | None) -> list[int] | None:
 
 
 def _write_report(report: MaintenanceReport, report_path: str | None) -> None:
-    payload = json.dumps(asdict(report), indent=2, sort_keys=True)
+    payload = _encode_pretty_json(_report_payload(report))
     _write_text_payload(payload, report_path)
 
 
 def _write_artifact(report: MaintenanceReport, artifact_path: str | None) -> None:
     if artifact_path is None:
         return
-    payload = {"reports": [asdict(report)]}
-    encoded = json.dumps(payload, indent=2, sort_keys=True)
+    payload = {"reports": [_report_payload(report)]}
+    encoded = _encode_pretty_json(payload)
     _write_text_payload(encoded, artifact_path)
+
+
+def _report_payload(report: object) -> object:
+    def _enc_hook(value: object) -> object:
+        try:
+            return json_default(value)
+        except TypeError:
+            return str(value)
+
+    return msgspec.to_builtins(report, str_keys=True, enc_hook=_enc_hook)
+
+
+def _encode_pretty_json(payload: object) -> str:
+    raw = JSON_ENCODER_SORTED.encode(payload)
+    formatted = msgspec.json.format(raw, indent=2)
+    return formatted.decode("utf-8")
 
 
 def _write_text_payload(payload: str, output_path: str | None) -> None:

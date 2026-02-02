@@ -26,11 +26,12 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-_SKIP_DIRS: set[str] = {"__pycache__", "venv", ".venv", "build", "dist"}
 _MAX_HAZARDS_DISPLAY = 50
 _CALL_TYPE_LIMIT = 15
 
@@ -181,14 +182,18 @@ def _scan_async_hazards(
     max_files: int,
 ) -> tuple[list[AsyncHazard], int, int]:
     all_hazards: list[AsyncHazard] = []
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    file_result = tabulate_files(
+        repo_index,
+        [repo_context.repo_root],
+        None,
+        extensions=(".py",),
+    )
     files_scanned = 0
     async_functions_found = 0
-    for pyfile in root.rglob("*.py"):
-        if files_scanned >= max_files:
-            break
-        rel = pyfile.relative_to(root)
-        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel.parts):
-            continue
+    for pyfile in file_result.files[:max_files]:
+        rel = pyfile.relative_to(repo_context.repo_root)
         try:
             source = pyfile.read_text(encoding="utf-8")
             if "async def" not in source:

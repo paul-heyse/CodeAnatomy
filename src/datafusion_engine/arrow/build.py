@@ -53,6 +53,46 @@ def _resolve_schema(schema: SchemaLike) -> pa.Schema:
     raise TypeError(msg)
 
 
+def _storage_schema(schema: pa.Schema) -> pa.Schema:
+    fields = [_storage_field(field) for field in schema]
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _storage_field(field: pa.Field) -> pa.Field:
+    return pa.field(
+        field.name,
+        _storage_type(field.type),
+        nullable=field.nullable,
+        metadata=field.metadata,
+    )
+
+
+def _storage_type(data_type: pa.DataType) -> pa.DataType:
+    resolved = data_type
+    if isinstance(data_type, pa.ExtensionType):
+        resolved = _storage_type(data_type.storage_type)
+    elif pa.types.is_struct(data_type):
+        resolved = pa.struct([_storage_field(field) for field in data_type])
+    elif pa.types.is_list(data_type):
+        value_field = _storage_field(data_type.value_field)
+        resolved = pa.list_(value_field)
+    elif pa.types.is_large_list(data_type):
+        value_field = _storage_field(data_type.value_field)
+        resolved = pa.large_list(value_field)
+    elif pa.types.is_map(data_type):
+        key_field = _storage_field(data_type.key_field)
+        item_field = _storage_field(data_type.item_field)
+        resolved = pa.map_(key_field, item_field, keys_sorted=data_type.keys_sorted)
+    elif pa.types.is_union(data_type):
+        children = [_storage_field(field) for field in data_type]
+        type_codes = list(data_type.type_codes)
+        if data_type.mode == "dense":
+            resolved = pa.dense_union(children, type_codes=type_codes)
+        else:
+            resolved = pa.sparse_union(children, type_codes=type_codes)
+    return resolved
+
+
 class ColumnExpr(Protocol):
     """Protocol for column expressions used by defaults."""
 
@@ -382,7 +422,7 @@ def empty_table(schema: SchemaLike) -> TableLike:
         Empty Arrow table.
     """
     resolved = _resolve_schema(schema)
-    columns = [pa.array([], type=field.type) for field in resolved]
+    columns = [pa.nulls(0, type=field.type) for field in resolved]
     return pa.table(columns, schema=resolved)
 
 
@@ -479,8 +519,9 @@ def record_batch_reader_from_rows(
         Reader yielding record batches aligned to the schema.
     """
     resolved = _resolve_schema(schema)
-    table = pa.Table.from_pylist(list(rows), schema=resolved)
-    return pa.RecordBatchReader.from_batches(resolved, table.to_batches())
+    storage_schema = _storage_schema(resolved)
+    table = pa.Table.from_pylist(list(rows), schema=storage_schema)
+    return pa.RecordBatchReader.from_batches(storage_schema, table.to_batches())
 
 
 def record_batch_reader_from_row_batches(
@@ -495,8 +536,12 @@ def record_batch_reader_from_row_batches(
         Reader yielding record batches aligned to the schema.
     """
     resolved = _resolve_schema(schema)
-    batches = [pa.RecordBatch.from_pylist(list(batch), schema=resolved) for batch in row_batches]
-    return pa.RecordBatchReader.from_batches(resolved, batches)
+    storage_schema = _storage_schema(resolved)
+    batches = [
+        pa.RecordBatch.from_pylist(list(batch), schema=storage_schema)
+        for batch in row_batches
+    ]
+    return pa.RecordBatchReader.from_batches(storage_schema, batches)
 
 
 def list_table_from_rows(

@@ -78,9 +78,6 @@ class GraphProductBuildResult:
     cpg_edges_by_src: TableDeltaReport
     cpg_edges_by_dst: TableDeltaReport
 
-    cpg_nodes_quality: TableDeltaReport | None = None
-    cpg_props_quality: TableDeltaReport | None = None
-
     extract_error_artifacts: JsonDict | None = None
     manifest_path: Path | None = None
     run_bundle_dir: Path | None = None
@@ -112,7 +109,6 @@ class GraphProductBuildRequest:
     incremental_config: IncrementalConfig | None = None
     incremental_impact_strategy: ImpactStrategy | None = None
 
-    include_quality: bool = True
     include_extract_errors: bool = True
     include_manifest: bool = True
     include_run_bundle: bool = True
@@ -213,13 +209,6 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
         "write_cpg_edges_by_src_delta",
         "write_cpg_edges_by_dst_delta",
     ]
-    if request.include_quality:
-        outputs.extend(
-            [
-                "write_cpg_nodes_quality_delta",
-                "write_cpg_props_quality_delta",
-            ]
-        )
     if request.include_extract_errors:
         outputs.append("write_extract_error_artifacts_delta")
     if request.include_manifest:
@@ -292,20 +281,6 @@ def _parse_table(report: JsonDict) -> TableDeltaReport:
         path=Path(cast("str", report["path"])),
         rows=_int_field(report, "rows"),
     )
-
-
-def _parse_quality_report(
-    pipeline_outputs: Mapping[str, JsonDict | None],
-    *,
-    include_quality: bool,
-    key: str,
-) -> TableDeltaReport | None:
-    if not include_quality:
-        return None
-    quality = _optional(pipeline_outputs, key)
-    if quality is None:
-        return None
-    return _parse_table(quality)
 
 
 def _parse_manifest_path(
@@ -453,16 +428,6 @@ def _parse_result(
     edges_by_src_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_src_delta"))
     edges_by_dst_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_dst_delta"))
 
-    nodes_quality = _parse_quality_report(
-        pipeline_outputs,
-        include_quality=request.include_quality,
-        key="write_cpg_nodes_quality_delta",
-    )
-    props_quality = _parse_quality_report(
-        pipeline_outputs,
-        include_quality=request.include_quality,
-        key="write_cpg_props_quality_delta",
-    )
     manifest_path, manifest_run_id = _parse_manifest_details(
         pipeline_outputs,
         include_manifest=request.include_manifest,
@@ -495,8 +460,6 @@ def _parse_result(
         cpg_props_map=props_map_report,
         cpg_edges_by_src=edges_by_src_report,
         cpg_edges_by_dst=edges_by_dst_report,
-        cpg_nodes_quality=nodes_quality,
-        cpg_props_quality=props_quality,
         extract_error_artifacts=extract_errors,
         manifest_path=manifest_path,
         run_bundle_dir=run_bundle_dir,

@@ -1450,9 +1450,7 @@ src/hamilton_pipeline/
 ├── cache_lineage.py               # CacheLineageHook, lineage export
 ├── materializers.py               # Delta materializer factories
 ├── validators.py                  # TableSchemaValidator, NonEmptyTableValidator
-├── cpg_finalize_utils.py          # CPG finalization utilities
 ├── types/                         # ExecutionMode, ExecutorConfig, OutputConfig (types package)
-├── semantic_registry.py           # SemanticRegistryHook for view registration
 ├── scheduling_hooks.py            # plan_task_submission_hook, plan_grouping_strategy
 ├── plan_artifacts.py              # build_plan_artifact_bundle
 └── modules/
@@ -1463,7 +1461,6 @@ src/hamilton_pipeline/
     ├── execution_plan.py          # ExecutionPlan node, plan artifacts
     ├── task_execution.py          # execute_task_from_catalog()
     ├── column_features.py         # Column-level feature extraction
-    ├── cpg_finalize.py            # CPG finalization module
     └── outputs.py                 # CPG materialization, run manifests
 ```
 
@@ -1606,7 +1603,6 @@ Register via `builder.with_materializers(CustomMaterializer())`.
 - `enable_otel_node_tracing` - Enable OpenTelemetry node tracing (default: True)
 - `enable_plan_diagnostics` - Enable plan diagnostics hook (default: True)
 - `enable_otel_plan_tracing` - Enable OpenTelemetry plan tracing (default: True)
-- `enable_semantic_registry` - Enable semantic registry hook (default: True)
 - `enable_cache_lineage` - Enable cache lineage export (default: True)
 
 ### Execution Options Keys

@@ -30,10 +30,12 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
+    from datafusion_engine.io.adapter import DataFusionIOAdapter
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
+    from semantics.ir import SemanticIR
     from semantics.runtime import SemanticRuntimeConfig
     from semantics.types import AnnotatedSchema
 
@@ -50,6 +52,18 @@ class ContractBuilderOptions:
     enforce_columns: bool = False
     annotated_schema: AnnotatedSchema | None = None
     enforce_semantic_types: bool = False
+
+
+@dataclass(frozen=True)
+class SemanticViewNodeContext:
+    """Context needed to build a semantic view node."""
+
+    ctx: SessionContext
+    snapshot: Mapping[str, object]
+    runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
+    adapter: DataFusionIOAdapter
+    dataset_specs: Mapping[str, DatasetSpec]
 
 
 def _merge_metadata_specs(specs: Sequence[SchemaMetadataSpec]) -> SchemaMetadataSpec:
@@ -218,6 +232,7 @@ def view_graph_nodes(
     *,
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    semantic_ir: SemanticIR,
 ) -> tuple[ViewNode, ...]:
     """Return view graph nodes for IR-driven semantic outputs.
 
@@ -229,6 +244,8 @@ def view_graph_nodes(
         Rust UDF snapshot used for required UDF validation.
     runtime_profile
         Runtime profile used for plan bundle compilation.
+    semantic_ir
+        Compiled semantic IR artifact that defines view ordering and outputs.
 
     Returns
     -------
@@ -251,14 +268,7 @@ def view_graph_nodes(
             snapshot=snapshot,
             runtime_profile=runtime_profile,
             runtime_config=runtime_config,
-        )
-    )
-    nodes.extend(
-        _alias_nodes(
-            nodes,
-            ctx=ctx,
-            snapshot=snapshot,
-            runtime_profile=runtime_profile,
+            semantic_ir=semantic_ir,
         )
     )
     return tuple(nodes)
@@ -324,6 +334,7 @@ def _semantic_view_specs_for_registration(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     runtime_config: SemanticRuntimeConfig,
+    semantic_ir: SemanticIR,
 ) -> list[tuple[str, DataFrameBuilder]]:
     from semantics.pipeline import CpgViewSpecsRequest, _cpg_view_specs
 
@@ -339,37 +350,32 @@ def _semantic_view_specs_for_registration(
             use_cdf=use_cdf,
             runtime_profile=runtime_profile,
             requested_outputs=None,
-            semantic_ir=None,
+            semantic_ir=semantic_ir,
         )
     )
 
 
 def _build_semantic_view_node(
     *,
-    ctx: SessionContext,
-    snapshot: Mapping[str, object],
-    runtime_profile: DataFusionRuntimeProfile,
-    runtime_config: SemanticRuntimeConfig,
-    adapter: DataFusionIOAdapter,
-    dataset_specs: Mapping[str, DatasetSpec],
+    context: SemanticViewNodeContext,
     name: str,
     builder: DataFrameBuilder,
 ) -> ViewNode:
     from semantics.catalog.dataset_rows import dataset_row
 
     bundle, deps, required = _bundle_deps_and_udfs(
-        ctx,
+        context.ctx,
         builder,
-        snapshot,
+        context.snapshot,
         label=name,
-        runtime_profile=runtime_profile,
+        runtime_profile=context.runtime_profile,
     )
-    dataset_spec = dataset_specs.get(name)
+    dataset_spec = context.dataset_specs.get(name)
     metadata_spec = _metadata_from_dataset_spec(dataset_spec) if dataset_spec else None
     metadata = _metadata_with_required_udfs(metadata_spec, required)
     expected_schema, enforce_columns = _dataset_contract_for(
         name,
-        dataset_specs=dataset_specs,
+        dataset_specs=context.dataset_specs,
     )
     annotated_contract: AnnotatedSchema | None = None
     if expected_schema is not None:
@@ -379,14 +385,14 @@ def _build_semantic_view_node(
 
     row = dataset_row(name, strict=False)
     if row is None:
-        cache_policy = runtime_config.cache_policy_overrides.get(name, "none")
+        cache_policy = context.runtime_config.cache_policy_overrides.get(name, "none")
     else:
         cache_policy = _semantic_cache_policy_for_row(
             row,
-            runtime_config=runtime_config,
+            runtime_config=context.runtime_config,
         )
 
-    adapter.register_view(name, bundle.df, overwrite=True, temporary=True)
+    context.adapter.register_view(name, bundle.df, overwrite=True, temporary=True)
 
     return ViewNode(
         name=name,
@@ -414,6 +420,7 @@ def _semantics_view_nodes(
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,
     runtime_config: SemanticRuntimeConfig | None = None,
+    semantic_ir: SemanticIR,
 ) -> list[ViewNode]:
     """Build semantic pipeline view nodes with inferred dependencies.
 
@@ -440,6 +447,8 @@ def _semantics_view_nodes(
         Runtime configuration for building plan bundles.
     runtime_config
         Semantic runtime configuration for cache policy and output locations.
+    semantic_ir
+        Compiled semantic IR artifact.
 
     Returns
     -------
@@ -466,90 +475,27 @@ def _semantics_view_nodes(
         ctx,
         runtime_profile=runtime_profile,
         runtime_config=runtime_config,
+        semantic_ir=semantic_ir,
     )
     dataset_specs = _semantic_dataset_specs()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    context = SemanticViewNodeContext(
+        ctx=ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        adapter=adapter,
+        dataset_specs=dataset_specs,
+    )
 
     return [
         _build_semantic_view_node(
-            ctx=ctx,
-            snapshot=snapshot,
-            runtime_profile=runtime_profile,
-            runtime_config=runtime_config,
-            adapter=adapter,
-            dataset_specs=dataset_specs,
+            context=context,
             name=name,
             builder=builder,
         )
         for name, builder in view_specs
     ]
-
-
-def _alias_nodes(
-    nodes: Sequence[ViewNode],
-    *,
-    ctx: SessionContext,
-    snapshot: Mapping[str, object],
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> list[ViewNode]:
-    registered = {node.name for node in nodes}
-    alias_nodes: list[ViewNode] = []
-    for name in registered:
-        alias = _resolve_alias(name)
-        if alias == name or alias in registered:
-            continue
-        builder = _alias_builder(source=name)
-        bundle, deps, required = _bundle_deps_and_udfs(
-            ctx,
-            builder,
-            snapshot,
-            label=alias,
-            runtime_profile=runtime_profile,
-        )
-        alias_nodes.append(
-            ViewNode(
-                name=alias,
-                deps=deps,
-                builder=builder,
-                contract_builder=_contract_builder(
-                    alias,
-                    options=ContractBuilderOptions(),
-                ),
-                required_udfs=required,
-                plan_bundle=bundle,
-            )
-        )
-    return alias_nodes
-
-
-def _resolve_alias(name: str) -> str:
-    from semantics.catalog.dataset_specs import dataset_alias
-    from semantics.naming import SEMANTIC_OUTPUT_ALIASES
-
-    legacy_by_canonical = {
-        canonical: legacy for legacy, canonical in SEMANTIC_OUTPUT_ALIASES.items()
-    }
-    legacy_alias = legacy_by_canonical.get(name)
-    if legacy_alias is not None:
-        return legacy_alias
-    try:
-        return dataset_alias(name)
-    except KeyError:
-        return _strip_version(name)
-
-
-def _strip_version(name: str) -> str:
-    base, sep, suffix = name.rpartition("_v")
-    if sep and suffix.isdigit():
-        return base
-    return name
-
-
-def _alias_builder(source: str) -> DataFrameBuilder:
-    def _build(ctx: SessionContext) -> DataFrame:
-        return ctx.table(source)
-
-    return _build
 
 
 __all__ = ["view_graph_nodes"]

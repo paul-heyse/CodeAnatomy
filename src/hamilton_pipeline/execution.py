@@ -33,13 +33,11 @@ logger = logging.getLogger(__name__)
 
 FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_cpg_nodes_delta",
-    "write_cpg_nodes_quality_delta",
     "write_cpg_edges_delta",
     "write_cpg_props_delta",
     "write_cpg_props_map_delta",
     "write_cpg_edges_by_src_delta",
     "write_cpg_edges_by_dst_delta",
-    "write_cpg_props_quality_delta",
     "write_normalize_outputs_delta",
     "write_extract_error_artifacts_delta",
     "write_run_manifest_delta",

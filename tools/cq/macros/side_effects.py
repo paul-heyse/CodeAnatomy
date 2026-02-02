@@ -26,11 +26,12 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
+from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-_SKIP_DIRS: set[str] = {"__pycache__", "venv", ".venv", "build", "dist"}
 _MAX_EFFECTS_DISPLAY = 40
 
 # Known ambient state patterns
@@ -252,28 +253,28 @@ class SideEffectsRequest:
 
 
 def _iter_python_files(root: Path, max_files: int) -> list[Path]:
-    files: list[Path] = []
-    files_scanned = 0
-    for pyfile in root.rglob("*.py"):
-        if files_scanned >= max_files:
-            break
-        rel = pyfile.relative_to(root)
-        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel.parts):
-            continue
-        files.append(pyfile)
-        files_scanned += 1
-    return files
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    result = tabulate_files(
+        repo_index,
+        [repo_context.repo_root],
+        None,
+        extensions=(".py",),
+    )
+    return result.files[:max_files]
 
 
 def _scan_side_effects(
     root: Path,
     max_files: int,
 ) -> tuple[list[SideEffect], int]:
+    repo_context = resolve_repo_context(root)
+    repo_root = repo_context.repo_root
     all_effects: list[SideEffect] = []
     files_scanned = 0
 
-    for pyfile in _iter_python_files(root, max_files):
-        rel = pyfile.relative_to(root)
+    for pyfile in _iter_python_files(repo_root, max_files):
+        rel = pyfile.relative_to(repo_root)
         try:
             source = pyfile.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(rel))

@@ -126,20 +126,9 @@ def _ingest_table(
         msg = "Unsupported Arrow input for DataFusion ingestion."
         raise TypeError(msg)
     if batch_size is None or batch_size <= 0:
-        df = cast("DataFrame", from_arrow(table, name=name))
-        _emit_arrow_ingest(
-            ingest_hook,
-            ArrowIngestEvent(
-                name=name,
-                method="from_arrow",
-                partitioning="datafusion_native",
-                batch_size=None,
-                batch_count=None,
-                row_count=table.num_rows,
-            ),
-        )
-        return df
-    batches = table.to_batches(max_chunksize=batch_size)
+        batches = table.to_batches()
+    else:
+        batches = table.to_batches(max_chunksize=batch_size)
     reader = pa.RecordBatchReader.from_batches(table.schema, batches)
     df = cast("DataFrame", from_arrow(reader, name=name))
     _emit_arrow_ingest(

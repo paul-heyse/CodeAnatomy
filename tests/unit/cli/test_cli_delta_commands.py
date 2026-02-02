@@ -17,10 +17,15 @@ from cli.commands.delta import (
 )
 from storage.deltalake import delta_table_version
 from tests.test_helpers.delta_seed import write_delta_table
-from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+from tests.test_helpers.optional_deps import (
+    require_datafusion,
+    require_delta_extension,
+    require_deltalake,
+)
 
 require_datafusion()
 require_deltalake()
+require_delta_extension()
 
 
 EXPECTED_ROW_COUNT = 2

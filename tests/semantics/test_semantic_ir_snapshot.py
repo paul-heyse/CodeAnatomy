@@ -24,6 +24,13 @@ def _snapshot(semantic_ir: SemanticIR) -> dict[str, object]:
         }
         for view in semantic_ir.views
     ]
+    dataset_rows = [
+        {
+            "name": row.name,
+            "category": row.category,
+        }
+        for row in semantic_ir.dataset_rows
+    ]
     join_groups = [
         {
             "name": group.name,
@@ -40,6 +47,7 @@ def _snapshot(semantic_ir: SemanticIR) -> dict[str, object]:
         "model_hash": semantic_ir.model_hash,
         "ir_hash": semantic_ir.ir_hash,
         "views": views,
+        "dataset_rows": dataset_rows,
         "join_groups": join_groups,
     }
 

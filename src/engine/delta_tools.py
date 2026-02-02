@@ -206,7 +206,10 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     storage = dict(request.storage_options or {})
     if request.log_storage_options:
         storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
-    from datafusion_engine.dataset.registration import register_dataset_df
+    from datafusion_engine.dataset.registration import (
+        DatasetRegistrationOptions,
+        register_dataset_df,
+    )
     from datafusion_engine.dataset.registry import DatasetLocation
 
     ctx = profile.session_context()
@@ -220,7 +223,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
         ctx,
         name=request.table_name,
         location=location,
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     builder = request.builder
     df = builder(ctx, request.table_name) if builder is not None else ctx.table(request.table_name)

@@ -268,13 +268,18 @@ class ProviderRegistry:
             msg = "ProviderRegistry requires a runtime profile for registration."
             raise ValueError(msg)
 
+        dataset_spec = spec.dataset_spec
+        if dataset_spec is None:
+            from schema_spec.system import dataset_spec_from_schema
+
+            dataset_spec = dataset_spec_from_schema(spec.name, spec.schema)
         location = DatasetLocation(
             path=spec.storage_location,
             format=spec.format,
             delta_version=spec.delta_version,
             delta_timestamp=spec.delta_timestamp,
             storage_options=spec.storage_options,
-            dataset_spec=spec.dataset_spec,
+            dataset_spec=dataset_spec,
         )
 
         context = _build_registration_context(

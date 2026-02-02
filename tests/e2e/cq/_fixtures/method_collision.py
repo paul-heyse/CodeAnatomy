@@ -13,11 +13,20 @@ class Alpha:
         -------
         int
             Result of the collide call.
+
+        Raises
+        ------
+        TypeError
+            Raised when collide is not callable.
         """
         from collections.abc import Callable
         from typing import cast
 
-        collide = cast("Callable[[], int]", self.collide)
+        candidate = getattr(self, "collide", None)
+        if not callable(candidate):
+            msg = "collide method not available"
+            raise TypeError(msg)
+        collide = cast("Callable[[], int]", candidate)
         return collide()
 
 

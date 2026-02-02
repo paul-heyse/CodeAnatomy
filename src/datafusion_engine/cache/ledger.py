@@ -14,7 +14,10 @@ from datafusion_engine.cache.commit_metadata import (
     CacheCommitMetadataRequest,
     cache_commit_metadata,
 )
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
@@ -120,7 +123,7 @@ def ensure_cache_run_summary_table(
         ctx,
         name=CACHE_RUN_SUMMARY_TABLE_NAME,
         location=location,
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     return location
 
@@ -199,7 +202,7 @@ def ensure_cache_snapshot_registry_table(
         ctx,
         name=CACHE_SNAPSHOT_REGISTRY_TABLE_NAME,
         location=location,
-        runtime_profile=profile,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     return location
 

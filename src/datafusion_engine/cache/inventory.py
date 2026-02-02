@@ -15,7 +15,10 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.dataset.registration import register_dataset_df
+from datafusion_engine.dataset.registration import (
+    DatasetRegistrationOptions,
+    register_dataset_df,
+)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import (
@@ -107,7 +110,10 @@ def ensure_cache_inventory_table(
         )
     location = DatasetLocation(path=str(table_path), format="delta")
     register_dataset_df(
-        ctx, name=CACHE_INVENTORY_TABLE_NAME, location=location, runtime_profile=profile
+        ctx,
+        name=CACHE_INVENTORY_TABLE_NAME,
+        location=location,
+        options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     return location
 

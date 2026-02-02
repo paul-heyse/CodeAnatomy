@@ -227,7 +227,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             executor_config=executor_config,
             scip_index_config=scip_config,
             incremental_impact_strategy=args.incremental_impact_strategy,
-            include_quality=True,
             include_extract_errors=True,
             include_manifest=True,
             include_run_bundle=True,

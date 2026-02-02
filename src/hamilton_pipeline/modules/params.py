@@ -43,6 +43,8 @@ from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewNode
+else:
+    ViewNode = object
 
 
 @apply_tag(TagPolicy(layer="params", kind="object", artifact="param_table_policy"))

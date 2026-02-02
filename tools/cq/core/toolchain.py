@@ -1,12 +1,10 @@
 """Toolchain detection for cq.
 
-Detects availability and versions of external tools (rg, ast-grep, python).
+Detects availability and versions of external tools (ast-grep-py, python, rpygrep).
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from dataclasses import dataclass
 
 
@@ -16,24 +14,24 @@ class Toolchain:
 
     Parameters
     ----------
-    rg_path : str | None
-        Path to ripgrep binary.
-    rg_version : str | None
-        Ripgrep version string.
-    sg_path : str | None
-        Path to ast-grep binary.
-    sg_version : str | None
-        ast-grep version string.
+    rpygrep_available : bool
+        Whether rpygrep Python package is available.
+    rpygrep_version : str | None
+        rpygrep package version string.
+    sgpy_available : bool
+        Whether ast-grep-py Python package is available.
+    sgpy_version : str | None
+        ast-grep-py package version string.
     py_path : str
         Path to Python interpreter.
     py_version : str
         Python version string.
     """
 
-    rg_path: str | None
-    rg_version: str | None
-    sg_path: str | None
-    sg_version: str | None
+    rpygrep_available: bool
+    rpygrep_version: str | None
+    sgpy_available: bool
+    sgpy_version: str | None
     py_path: str
     py_version: str
 
@@ -48,40 +46,35 @@ class Toolchain:
         """
         import sys
 
-        # Detect ripgrep
-        rg_path = shutil.which("rg")
-        rg_version = None
-        if rg_path:
+        # Detect rpygrep Python package
+        rpygrep_available = False
+        rpygrep_version = None
+        try:
+            import importlib.metadata
+        except ImportError:
+            # importlib.metadata not available (Python < 3.8)
+            pass
+        else:
             try:
-                result = subprocess.run(
-                    [rg_path, "--version"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    # First line: "ripgrep X.Y.Z"
-                    first_line = result.stdout.strip().split("\n")[0]
-                    rg_version = first_line.split()[-1] if first_line else None
-            except (subprocess.TimeoutExpired, OSError):
+                rpygrep_version = importlib.metadata.version("rpygrep")
+                rpygrep_available = True
+            except importlib.metadata.PackageNotFoundError:
+                # rpygrep package not installed
                 pass
 
-        # Detect ast-grep
-        sg_path = shutil.which("sg") or shutil.which("ast-grep")
-        sg_version = None
-        if sg_path:
+        # Detect ast-grep-py Python package
+        sgpy_available = False
+        sgpy_version = None
+        try:
+            import importlib.metadata
+        except ImportError:
+            pass
+        else:
             try:
-                result = subprocess.run(
-                    [sg_path, "--version"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    sg_version = result.stdout.strip().split()[-1]
-            except (subprocess.TimeoutExpired, OSError):
+                sgpy_version = importlib.metadata.version("ast-grep-py")
+                sgpy_available = True
+            except importlib.metadata.PackageNotFoundError:
+                # ast-grep-py package not installed
                 pass
 
         # Python is always available
@@ -89,10 +82,10 @@ class Toolchain:
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
         return Toolchain(
-            rg_path=rg_path,
-            rg_version=rg_version,
-            sg_path=sg_path,
-            sg_version=sg_version,
+            rpygrep_available=rpygrep_available,
+            rpygrep_version=rpygrep_version,
+            sgpy_available=sgpy_available,
+            sgpy_version=sgpy_version,
             py_path=py_path,
             py_version=py_version,
         )
@@ -106,54 +99,59 @@ class Toolchain:
             Tool version information.
         """
         return {
-            "rg": self.rg_version,
-            "sg": self.sg_version,
+            "rpygrep": self.rpygrep_version,
+            "sgpy": self.sgpy_version,
             "python": self.py_version,
         }
 
-    def require_rg(self) -> str:
-        """Get ripgrep path, raising if not available.
-
-        Returns
-        -------
-        str
-            Path to rg binary.
+    def require_rpygrep(self) -> None:
+        """Verify rpygrep package is available, raising if not.
 
         Raises
         ------
         RuntimeError
-            If ripgrep is not installed.
+            If rpygrep is not installed.
         """
-        if not self.rg_path:
+        if not self.rpygrep_available:
             msg = (
-                "ripgrep (rg) is required but not found. "
-                "Install with: brew install ripgrep (macOS) or apt install ripgrep (Linux)"
+                "rpygrep Python package is required but not found. "
+                "Install with: pip install rpygrep or uv add rpygrep"
             )
             raise RuntimeError(msg)
-        return self.rg_path
 
-    def require_sg(self) -> str:
-        """Get ast-grep path, raising if not available.
-
-        Returns
-        -------
-        str
-            Path to sg/ast-grep binary.
+    def require_sgpy(self) -> None:
+        """Verify ast-grep-py package is available, raising if not.
 
         Raises
         ------
         RuntimeError
-            If ast-grep is not installed.
+            If ast-grep-py is not installed.
         """
-        if not self.sg_path:
+        if not self.sgpy_available:
             msg = (
-                "ast-grep (sg) is required but not found. "
-                "Install with: pip install ast-grep-py (Python) or cargo install ast-grep (Rust)"
+                "ast-grep-py Python package is required but not found. "
+                "Install with: pip install ast-grep-py or uv add ast-grep-py"
             )
             raise RuntimeError(msg)
-        return self.sg_path
 
     @property
-    def has_sg(self) -> bool:
-        """Check if ast-grep is available."""
-        return self.sg_path is not None
+    def has_sgpy(self) -> bool:
+        """Check if ast-grep-py is available.
+
+        Returns
+        -------
+        bool
+            True if ast-grep-py Python package is installed.
+        """
+        return self.sgpy_available
+
+    @property
+    def has_rpygrep(self) -> bool:
+        """Check if rpygrep is available.
+
+        Returns
+        -------
+        bool
+            True if rpygrep Python package is installed.
+        """
+        return self.rpygrep_available

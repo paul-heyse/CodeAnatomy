@@ -740,7 +740,16 @@ def _prepare_plan_context(
 
 def _dataset_spec_map(session: SessionContext) -> Mapping[str, DatasetSpec]:
     dataset_specs = known_dataset_specs(ctx=session)
-    return {spec.name: spec for spec in dataset_specs}
+    semantic_outputs = _semantic_output_names()
+    return {spec.name: spec for spec in dataset_specs if spec.name not in semantic_outputs}
+
+
+def _semantic_output_names() -> set[str]:
+    try:
+        from semantics.registry import SEMANTIC_MODEL
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return set()
+    return {spec.name for spec in SEMANTIC_MODEL.outputs}
 
 
 def _dataset_location_map(

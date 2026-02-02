@@ -96,13 +96,16 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.dataset.registration import register_dataset_df
+        from datafusion_engine.dataset.registration import (
+            DatasetRegistrationOptions,
+            register_dataset_df,
+        )
 
         return register_dataset_df(
             session_runtime.ctx,
             name=self.spec.name,
             location=location,
-            runtime_profile=session_runtime.profile,
+            options=DatasetRegistrationOptions(runtime_profile=session_runtime.profile),
         )
 
     def register_views(

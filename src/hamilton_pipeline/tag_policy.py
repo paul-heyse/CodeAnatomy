@@ -9,12 +9,6 @@ from typing import TypeVar
 from hamilton.function_modifiers import tag
 
 from core.config_base import FingerprintableConfig, config_fingerprint
-from semantics.catalog.tags import (
-    SemanticColumnTagSpec,
-    SemanticTagSpec,
-    tag_spec_for_column,
-    tag_spec_for_dataset,
-)
 
 F = TypeVar("F", bound=Callable[..., object])
 
@@ -192,144 +186,13 @@ def tag_outputs_by_name(
     return tag_outputs_payloads(policies)
 
 
-def semantic_tag_policy(dataset_name: str) -> TagPolicy:
-    """Return a TagPolicy derived from the semantic catalog.
-
-    Parameters
-    ----------
-    dataset_name
-        Dataset name or alias.
-
-    Returns
-    -------
-    TagPolicy
-        TagPolicy with semantic metadata populated from the catalog.
-    """
-    spec = tag_spec_for_dataset(dataset_name)
-    return _tag_policy_from_semantic_spec(spec)
-
-
-def semantic_tag_payload(dataset_name: str) -> dict[str, str | list[str]]:
-    """Return a semantic tag payload derived from the semantic catalog.
-
-    Parameters
-    ----------
-    dataset_name
-        Dataset name or alias.
-
-    Returns
-    -------
-    dict[str, str | list[str]]
-        Tag payload for Hamilton metadata.
-    """
-    return semantic_tag_policy(dataset_name).as_tags()
-
-
-def semantic_tag_payloads(
-    dataset_names: Sequence[str],
-) -> dict[str, dict[str, str | list[str]]]:
-    """Return semantic tag payloads keyed by output name.
-
-    Parameters
-    ----------
-    dataset_names
-        Dataset names or aliases that align with output node names.
-
-    Returns
-    -------
-    dict[str, dict[str, str | list[str]]]
-        Tag payloads keyed by output name.
-    """
-    payloads: dict[str, dict[str, str | list[str]]] = {}
-    for name in dataset_names:
-        payloads[name] = semantic_tag_payload(name)
-    return payloads
-
-
-def semantic_column_payloads(
-    dataset_name: str,
-    columns: Sequence[str],
-    *,
-    node_prefix: str | None = None,
-    kind: str = "column",
-) -> dict[str, dict[str, str | list[str]]]:
-    r"""Return tag payloads for semantic column outputs.
-
-    Parameters
-    ----------
-    dataset_name
-        Dataset name or alias.
-    columns
-        Column names to tag.
-    node_prefix
-        Optional prefix for output node names (e.g. "cpg_nodes__").
-    kind
-        Semantic kind to tag (defaults to "column").
-
-    Returns
-    -------
-    dict[str, dict[str, str | list[str]]]
-        Tag payloads keyed by output node name.
-    """
-    payloads: dict[str, dict[str, str | list[str]]] = {}
-    for column in columns:
-        spec = tag_spec_for_column(dataset_name, column)
-        node_name = f"{node_prefix}{column}" if node_prefix else column
-        payloads[node_name] = _column_tags(spec, kind=kind)
-    return payloads
-
-
 def _join_tags(values: Sequence[str]) -> str:
     return ",".join(str(value) for value in values if value)
-
-
-def _tag_policy_from_semantic_spec(spec: SemanticTagSpec) -> TagPolicy:
-    return TagPolicy(
-        layer="semantic",
-        kind=spec.kind,
-        artifact=spec.artifact,
-        semantic_id=spec.semantic_id,
-        entity=spec.entity,
-        grain=spec.grain,
-        version=spec.version,
-        stability=spec.stability,
-        schema_ref=spec.schema_ref,
-        materialization=spec.materialization,
-        materialized_name=spec.materialized_name,
-        entity_keys=spec.entity_keys,
-        join_keys=spec.join_keys,
-    )
-
-
-def _column_tags(
-    spec: SemanticColumnTagSpec,
-    *,
-    kind: str | None = None,
-) -> dict[str, str | list[str]]:
-    resolved_kind = kind.strip() if isinstance(kind, str) and kind.strip() else spec.kind
-    tags: dict[str, str | list[str]] = {
-        "layer": "semantic",
-        "kind": resolved_kind,
-        "artifact": spec.artifact,
-        "semantic_id": spec.semantic_id,
-        "entity": spec.entity,
-        "grain": spec.grain,
-        "version": spec.version,
-        "stability": spec.stability,
-        "schema_ref": spec.schema_ref,
-    }
-    if spec.dtype is not None:
-        tags["dtype"] = spec.dtype
-    return tags
 
 
 __all__ = [
     "TagPolicy",
     "apply_tag",
-    "semantic_column_payloads",
-    "semantic_tag_payload",
-    "semantic_tag_payloads",
-    "semantic_tag_policy",
     "tag_outputs_by_name",
     "tag_outputs_payloads",
 ]

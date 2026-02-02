@@ -332,7 +332,8 @@ class SemanticModel:
         """
         return tuple(spec.name for spec in self.relationship_specs)
 
-    def dataset_rows(self) -> tuple[SemanticDatasetRow, ...]:
+    @staticmethod
+    def dataset_rows() -> tuple[SemanticDatasetRow, ...]:
         """Return semantic dataset rows generated from the model.
 
         Returns
@@ -340,9 +341,9 @@ class SemanticModel:
         tuple[SemanticDatasetRow, ...]
             Dataset rows in dependency order.
         """
-        from semantics.catalog.dataset_rows import build_semantic_dataset_rows
+        from semantics.ir_pipeline import build_semantic_ir
 
-        return build_semantic_dataset_rows(self)
+        return build_semantic_ir().dataset_rows
 
     def cpg_node_specs(self) -> tuple[NodePlanSpec, ...]:
         """Return CPG node plan specs generated from the model.
@@ -406,7 +407,7 @@ class SemanticModel:
 def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
     from relspec.view_defs import RELATION_OUTPUT_NAME
     from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
-    from semantics.naming import SEMANTIC_VIEW_NAMES
+    from semantics.naming import canonical_output_name
 
     ordered: list[SemanticOutputSpec] = []
     seen: set[str] = set()
@@ -417,16 +418,45 @@ def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
         seen.add(spec.name)
         ordered.append(spec)
 
-    for name in SEMANTIC_VIEW_NAMES:
-        _append(SemanticOutputSpec(name=name, kind="table", contract_ref=name))
+    for spec in SEMANTIC_NORMALIZATION_SPECS:
+        _append(
+            SemanticOutputSpec(name=spec.output_name, kind="table", contract_ref=spec.output_name)
+        )
+
+    scip_norm = canonical_output_name("scip_occurrences_norm")
+    _append(SemanticOutputSpec(name=scip_norm, kind="table", contract_ref=scip_norm))
+
+    for spec in RELATIONSHIP_SPECS:
+        _append(SemanticOutputSpec(name=spec.name, kind="table", contract_ref=spec.name))
 
     _append(
         SemanticOutputSpec(
-            name=RELATION_OUTPUT_NAME,
+            name=canonical_output_name("semantic_nodes_union"),
             kind="table",
-            contract_ref=RELATION_OUTPUT_NAME,
+            contract_ref=canonical_output_name("semantic_nodes_union"),
         )
     )
+    _append(
+        SemanticOutputSpec(
+            name=canonical_output_name("semantic_edges_union"),
+            kind="table",
+            contract_ref=canonical_output_name("semantic_edges_union"),
+        )
+    )
+
+    for name in (
+        "cpg_nodes",
+        "cpg_edges",
+        "cpg_props",
+        "cpg_props_map",
+        "cpg_edges_by_src",
+        "cpg_edges_by_dst",
+    ):
+        canonical = canonical_output_name(name)
+        _append(SemanticOutputSpec(name=canonical, kind="table", contract_ref=canonical))
+
+    for name in (RELATION_OUTPUT_NAME,):
+        _append(SemanticOutputSpec(name=name, kind="table", contract_ref=name))
 
     for name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
         _append(SemanticOutputSpec(name=name, kind="diagnostic", contract_ref=name))

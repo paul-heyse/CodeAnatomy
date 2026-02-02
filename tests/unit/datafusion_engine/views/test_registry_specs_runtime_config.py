@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from datafusion_engine.views import registry_specs
+from semantics.ir_pipeline import build_semantic_ir
 from semantics.runtime import SemanticRuntimeConfig
 from tests.test_helpers.datafusion_runtime import df_profile
 
@@ -25,9 +26,6 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
     def _noop_snapshot(_: Mapping[str, object]) -> None:
         return None
 
-    def _empty_nodes(*_args: object, **_kwargs: object) -> list[object]:
-        return []
-
     captured: dict[str, SemanticRuntimeConfig | None] = {"runtime_config": None}
 
     def _capture(
@@ -43,7 +41,6 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(registry_specs, "semantic_runtime_from_profile", _runtime_from_profile)
     monkeypatch.setattr(registry_specs, "validate_rust_udf_snapshot", _noop_snapshot)
-    monkeypatch.setattr(registry_specs, "_alias_nodes", _empty_nodes)
     monkeypatch.setattr(registry_specs, "_semantics_view_nodes", _capture)
 
     ctx = cast("SessionContext", object())
@@ -51,6 +48,7 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
         ctx,
         snapshot={},
         runtime_profile=profile,
+        semantic_ir=build_semantic_ir(),
     )
 
     assert nodes == ()

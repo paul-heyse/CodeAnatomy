@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+import msgspec
 
 
 def read_text(path: Path, *, encoding: str = "utf-8") -> str:
@@ -39,8 +40,17 @@ def read_toml(path: Path) -> Mapping[str, object]:
     -------
     Mapping[str, object]
         Parsed TOML content.
+
+    Raises
+    ------
+    TypeError
+        Raised when the TOML content is not a mapping.
     """
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+    payload = msgspec.toml.decode(path.read_text(encoding="utf-8"), type=object, strict=True)
+    if not isinstance(payload, dict):
+        msg = f"Expected TOML mapping in {path}, got {type(payload).__name__}."
+        raise TypeError(msg)
+    return payload
 
 
 def read_json(path: Path) -> Any:

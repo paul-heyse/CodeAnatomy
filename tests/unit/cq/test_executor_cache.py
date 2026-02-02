@@ -23,10 +23,10 @@ def _build_toolchain() -> Toolchain:
     """
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     return Toolchain(
-        rg_path=None,
-        rg_version=None,
-        sg_path=None,
-        sg_version=None,
+        rpygrep_available=False,
+        rpygrep_version=None,
+        sgpy_available=True,
+        sgpy_version="0.40.0",
         py_path=sys.executable,
         py_version=py_version,
     )

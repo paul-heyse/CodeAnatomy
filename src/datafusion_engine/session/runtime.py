@@ -114,7 +114,6 @@ if TYPE_CHECKING:
 
     from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.udf.catalog import UdfCatalog
-    from datafusion_engine.views.graph import ViewNode
     from obs.datafusion_runs import DataFusionRun
     from semantics.incremental.cdf_cursors import CdfCursorStore
     from semantics.runtime import CachePolicy
@@ -133,7 +132,6 @@ from schema_spec.system import (
     DeltaScanOptions,
     dataset_spec_from_schema,
 )
-from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
     ExplainRows = TableLike | RecordBatchReaderLike
@@ -558,12 +556,9 @@ def semantic_output_locations_for_profile(
         when semantic output root is not configured and no explicit
         semantic output locations are provided.
     """
-    from relspec.view_defs import RELATION_OUTPUT_NAME
-    from semantics.naming import SEMANTIC_VIEW_NAMES
+    from semantics.registry import SEMANTIC_MODEL
 
-    view_names = list(SEMANTIC_VIEW_NAMES)
-    if RELATION_OUTPUT_NAME not in view_names:
-        view_names.append(RELATION_OUTPUT_NAME)
+    view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
     if profile.semantic_output_locations:
         return profile.semantic_output_locations
     if profile.semantic_output_catalog_name is not None:
@@ -955,7 +950,11 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
         return False
     if profile.expr_planner_hook is not None:
         return True
-    return bool(profile.expr_planner_names)
+    if not profile.expr_planner_names:
+        return False
+    from datafusion_engine.udf.platform import native_udf_platform_available
+
+    return native_udf_platform_available()
 
 
 @dataclass
@@ -1509,104 +1508,6 @@ class SchemaRegistryValidationResult:
             or self.constraint_drift
             or self.relationship_constraint_errors
         )
-
-
-def register_view_specs(
-    ctx: SessionContext,
-    *,
-    views: Sequence[ViewSpec],
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    validate: bool = True,
-) -> None:
-    """Legacy view-spec registration (removed).
-
-    Raises
-    ------
-    RuntimeError
-        Always raised. Use ``datafusion_engine.views.registration.ensure_view_graph`` instead.
-    """
-    _ = ctx
-    _ = views
-    _ = runtime_profile
-    _ = validate
-    msg = "Legacy view spec registration is removed; use ensure_view_graph."
-    raise RuntimeError(msg)
-
-
-def _register_view_specs_udfs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> Mapping[str, object]:
-    from datafusion_engine.udf.runtime import rust_udf_snapshot
-
-    if runtime_profile is None:
-        msg = "Runtime profile is required for view registration."
-        raise ValueError(msg)
-    return rust_udf_snapshot(ctx)
-
-
-def _build_view_nodes(
-    ctx: SessionContext,
-    *,
-    views: Sequence[ViewSpec],
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> list[ViewNode]:
-    """Build view nodes for registration (DEPRECATED).
-
-    DEPRECATED: This function supports legacy view-spec registration paths.
-    Prefer DataFusion-native builder functions for new work.
-
-    Returns
-    -------
-    list[ViewNode]
-        List of compiled view nodes.
-
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile is unavailable.
-    """
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
-    from datafusion_engine.views.graph import ViewNode
-
-    if runtime_profile is None:
-        msg = "Runtime profile is required for view planning."
-        raise ValueError(msg)
-    session_runtime = runtime_profile.session_runtime()
-    nodes: list[ViewNode] = []
-    for view in views:
-        builder = _resolve_view_builder(ctx, view=view)
-        df = builder(ctx)
-        plan_bundle = build_plan_bundle(
-            ctx,
-            df,
-            options=PlanBundleOptions(
-                compute_execution_plan=True,
-                session_runtime=session_runtime,
-            ),
-        )
-        nodes.append(
-            ViewNode(
-                name=view.name,
-                deps=(),
-                builder=builder,
-                plan_bundle=plan_bundle,
-            )
-        )
-    return nodes
-
-
-def _resolve_view_builder(
-    ctx: SessionContext,
-    view: ViewSpec,
-) -> Callable[[SessionContext], DataFrame]:
-    _ = ctx
-    builder = view.builder
-    if builder is None:
-        msg = f"View {view.name!r} missing builder for registration."
-        raise ValueError(msg)
-    return builder
 
 
 def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
@@ -4814,21 +4715,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             payload,
         )
 
-    def _register_schema_views(
-        self,
-        ctx: SessionContext,
-        *,
-        fragment_views: Sequence[ViewSpec],
-    ) -> set[str]:
-        _ = ctx
-        if fragment_views:
-            msg = (
-                f"{type(self).__name__} no longer supports legacy view specs; "
-                "use ensure_view_graph."
-            )
-            raise RuntimeError(msg)
-        return set()
-
     def _validate_catalog_autoloads(
         self,
         ctx: SessionContext,
@@ -4925,8 +4811,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
-        fragment_views: tuple[ViewSpec, ...] = ()
-        _ = self._register_schema_views(ctx, fragment_views=fragment_views)
         expected_names: tuple[str, ...] = ()
         self._validate_catalog_autoloads(
             ctx,
@@ -5780,7 +5664,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return self._cache_key()
 
     def _cached_context(self) -> SessionContext | None:
-        if not self.share_context:
+        if not self.share_context or self.diagnostics_sink is not None:
             return None
         return _SESSION_CONTEXT_CACHE.get(self._cache_key())
 
@@ -6268,6 +6152,12 @@ def align_table_to_schema(
     """
     resolved_schema = pa.schema(schema)
     resolved_table = to_arrow_table(table)
+    if _schema_has_extension(resolved_schema):
+        return _align_table_with_arrow(
+            resolved_table,
+            schema=resolved_schema,
+            keep_extra_columns=keep_extra_columns,
+        )
     session = ctx or DataFusionRuntimeProfile().session_context()
     temp_name = register_temp_table(session, resolved_table, prefix="__schema_align_")
     try:
@@ -6284,6 +6174,55 @@ def align_table_to_schema(
         schema=resolved_schema,
         keep_extra_columns=keep_extra_columns,
     )
+
+
+def _schema_has_extension(schema: pa.Schema) -> bool:
+    return any(_type_has_extension(field.type) for field in schema)
+
+
+def _type_has_extension(data_type: pa.DataType) -> bool:
+    if isinstance(data_type, pa.ExtensionType):
+        return True
+    if pa.types.is_struct(data_type):
+        return any(_type_has_extension(field.type) for field in data_type)
+    if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+        return _type_has_extension(data_type.value_field.type)
+    if pa.types.is_map(data_type):
+        return _type_has_extension(data_type.key_field.type) or _type_has_extension(
+            data_type.item_field.type
+        )
+    if pa.types.is_union(data_type):
+        return any(_type_has_extension(field.type) for field in data_type)
+    return False
+
+
+def _align_table_with_arrow(
+    table: pa.Table,
+    *,
+    schema: pa.Schema,
+    keep_extra_columns: bool,
+) -> pa.Table:
+    arrays: list[pa.Array | pa.ChunkedArray] = []
+    fields: list[pa.Field] = []
+    num_rows = int(table.num_rows)
+    table_fields = {field.name: field for field in table.schema}
+    for schema_field in schema:
+        if schema_field.name in table.column_names:
+            column = table[schema_field.name]
+            if column.type != schema_field.type:
+                column = column.cast(schema_field.type)
+            arrays.append(column)
+        else:
+            arrays.append(pa.nulls(num_rows, type=schema_field.type))
+        fields.append(schema_field)
+    if keep_extra_columns:
+        for name in table.column_names:
+            if name in schema.names:
+                continue
+            arrays.append(table[name])
+            fields.append(table_fields[name])
+    resolved_schema = pa.schema(fields, metadata=schema.metadata)
+    return pa.Table.from_arrays(arrays, schema=resolved_schema)
 
 
 def assert_schema_metadata(

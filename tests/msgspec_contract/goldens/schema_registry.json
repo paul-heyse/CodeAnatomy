@@ -1,49 +1,110 @@
 {
   "components": {
-    "DeltaFeatureGate": {
+    "DeltaAppTransaction": {
+      "$id": "schemas/delta/app_transaction.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "Protocol and feature-gating requirements for Delta tables.\n\nParameters\n----------\nmin_reader_version:\n    Minimum reader protocol version required.\nmin_writer_version:\n    Minimum writer protocol version required.\nrequired_reader_features:\n    Required Delta reader features.\nrequired_writer_features:\n    Required Delta writer features.",
+      "description": "Delta application transaction metadata.",
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "last_updated": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "app_id",
+        "version"
+      ],
+      "title": "DeltaAppTransaction",
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
+    },
+    "DeltaCommitOptions": {
+      "$id": "schemas/delta/commit_options.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Delta protocol schema component.",
+      "properties": {
+        "app_transaction": {
+          "anyOf": [
+            {
+              "$ref": "schemas/delta/app_transaction.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "create_checkpoint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "title": "DeltaCommitOptions",
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
+    },
+    "DeltaFeatureGate": {
+      "$id": "schemas/delta/feature_gate.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Delta protocol schema component.",
       "properties": {
         "min_reader_version": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "format": "int32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "min_writer_version": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "format": "int32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "required_reader_features": {
-          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "required_writer_features": {
-          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         }
       },
-      "required": [],
       "title": "DeltaFeatureGate",
       "type": "object",
       "x-codeanatomy-domain": "protocol"
@@ -1134,15 +1195,8 @@
           "type": "string"
         },
         "substrait_msgpack": {
-          "anyOf": [
-            {
-              "contentEncoding": "base64",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "contentEncoding": "base64",
+          "type": "string"
         },
         "substrait_validation_msgpack": {
           "anyOf": [
@@ -2608,8 +2662,114 @@
     }
   },
   "schemas": {
+    "DeltaAppTransaction": {
+      "$id": "schemas/delta/app_transaction.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Delta application transaction metadata.",
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "last_updated": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "app_id",
+        "version"
+      ],
+      "title": "DeltaAppTransaction",
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
+    },
+    "DeltaCommitOptions": {
+      "$id": "schemas/delta/commit_options.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Delta protocol schema component.",
+      "properties": {
+        "app_transaction": {
+          "anyOf": [
+            {
+              "$ref": "schemas/delta/app_transaction.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "create_checkpoint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "title": "DeltaCommitOptions",
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
+    },
     "DeltaFeatureGate": {
-      "$ref": "#/$defs/DeltaFeatureGate"
+      "$id": "schemas/delta/feature_gate.schema.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Delta protocol schema component.",
+      "properties": {
+        "min_reader_version": {
+          "format": "int32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_writer_version": {
+          "format": "int32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "required_reader_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_writer_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "DeltaFeatureGate",
+      "type": "object",
+      "x-codeanatomy-domain": "protocol"
     },
     "DeltaProtocolCompatibility": {
       "$ref": "#/$defs/DeltaProtocolCompatibility"

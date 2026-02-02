@@ -1,0 +1,40 @@
+{
+  "artifacts": [],
+  "evidence": [],
+  "key_findings": [
+    {
+      "anchor": {
+        "col": 0,
+        "end_col": 24,
+        "end_line": 8,
+        "file": "/home/paul/CodeAnatomy/tools/cq/cli.py",
+        "line": 8
+      },
+      "category": "from_import",
+      "details": {
+        "kind": "from_import",
+        "name": "Path",
+        "text": "from pathlib import Path"
+      },
+      "message": "from_import: Path",
+      "severity": "info"
+    }
+  ],
+  "run": {
+    "argv": [],
+    "macro": "q",
+    "root": "/home/paul/CodeAnatomy",
+    "schema_version": "cq.v1",
+    "toolchain": {
+      "python": "3.13.11",
+      "rg": "15.0.0",
+      "sg": "0.40.5"
+    }
+  },
+  "sections": [],
+  "summary": {
+    "files_scanned": 1,
+    "matches": 1,
+    "total_imports": 40
+  }
+}

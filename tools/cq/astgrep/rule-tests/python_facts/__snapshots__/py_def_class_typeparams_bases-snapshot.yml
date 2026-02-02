@@ -1,0 +1,38 @@
+id: py_def_class_typeparams_bases
+snapshots:
+  ? |
+    class Foo[T](Base):
+        pass
+  : labels:
+    - source: |-
+        class Foo[T](Base):
+            pass
+      style: primary
+      start: 0
+      end: 28
+    - source: '[T]'
+      style: secondary
+      start: 9
+      end: 12
+    - source: (Base)
+      style: secondary
+      start: 12
+      end: 18
+  ? |
+    class Generic[T, U](Protocol):
+        def method(self): pass
+  : labels:
+    - source: |-
+        class Generic[T, U](Protocol):
+            def method(self): pass
+      style: primary
+      start: 0
+      end: 57
+    - source: '[T, U]'
+      style: secondary
+      start: 13
+      end: 19
+    - source: (Protocol)
+      style: secondary
+      start: 19
+      end: 29

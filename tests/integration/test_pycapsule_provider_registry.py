@@ -14,9 +14,9 @@ from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DatasetSpec
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.diagnostics import diagnostic_profile
-from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
 
-require_datafusion()
+require_datafusion_udfs()
 require_deltalake()
 
 EXPECTED_ROW_COUNT = 2

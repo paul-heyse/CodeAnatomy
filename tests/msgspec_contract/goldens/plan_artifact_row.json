@@ -37,7 +37,7 @@
     "scan_key_1"
   ],
   "scan_units_msgpack": "kYGkbmFtZaZzY2FuLTE=",
-  "substrait_msgpack": null,
+  "substrait_msgpack": "xAlzdWJzdHJhaXQ=",
   "substrait_validation_msgpack": null,
   "udf_compatibility_detail_msgpack": "gaZzdGF0dXOib2s=",
   "udf_compatibility_ok": true,

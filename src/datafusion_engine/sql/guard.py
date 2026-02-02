@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.sql.options import sql_options_for_profile
+from datafusion_engine.sql.options import safe_sql_options_for_profile
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
@@ -98,7 +98,7 @@ def _resolve_sql_options(
     """
     if sql_options is not None:
         return sql_options
-    return sql_options_for_profile(runtime_profile)
+    return safe_sql_options_for_profile(runtime_profile)
 
 
 def _resolve_bindings(bindings: SqlBindings | None) -> _ResolvedSqlBindings:

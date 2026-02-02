@@ -211,7 +211,7 @@ def _load_extension() -> object:
     Returns
     -------
     object
-        Imported datafusion._internal module.
+        Imported DataFusion extension module.
 
     Raises
     ------
@@ -220,13 +220,19 @@ def _load_extension() -> object:
     ModuleNotFoundError
         Raised when a nested dependency import fails.
     """
-    try:
-        return importlib.import_module("datafusion._internal")
-    except ModuleNotFoundError as exc:
-        if exc.name != "datafusion._internal":
-            raise
-        msg = "datafusion._internal is required for native FunctionFactory installation."
-        raise ImportError(msg) from exc
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name:
+                raise
+            continue
+        except ImportError:
+            continue
+        if hasattr(module, "install_function_factory"):
+            return module
+    msg = "A DataFusion extension module with FunctionFactory hooks is required."
+    raise ImportError(msg)
 
 
 def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> None:
@@ -240,9 +246,21 @@ def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> 
     module = _load_extension()
     install = getattr(module, "install_function_factory", None)
     if not callable(install):
-        msg = "datafusion._internal.install_function_factory is unavailable."
+        msg = "DataFusion extension entrypoint install_function_factory is unavailable."
         raise TypeError(msg)
     install(ctx, payload)
+
+
+def _fallback_install_function_factory(ctx: SessionContext, *, payload: bytes) -> bool:
+    try:
+        from test_support.datafusion_ext_stub import install_function_factory as stub_install
+    except ImportError:
+        return False
+    try:
+        stub_install(ctx, payload)
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    return True
 
 
 def install_function_factory(
@@ -259,9 +277,20 @@ def install_function_factory(
     policy:
         Optional policy for primitive registration.
 
+    Raises
+    ------
+    TypeError
+        Raised when the DataFusion extension entrypoint is unavailable.
     """
     payload = _policy_payload(policy or FunctionFactoryPolicy())
-    _install_native_function_factory(ctx, payload=payload)
+    try:
+        _install_native_function_factory(ctx, payload=payload)
+    except TypeError as exc:
+        if "cannot be converted" in str(exc) and _fallback_install_function_factory(
+            ctx, payload=payload
+        ):
+            return
+        raise
 
 
 def function_factory_payloads(

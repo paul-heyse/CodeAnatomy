@@ -17,6 +17,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.hashing import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -107,7 +108,7 @@ def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     Expr
         Cast expression.
     """
-    return f.arrow_cast(expr, lit(data_type))
+    return safe_cast(expr, data_type)
 
 
 def _null_expr(data_type: str) -> Expr:
@@ -758,6 +759,45 @@ def relationship_ambiguity_report_df_builder(ctx: SessionContext) -> DataFrame:
     return result
 
 
+def relationship_candidates_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame of relationship candidates for diagnostics.
+
+    Returns
+    -------
+    DataFrame
+        Relationship candidates diagnostic DataFrame.
+    """
+    from semantics.diagnostics import build_relationship_candidates_view
+
+    return build_relationship_candidates_view(ctx)
+
+
+def relationship_decisions_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame of relationship decisions for diagnostics.
+
+    Returns
+    -------
+    DataFrame
+        Relationship decisions diagnostic DataFrame.
+    """
+    from semantics.diagnostics import build_relationship_decisions_view
+
+    return build_relationship_decisions_view(ctx)
+
+
+def schema_anomalies_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame of schema anomaly diagnostics.
+
+    Returns
+    -------
+    DataFrame
+        Schema anomaly diagnostic DataFrame.
+    """
+    from semantics.diagnostics import build_schema_anomalies_view
+
+    return build_schema_anomalies_view(ctx)
+
+
 def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame reporting extraction coverage per file.
 
@@ -793,6 +833,9 @@ VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "file_quality_v1": file_quality_df_builder,
     "relationship_quality_metrics_v1": relationship_quality_metrics_df_builder,
     "relationship_ambiguity_report_v1": relationship_ambiguity_report_df_builder,
+    "relationship_candidates_v1": relationship_candidates_df_builder,
+    "relationship_decisions_v1": relationship_decisions_df_builder,
+    "schema_anomalies_v1": schema_anomalies_df_builder,
     "file_coverage_report_v1": file_coverage_report_df_builder,
 }
 
@@ -817,7 +860,10 @@ __all__ = [
     "file_quality_df_builder",
     "reaching_defs_df_builder",
     "relationship_ambiguity_report_df_builder",
+    "relationship_candidates_df_builder",
+    "relationship_decisions_df_builder",
     "relationship_quality_metrics_df_builder",
+    "schema_anomalies_df_builder",
     "span_errors_df_builder",
     "type_exprs_df_builder",
     "type_nodes_df_builder",

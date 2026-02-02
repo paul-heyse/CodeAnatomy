@@ -216,10 +216,9 @@ def _bitwise_fold(args: Sequence[Expr], *, op: str) -> Expr:
 
 
 def _expr_stringify(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion import functions as f
-    from datafusion import lit
+    from datafusion_engine.expr.cast import safe_cast
 
-    return f.arrow_cast(args[0], lit("Utf8"))
+    return safe_cast(args[0], "Utf8")
 
 
 def _expr_trim(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:

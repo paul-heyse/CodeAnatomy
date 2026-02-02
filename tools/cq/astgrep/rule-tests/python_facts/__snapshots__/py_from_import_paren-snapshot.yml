@@ -1,0 +1,28 @@
+id: py_from_import_paren
+snapshots:
+  ? |
+    from typing import (
+        List,
+        Dict,
+    )
+  : labels:
+    - source: |-
+        from typing import (
+            List,
+            Dict,
+        )
+      style: primary
+      start: 0
+      end: 42
+  from typing import (List):
+    labels:
+    - source: from typing import (List)
+      style: primary
+      start: 0
+      end: 25
+  from typing import (List, Dict):
+    labels:
+    - source: from typing import (List, Dict)
+      style: primary
+      start: 0
+      end: 31

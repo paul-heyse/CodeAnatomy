@@ -365,9 +365,7 @@ def _registry_path(
     run_id: str | None,
 ) -> Path:
     filename = f"semantic_registry_{plan_signature}.json"
-    explicit = config.get("semantic_registry_path") or config.get(
-        "hamilton_semantic_registry_path"
-    )
+    explicit = config.get("semantic_registry_path") or config.get("hamilton_semantic_registry_path")
     if isinstance(explicit, str) and explicit:
         base = Path(explicit).expanduser()
         if base.suffix:

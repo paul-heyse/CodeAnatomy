@@ -541,6 +541,9 @@ def configure_otel(
     OtelProviders
         Configured providers for traces, metrics, and logs.
     """
+    if options is not None and options.test_mode and _STATE["providers"] is not None:
+        _STATE["providers"].shutdown()
+        _STATE["providers"] = None
     if _STATE["providers"] is not None:
         return _STATE["providers"]
     _set_propagators()

@@ -1,0 +1,11 @@
+id: py_def_class_bases
+valid:
+  - "class Foo: pass"
+  - "def foo(): pass"
+invalid:
+  - |
+    class Foo(Bar):
+        pass
+  - |
+    class Child(Parent, Mixin):
+        x = 1

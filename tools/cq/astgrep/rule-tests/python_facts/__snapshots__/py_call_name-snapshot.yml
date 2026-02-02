@@ -1,0 +1,52 @@
+id: py_call_name
+snapshots:
+  Bar():
+    labels:
+    - source: Bar()
+      style: primary
+      start: 0
+      end: 5
+    - source: Bar
+      style: secondary
+      start: 0
+      end: 3
+  foo():
+    labels:
+    - source: foo()
+      style: primary
+      start: 0
+      end: 5
+    - source: foo
+      style: secondary
+      start: 0
+      end: 3
+  func(a, b, c):
+    labels:
+    - source: func(a, b, c)
+      style: primary
+      start: 0
+      end: 13
+    - source: func
+      style: secondary
+      start: 0
+      end: 4
+  len(items):
+    labels:
+    - source: len(items)
+      style: primary
+      start: 0
+      end: 10
+    - source: len
+      style: secondary
+      start: 0
+      end: 3
+  print(x):
+    labels:
+    - source: print(x)
+      style: primary
+      start: 0
+      end: 8
+    - source: print
+      style: secondary
+      start: 0
+      end: 5

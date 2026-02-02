@@ -1,0 +1,13 @@
+id: py_def_class_typeparams
+language: python
+severity: hint
+rule:
+  kind: class_definition
+  has:
+    kind: type_parameter
+  not:
+    has:
+      kind: argument_list
+metadata:
+  record: def
+  kind: class_typeparams

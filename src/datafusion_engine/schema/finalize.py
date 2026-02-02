@@ -23,6 +23,7 @@ from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import ArrayLike, DataTypeLike, SchemaLike, TableLike
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.kernels import (
     DedupeSpec,
     SortKey,
@@ -573,7 +574,7 @@ def _row_id_for_errors(
             parts = [lit(prefix)]
             for name in key_cols:
                 if name in resolved_table.column_names:
-                    expr = f.arrow_cast(col(name), lit("Utf8"))
+                    expr = safe_cast(col(name), "Utf8")
                     expr = f.coalesce(expr, lit(_HASH_NULL_SENTINEL))
                 else:
                     expr = lit(_HASH_NULL_SENTINEL)
@@ -676,7 +677,7 @@ def _aggregate_error_detail_lists_df(
             expr = col(name)
             if patypes.is_dictionary(field.type):
                 dict_type = cast("pa.DictionaryType", field.type)
-                expr = f.arrow_cast(expr, lit(str(dict_type.value_type)))
+                expr = safe_cast(expr, dict_type.value_type)
             exprs.append(expr.alias(name))
         df = df.select(*exprs)
         struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])

@@ -1,0 +1,9 @@
+id: py_raise_from
+language: python
+severity: hint
+rule:
+  kind: raise_statement
+  regex: " from "
+metadata:
+  record: raise
+  kind: raise_from

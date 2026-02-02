@@ -767,6 +767,7 @@ def _semantic_view_specs_for_registration(
         input_mapping=input_mapping,
         config=None,
         use_cdf=use_cdf,
+        runtime_profile=runtime_profile,
     )
     projection_options = semantic_projection_options(
         SemanticProjectionConfig(
@@ -896,6 +897,8 @@ def _cpg_view_nodes(
     from cpg.view_builders_df import (
         build_cpg_edges_by_dst_df,
         build_cpg_edges_by_src_df,
+        build_cpg_edges_df,
+        build_cpg_nodes_df,
         build_cpg_props_df,
         build_cpg_props_map_df,
     )
@@ -915,6 +918,8 @@ def _cpg_view_nodes(
     props_identity = TaskIdentity(name="cpg.props", priority=priority)
 
     view_specs: tuple[tuple[str, DataFrameBuilder], ...] = (
+        ("cpg_nodes_v1", _wrap(build_cpg_nodes_df)),
+        ("cpg_edges_v1", _wrap(build_cpg_edges_df)),
         ("cpg_props_v1", _wrap(partial(build_cpg_props_df, task_identity=props_identity))),
         ("cpg_props_map_v1", _wrap(build_cpg_props_map_df)),
         ("cpg_edges_by_src_v1", _wrap(build_cpg_edges_by_src_df)),
@@ -933,7 +938,7 @@ def _cpg_view_nodes(
         metadata = _metadata_with_required_udfs(None, required)
         schema = arrow_schema_from_df(bundle.df)
         cache_policy = "none"
-        if name in {"cpg_edges_v1", "cpg_props_v1"}:
+        if name in {"cpg_nodes_v1", "cpg_edges_v1", "cpg_props_v1"}:
             cache_policy = "delta_staging"
         nodes.append(
             ViewNode(

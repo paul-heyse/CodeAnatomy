@@ -1,0 +1,32 @@
+id: py_import_as
+snapshots:
+  import numpy as np:
+    labels:
+    - source: import numpy as np
+      style: primary
+      start: 0
+      end: 18
+    - source: numpy as np
+      style: secondary
+      start: 7
+      end: 18
+  import pandas as pd:
+    labels:
+    - source: import pandas as pd
+      style: primary
+      start: 0
+      end: 19
+    - source: pandas as pd
+      style: secondary
+      start: 7
+      end: 19
+  import tensorflow as tf:
+    labels:
+    - source: import tensorflow as tf
+      style: primary
+      start: 0
+      end: 23
+    - source: tensorflow as tf
+      style: secondary
+      start: 7
+      end: 23

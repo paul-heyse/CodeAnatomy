@@ -1,0 +1,9 @@
+id: py_except_bare
+language: python
+severity: hint
+rule:
+  kind: except_clause
+  regex: "^except:"
+metadata:
+  record: except
+  kind: except_bare

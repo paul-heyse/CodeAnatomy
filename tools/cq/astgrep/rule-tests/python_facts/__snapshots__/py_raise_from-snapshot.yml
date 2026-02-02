@@ -1,0 +1,14 @@
+id: py_raise_from
+snapshots:
+  raise NewError('msg') from original:
+    labels:
+    - source: raise NewError('msg') from original
+      style: primary
+      start: 0
+      end: 35
+  raise ValueError() from e:
+    labels:
+    - source: raise ValueError() from e
+      style: primary
+      start: 0
+      end: 25

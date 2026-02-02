@@ -1,0 +1,12 @@
+id: py_def_class_typeparams_bases
+valid:
+  - "class Foo: pass"
+  - "class Foo[T]: pass"
+  - "class Foo(Bar): pass"
+invalid:
+  - |
+    class Foo[T](Base):
+        pass
+  - |
+    class Generic[T, U](Protocol):
+        def method(self): pass

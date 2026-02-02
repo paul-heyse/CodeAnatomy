@@ -1,0 +1,14 @@
+id: py_def_class
+language: python
+severity: hint
+rule:
+  kind: class_definition
+  not:
+    any:
+      - has:
+          kind: argument_list
+      - has:
+          kind: type_parameter
+metadata:
+  record: def
+  kind: class

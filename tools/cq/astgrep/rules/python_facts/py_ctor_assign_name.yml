@@ -1,0 +1,14 @@
+id: py_ctor_assign_name
+language: python
+severity: hint
+rule:
+  kind: assignment
+  has:
+    kind: call
+    has:
+      kind: identifier
+      field: function
+      regex: "^[A-Z]"
+metadata:
+  record: assign_ctor
+  kind: ctor_assign_name

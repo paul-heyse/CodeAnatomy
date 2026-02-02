@@ -1,0 +1,22 @@
+id: py_from_import_as
+snapshots:
+  from os import path as p:
+    labels:
+    - source: from os import path as p
+      style: primary
+      start: 0
+      end: 24
+    - source: path as p
+      style: secondary
+      start: 15
+      end: 24
+  from typing import Optional as Opt:
+    labels:
+    - source: from typing import Optional as Opt
+      style: primary
+      start: 0
+      end: 34
+    - source: Optional as Opt
+      style: secondary
+      start: 19
+      end: 34

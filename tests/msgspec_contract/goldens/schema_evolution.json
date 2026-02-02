@@ -1,11 +1,5 @@
 {
   "field_order": {
-    "DeltaFeatureGate": [
-      "min_reader_version",
-      "min_writer_version",
-      "required_reader_features",
-      "required_writer_features"
-    ],
     "DeltaProtocolCompatibility": [
       "compatible",
       "reason",
@@ -1131,13 +1125,8 @@
           "name": "substrait_msgpack",
           "required": true,
           "type": {
-            "types": [
-              {
-                "max_length": null,
-                "min_length": null
-              },
-              {}
-            ]
+            "max_length": null,
+            "min_length": null
           }
         },
         {
@@ -5449,7 +5438,7 @@
     },
     {
       "array_like": false,
-      "cls": "datafusion_engine.delta_protocol.DeltaProtocolSnapshot",
+      "cls": "datafusion_engine.delta.protocol.DeltaProtocolSnapshot",
       "fields": [
         {
           "default": null,
@@ -5528,7 +5517,7 @@
     },
     {
       "array_like": false,
-      "cls": "datafusion_engine.delta_protocol.DeltaProtocolCompatibility",
+      "cls": "datafusion_engine.delta.protocol.DeltaProtocolCompatibility",
       "fields": [
         {
           "default": "NODEFAULT",
@@ -5773,85 +5762,6 @@
         }
       ],
       "forbid_unknown_fields": false,
-      "tag": null,
-      "tag_field": null
-    },
-    {
-      "array_like": false,
-      "cls": "datafusion_engine.delta_protocol.DeltaFeatureGate",
-      "fields": [
-        {
-          "default": null,
-          "default_factory": "NODEFAULT",
-          "encode_name": "min_reader_version",
-          "name": "min_reader_version",
-          "required": false,
-          "type": {
-            "types": [
-              {
-                "ge": 0,
-                "gt": null,
-                "le": null,
-                "lt": null,
-                "multiple_of": null
-              },
-              {}
-            ]
-          }
-        },
-        {
-          "default": null,
-          "default_factory": "NODEFAULT",
-          "encode_name": "min_writer_version",
-          "name": "min_writer_version",
-          "required": false,
-          "type": {
-            "types": [
-              {
-                "ge": 0,
-                "gt": null,
-                "le": null,
-                "lt": null,
-                "multiple_of": null
-              },
-              {}
-            ]
-          }
-        },
-        {
-          "default": [],
-          "default_factory": "NODEFAULT",
-          "encode_name": "required_reader_features",
-          "name": "required_reader_features",
-          "required": false,
-          "type": {
-            "item_type": {
-              "max_length": null,
-              "min_length": null,
-              "pattern": null
-            },
-            "max_length": null,
-            "min_length": null
-          }
-        },
-        {
-          "default": [],
-          "default_factory": "NODEFAULT",
-          "encode_name": "required_writer_features",
-          "name": "required_writer_features",
-          "required": false,
-          "type": {
-            "item_type": {
-              "max_length": null,
-              "min_length": null,
-              "pattern": null
-            },
-            "max_length": null,
-            "min_length": null
-          }
-        }
-      ],
-      "forbid_unknown_fields": true,
       "tag": null,
       "tag_field": null
     },

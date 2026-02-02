@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -60,13 +61,24 @@ def _normalize_dataset_name(name: str) -> str:
 def _table_from_dataset(dataset: object) -> Table:
     if isinstance(dataset, Table):
         return dataset
+    try:
+        df_internal = importlib.import_module("datafusion._internal")
+    except ImportError:
+        df_internal = None
+    if df_internal is not None:
+        try:
+            raw_table_cls = df_internal.catalog.RawTable
+        except AttributeError:
+            raw_table_cls = None
+        if raw_table_cls is not None and isinstance(dataset, raw_table_cls):
+            return Table(dataset)
+    provider = getattr(dataset, "__datafusion_table_provider__", None)
+    if provider is not None:
+        return Table(cast("TableProviderExportable", dataset))
     if isinstance(dataset, ds.Dataset):
         return Table(dataset)
     if isinstance(dataset, DataFrame):
         return Table(dataset)
-    provider = getattr(dataset, "__datafusion_table_provider__", None)
-    if callable(provider):
-        return Table(cast("TableProviderExportable", dataset))
     return Table(ds.dataset(dataset))
 
 

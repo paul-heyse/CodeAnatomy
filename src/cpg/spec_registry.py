@@ -2,672 +2,77 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from cpg import kind_catalog
 from cpg.constants import ROLE_FLAG_SPECS
-from cpg.contract_map import prop_fields_from_catalog
 from cpg.kind_catalog import EntityKind
-from cpg.node_families import NODE_FAMILY_DEFAULTS, NodeFamily
 from cpg.specs import (
-    INCLUDE_HEAVY_JSON,
-    TRANSFORM_EXPR_CONTEXT,
     TRANSFORM_FLAG_TO_BOOL,
-    NodeEmitSpec,
     NodePlanSpec,
     PropFieldSpec,
     PropTableSpec,
 )
 
 if TYPE_CHECKING:
-    from cpg.contract_map import PropFieldInput
-    from cpg.kind_catalog import NodeKindId
+    from semantics.cpg_entity_specs import CpgEntitySpec
+    from semantics.registry import SemanticModel
 
 
-@dataclass(frozen=True)
-class EntityFamilySpec:
-    """Spec for a node/prop family with shared identity columns.
-
-    The ``node_family`` field provides sensible defaults for column names
-    (path_cols, bstart_cols, bend_cols, file_id_cols). Explicit values
-    override the family defaults.
-    """
-
-    name: str
-    node_kind: NodeKindId
-    id_cols: tuple[str, ...]
-    node_table: str | None
-    prop_source_map: Mapping[str, PropFieldInput] = field(default_factory=dict)
-    prop_table: str | None = None
-    node_name: str | None = None
-    prop_name: str | None = None
-    node_family: NodeFamily | None = None
-    path_cols: tuple[str, ...] | None = None
-    bstart_cols: tuple[str, ...] | None = None
-    bend_cols: tuple[str, ...] | None = None
-    file_id_cols: tuple[str, ...] | None = None
-    prop_include_if_id: str | None = None
-
-    def _resolve_cols(
-        self,
-        explicit: tuple[str, ...] | None,
-        family_attr: str,
-        default: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        """Resolve column tuple from explicit value, family default, or fallback.
-
-        Parameters
-        ----------
-        explicit
-            Explicitly provided column tuple.
-        family_attr
-            Attribute name on NodeFamilyDefaults.
-        default
-            Fallback default if no family is set.
-
-        Returns
-        -------
-        tuple[str, ...]
-            Resolved column tuple.
-        """
-        if explicit is not None:
-            return explicit
-        if self.node_family is not None:
-            defaults = NODE_FAMILY_DEFAULTS.get(self.node_family)
-            if defaults is not None:
-                return getattr(defaults, family_attr, default)
-        return default
-
-    @property
-    def resolved_path_cols(self) -> tuple[str, ...]:
-        """Return resolved path columns."""
-        return self._resolve_cols(self.path_cols, "path_cols", ())
-
-    @property
-    def resolved_bstart_cols(self) -> tuple[str, ...]:
-        """Return resolved bstart columns."""
-        return self._resolve_cols(self.bstart_cols, "bstart_cols", ())
-
-    @property
-    def resolved_bend_cols(self) -> tuple[str, ...]:
-        """Return resolved bend columns."""
-        return self._resolve_cols(self.bend_cols, "bend_cols", ())
-
-    @property
-    def resolved_file_id_cols(self) -> tuple[str, ...]:
-        """Return resolved file_id columns."""
-        return self._resolve_cols(self.file_id_cols, "file_id_cols", ())
-
-    def to_node_plan(self) -> NodePlanSpec | None:
-        """Return a NodePlanSpec for this family when configured.
-
-        Returns
-        -------
-        NodePlanSpec | None
-            Node plan spec or ``None`` when not configured.
-        """
-        if self.node_table is None:
-            return None
-        return NodePlanSpec(
-            name=self.node_name or self.name,
-            table_ref=self.node_table,
-            emit=NodeEmitSpec(
-                node_kind=self.node_kind,
-                id_cols=self.id_cols,
-                path_cols=self.resolved_path_cols,
-                bstart_cols=self.resolved_bstart_cols,
-                bend_cols=self.resolved_bend_cols,
-                file_id_cols=self.resolved_file_id_cols,
-            ),
-        )
-
-    def to_prop_table(
-        self,
-        *,
-        source_columns: Sequence[str] | None = None,
-    ) -> PropTableSpec | None:
-        """Return a PropTableSpec for this family when configured.
-
-        Parameters
-        ----------
-        source_columns:
-            Optional list of available source columns for validation.
-
-        Returns
-        -------
-        PropTableSpec | None
-            Prop table spec or ``None`` when not configured.
-        """
-        table = self.prop_table or self.node_table
-        if table is None:
-            return None
-        prop_fields = prop_fields_from_catalog(
-            source_map=self.prop_source_map,
-            source_columns=source_columns,
-        )
-        return PropTableSpec(
-            name=self.prop_name or self.name,
-            table_ref=table,
-            entity_kind=EntityKind.NODE,
-            id_cols=self.id_cols,
-            node_kind=self.node_kind,
-            fields=prop_fields,
-            include_if_id=self.prop_include_if_id,
-        )
+def _entity_specs(model: SemanticModel) -> tuple[CpgEntitySpec, ...]:
+    return model.cpg_entity_specs()
 
 
-def _prop_source_map(
-    node_kind: NodeKindId,
-    source_map: Mapping[str, PropFieldInput],
-) -> Mapping[str, PropFieldInput]:
-    _ = node_kind
-    return dict(source_map)
-
-
-ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
-    EntityFamilySpec(
-        name="file",
-        node_kind=kind_catalog.NODE_KIND_PY_FILE,
-        id_cols=("file_id",),
-        node_table="repo_files_nodes",
-        node_family=NodeFamily.FILE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_FILE,
-            {
-                "path": "path",
-                "size_bytes": "size_bytes",
-                "file_sha256": "file_sha256",
-                "encoding": "encoding",
-            },
-        ),
-        prop_table="repo_files",
-    ),
-    EntityFamilySpec(
-        name="ref",
-        node_kind=kind_catalog.NODE_KIND_CST_REF,
-        id_cols=("ref_id",),
-        node_table="cst_refs",
-        node_family=NodeFamily.CST,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_CST_REF,
-            {
-                "ref_text": "ref_text",
-                "ref_kind": "ref_kind",
-                "expr_context": PropFieldSpec(
-                    prop_key="expr_context",
-                    source_col="expr_ctx",
-                    transform_id=TRANSFORM_EXPR_CONTEXT,
-                ),
-                "scope_type": "scope_type",
-                "scope_name": "scope_name",
-                "scope_role": "scope_role",
-                "parent_kind": "parent_kind",
-                "inferred_type": "inferred_type",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="import_alias",
-        node_kind=kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
-        id_cols=("import_alias_id", "import_id"),
-        node_table="cst_imports",
-        node_family=NodeFamily.CST,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
-            {
-                "import_kind": "kind",
-                "module": "module",
-                "relative_level": "relative_level",
-                "imported_name": "name",
-                "name": "name",
-                "asname": "asname",
-                "is_star": "is_star",
-            },
-        ),
-        # Override span cols for alias-specific columns
-        bstart_cols=("bstart", "alias_bstart"),
-        bend_cols=("bend", "alias_bend"),
-    ),
-    EntityFamilySpec(
-        name="callsite",
-        node_kind=kind_catalog.NODE_KIND_CST_CALLSITE,
-        id_cols=("call_id",),
-        node_table="cst_callsites",
-        node_family=NodeFamily.CST,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_CST_CALLSITE,
-            {
-                "callee_shape": "callee_shape",
-                "callee_text": "callee_text",
-                "callee_dotted": "callee_dotted",
-                "arg_count": "arg_count",
-                "inferred_type": "inferred_type",
-                "callee_qnames": PropFieldSpec(
-                    prop_key="callee_qnames",
-                    source_col="callee_qnames",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "callee_fqns": PropFieldSpec(
-                    prop_key="callee_fqns",
-                    source_col="callee_fqns",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-            },
-        ),
-        # Override span cols for callsite-specific columns
-        bstart_cols=("call_bstart", "bstart"),
-        bend_cols=("call_bend", "bend"),
-    ),
-    EntityFamilySpec(
-        name="definition",
-        node_kind=kind_catalog.NODE_KIND_CST_DEF,
-        id_cols=("def_id",),
-        node_table="cst_defs",
-        node_family=NodeFamily.CST,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_CST_DEF,
-            {
-                "def_kind": "def_kind_norm",
-                "name": "name",
-                "container_def_id": "container_def_id",
-                "qnames": PropFieldSpec(
-                    prop_key="qnames",
-                    source_col="qnames",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "def_fqns": PropFieldSpec(
-                    prop_key="def_fqns",
-                    source_col="def_fqns",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "docstring": "docstring",
-                "decorator_count": "decorator_count",
-            },
-        ),
-        prop_table="cst_defs_norm",
-        # Override span cols for definition-specific columns
-        bstart_cols=("bstart", "name_bstart"),
-        bend_cols=("bend", "name_bend"),
-    ),
-    EntityFamilySpec(
-        name="sym_scope",
-        node_kind=kind_catalog.NODE_KIND_SYM_SCOPE,
-        id_cols=("scope_id",),
-        node_table="symtable_scopes",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_SYM_SCOPE,
-            {
-                "scope_id": "scope_id",
-                "scope_type": "scope_type",
-                "scope_name": "scope_name",
-                "function_partitions": PropFieldSpec(
-                    prop_key="function_partitions",
-                    source_col="function_partitions",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "class_methods": PropFieldSpec(
-                    prop_key="class_methods",
-                    source_col="class_methods",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "lineno": "lineno",
-                "is_meta_scope": "is_meta_scope",
-                "path": "path",
-            },
-        ),
-        # Symtable scopes have no span
-        bstart_cols=(),
-        bend_cols=(),
-    ),
-    EntityFamilySpec(
-        name="sym_symbol",
-        node_kind=kind_catalog.NODE_KIND_SYM_SYMBOL,
-        id_cols=("sym_symbol_id",),
-        node_table="symtable_symbols",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_SYM_SYMBOL,
-            {
-                "scope_id": "scope_id",
-                "name": "symbol_name",
-                "namespace_count": "namespace_count",
-                "namespace_block_ids": PropFieldSpec(
-                    prop_key="namespace_block_ids",
-                    source_col="namespace_block_ids",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "is_local": "is_local",
-                "is_global": "is_global",
-                "is_nonlocal": "is_nonlocal",
-                "is_free": "is_free",
-                "is_parameter": "is_parameter",
-                "is_imported": "is_imported",
-                "is_assigned": "is_assigned",
-                "is_referenced": "is_referenced",
-                "is_annotated": "is_annotated",
-                "is_namespace": "is_namespace",
-            },
-        ),
-        # Symtable symbols have no span
-        bstart_cols=(),
-        bend_cols=(),
-    ),
-    EntityFamilySpec(
-        name="py_scope",
-        node_kind=kind_catalog.NODE_KIND_PY_SCOPE,
-        id_cols=("scope_id",),
-        node_table="symtable_scopes",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_SCOPE,
-            {
-                "scope_id": "scope_id",
-                "scope_type": "scope_type",
-                "path": "path",
-            },
-        ),
-        # PY scopes have no span
-        bstart_cols=(),
-        bend_cols=(),
-    ),
-    EntityFamilySpec(
-        name="py_binding",
-        node_kind=kind_catalog.NODE_KIND_PY_BINDING,
-        id_cols=("binding_id",),
-        node_table="symtable_bindings",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_BINDING,
-            {
-                "binding_id": "binding_id",
-                "scope_id": "scope_id",
-                "name": "name",
-                "binding_kind": "binding_kind",
-                "declared_here": "declared_here",
-                "referenced_here": "referenced_here",
-                "assigned_here": "assigned_here",
-                "annotated_here": "annotated_here",
-            },
-        ),
-        # Bindings have no span
-        bstart_cols=(),
-        bend_cols=(),
-    ),
-    EntityFamilySpec(
-        name="py_def_site",
-        node_kind=kind_catalog.NODE_KIND_PY_DEF_SITE,
-        id_cols=("def_site_id",),
-        node_table="symtable_def_sites",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_DEF_SITE,
-            {
-                "binding_id": "binding_id",
-                "name": "name",
-                "def_site_kind": "def_site_kind",
-                "anchor_confidence": "anchor_confidence",
-                "anchor_reason": "anchor_reason",
-                "ambiguity_group_id": "ambiguity_group_id",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="py_use_site",
-        node_kind=kind_catalog.NODE_KIND_PY_USE_SITE,
-        id_cols=("use_site_id",),
-        node_table="symtable_use_sites",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_USE_SITE,
-            {
-                "binding_id": "binding_id",
-                "name": "name",
-                "use_kind": "use_kind",
-                "anchor_confidence": "anchor_confidence",
-                "anchor_reason": "anchor_reason",
-                "ambiguity_group_id": "ambiguity_group_id",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="type_param",
-        node_kind=kind_catalog.NODE_KIND_TYPE_PARAM,
-        id_cols=("type_param_id",),
-        node_table="symtable_type_params",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TYPE_PARAM,
-            {
-                "name": "name",
-                "variance": "variance",
-            },
-        ),
-        # Type params have no span
-        bstart_cols=(),
-        bend_cols=(),
-    ),
-    EntityFamilySpec(
-        name="qualified_name",
-        node_kind=kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
-        id_cols=("qname_id",),
-        node_table="dim_qualified_names",
-        node_family=NodeFamily.SYMTABLE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
-            {"qname": "qname"},
-        ),
-        # Override to remove file_id
-        file_id_cols=(),
-    ),
-    EntityFamilySpec(
-        name="scip_symbol",
-        node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
-        id_cols=("symbol",),
-        node_table="scip_symbols",
-        node_family=NodeFamily.SCIP,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_SCIP_SYMBOL,
-            {
-                "symbol": "symbol",
-                "display_name": "display_name",
-                "symbol_kind": "kind_name",
-                "enclosing_symbol": "enclosing_symbol",
-                "documentation": PropFieldSpec(
-                    prop_key="documentation",
-                    source_col="documentation",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "signature_text": PropFieldSpec(
-                    prop_key="signature_text",
-                    source_col="signature_text",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "signature_language": PropFieldSpec(
-                    prop_key="signature_language",
-                    source_col="signature_language",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-            },
-        ),
-        prop_table="scip_symbol_information",
-    ),
-    EntityFamilySpec(
-        name="scip_external_symbol",
-        node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
-        id_cols=("symbol",),
-        node_table=None,
-        node_family=NodeFamily.SCIP,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_SCIP_SYMBOL,
-            {
-                "symbol": "symbol",
-                "display_name": "display_name",
-                "symbol_kind": "kind_name",
-                "enclosing_symbol": "enclosing_symbol",
-                "documentation": PropFieldSpec(
-                    prop_key="documentation",
-                    source_col="documentation",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "signature_text": PropFieldSpec(
-                    prop_key="signature_text",
-                    source_col="signature_text",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-                "signature_language": PropFieldSpec(
-                    prop_key="signature_language",
-                    source_col="signature_language",
-                    include_if_id=INCLUDE_HEAVY_JSON,
-                ),
-            },
-        ),
-        prop_table="scip_external_symbol_information",
-        prop_name="scip_external_symbol_props",
-    ),
-    EntityFamilySpec(
-        name="tree_sitter_node",
-        node_kind=kind_catalog.NODE_KIND_TS_NODE,
-        id_cols=("ts_node_id",),
-        node_table="ts_nodes",
-        node_family=NodeFamily.TREESITTER,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TS_NODE,
-            {
-                "ts_type": "ts_type",
-                "ts_kind_id": "ts_kind_id",
-                "ts_grammar_id": "ts_grammar_id",
-                "ts_grammar_name": "ts_grammar_name",
-                "ts_node_uid": "ts_node_uid",
-                "is_named": "is_named",
-                "has_error": "has_error",
-                "is_error": "is_error",
-                "is_missing": "is_missing",
-                "is_extra": "is_extra",
-                "has_changes": "has_changes",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="tree_sitter_error",
-        node_kind=kind_catalog.NODE_KIND_TS_ERROR,
-        id_cols=("ts_error_id",),
-        node_table="ts_errors",
-        node_family=NodeFamily.TREESITTER,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TS_ERROR,
-            {
-                "ts_type": "ts_type",
-                "is_error": "is_error",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="tree_sitter_missing",
-        node_kind=kind_catalog.NODE_KIND_TS_MISSING,
-        id_cols=("ts_missing_id",),
-        node_table="ts_missing",
-        node_family=NodeFamily.TREESITTER,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TS_MISSING,
-            {
-                "ts_type": "ts_type",
-                "is_missing": "is_missing",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="type_expr",
-        node_kind=kind_catalog.NODE_KIND_TYPE_EXPR,
-        id_cols=("type_expr_id",),
-        node_table="type_exprs_norm",
-        node_family=NodeFamily.TYPE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TYPE_EXPR,
-            {
-                "expr_text": "expr_text",
-                "expr_kind": "expr_kind",
-                "expr_role": "expr_role",
-                "param_name": "param_name",
-            },
-        ),
-    ),
-    EntityFamilySpec(
-        name="type",
-        node_kind=kind_catalog.NODE_KIND_TYPE,
-        id_cols=("type_id",),
-        node_table="types_norm",
-        node_family=NodeFamily.TYPE,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_TYPE,
-            {
-                "type_repr": "type_repr",
-                "type_form": "type_form",
-                "origin": "origin",
-            },
-        ),
-        # Types have no anchoring
-        path_cols=(),
-        bstart_cols=(),
-        bend_cols=(),
-        file_id_cols=(),
-    ),
-    EntityFamilySpec(
-        name="diagnostic",
-        node_kind=kind_catalog.NODE_KIND_DIAG,
-        id_cols=("diag_id",),
-        node_table="diagnostics_norm",
-        node_family=NodeFamily.DIAGNOSTIC,
-        prop_source_map=_prop_source_map(
-            kind_catalog.NODE_KIND_DIAG,
-            {
-                "severity": "severity",
-                "message": "message",
-                "diag_source": "diag_source",
-                "code": "code",
-                "details": "details",
-            },
-        ),
-    ),
-)
-
-
-def node_plan_specs() -> tuple[NodePlanSpec, ...]:
-    """Return node plan specs for all node-emitting families.
+def build_node_plan_specs(model: SemanticModel) -> tuple[NodePlanSpec, ...]:
+    """Build node plan specs for all node-emitting entities.
 
     Returns
     -------
     tuple[NodePlanSpec, ...]
-        Node plan specs for configured families.
+        Node plan specs for configured entities.
     """
     specs: list[NodePlanSpec] = []
-    for spec in ENTITY_FAMILY_SPECS:
+    for spec in _entity_specs(model):
         plan = spec.to_node_plan()
         if plan is not None:
             specs.append(plan)
     return tuple(specs)
 
 
-def prop_table_specs(
+def node_plan_specs() -> tuple[NodePlanSpec, ...]:
+    """Return node plan specs for all node-emitting entities.
+
+    Returns
+    -------
+    tuple[NodePlanSpec, ...]
+        Node plan specs for configured entities.
+    """
+    from semantics.ir_pipeline import build_semantic_ir
+
+    return build_semantic_ir().cpg_node_specs
+
+
+def build_prop_table_specs(
+    model: SemanticModel,
     *,
     source_columns_lookup: Callable[[str], Sequence[str] | None] | None = None,
 ) -> tuple[PropTableSpec, ...]:
-    """Return prop table specs for all prop-emitting families.
+    """Build prop table specs for all prop-emitting entities.
 
     Parameters
     ----------
+    model
+        Semantic model providing CPG entity specs.
     source_columns_lookup:
         Optional function returning source columns for a table name.
 
     Returns
     -------
     tuple[PropTableSpec, ...]
-        Prop table specs for configured families.
+        Prop table specs for configured entities.
     """
     specs: list[PropTableSpec] = []
-    for spec in ENTITY_FAMILY_SPECS:
+    for spec in _entity_specs(model):
         table_name = spec.prop_table or spec.node_table
         source_columns = None
         if table_name is not None and source_columns_lookup is not None:
@@ -676,6 +81,26 @@ def prop_table_specs(
         if table is not None:
             specs.append(table)
     return tuple(specs)
+
+
+def prop_table_specs(
+    *,
+    source_columns_lookup: Callable[[str], Sequence[str] | None] | None = None,
+) -> tuple[PropTableSpec, ...]:
+    """Return prop table specs for all prop-emitting entities.
+
+    Returns
+    -------
+    tuple[PropTableSpec, ...]
+        Prop table specs for configured entities.
+    """
+    if source_columns_lookup is None:
+        from semantics.ir_pipeline import build_semantic_ir
+
+        return build_semantic_ir().cpg_prop_specs
+    from semantics.registry import SEMANTIC_MODEL
+
+    return build_prop_table_specs(SEMANTIC_MODEL, source_columns_lookup=source_columns_lookup)
 
 
 def scip_role_flag_prop_spec() -> PropTableSpec:
@@ -737,9 +162,9 @@ def edge_prop_spec() -> PropTableSpec:
 
 
 __all__ = [
-    "ENTITY_FAMILY_SPECS",
     "ROLE_FLAG_SPECS",
-    "EntityFamilySpec",
+    "build_node_plan_specs",
+    "build_prop_table_specs",
     "edge_prop_spec",
     "node_plan_specs",
     "prop_table_specs",

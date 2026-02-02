@@ -1,0 +1,20 @@
+id: py_raise
+snapshots:
+  raise Exception('error'):
+    labels:
+    - source: raise Exception('error')
+      style: primary
+      start: 0
+      end: 24
+  raise RuntimeError(msg):
+    labels:
+    - source: raise RuntimeError(msg)
+      style: primary
+      start: 0
+      end: 23
+  raise ValueError():
+    labels:
+    - source: raise ValueError()
+      style: primary
+      start: 0
+      end: 18

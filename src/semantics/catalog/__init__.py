@@ -49,7 +49,6 @@ from semantics.catalog.dataset_rows import (
     dataset_names,
     dataset_names_by_category,
     dataset_row,
-    dataset_rows,
     get_all_dataset_rows,
     get_analysis_dataset_rows,
     get_cdf_enabled_dataset_rows,
@@ -86,7 +85,6 @@ from semantics.catalog.view_builders import (
     DataFrameBuilder,
     PlanBundleBuilder,
     view_builder,
-    view_builders,
 )
 
 __all__ = [
@@ -114,7 +112,6 @@ __all__ = [
     "dataset_names",
     "dataset_names_by_category",
     "dataset_row",
-    "dataset_rows",
     "dataset_schema",
     "dataset_spec",
     "dataset_specs",
@@ -128,5 +125,4 @@ __all__ = [
     "tag_spec_for_column",
     "tag_spec_for_dataset",
     "view_builder",
-    "view_builders",
 ]

@@ -1,0 +1,20 @@
+id: py_from_import_multi
+snapshots:
+  from collections import defaultdict, OrderedDict, Counter:
+    labels:
+    - source: from collections import defaultdict, OrderedDict, Counter
+      style: primary
+      start: 0
+      end: 57
+  from os import path, getcwd:
+    labels:
+    - source: from os import path, getcwd
+      style: primary
+      start: 0
+      end: 27
+  from typing import List, Dict:
+    labels:
+    - source: from typing import List, Dict
+      style: primary
+      start: 0
+      end: 29

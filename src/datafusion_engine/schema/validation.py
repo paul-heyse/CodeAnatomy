@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
@@ -15,10 +14,11 @@ from pyarrow import Table as ArrowTable
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike, TableLike
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema.introspection import table_constraint_rows
 from datafusion_engine.schema.spec_protocol import ArrowFieldSpec, TableSchemaSpec
-from datafusion_engine.session.helpers import deregister_table, register_temp_table, temp_table
+from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import sql_options_for_profile
 from validation.violations import ValidationViolation, ViolationType
 
@@ -110,6 +110,19 @@ def _expr_table(df: DataFrame) -> ArrowTable:
     return df.to_arrow_table()
 
 
+def _datafusion_type_name(dtype: pa.DataType) -> str:
+    """Return the DataFusion SQL type name for an Arrow dtype.
+
+    Returns
+    -------
+    str
+        DataFusion SQL type name for the dtype.
+    """
+    from datafusion_engine.session.runtime import _datafusion_type_name as runtime_type_name
+
+    return runtime_type_name(dtype)
+
+
 def _or_expressions(expressions: Sequence[Expr]) -> Expr | None:
     if not expressions:
         return None
@@ -177,25 +190,6 @@ def _resolve_key_fields(
     return resolved or default_keys
 
 
-@lru_cache(maxsize=128)
-def _datafusion_type_name(dtype: DataTypeLike) -> str:
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-    ctx = DataFusionRuntimeProfile().ephemeral_context()
-    table = pa.Table.from_arrays(
-        [pa.array([None], type=dtype)],
-        names=["value"],
-    )
-    with temp_table(ctx, table, prefix="_dtype_") as temp_name:
-        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
-        result = _expr_table(df)
-    value = result["dtype"][0].as_py()
-    if not isinstance(value, str):
-        msg = "Failed to resolve DataFusion type name."
-        raise DataFusionEngineError(msg, kind=ErrorKind.DATAFUSION)
-    return value
-
-
 def _count_rows(
     ctx: SessionContext,
     *,
@@ -240,9 +234,8 @@ def _cast_failure_count(
     sql_options: SQLOptions,
 ) -> int:
     _ = sql_options
-    dtype_name = _datafusion_type_name(dtype)
     col_expr = col(column)
-    cast_expr = f.arrow_cast(col_expr, lit(dtype_name))
+    cast_expr = safe_cast(col_expr, dtype)
     condition = col_expr.is_not_null() & cast_expr.is_null()
     failures_expr = f.sum(f.when(condition, lit(1)).otherwise(lit(0))).alias("failures")
     try:

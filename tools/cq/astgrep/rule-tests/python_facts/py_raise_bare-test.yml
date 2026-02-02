@@ -1,0 +1,7 @@
+id: py_raise_bare
+valid:
+  - "raise ValueError()"
+  - "raise E() from x"
+  - "x = 1"
+invalid:
+  - "raise"

@@ -1,0 +1,11 @@
+id: py_raise
+language: python
+severity: hint
+rule:
+  kind: raise_statement
+  regex: "^raise [^f]"
+  not:
+    regex: " from "
+metadata:
+  record: raise
+  kind: raise

@@ -45,6 +45,11 @@ if TYPE_CHECKING:
     from extract.session import ExtractSession
     from hamilton_pipeline.types import RepoScanConfig
     from semantics.incremental.config import IncrementalConfig
+else:
+    try:
+        from engine.session import EngineSession
+    except ImportError:
+        EngineSession = object
 
 
 @dataclass(frozen=True)

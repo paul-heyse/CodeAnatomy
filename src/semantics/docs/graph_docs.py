@@ -438,8 +438,10 @@ def _format_output_views() -> list[str]:
             "",
             "| Output | Description |",
             "|--------|-------------|",
-            "| `cpg_nodes_v1` | Union of all normalized entity tables |",
-            "| `cpg_edges_v1` | Union of all relationship views |",
+            "| `semantic_nodes_union_v1` | Union of all normalized entity tables |",
+            "| `semantic_edges_union_v1` | Union of all relationship views |",
+            "| `cpg_nodes_v1` | Canonical CPG node output (stable IDs, spans) |",
+            "| `cpg_edges_v1` | Canonical CPG edge output (stable IDs, spans) |",
             "",
         ]
     )

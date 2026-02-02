@@ -6,6 +6,7 @@ from datafusion import functions as f
 from datafusion import lit
 from datafusion.expr import Expr
 
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.udf.shims import utf8_normalize, utf8_null_if_blank
 
 
@@ -53,7 +54,7 @@ def expr_context_expr(expr: Expr) -> Expr:
     normalized = utf8_null_if_blank(utf8_normalize(expr, collapse_ws=True))
     last = f.regexp_replace(normalized, lit(r".*\\."), lit(""))
     upper = f.upper(last)
-    null_expr = f.arrow_cast(lit(None), lit("Utf8"))
+    null_expr = safe_cast(lit(None), "Utf8")
     return f.when(normalized.is_null(), null_expr).otherwise(upper)
 
 
@@ -65,9 +66,9 @@ def flag_to_bool_expr(expr: Expr) -> Expr:
     datafusion.expr.Expr
         Expression returning True or NULL.
     """
-    casted = f.arrow_cast(expr, lit("Int64"))
+    casted = safe_cast(expr, "Int64")
     hit = casted == lit(1)
-    null_bool = f.arrow_cast(lit(None), lit("Boolean"))
+    null_bool = safe_cast(lit(None), "Boolean")
     return f.when(hit, lit(value=True)).otherwise(null_bool)
 
 

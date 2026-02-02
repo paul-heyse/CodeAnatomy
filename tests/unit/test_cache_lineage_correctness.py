@@ -8,6 +8,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 from hamilton import driver
 from hamilton.caching.stores.file import FileResultStore
@@ -21,6 +22,14 @@ logging.getLogger("hamilton").setLevel(logging.ERROR)
 
 _FIRST_RUN_VALUE = 1
 _EXPECTED_RECOMPUTE_COUNT = 2
+
+
+class ManagedSQLiteMetadataStore(SQLiteMetadataStore):
+    """SQLite metadata store with a public close hook for tests."""
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        self._close_connection()
 
 
 def _make_cache_module(counter: dict[str, int]) -> ModuleType:
@@ -62,7 +71,7 @@ def _driver_with_cache(module: ModuleType, cache_dir: Path) -> driver.Driver:
     cache_dir.mkdir(parents=True, exist_ok=True)
     results_dir = cache_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
-    meta_store = SQLiteMetadataStore(path=str(cache_dir / "meta.sqlite"))
+    meta_store = ManagedSQLiteMetadataStore(path=str(cache_dir / "meta.sqlite"))
     result_store = FileResultStore(path=str(results_dir))
     return (
         driver.Builder()
@@ -90,6 +99,8 @@ def test_external_dataloaders_recompute_even_with_cache(tmp_path: Path) -> None:
     assert first == _FIRST_RUN_VALUE
     assert second == _EXPECTED_RECOMPUTE_COUNT
     assert counter["value"] == _EXPECTED_RECOMPUTE_COUNT
+    store = cast("ManagedSQLiteMetadataStore", driver_instance.cache.metadata_store)
+    store.close()
 
 
 def test_metadata_store_lineage_rows_are_deterministic_and_decodable(
@@ -128,3 +139,5 @@ def test_metadata_store_lineage_rows_are_deterministic_and_decodable(
         for key, value in dependencies.items():
             assert isinstance(key, str)
             assert isinstance(value, str)
+    store = cast("ManagedSQLiteMetadataStore", driver_instance.cache.metadata_store)
+    store.close()

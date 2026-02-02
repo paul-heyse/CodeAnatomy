@@ -14,6 +14,7 @@ from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from datafusion_engine.encoding import apply_encoding
+from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from storage.ipc_utils import ipc_bytes
@@ -135,8 +136,61 @@ def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
             gate=request.gate,
         )
         return delta_snapshot_info(snapshot_request)
-    except (ImportError, RuntimeError, TypeError, ValueError):
+    except (ImportError, RuntimeError, TypeError, ValueError, DataFusionEngineError):
+        return _fallback_snapshot_info(request, storage)
+
+
+def _fallback_snapshot_info(
+    request: DeltaSnapshotLookup,
+    storage: StorageOptions | None,
+) -> Mapping[str, object] | None:
+    try:
+        from deltalake import DeltaTable
+        from deltalake._internal import DeltaError, DeltaProtocolError
+    except ImportError:
         return None
+    options = dict(storage or {}) or None
+    try:
+        table = DeltaTable(request.path, version=request.version, storage_options=options)
+    except (DeltaError, DeltaProtocolError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+    protocol = table.protocol()
+    metadata = table.metadata()
+    history = table.history(1)
+    snapshot_timestamp = None
+    if history:
+        entry = history[0]
+        if isinstance(entry, Mapping):
+            snapshot_timestamp = entry.get("timestamp")
+    schema_json = None
+    try:
+        schema_obj = table.schema()
+        schema_json_fn = getattr(schema_obj, "json", None)
+        schema_json = schema_json_fn() if callable(schema_json_fn) else None
+    except (RuntimeError, TypeError, ValueError):
+        schema_json = None
+    table_properties = None
+    configuration = getattr(metadata, "configuration", None)
+    if isinstance(configuration, Mapping):
+        table_properties = {str(key): str(value) for key, value in configuration.items()}
+    partition_columns = None
+    raw_partitions = getattr(metadata, "partition_columns", None)
+    if isinstance(raw_partitions, Sequence) and not isinstance(
+        raw_partitions,
+        (str, bytes, bytearray),
+    ):
+        partition_columns = [str(value) for value in raw_partitions]
+    return {
+        "version": table.version(),
+        "snapshot_timestamp": snapshot_timestamp,
+        "min_reader_version": getattr(protocol, "min_reader_version", None),
+        "min_writer_version": getattr(protocol, "min_writer_version", None),
+        "reader_features": getattr(protocol, "reader_features", None),
+        "writer_features": getattr(protocol, "writer_features", None),
+        "table_properties": table_properties,
+        "schema_json": schema_json,
+        "partition_columns": partition_columns,
+    }
 
 
 @dataclass(frozen=True)
@@ -2160,14 +2214,22 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     TypeError
         Raised when the delta data checker entrypoint is missing.
     """
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:
-        msg = "Delta data checks require datafusion._internal."
-        raise ValueError(msg) from exc
+    module = None
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            candidate = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        checker = getattr(candidate, "delta_data_checker", None)
+        if callable(checker):
+            module = candidate
+            break
+    if module is None:
+        msg = "Delta data checks require datafusion._internal or datafusion_ext."
+        raise ValueError(msg)
     checker = getattr(module, "delta_data_checker", None)
     if not callable(checker):
-        msg = "datafusion._internal.delta_data_checker is unavailable."
+        msg = "Delta data checker is unavailable in the extension module."
         raise TypeError(msg)
     table = to_arrow_table(request.data)
     payload = ipc_bytes(cast("pa.Table", table))

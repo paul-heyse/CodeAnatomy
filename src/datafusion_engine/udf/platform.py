@@ -29,6 +29,7 @@ All DataFusion execution facades automatically install the platform in
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -266,6 +267,26 @@ def install_rust_udf_platform(
     )
 
 
+def native_udf_platform_available() -> bool:
+    """Return whether native FunctionFactory/ExprPlanner hooks are available.
+
+    Returns
+    -------
+    bool
+        ``True`` when the native UDF platform hooks are available.
+    """
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if callable(getattr(module, "install_function_factory", None)) and callable(
+            getattr(module, "install_expr_planners", None)
+        ):
+            return True
+    return False
+
+
 def ensure_rust_udfs(
     ctx: SessionContext,
     *,
@@ -309,4 +330,5 @@ __all__ = [
     "RustUdfPlatformOptions",
     "ensure_rust_udfs",
     "install_rust_udf_platform",
+    "native_udf_platform_available",
 ]

@@ -1,0 +1,11 @@
+id: py_from_import_multi
+language: python
+severity: hint
+rule:
+  kind: import_from_statement
+  regex: "import [A-Za-z_]+, [A-Za-z_]+"
+  not:
+    regex: "\\("
+metadata:
+  record: import
+  kind: from_import_multi

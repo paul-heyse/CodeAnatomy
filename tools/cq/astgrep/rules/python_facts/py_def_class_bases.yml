@@ -1,0 +1,13 @@
+id: py_def_class_bases
+language: python
+severity: hint
+rule:
+  kind: class_definition
+  has:
+    kind: argument_list
+  not:
+    has:
+      kind: type_parameter
+metadata:
+  record: def
+  kind: class_bases

@@ -460,12 +460,25 @@ class CacheStateSnapshot:
 
 def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnapshot:
     settings_map = {str(row.get("name")): str(row.get("value")) for row in settings}
+    from datafusion_engine.session.runtime import DEFAULT_DF_POLICY
+
+    defaults = DEFAULT_DF_POLICY.settings
     return CacheConfigSnapshot(
-        list_files_cache_ttl=settings_map.get("datafusion.runtime.list_files_cache_ttl"),
-        list_files_cache_limit=settings_map.get("datafusion.runtime.list_files_cache_limit"),
-        metadata_cache_limit=settings_map.get("datafusion.runtime.metadata_cache_limit"),
-        predicate_cache_size=settings_map.get(
-            "datafusion.execution.parquet.max_predicate_cache_size"
+        list_files_cache_ttl=(
+            settings_map.get("datafusion.runtime.list_files_cache_ttl")
+            or defaults.get("datafusion.runtime.list_files_cache_ttl")
+        ),
+        list_files_cache_limit=(
+            settings_map.get("datafusion.runtime.list_files_cache_limit")
+            or defaults.get("datafusion.runtime.list_files_cache_limit")
+        ),
+        metadata_cache_limit=(
+            settings_map.get("datafusion.runtime.metadata_cache_limit")
+            or defaults.get("datafusion.runtime.metadata_cache_limit")
+        ),
+        predicate_cache_size=(
+            settings_map.get("datafusion.execution.parquet.max_predicate_cache_size")
+            or defaults.get("datafusion.execution.parquet.max_predicate_cache_size")
         ),
     )
 
@@ -655,14 +668,23 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
         "metadata_cache_limit": config.metadata_cache_limit,
         "predicate_cache_size": config.predicate_cache_size,
     }
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:
-        msg = "datafusion._internal is required for cache introspection tables."
-        raise ImportError(msg) from exc
-    register = getattr(module, "register_cache_tables", None)
-    if not callable(register):
-        msg = "datafusion._internal.register_cache_tables is unavailable."
+    register = None
+    imported = False
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        imported = True
+        register = getattr(module, "register_cache_tables", None)
+        if callable(register):
+            break
+        register = None
+    if register is None:
+        if not imported:
+            msg = "DataFusion extensions are required for cache introspection tables."
+            raise ImportError(msg)
+        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
         raise TypeError(msg)
     register(ctx, payload)
 

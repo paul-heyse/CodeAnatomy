@@ -157,6 +157,32 @@ class CacheRegistrationContext:
     schema_hash: str | None
 
 
+def _finalize_df_to_contract(
+    ctx: SessionContext,
+    *,
+    df: DataFrame,
+    contract_builder: Callable[[pa.Schema], SchemaContract],
+) -> DataFrame:
+    from datafusion import col, lit
+
+    from datafusion_engine.expr.cast import safe_cast
+
+    _ = ctx
+    schema = arrow_schema_from_df(df)
+    contract = contract_builder(schema)
+    target_schema = contract.to_arrow_schema()
+    existing = set(df.schema().names)
+    selections = [
+        (
+            safe_cast(col(field.name), field.type).alias(field.name)
+            if field.name in existing
+            else safe_cast(lit(None), field.type).alias(field.name)
+        )
+        for field in target_schema
+    ]
+    return df.select(*selections)
+
+
 def register_view_graph(
     ctx: SessionContext,
     *,
@@ -235,6 +261,8 @@ def _register_view_node(
     _maybe_capture_scan_units(context, node=node, scan_state=scan_state)
     _maybe_capture_lineage(context.runtime, node=node, lineage_by_view=lineage_by_view)
     df = node.builder(context.ctx)
+    if node.contract_builder is not None:
+        df = _finalize_df_to_contract(context.ctx, df=df, contract_builder=node.contract_builder)
     registered = _register_view_with_cache(
         context.ctx,
         adapter=context.adapter,
@@ -1198,6 +1226,13 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         name = row.get("function_name") or row.get("routine_name") or row.get("name")
         if isinstance(name, str):
             available.add(name.lower())
+    try:
+        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
+
+        snapshot = rust_udf_snapshot(ctx)
+        available.update(name.lower() for name in udf_names_from_snapshot(snapshot))
+    except (RuntimeError, TypeError, ValueError):
+        pass
     required_lower = [name.lower() for name in required]
     try:
         validate_required_items(

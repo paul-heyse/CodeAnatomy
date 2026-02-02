@@ -14,7 +14,7 @@ import base64
 import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -38,6 +38,14 @@ from utils.value_coercion import coerce_mapping_list
 
 if TYPE_CHECKING:
     from storage.deltalake.delta import DeltaCdfOptions
+
+
+class InternalSessionContext(Protocol):
+    """Protocol representing the internal DataFusion session context."""
+
+
+class _DeltaCdfExtension(Protocol):
+    def delta_cdf_table_provider(self, *args: object, **kwargs: object) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -289,24 +297,35 @@ class DeltaCheckpointRequest:
     gate: DeltaFeatureGate | None = None
 
 
-def _require_datafusion_internal() -> object:
-    """Import and return the ``datafusion._internal`` module.
-
-    Returns
-    -------
-    object
-        Imported ``datafusion._internal`` module.
+def _resolve_extension_module(
+    *,
+    required_attr: str | None = None,
+    entrypoint: str | None = None,
+) -> object:
+    """Return the Delta extension module (datafusion._internal or datafusion_ext).
 
     Raises
     ------
     DataFusionEngineError
-        Raised when ``datafusion._internal`` is unavailable.
+        Raised when the required extension module is unavailable.
+
+    Returns
+    -------
+    object
+        Resolved extension module implementing the requested entrypoints.
     """
-    try:
-        return importlib.import_module("datafusion._internal")
-    except ImportError as exc:  # pragma: no cover - environment contract
-        msg = "Delta control-plane operations require datafusion._internal."
-        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if required_attr is not None and not hasattr(module, required_attr):
+            continue
+        if entrypoint is not None and not callable(getattr(module, entrypoint, None)):
+            continue
+        return module
+    msg = "Delta control-plane operations require datafusion._internal or datafusion_ext."
+    raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
 
 
 def _raise_engine_error(
@@ -321,11 +340,26 @@ def _raise_engine_error(
     raise error from exc
 
 
+def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
+    """Return the internal session context required by Rust entrypoints.
+
+    Returns
+    -------
+    InternalSessionContext
+        Internal DataFusion session context used by Rust entrypoints.
+    """
+    internal_ctx = getattr(ctx, "ctx", None)
+    if internal_ctx is None:
+        msg = "Delta entrypoints require datafusion._internal.SessionContext (use ctx.ctx)."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    return cast("InternalSessionContext", internal_ctx)
+
+
 def _require_internal_entrypoint(name: str) -> Callable[..., object]:
-    module = _require_datafusion_internal()
+    module = _resolve_extension_module(entrypoint=name)
     entrypoint = getattr(module, name, None)
     if not callable(entrypoint):
-        msg = f"datafusion._internal.{name} is unavailable."
+        msg = f"Delta control-plane entrypoint {name} is unavailable."
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
     return entrypoint
 
@@ -361,7 +395,7 @@ def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> obje
     """
     options_type = getattr(module, "DeltaCdfOptions", None)
     if options_type is None:
-        msg = "datafusion._internal.DeltaCdfOptions is unavailable."
+        msg = "Delta CDF options type is unavailable in the extension module."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
     ext_options = options_type()
     payload = cdf_options_payload(options)
@@ -399,6 +433,58 @@ def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _fallback_snapshot_info(
+    request: DeltaSnapshotRequest,
+) -> Mapping[str, object] | None:
+    try:
+        from deltalake import DeltaTable
+        from deltalake._internal import DeltaError, DeltaProtocolError
+    except ImportError:
+        return None
+    options = dict(request.storage_options) if request.storage_options else None
+    try:
+        table = DeltaTable(request.table_uri, version=request.version, storage_options=options)
+    except (DeltaError, DeltaProtocolError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+    protocol = table.protocol()
+    metadata = table.metadata()
+    history = table.history(1)
+    snapshot_timestamp = None
+    if history:
+        entry = history[0]
+        if isinstance(entry, Mapping):
+            snapshot_timestamp = entry.get("timestamp")
+    schema_json = None
+    try:
+        schema_obj = table.schema()
+        schema_json_fn = getattr(schema_obj, "json", None)
+        schema_json = schema_json_fn() if callable(schema_json_fn) else None
+    except (RuntimeError, TypeError, ValueError):
+        schema_json = None
+    table_properties = None
+    configuration = getattr(metadata, "configuration", None)
+    if isinstance(configuration, Mapping):
+        table_properties = {str(key): str(value) for key, value in configuration.items()}
+    partition_columns = None
+    raw_partitions = getattr(metadata, "partition_columns", None)
+    if isinstance(raw_partitions, Sequence) and not isinstance(
+        raw_partitions,
+        (str, bytes, bytearray),
+    ):
+        partition_columns = [str(value) for value in raw_partitions]
+    return {
+        "version": table.version(),
+        "snapshot_timestamp": snapshot_timestamp,
+        "min_reader_version": getattr(protocol, "min_reader_version", None),
+        "min_writer_version": getattr(protocol, "min_writer_version", None),
+        "reader_features": getattr(protocol, "reader_features", None),
+        "writer_features": getattr(protocol, "writer_features", None),
+        "table_properties": table_properties,
+        "schema_json": schema_json,
+        "partition_columns": partition_columns,
+    }
+
+
 def delta_provider_from_session(
     ctx: SessionContext,
     *,
@@ -424,7 +510,7 @@ def delta_provider_from_session(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -485,7 +571,7 @@ def delta_provider_with_files(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -534,8 +620,11 @@ def delta_cdf_provider(
         Provider capsule plus snapshot metadata and CDF options payload.
 
     """
-    module = _require_datafusion_internal()
-    provider_factory = _require_internal_entrypoint("delta_cdf_table_provider")
+    module = _resolve_extension_module(
+        required_attr="DeltaCdfOptions",
+        entrypoint="delta_cdf_table_provider",
+    )
+    provider_factory = cast("_DeltaCdfExtension", module).delta_cdf_table_provider
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     ext_options = _cdf_options_to_ext(module, request.options)
@@ -578,21 +667,42 @@ def delta_snapshot_info(
     Mapping[str, object]
         Snapshot metadata payload from the control plane.
 
+    Raises
+    ------
+    DataFusionEngineError
+        Raised when required extension hooks are unavailable and fallback fails.
+    RuntimeError
+        Raised when extension snapshot retrieval fails unexpectedly.
+    TypeError
+        Raised when extension snapshot retrieval returns invalid payloads.
+    ValueError
+        Raised when extension snapshot retrieval returns invalid payloads.
     """
-    snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
-    response = snapshot_factory(
-        request.table_uri,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
-    )
-    return ensure_mapping(response, label="delta_snapshot_info")
+    try:
+        snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
+        storage_payload = list(request.storage_options.items()) if request.storage_options else None
+        gate_payload = delta_feature_gate_rust_payload(request.gate)
+        response = snapshot_factory(
+            request.table_uri,
+            storage_payload,
+            request.version,
+            request.timestamp,
+            gate_payload[0],
+            gate_payload[1],
+            gate_payload[2],
+            gate_payload[3],
+        )
+        return ensure_mapping(response, label="delta_snapshot_info")
+    except DataFusionEngineError:
+        fallback = _fallback_snapshot_info(request)
+        if fallback is None:
+            raise
+        return fallback
+    except (RuntimeError, TypeError, ValueError):
+        fallback = _fallback_snapshot_info(request)
+        if fallback is None:
+            raise
+        return fallback
 
 
 def delta_add_actions(
@@ -654,7 +764,7 @@ def delta_write_ipc(
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     partitions_payload = list(request.partition_columns) if request.partition_columns else None
     response = write_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -705,7 +815,7 @@ def delta_delete(
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     response = delete_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -813,7 +923,7 @@ def delta_update(
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     updates_payload = sorted((str(key), str(value)) for key, value in request.updates.items())
     response = update_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -867,7 +977,7 @@ def delta_merge(
         (str(key), str(value)) for key, value in request.not_matched_inserts.items()
     )
     response = merge_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -923,7 +1033,7 @@ def delta_optimize_compact(
     commit_payload_values = commit_payload(request.commit_options)
     z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
     response = optimize_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -969,7 +1079,7 @@ def delta_vacuum(
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = vacuum_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1017,7 +1127,7 @@ def delta_restore(
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = restore_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1067,7 +1177,7 @@ def delta_set_properties(
     commit_payload_values = commit_payload(request.commit_options)
     properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
     response = set_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1116,7 +1226,7 @@ def delta_add_features(
     commit_payload_values = commit_payload(request.commit_options)
     features_payload = [str(feature) for feature in request.features]
     response = add_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1161,7 +1271,7 @@ def delta_add_constraints(
         (str(name), str(expr)) for name, expr in request.constraints.items()
     )
     response = add_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1202,7 +1312,7 @@ def delta_drop_constraints(
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = drop_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1240,7 +1350,7 @@ def delta_create_checkpoint(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = checkpoint_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,
@@ -1270,7 +1380,7 @@ def delta_cleanup_metadata(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = cleanup_fn(
-        ctx,
+        _internal_ctx(ctx),
         request.table_uri,
         storage_payload,
         request.version,

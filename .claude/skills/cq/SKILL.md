@@ -1,6 +1,6 @@
 ---
 name: cq
-description: High-signal code queries (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, async-hazards, bytecode-surface)
+description: High-signal code queries (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, async-hazards, bytecode-surface, pattern queries, scope filtering, visualization)
 allowed-tools: Bash
 ---
 
@@ -8,6 +8,22 @@ allowed-tools: Bash
 
 Use this skill for high-recall, structured repository analysis before proposing changes.
 The cq tool provides markdown-formatted analysis injected directly into context.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Find callers | `/cq calls <fn>` |
+| Trace parameter | `/cq impact <fn> --param <p>` |
+| Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
+| Find entity | `/cq q "entity=function name=<name>"` |
+| Pattern search | `/cq q "pattern='<ast-grep-pattern>'"` |
+| Context search | `/cq q "entity=function inside='class <C>'"` |
+| Find closures | `/cq q "entity=function scope=closure"` |
+| Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
+| Hazard scan | `/cq q "entity=function fields=hazards"` |
+| Security hazards | `/cq q "pattern='eval(\$X)'"` |
+| Cache status | `/cq cache --stats` |
 
 ## Reference Documentation
 
@@ -29,6 +45,7 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 | `scopes` | Analyze closure captures | `/cq scopes path/to/file.py` |
 | `async-hazards` | Find blocking in async | `/cq async-hazards` |
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
+| `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
 
 ## Command Details
 
@@ -113,6 +130,219 @@ Usage: /cq bytecode-surface <FILE_OR_SYMBOL> [--show <globals,attrs,constants,op
 
 Example: /cq bytecode-surface tools/cq/macros/calls.py --show globals,attrs
 
+### q - Declarative Entity Queries
+
+The `q` command provides a composable query DSL for finding code entities.
+
+Results: !`./scripts/cq q "$1" --root .`
+Usage: /cq q "<query_string>"
+
+**Query Syntax:** `entity=TYPE [name=PATTERN] [in=DIR] [expand=KIND] [fields=FIELDS]`
+
+**Entity Types:**
+| Entity | Finds |
+|--------|-------|
+| `function` | Function definitions |
+| `class` | Class definitions |
+| `import` | Import statements (all forms) |
+| `callsite` | Function/method call sites |
+
+**Name Patterns:**
+- Exact: `name=build_graph_product`
+- Regex: `name=~^test_.*` (prefix with `~`)
+
+**Scope:**
+- `in=src/semantics/` - Search only in directory
+- `exclude=tests,__pycache__` - Exclude directories
+
+**Expanders:**
+- `expand=callers` - Find functions that call the target
+- `expand=callees` - Find functions called by target
+- `expand=callers(depth=2)` - Transitive callers
+
+**Fields:**
+- `fields=def,hazards` - Include hazard detection
+- `fields=callers` - Include caller section
+
+**Examples:**
+```bash
+# Find all imports of Path
+/cq q "entity=import name=Path"
+
+# Find functions matching pattern with callers
+/cq q "entity=function name=~^build expand=callers in=src/"
+
+# Find class definitions with hazard analysis
+/cq q "entity=class in=src/semantics/ fields=def,hazards"
+
+# Show query plan explanation
+/cq q "entity=function name=compile explain=true"
+```
+
+### Pattern Queries (Structural Search)
+
+Pattern queries use ast-grep syntax for structural code matching without false positives from strings/comments.
+
+| Syntax | Description |
+|--------|-------------|
+| `pattern='$X = getattr($Y, $Z)'` | Match getattr assignments |
+| `pattern='def $F($$$)'` | Match any function definition |
+| `pattern='async def $F($$$)'` | Match async functions |
+| `strictness=signature` | Match signatures only |
+
+**Examples:**
+```bash
+# Find dynamic attribute access
+/cq q "pattern='getattr(\$X, \$Y)'"
+
+# Find all f-string usages
+/cq q "pattern='f\"\$\$\$\"'"
+
+# Find specific decorator usage
+/cq q "pattern='@dataclass'"
+
+# Find eval/exec (security hazard)
+/cq q "pattern='eval(\$X)'"
+
+# Find pickle.load (security hazard)
+/cq q "pattern='pickle.load(\$X)'"
+```
+
+### Relational Constraints (Contextual Search)
+
+Find code in specific structural contexts.
+
+| Constraint | Description |
+|------------|-------------|
+| `inside='class Config'` | Within a class |
+| `has='return $X'` | Contains a pattern |
+| `precedes='$X'` | Before a pattern |
+| `follows='$X'` | After a pattern |
+
+**Examples:**
+```bash
+# Find methods inside Config classes
+/cq q "entity=function inside='class Config'"
+
+# Find functions that contain getattr
+/cq q "entity=function has='getattr(\$X, \$Y)'"
+
+# Find functions inside async context managers
+/cq q "entity=function inside='async with \$X'"
+```
+
+### Scope Filtering (Closure Analysis)
+
+Filter functions by scope characteristics using Python's symtable.
+
+| Filter | Description |
+|--------|-------------|
+| `scope=closure` | Functions that capture variables |
+| `scope=module` | Module-level functions |
+| `scope=class` | Methods in classes |
+| `captures=var_name` | Functions capturing specific variable |
+
+**Examples:**
+```bash
+# Find all closures
+/cq q "entity=function scope=closure"
+
+# Find closures in a specific directory
+/cq q "entity=function scope=closure in=src/semantics/"
+
+# Find functions capturing a specific variable
+/cq q "entity=function captures=config"
+```
+
+### Decorator Queries
+
+Find decorated functions or analyze decorator usage.
+
+| Syntax | Description |
+|--------|-------------|
+| `entity=decorator` | Find decorator definitions |
+| `decorated_by=dataclass` | Functions with @dataclass |
+| `decorator_count_min=2` | Multiple decorators |
+
+**Examples:**
+```bash
+# Find all @pytest.fixture decorated functions
+/cq q "entity=function decorated_by=fixture"
+
+# Find heavily decorated functions
+/cq q "entity=function decorator_count_min=3"
+
+# Find @dataclass decorated classes
+/cq q "entity=class decorated_by=dataclass"
+```
+
+### Join Queries (Cross-Entity Relationships)
+
+Find entities by their relationships to other entities.
+
+| Join | Description |
+|------|-------------|
+| `used_by=function:main` | Called by main function |
+| `defines=class:Config` | Modules defining Config class |
+| `raises=class:ValueError` | Functions raising ValueError |
+| `exports=function:main` | Modules exporting main |
+
+**Examples:**
+```bash
+# Find functions called by main
+/cq q "entity=function used_by=function:main"
+
+# Find modules that define Config class
+/cq q "entity=module defines=class:Config"
+
+# Find functions that raise ValueError
+/cq q "entity=function raises=class:ValueError"
+```
+
+### Visualization Outputs
+
+Generate visual representations of code structure.
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `--format mermaid` | Mermaid flowchart | Call graphs |
+| `--format mermaid-class` | Mermaid class diagram | Class hierarchies |
+| `--format dot` | Graphviz DOT | Complex graphs |
+
+**Examples:**
+```bash
+# Generate call graph
+/cq q "entity=function name=build_graph expand=callers" --format mermaid
+
+# Generate class diagram
+/cq q "entity=class in=src/semantics/" --format mermaid-class
+
+# Export for Graphviz
+/cq q "entity=function expand=callees" --format dot > graph.dot
+```
+
+### Cache Management
+
+Manage query result caching for faster repeated queries.
+
+| Command | Description |
+|---------|-------------|
+| `cq cache --stats` | Show cache statistics |
+| `cq cache --clear` | Clear the cache |
+| `--no-cache` | Bypass cache for query |
+
+**Examples:**
+```bash
+# Check cache status
+/cq cache --stats
+
+# Run query without caching
+/cq q "entity=function" --no-cache
+
+# Clear cache after major changes
+/cq cache --clear
+```
+
 ## Filtering & Output
 
 ### Filter Options (all commands)
@@ -191,6 +421,16 @@ Based on evidence quality:
 | Extracting nested functions | `/cq scopes <file>` |
 | Async performance issues | `/cq async-hazards` |
 | Finding hidden deps | `/cq bytecode-surface <file>` |
+| Finding specific imports | `/cq q "entity=import name=pandas"` |
+| Finding functions by pattern | `/cq q "entity=function name=~^test_"` |
+| Quick entity census | `/cq q "entity=class in=src/"` |
+| Finding structural patterns | `/cq q "pattern='getattr(\$X, \$Y)'"` |
+| Context-aware search | `/cq q "entity=function inside='class Config'"` |
+| Closure investigation | `/cq q "entity=function scope=closure"` |
+| Understanding code flow | `/cq q "entity=function expand=callers" --format mermaid` |
+| Decorator analysis | `/cq q "entity=function decorated_by=fixture"` |
+| Security hazard scan | `/cq q "pattern='eval(\$X)'"` or `/cq q "fields=hazards"` |
+| Cache management | `/cq cache --stats` |
 
 ## Artifacts
 

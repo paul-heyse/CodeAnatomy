@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
-require_datafusion()
+require_datafusion_udfs()
 pytest.importorskip("rustworkx")
 
 import rustworkx as rx

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pyarrow as pa
 from datafusion import col, lit
-from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import align_table
 from semantics.incremental.delta_context import DeltaAccessContext, register_delta_df
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
@@ -182,7 +182,7 @@ def _join_keys(cols: list[str], *, prefix: str) -> list[str]:
 def _symbol_expr(cols: list[str], *, prefix: str) -> Expr:
     if "symbol" in cols:
         return col(f"{prefix}_symbol")
-    return f.arrow_cast(lit(None), lit("Utf8"))
+    return safe_cast(lit(None), "Utf8")
 
 
 __all__ = ["compute_changed_exports"]

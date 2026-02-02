@@ -1,0 +1,30 @@
+id: py_def_class_typeparams
+snapshots:
+  ? |
+    class Container[T, U]:
+        items: list[T]
+  : labels:
+    - source: |-
+        class Container[T, U]:
+            items: list[T]
+      style: primary
+      start: 0
+      end: 41
+    - source: '[T, U]'
+      style: secondary
+      start: 15
+      end: 21
+  ? |
+    class Foo[T]:
+        pass
+  : labels:
+    - source: |-
+        class Foo[T]:
+            pass
+      style: primary
+      start: 0
+      end: 22
+    - source: '[T]'
+      style: secondary
+      start: 9
+      end: 12

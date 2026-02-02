@@ -9,9 +9,9 @@ import pytest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.datafusion_runtime import df_ctx
 from tests.test_helpers.diagnostics import diagnostic_profile
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
-require_datafusion()
+require_datafusion_udfs()
 
 
 @pytest.mark.integration

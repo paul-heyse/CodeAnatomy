@@ -1,0 +1,14 @@
+id: py_from_import
+language: python
+severity: hint
+rule:
+  kind: import_from_statement
+  not:
+    has:
+      kind: aliased_import
+  has:
+    kind: dotted_name
+    field: name
+metadata:
+  record: import
+  kind: from_import

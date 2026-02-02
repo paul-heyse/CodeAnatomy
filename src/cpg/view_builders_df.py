@@ -25,11 +25,19 @@ from cpg.spec_registry import (
 )
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
 from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.shims import semantic_tag, span_id, stable_id_parts
+from datafusion_engine.udf.shims import (
+    semantic_tag,
+    span_end,
+    span_id,
+    span_make,
+    span_start,
+    stable_id_parts,
+)
 from obs.otel.scopes import SCOPE_CPG
 from obs.otel.tracing import stage_span
 from relspec.view_defs import RELATION_OUTPUT_NAME
@@ -54,7 +62,7 @@ def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     Expr
         Arrow-casted expression.
     """
-    return f.arrow_cast(expr, lit(data_type))
+    return safe_cast(expr, data_type)
 
 
 def _null_expr(data_type: str) -> Expr:
@@ -206,6 +214,29 @@ def _coalesce_cols(df: DataFrame, columns: Sequence[str], dtype: pa.DataType) ->
     return f.coalesce(*exprs)
 
 
+def _span_exprs_from_df(
+    df: DataFrame,
+    *,
+    bstart_cols: Sequence[str],
+    bend_cols: Sequence[str],
+) -> tuple[Expr, Expr]:
+    bstart_expr = (
+        _coalesce_cols(df, bstart_cols, pa.int64())
+        if any(name in df.schema().names for name in bstart_cols)
+        else span_start(col("span"))
+        if "span" in df.schema().names
+        else _null_expr("Int64")
+    )
+    bend_expr = (
+        _coalesce_cols(df, bend_cols, pa.int64())
+        if any(name in df.schema().names for name in bend_cols)
+        else span_end(col("span"))
+        if "span" in df.schema().names
+        else _null_expr("Int64")
+    )
+    return bstart_expr, bend_expr
+
+
 def _literal_or_null(value: object | None, dtype: pa.DataType) -> Expr:
     """Create a literal or null expression based on the value.
 
@@ -338,14 +369,19 @@ def _emit_nodes_df(
     node_id = semantic_tag("NodeId", _stable_id_from_parts("node", node_id_parts))
     node_kind = lit(str(spec.node_kind))
     path = _coalesce_cols(df, spec.path_cols, pa.string())
-    bstart = _coalesce_cols(df, spec.bstart_cols, pa.int64())
-    bend = _coalesce_cols(df, spec.bend_cols, pa.int64())
+    bstart, bend = _span_exprs_from_df(
+        df,
+        bstart_cols=spec.bstart_cols,
+        bend_cols=spec.bend_cols,
+    )
     file_id = _coalesce_cols(df, spec.file_id_cols, pa.string())
+    span_expr = span_make(bstart, bend)
 
     return df.select(
         node_id.alias("node_id"),
         node_kind.alias("node_kind"),
         path.alias("path"),
+        span_expr.alias("span"),
         bstart.alias("bstart"),
         bend.alias("bend"),
         file_id.alias("file_id"),
@@ -440,7 +476,21 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     base_id = _stable_id_from_parts("edge", base_id_parts)
 
     valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
-    span_id_expr = span_id("edge", col("path"), col("bstart"), col("bend"), kind=edge_kind)
+    span_bstart = (
+        col("bstart")
+        if "bstart" in names
+        else span_start(col("span"))
+        if "span" in names
+        else _null_expr("Int64")
+    )
+    span_bend = (
+        col("bend")
+        if "bend" in names
+        else span_end(col("span"))
+        if "span" in names
+        else _null_expr("Int64")
+    )
+    span_id_expr = span_id("edge", col("path"), span_bstart, span_bend, kind=edge_kind)
 
     edge_id = (
         f.case(valid_nodes)
@@ -463,14 +513,17 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     task_name = col("task_name") if "task_name" in names else _null_expr("Utf8")
     task_priority = col("task_priority") if "task_priority" in names else _null_expr("Int32")
 
+    span_expr = span_make(span_bstart, span_bend)
+
     return df.select(
         edge_id.alias("edge_id"),
         edge_kind.alias("edge_kind"),
         semantic_tag("NodeId", col("src")).alias("src_node_id"),
         semantic_tag("NodeId", col("dst")).alias("dst_node_id"),
         col("path").alias("path"),
-        col("bstart").alias("bstart"),
-        col("bend").alias("bend"),
+        span_expr.alias("span"),
+        span_bstart.alias("bstart"),
+        span_bend.alias("bend"),
         origin.alias("origin"),
         resolution_method.alias("resolution_method"),
         confidence.alias("confidence"),

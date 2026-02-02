@@ -107,6 +107,18 @@ def register_table(
     from datafusion_engine.dataset.registry import resolve_dataset_schema
 
     schema = resolve_dataset_schema(location)
+    if schema is None and location.format != "delta":
+        try:
+            dataset = ds.dataset(
+                list(location.files) if location.files is not None else location.path,
+                format=location.format,
+                filesystem=location.filesystem,
+                partitioning=location.partitioning,
+            )
+            schema = dataset.schema
+        except (TypeError, ValueError, OSError) as exc:
+            msg = f"Schema required for dataset registration: {request.name!r}."
+            raise ValueError(msg) from exc
     if schema is None:
         msg = f"Schema required for dataset registration: {request.name!r}."
         raise ValueError(msg)

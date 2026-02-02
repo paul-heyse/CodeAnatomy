@@ -1,0 +1,56 @@
+id: py_ctor_assign_attr
+snapshots:
+  instance = os.path.Path():
+    labels:
+    - source: instance = os.path.Path()
+      style: primary
+      start: 0
+      end: 25
+    - source: Path
+      style: secondary
+      start: 19
+      end: 23
+    - source: os.path.Path
+      style: secondary
+      start: 11
+      end: 23
+    - source: os.path.Path()
+      style: secondary
+      start: 11
+      end: 25
+  obj = pkg.MyClass(arg):
+    labels:
+    - source: obj = pkg.MyClass(arg)
+      style: primary
+      start: 0
+      end: 22
+    - source: MyClass
+      style: secondary
+      start: 10
+      end: 17
+    - source: pkg.MyClass
+      style: secondary
+      start: 6
+      end: 17
+    - source: pkg.MyClass(arg)
+      style: secondary
+      start: 6
+      end: 22
+  x = module.Foo():
+    labels:
+    - source: x = module.Foo()
+      style: primary
+      start: 0
+      end: 16
+    - source: Foo
+      style: secondary
+      start: 11
+      end: 14
+    - source: module.Foo
+      style: secondary
+      start: 4
+      end: 14
+    - source: module.Foo()
+      style: secondary
+      start: 4
+      end: 16

@@ -16,9 +16,9 @@ from datafusion_engine.tables.spec import table_spec_from_location
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts
 from tests.test_helpers.delta_commit import latest_commit_metadata
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
-from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
 
-require_datafusion()
+require_datafusion_udfs()
 require_deltalake()
 try:
     _internal = importlib.import_module("datafusion._internal")

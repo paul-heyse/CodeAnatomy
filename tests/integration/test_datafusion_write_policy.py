@@ -6,9 +6,9 @@ import pytest
 
 from datafusion_engine.plan.execution import datafusion_write_options
 from schema_spec.policies import DataFusionWritePolicy
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
-datafusion = require_datafusion()
+datafusion = require_datafusion_udfs()
 
 
 @pytest.mark.integration

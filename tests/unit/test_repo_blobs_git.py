@@ -29,7 +29,8 @@ def _rows_from_table(value: TableLike | RecordBatchReaderLike) -> list[dict[str,
 def _commit_file(repo: Repository, path: Path, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    repo.index.add(path.as_posix())
+    repo_root = Path(repo.workdir or "")
+    repo.index.add(path.relative_to(repo_root).as_posix())
     repo.index.write()
     author = pygit2.Signature("Test User", "test@example.com")
     tree_id = repo.index.write_tree()

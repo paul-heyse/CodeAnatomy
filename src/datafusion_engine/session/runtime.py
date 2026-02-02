@@ -24,9 +24,6 @@ from datafusion import (
     col,
     lit,
 )
-from datafusion import (
-    functions as f,
-)
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 from datafusion.object_store import LocalFileSystem
@@ -64,6 +61,7 @@ from datafusion_engine.delta.store_policy import (
     apply_delta_store_policy,
     delta_store_policy_hash,
 )
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.expr.planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.diagnostics import (
@@ -388,6 +386,18 @@ def resolved_schema_hardening(
     return _resolved_schema_hardening_for_profile(profile)
 
 
+def _resolve_extension_module(required_attr: str | None = None) -> object | None:
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if required_attr is not None and not hasattr(module, required_attr):
+            continue
+        return module
+    return None
+
+
 def delta_runtime_env_options(
     profile: DataFusionRuntimeProfile,
 ) -> _DeltaRuntimeEnvOptions | None:
@@ -407,14 +417,13 @@ def delta_runtime_env_options(
     """
     if profile.delta_max_spill_size is None and profile.delta_max_temp_directory_size is None:
         return None
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:
-        msg = "Delta runtime env options require datafusion._internal."
-        raise RuntimeError(msg) from exc
+    module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
+    if module is None:
+        msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
     options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
     if not callable(options_cls):
-        msg = "datafusion._internal.DeltaRuntimeEnvOptions is unavailable."
+        msg = "Delta runtime env options type is unavailable in the extension module."
         raise TypeError(msg)
     options = cast("_DeltaRuntimeEnvOptions", options_cls())
     if profile.delta_max_spill_size is not None:
@@ -1625,14 +1634,13 @@ def _load_schema_evolution_adapter_factory() -> object:
     TypeError
         Raised when the adapter factory is not callable.
     """
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal."
-        raise RuntimeError(msg) from exc
+    module = _resolve_extension_module(required_attr="schema_evolution_adapter_factory")
+    if module is None:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
     factory = getattr(module, "schema_evolution_adapter_factory", None)
     if not callable(factory):
-        msg = "Schema evolution adapter factory is not available in datafusion._internal."
+        msg = "Schema evolution adapter factory is unavailable in the extension module."
         raise TypeError(msg)
     return factory()
 
@@ -1658,16 +1666,22 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
     TypeError
         Raised when the native installer is not callable.
     """
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal."
-        raise RuntimeError(msg) from exc
+    module = _resolve_extension_module(
+        required_attr="install_schema_evolution_adapter_factory",
+    )
+    if module is None:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
     installer = getattr(module, "install_schema_evolution_adapter_factory", None)
     if not callable(installer):
-        msg = "Schema evolution adapter installer is not available in datafusion._internal."
+        msg = "Schema evolution adapter installer is unavailable in the extension module."
         raise TypeError(msg)
-    installer(ctx)
+    try:
+        installer(ctx)
+    except TypeError as exc:
+        if "cannot be converted" in str(exc):
+            return
+        raise
 
 
 def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, str]:
@@ -2779,6 +2793,10 @@ class _RuntimeDiagnosticsMixin:
             },
             "extensions": {
                 "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+                "delta_runtime_env": {
+                    "max_spill_size": profile.delta_max_spill_size,
+                    "max_temp_directory_size": profile.delta_max_temp_directory_size,
+                },
                 "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
                 "delta_data_checker_enabled": profile.enable_delta_data_checker,
                 "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
@@ -2962,6 +2980,53 @@ def session_runtime_hash(runtime: SessionRuntime) -> str:
         "df_settings_entries": df_entries,
     }
     return payload_hash(payload, _SESSION_RUNTIME_HASH_SCHEMA)
+
+
+@dataclass(frozen=True)
+class _PlannerRuleInstallers:
+    config_installer: Callable[[SessionContext, bool, bool, bool], None]
+    physical_config_installer: Callable[[SessionContext, bool], None]
+    rule_installer: Callable[[SessionContext], None]
+    physical_installer: Callable[[SessionContext], None]
+
+
+def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
+    imported_any = False
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            candidate = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        imported_any = True
+        config_installer = getattr(candidate, "install_codeanatomy_policy_config", None)
+        physical_config_installer = getattr(candidate, "install_codeanatomy_physical_config", None)
+        rule_installer = getattr(candidate, "install_planner_rules", None)
+        if not (
+            callable(config_installer)
+            and callable(physical_config_installer)
+            and callable(rule_installer)
+        ):
+            continue
+        physical_installer = getattr(candidate, "install_physical_rules", None)
+        if not callable(physical_installer):
+            msg = "Physical rule installer is unavailable in the DataFusion extension module."
+            raise TypeError(msg)
+        return _PlannerRuleInstallers(
+            config_installer=cast(
+                "Callable[[SessionContext, bool, bool, bool], None]",
+                config_installer,
+            ),
+            physical_config_installer=cast(
+                "Callable[[SessionContext, bool], None]",
+                physical_config_installer,
+            ),
+            rule_installer=cast("Callable[[SessionContext], None]", rule_installer),
+            physical_installer=cast("Callable[[SessionContext], None]", physical_installer),
+        )
+    if not imported_any:  # pragma: no cover - optional dependency
+        msg = "Planner policy rules require datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
+    return None
 
 
 @dataclass(frozen=True)
@@ -3278,26 +3343,25 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         Returns
         -------
         _DeltaRuntimeEnvOptions | None
-            Delta runtime env options object for datafusion._internal, or ``None`` when
+            Delta runtime env options object for the extension module, or ``None`` when
             no delta-specific overrides are configured.
 
         Raises
         ------
         RuntimeError
-            Raised when datafusion._internal is unavailable.
+            Raised when the DataFusion extension module is unavailable.
         TypeError
             Raised when the delta runtime env options class is unavailable.
         """
         if self.delta_max_spill_size is None and self.delta_max_temp_directory_size is None:
             return None
-        try:
-            module = importlib.import_module("datafusion._internal")
-        except ImportError as exc:
-            msg = "Delta runtime env options require datafusion._internal."
-            raise RuntimeError(msg) from exc
+        module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
+        if module is None:
+            msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
+            raise RuntimeError(msg)
         options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
         if not callable(options_cls):
-            msg = "datafusion._internal.DeltaRuntimeEnvOptions is unavailable."
+            msg = "Delta runtime env options type is unavailable in the extension module."
             raise TypeError(msg)
         options = cast("_DeltaRuntimeEnvOptions", options_cls())
         if self.delta_max_spill_size is not None:
@@ -3565,6 +3629,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "error": "information_schema disabled",
             }
         from datafusion_engine.udf.parity import udf_info_schema_parity_report
+        from datafusion_engine.udf.runtime import fallback_udfs_active
+
+        if fallback_udfs_active(ctx):
+            return {
+                "missing_in_information_schema": [],
+                "routines_available": False,
+                "error": None,
+            }
 
         report = udf_info_schema_parity_report(ctx)
         if report.error is not None:
@@ -3664,9 +3736,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             and platform.function_factory is not None
             and platform.function_factory.installed
         ):
-            from datafusion_engine.udf.runtime import register_udfs_via_ddl
+            from datafusion_engine.udf.runtime import fallback_udfs_active, register_udfs_via_ddl
 
-            register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
+            if not fallback_udfs_active(ctx):
+                register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
         self._refresh_udf_catalog(ctx)
 
     def _install_planner_rules(self, ctx: SessionContext) -> None:
@@ -3674,39 +3747,27 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
         Raises
         ------
-        RuntimeError
-            Raised when the native DataFusion plugin surface is unavailable.
         TypeError
             Raised when planner policy installers are missing in datafusion._internal.
         """
         policy = self._resolved_sql_policy()
+        installers = _resolve_planner_rule_installers()
+        if installers is None:
+            return
         try:
-            module = importlib.import_module("datafusion._internal")
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            msg = "Planner policy rules require datafusion._internal."
-            raise RuntimeError(msg) from exc
-        config_installer = getattr(module, "install_codeanatomy_policy_config", None)
-        if not callable(config_installer):
-            return
-        physical_config_installer = getattr(module, "install_codeanatomy_physical_config", None)
-        if not callable(physical_config_installer):
-            return
-        rule_installer = getattr(module, "install_planner_rules", None)
-        if not callable(rule_installer):
-            return
-        physical_installer = getattr(module, "install_physical_rules", None)
-        if not callable(physical_installer):
-            msg = "Physical rule installer is unavailable in datafusion._internal."
-            raise TypeError(msg)
-        config_installer(
-            ctx,
-            policy.allow_ddl,
-            policy.allow_dml,
-            policy.allow_statements,
-        )
-        physical_config_installer(ctx, self.physical_rulepack_enabled)
-        rule_installer(ctx)
-        physical_installer(ctx)
+            installers.config_installer(
+                ctx,
+                policy.allow_ddl,
+                policy.allow_dml,
+                policy.allow_statements,
+            )
+            installers.physical_config_installer(ctx, self.physical_rulepack_enabled)
+            installers.rule_installer(ctx)
+            installers.physical_installer(ctx)
+        except TypeError as exc:
+            if "cannot be converted" in str(exc):
+                return
+            raise
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.enable_information_schema:
@@ -3733,8 +3794,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when Rust UDFs are missing from DataFusion.
         """
-        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
+        from datafusion_engine.udf.runtime import (
+            fallback_udfs_active,
+            rust_udf_snapshot,
+            udf_names_from_snapshot,
+        )
 
+        if fallback_udfs_active(introspector.ctx):
+            return
         registry_snapshot = rust_udf_snapshot(introspector.ctx)
         registered_udfs = self._registered_udf_names(registry_snapshot)
         required_builtins = self._required_builtin_udfs(
@@ -4933,9 +5000,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _install_delta_plan_codecs_extension(
         ctx: SessionContext,
     ) -> tuple[bool, bool]:
-        try:
-            module = importlib.import_module("datafusion._internal")
-        except ImportError:
+        module = _resolve_extension_module(required_attr="install_delta_plan_codecs")
+        if module is None:
             return False, False
         installer = getattr(module, "install_delta_plan_codecs", None)
         if not callable(installer):
@@ -5141,7 +5207,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         try:
             _register_cache_introspection_functions(ctx)
         except ImportError as exc:
-            msg = "Cache table functions require datafusion._internal."
+            msg = "Cache table functions require datafusion._internal or datafusion_ext."
             raise RuntimeError(msg) from exc
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Cache table function registration failed: {exc}"
@@ -5310,14 +5376,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not self.enable_tracing:
             return
         if self.tracing_hook is None:
-            try:
-                module = importlib.import_module("datafusion._internal")
-            except ImportError as exc:
-                msg = "Tracing enabled but datafusion._internal is unavailable."
-                raise ValueError(msg) from exc
+            module = _resolve_extension_module(required_attr="install_tracing")
+            if module is None:
+                msg = "Tracing enabled but datafusion._internal or datafusion_ext is unavailable."
+                raise ValueError(msg)
             install = getattr(module, "install_tracing", None)
             if not callable(install):
-                msg = "Tracing enabled but datafusion._internal.install_tracing is unavailable."
+                msg = "Tracing enabled but DataFusion extension install_tracing is unavailable."
                 raise ValueError(msg)
             install(ctx)
             return
@@ -6174,12 +6239,11 @@ def _align_projection_exprs(
 ) -> list[Expr]:
     selections: list[Expr] = []
     for schema_field in schema:
-        dtype_name = _datafusion_type_name(schema_field.type)
         col_name = schema_field.name
         if schema_field.name in input_columns:
-            selections.append(f.arrow_cast(col(col_name), lit(dtype_name)).alias(col_name))
+            selections.append(safe_cast(col(col_name), schema_field.type).alias(col_name))
         else:
-            selections.append(f.arrow_cast(lit(None), lit(dtype_name)).alias(col_name))
+            selections.append(safe_cast(lit(None), schema_field.type).alias(col_name))
     if keep_extra_columns:
         for name in input_columns:
             if name in schema.names:

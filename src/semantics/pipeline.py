@@ -56,9 +56,10 @@ if TYPE_CHECKING:
     from datafusion_engine.io.write import WritePipeline
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from semantics.config import SemanticConfig
+    from semantics.ir import SemanticIRJoinGroup
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -190,7 +191,13 @@ def _default_semantic_cache_policy(
             else:
                 resolved[name] = "delta_staging"
             continue
+        if name in {"semantic_nodes_union_v1", "semantic_edges_union_v1"}:
+            resolved[name] = "delta_staging"
+            continue
         if name.startswith("rel_") or name.endswith("_norm_v1"):
+            resolved[name] = "delta_staging"
+            continue
+        if name.startswith("join_"):
             resolved[name] = "delta_staging"
             continue
         resolved[name] = "none"
@@ -283,6 +290,7 @@ def _relationship_builder(
     *,
     config: SemanticConfig | None,
     use_cdf: bool,
+    join_group: SemanticIRJoinGroup | None = None,
 ) -> DataFrameBuilder:
     """Build a DataFrame builder from a declarative RelationshipSpec.
 
@@ -294,6 +302,8 @@ def _relationship_builder(
         Optional semantic configuration.
     use_cdf
         Whether to enable CDF-aware incremental joins.
+    join_group
+        Optional join-fusion group for shared joins.
 
     Returns
     -------
@@ -314,7 +324,14 @@ def _relationship_builder(
                     file_quality_df = inner_ctx.table(spec.file_quality_view)
                 except Exception:  # noqa: BLE001
                     file_quality_df = build_file_quality_view(inner_ctx)
-            return compiler.compile_relationship_with_quality(
+            if join_group is None:
+                return compiler.compile_relationship_with_quality(
+                    spec,
+                    file_quality_df=file_quality_df,
+                )
+            joined = inner_ctx.table(join_group.name)
+            return compiler.compile_relationship_from_join(
+                joined,
                 spec,
                 file_quality_df=file_quality_df,
             )
@@ -330,6 +347,19 @@ def _relationship_builder(
                 output_name=spec.name,
             ),
         )
+
+    return _builder
+
+
+def _join_group_builder(
+    group: SemanticIRJoinGroup,
+    *,
+    config: SemanticConfig | None,
+) -> DataFrameBuilder:
+    def _builder(inner_ctx: SessionContext) -> DataFrame:
+        from semantics.compiler import SemanticCompiler
+
+        return SemanticCompiler(inner_ctx, config=config).build_join_group(group)
 
     return _builder
 
@@ -424,6 +454,7 @@ def _cpg_view_specs(
     input_mapping: Mapping[str, str],
     config: SemanticConfig | None,
     use_cdf: bool,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[tuple[str, DataFrameBuilder]]:
     """Build view specs for the CPG pipeline.
 
@@ -442,6 +473,8 @@ def _cpg_view_specs(
         Optional semantic configuration.
     use_cdf
         Whether to enable CDF-aware incremental joins.
+    runtime_profile
+        Runtime profile required to build CPG output views.
 
     Returns
     -------
@@ -450,11 +483,11 @@ def _cpg_view_specs(
 
     Raises
     ------
-    KeyError
-        Raised when required normalization or relationship specs are missing.
     ValueError
-        Raised when an unsupported semantic spec kind is encountered.
+        Raised when the runtime profile is unavailable.
+
     """
+    from semantics.ir_pipeline import build_semantic_ir
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
         SEMANTIC_NORMALIZATION_SPECS,
@@ -462,76 +495,139 @@ def _cpg_view_specs(
         semantic_spec_index,
     )
 
-    def _input(name: str) -> str:
-        return input_mapping.get(name, name)
-
     normalization_by_output = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
     relationship_by_name = {spec.name: spec for spec in RELATIONSHIP_SPECS}
+    ir = build_semantic_ir()
+    join_groups_by_name = {group.name: group for group in ir.join_groups}
+    join_group_by_relationship = {
+        rel_name: group for group in ir.join_groups for rel_name in group.relationship_names
+    }
 
-    ordered_specs = _ordered_semantic_specs(semantic_spec_index())
-    view_specs: list[tuple[str, DataFrameBuilder]] = []
-    for spec in ordered_specs:
-        if spec.kind == "normalize":
-            norm_spec = normalization_by_output.get(spec.name) or normalization_spec_for_output(
-                spec.name
-            )
-            if norm_spec is None:
-                msg = f"Missing normalization spec for output {spec.name!r}."
-                raise KeyError(msg)
-            view_specs.append(
-                (
-                    spec.name,
-                    _normalize_spec_builder(
-                        norm_spec,
-                        input_mapping=input_mapping,
-                        config=config,
-                    ),
-                )
-            )
-            continue
-        if spec.kind == "scip_normalize":
-            view_specs.append(
-                (
-                    spec.name,
-                    _scip_norm_builder(
-                        _input("scip_occurrences"),
-                        line_index_table=_input("file_line_index_v1"),
-                    ),
-                )
-            )
-            continue
-        if spec.kind == "relate":
-            rel_spec = relationship_by_name.get(spec.name)
-            if rel_spec is None:
-                msg = f"Missing relationship spec for output {spec.name!r}."
-                raise KeyError(msg)
-            view_specs.append(
-                (
-                    spec.name,
-                    _relationship_builder(rel_spec, config=config, use_cdf=use_cdf),
-                )
-            )
-            continue
-        if spec.kind == "union_edges":
-            view_specs.append(
-                (
-                    spec.name,
-                    _union_edges_builder(list(spec.inputs), config=config),
-                )
-            )
-            continue
-        if spec.kind == "union_nodes":
-            view_specs.append(
-                (
-                    spec.name,
-                    _union_nodes_builder(list(spec.inputs), config=config),
-                )
-            )
-            continue
-        msg = f"Unsupported semantic spec kind: {spec.kind!r}."
+    if runtime_profile is None:
+        msg = "Runtime profile is required for CPG output views."
         raise ValueError(msg)
 
+    context = _SemanticSpecContext(
+        normalization_by_output=normalization_by_output,
+        relationship_by_name=relationship_by_name,
+        input_mapping=input_mapping,
+        config=config,
+        use_cdf=use_cdf,
+        normalization_spec_for_output=normalization_spec_for_output,
+        join_groups_by_name=join_groups_by_name,
+        join_group_by_relationship=join_group_by_relationship,
+    )
+    view_specs = _semantic_view_specs(
+        ordered_specs=_ordered_semantic_specs(semantic_spec_index()),
+        context=context,
+    )
+    view_specs.extend(_cpg_output_view_specs(runtime_profile))
     return view_specs
+
+
+@dataclass(frozen=True)
+class _SemanticSpecContext:
+    normalization_by_output: Mapping[str, SemanticNormalizationSpec]
+    relationship_by_name: Mapping[str, QualityRelationshipSpec]
+    input_mapping: Mapping[str, str]
+    config: SemanticConfig | None
+    use_cdf: bool
+    normalization_spec_for_output: Callable[[str], SemanticNormalizationSpec | None]
+    join_groups_by_name: Mapping[str, SemanticIRJoinGroup]
+    join_group_by_relationship: Mapping[str, SemanticIRJoinGroup]
+
+
+def _semantic_view_specs(
+    *,
+    ordered_specs: Sequence[SemanticSpecIndex],
+    context: _SemanticSpecContext,
+) -> list[tuple[str, DataFrameBuilder]]:
+    view_specs: list[tuple[str, DataFrameBuilder]] = []
+    for spec in ordered_specs:
+        builder = _builder_for_semantic_spec(
+            spec,
+            context=context,
+        )
+        view_specs.append((spec.name, builder))
+    return view_specs
+
+
+def _builder_for_semantic_spec(
+    spec: SemanticSpecIndex,
+    *,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == "normalize":
+        norm_spec = context.normalization_by_output.get(
+            spec.name
+        ) or context.normalization_spec_for_output(spec.name)
+        if norm_spec is None:
+            msg = f"Missing normalization spec for output {spec.name!r}."
+            raise KeyError(msg)
+        return _normalize_spec_builder(
+            norm_spec,
+            input_mapping=context.input_mapping,
+            config=context.config,
+        )
+    if spec.kind == "scip_normalize":
+        return _scip_norm_builder(
+            _input_table(context.input_mapping, "scip_occurrences"),
+            line_index_table=_input_table(context.input_mapping, "file_line_index_v1"),
+        )
+    if spec.kind == "join_group":
+        join_group = context.join_groups_by_name.get(spec.name)
+        if join_group is None:
+            msg = f"Missing join group spec for output {spec.name!r}."
+            raise KeyError(msg)
+        return _join_group_builder(join_group, config=context.config)
+    if spec.kind == "relate":
+        rel_spec = context.relationship_by_name.get(spec.name)
+        if rel_spec is None:
+            msg = f"Missing relationship spec for output {spec.name!r}."
+            raise KeyError(msg)
+        join_group = context.join_group_by_relationship.get(spec.name)
+        return _relationship_builder(
+            rel_spec,
+            config=context.config,
+            use_cdf=context.use_cdf,
+            join_group=join_group,
+        )
+    if spec.kind == "union_edges":
+        return _union_edges_builder(list(spec.inputs), config=context.config)
+    if spec.kind == "union_nodes":
+        return _union_nodes_builder(list(spec.inputs), config=context.config)
+    msg = f"Unsupported semantic spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
+    return input_mapping.get(name, name)
+
+
+def _cpg_output_view_specs(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> list[tuple[str, DataFrameBuilder]]:
+    from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df
+
+    session_runtime = runtime_profile.session_runtime()
+
+    def _wrap_cpg_builder(builder: Callable[[SessionRuntime], DataFrame]) -> DataFrameBuilder:
+        def _builder(inner_ctx: SessionContext) -> DataFrame:
+            _ = inner_ctx
+            return builder(session_runtime)
+
+        return _builder
+
+    return [
+        (
+            "cpg_nodes_v1",
+            _wrap_cpg_builder(build_cpg_nodes_df),
+        ),
+        (
+            "cpg_edges_v1",
+            _wrap_cpg_builder(build_cpg_edges_df),
+        ),
+    ]
 
 
 def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
@@ -541,6 +637,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
         input_mapping=request.input_mapping,
         config=request.config,
         use_cdf=request.use_cdf,
+        runtime_profile=request.runtime_profile,
     )
     resolved_cache = request.cache_policy
     if resolved_cache is None:
@@ -588,6 +685,7 @@ def build_cpg(
     - scip_occurrences_norm_v1
     - cst_refs_norm_v1, cst_defs_norm_v1, cst_imports_norm_v1, cst_calls_norm_v1
     - rel_name_symbol_v1, rel_def_symbol_v1, rel_import_symbol_v1, rel_callsite_symbol_v1
+    - semantic_nodes_union_v1, semantic_edges_union_v1
     - cpg_nodes_v1, cpg_edges_v1
 
     Parameters

@@ -1,0 +1,9 @@
+id: py_import_as
+valid:
+  - "import os"
+  - "from x import y"
+  - "x = 1"
+invalid:
+  - "import numpy as np"
+  - "import pandas as pd"
+  - "import tensorflow as tf"

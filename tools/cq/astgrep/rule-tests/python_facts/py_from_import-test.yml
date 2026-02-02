@@ -1,0 +1,9 @@
+id: py_from_import
+valid:
+  - "import os"
+  - "from x import y as z"
+  - "x = 1"
+invalid:
+  - "from os import path"
+  - "from typing import Optional"
+  - "from collections import defaultdict"

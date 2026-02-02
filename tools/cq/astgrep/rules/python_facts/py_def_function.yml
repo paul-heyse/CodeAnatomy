@@ -1,0 +1,12 @@
+id: py_def_function
+language: python
+severity: hint
+rule:
+  kind: function_definition
+  regex: "^def "
+  not:
+    has:
+      kind: type_parameter
+metadata:
+  record: def
+  kind: function

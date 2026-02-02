@@ -87,9 +87,7 @@ def _graph_snapshot_path(
     *,
     plan_signature: str,
 ) -> Path:
-    explicit = config.get("graph_snapshot_path") or config.get(
-        "hamilton_graph_snapshot_path"
-    )
+    explicit = config.get("graph_snapshot_path") or config.get("hamilton_graph_snapshot_path")
     if isinstance(explicit, str) and explicit:
         base = Path(explicit).expanduser()
         if base.suffix:
@@ -97,17 +95,8 @@ def _graph_snapshot_path(
         return base / f"{plan_signature}.png"
     cache_path = config.get("cache_path")
     if isinstance(cache_path, str) and cache_path:
-        return (
-            Path(cache_path).expanduser()
-            / _GRAPH_SNAPSHOT_DIRNAME
-            / f"{plan_signature}.png"
-        )
-    return (
-        Path("build")
-        / "structured_logs"
-        / _GRAPH_SNAPSHOT_DIRNAME
-        / f"{plan_signature}.png"
-    )
+        return Path(cache_path).expanduser() / _GRAPH_SNAPSHOT_DIRNAME / f"{plan_signature}.png"
+    return Path("build") / "structured_logs" / _GRAPH_SNAPSHOT_DIRNAME / f"{plan_signature}.png"
 
 
 __all__ = ["GraphSnapshotHook"]

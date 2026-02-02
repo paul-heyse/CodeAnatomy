@@ -1,0 +1,9 @@
+id: py_from_import_multi
+valid:
+  - "from os import path"
+  - "import os"
+  - "x = 1"
+invalid:
+  - "from typing import List, Dict"
+  - "from os import path, getcwd"
+  - "from collections import defaultdict, OrderedDict, Counter"

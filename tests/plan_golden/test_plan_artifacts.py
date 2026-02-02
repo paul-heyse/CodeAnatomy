@@ -15,7 +15,7 @@ import pytest
 
 from test_support import datafusion_ext_stub
 from tests.test_helpers.arrow_seed import register_arrow_table
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
 
 def _stub_enabled() -> bool:
@@ -25,7 +25,7 @@ def _stub_enabled() -> bool:
 if _stub_enabled():
     sys.modules.setdefault("datafusion_ext", datafusion_ext_stub)
 
-require_datafusion()
+require_datafusion_udfs()
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

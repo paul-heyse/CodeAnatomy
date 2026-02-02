@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from serde_msgspec import to_builtins
-from utils.hashing import hash_msgpack_canonical
+from utils.hashing import hash_json_canonical
 
 
 @runtime_checkable
@@ -41,8 +40,7 @@ def config_fingerprint(payload: Mapping[str, object]) -> str:
     str
         SHA-256 hexdigest for the payload.
     """
-    normalized = to_builtins(payload, str_keys=True)
-    return hash_msgpack_canonical(normalized)
+    return hash_json_canonical(payload, str_keys=True)
 
 
 __all__ = ["FingerprintableConfig", "config_fingerprint"]

@@ -123,6 +123,9 @@ def scip_to_byte_offsets(
             "bend",
             _byte_offset("end_line_start_byte", "end_line_text", "end_char"),
         )
+        from datafusion_engine.udf.shims import span_make
+
+        df = df.with_column("span", span_make(col("bstart"), col("bend")))
 
         return df.drop(
             "start_line_no",

@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.abi import schema_to_dict
-from serde_artifacts import DeltaScanConfigSnapshot
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from schema_spec.system import DeltaScanOptions
+    from serde_artifacts import DeltaScanConfigSnapshot
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,8 @@ def delta_scan_config_snapshot_from_options(
     """
     if options is None:
         return None
+    from serde_artifacts import DeltaScanConfigSnapshot
+
     schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
     return DeltaScanConfigSnapshot(
         file_column_name=options.file_column_name,
@@ -105,14 +107,9 @@ def delta_scan_identity_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | 
     str | None
         Identity hash for the snapshot payload, when available.
     """
-    identity = delta_scan_config_identity_payload(snapshot)
-    if identity is None:
+    if snapshot is None:
         return None
-    payload = {
-        "options": dict(identity.options),
-        "schema": identity.schema_payload,
-    }
-    return hash_msgpack_canonical(payload)
+    return hash_msgpack_canonical(snapshot)
 
 
 __all__ = [

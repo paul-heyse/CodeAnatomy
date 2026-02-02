@@ -11,7 +11,7 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import TREE_SITTER_CHECK_VIEWS
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.diagnostics import diagnostic_profile
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
 _CACHE_TABLES: tuple[str, ...] = (
     "list_files_cache",
@@ -23,7 +23,7 @@ _CACHE_TABLES: tuple[str, ...] = (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-require_datafusion()
+require_datafusion_udfs()
 
 
 @pytest.mark.integration

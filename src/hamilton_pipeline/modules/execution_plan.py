@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_origin, get_type_hints
 
 from hamilton.function_modifiers import cache, check_output, extract_fields
 
@@ -83,8 +83,25 @@ def _register_module_symbol(
 ) -> None:
     if callable(fn):
         fn.__module__ = module.__name__
+        _normalize_hamilton_annotations(fn, module)
     module.__dict__[name] = fn
     exports.append(name)
+
+
+def _normalize_hamilton_annotations(fn: object, module: ModuleType) -> None:
+    annotations = getattr(fn, "__annotations__", None)
+    if not annotations:
+        return
+    try:
+        resolved = get_type_hints(fn, globalns=module.__dict__, localns=module.__dict__)
+    except (NameError, TypeError, ValueError):
+        return
+    normalized: dict[str, object] = {}
+    for key, value in resolved.items():
+        origin = get_origin(value)
+        normalized[key] = origin if origin is not None else value
+    if normalized:
+        fn.__annotations__ = normalized
 
 
 def _plan_node_functions(
@@ -261,11 +278,11 @@ def _plan_artifacts_node() -> object:
             "plan_reduction_removed_edge_count": int,
             "plan_reduction_reduced_edge_count": int,
             "plan_critical_path_task_names": tuple,
-            "plan_critical_path_length_weighted": float | None,
+            "plan_critical_path_length_weighted": object,
             "plan_scan_unit_count": int,
             "plan_scan_file_candidate_count": int,
             "plan_task_signature_count": int,
-            "plan_session_runtime_hash": str | None,
+            "plan_session_runtime_hash": object,
             "plan_total_edges": int,
             "plan_valid_edges": int,
             "plan_invalid_edges": int,

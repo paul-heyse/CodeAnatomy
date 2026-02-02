@@ -1,0 +1,8 @@
+id: py_raise_from
+valid:
+  - "raise ValueError()"
+  - "raise"
+  - "x = 1"
+invalid:
+  - "raise ValueError() from e"
+  - "raise NewError('msg') from original"

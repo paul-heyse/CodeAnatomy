@@ -1,0 +1,9 @@
+id: py_except_as
+language: python
+severity: hint
+rule:
+  kind: except_clause
+  regex: " as "
+metadata:
+  record: except
+  kind: except_as

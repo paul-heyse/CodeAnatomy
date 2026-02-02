@@ -1,0 +1,14 @@
+id: py_except_bare
+snapshots:
+  ? |
+    try:
+        pass
+    except:
+        pass
+  : labels:
+    - source: |-
+        except:
+            pass
+      style: primary
+      start: 14
+      end: 30

@@ -125,13 +125,24 @@ def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> Sessio
     return session_runtime.ctx
 
 
-def _ensure_required_udfs(ctx: SessionContext, *, required: Sequence[str]) -> None:
+def _ensure_required_udfs(
+    ctx: SessionContext,
+    *,
+    required: Sequence[str],
+    allow_missing: bool = False,
+) -> bool:
     if not required:
-        return
+        return True
     from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
 
-    snapshot = rust_udf_snapshot(ctx)
-    validate_required_udfs(snapshot, required=required)
+    try:
+        snapshot = rust_udf_snapshot(ctx)
+        validate_required_udfs(snapshot, required=required)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        if allow_missing:
+            return False
+        raise
+    return True
 
 
 def _df_from_table(
@@ -352,12 +363,13 @@ def _dedupe_dataframe(
     *,
     spec: DedupeSpec,
     columns: Sequence[str],
+    allow_best_by_score: bool = True,
 ) -> DataFrame:
     if not spec.keys:
         return df
     if spec.strategy == "COLLAPSE_LIST":
         return _dedupe_collapse_list_dataframe(df, spec=spec, columns=columns)
-    if spec.strategy == "KEEP_BEST_BY_SCORE":
+    if spec.strategy == "KEEP_BEST_BY_SCORE" and allow_best_by_score:
         row_expr = _dedupe_best_by_score_expr(df, spec=spec)
     else:
         order_by: list[DFSortKey] | None = None
@@ -408,8 +420,13 @@ def dedupe_kernel(
     ctx = _session_context(runtime_profile)
     ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
     resolved_spec = _dedupe_spec_with_ordering(spec, ordering)
+    allow_best_by_score = True
     if resolved_spec.strategy == "KEEP_BEST_BY_SCORE":
-        _ensure_required_udfs(ctx, required=("dedupe_best_by_score",))
+        allow_best_by_score = _ensure_required_udfs(
+            ctx,
+            required=("dedupe_best_by_score",),
+            allow_missing=True,
+        )
     df = _df_from_table(
         ctx,
         table,
@@ -418,7 +435,12 @@ def dedupe_kernel(
         ingest_hook=_arrow_ingest_hook(runtime_profile),
     )
     columns = list(table.schema.names)
-    result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
+    result_df = _dedupe_dataframe(
+        df,
+        spec=resolved_spec,
+        columns=columns,
+        allow_best_by_score=allow_best_by_score,
+    )
     out = result_df.to_arrow_table()
     return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
 

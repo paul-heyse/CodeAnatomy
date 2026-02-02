@@ -1,0 +1,11 @@
+id: py_call_attr
+valid:
+  - "foo()"
+  - "Bar()"
+  - "x + y"
+invalid:
+  - "obj.method()"
+  - "self.foo()"
+  - "module.func(a, b)"
+  - "cls.classmethod()"
+  - "a.b.c.deep()"

@@ -1,0 +1,26 @@
+id: py_except_as
+snapshots:
+  ? |
+    try:
+        pass
+    except Exception as ex:
+        pass
+  : labels:
+    - source: |-
+        except Exception as ex:
+            pass
+      style: primary
+      start: 14
+      end: 46
+  ? |
+    try:
+        pass
+    except ValueError as e:
+        pass
+  : labels:
+    - source: |-
+        except ValueError as e:
+            pass
+      style: primary
+      start: 14
+      end: 46

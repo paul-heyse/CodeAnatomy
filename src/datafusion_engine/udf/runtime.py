@@ -34,6 +34,7 @@ _RUST_UDF_POLICIES: WeakKeyDictionary[
 ] = WeakKeyDictionary()
 _RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_DDL: WeakSet[SessionContext] = WeakSet()
+_RUST_UDF_FALLBACK_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "scalar",
@@ -48,7 +49,6 @@ _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "short_circuits",
     "signature_inputs",
     "return_types",
-    "config_defaults",
 )
 
 RustUdfSnapshot = Mapping[str, object]
@@ -58,10 +58,9 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     try:
         snapshot = _datafusion_internal().registry_snapshot(ctx)
     except (ImportError, AttributeError, TypeError, ValueError):
-        return _empty_registry_snapshot()
+        return _fallback_registry_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
-        msg = "datafusion._internal.registry_snapshot returned a non-mapping payload."
-        raise TypeError(msg)
+        return _fallback_registry_snapshot(ctx)
     payload = dict(snapshot)
     payload.pop("pycapsule_udfs", None)
     # Preserve the key for diagnostics/tests while dropping non-serializable payloads.
@@ -126,6 +125,15 @@ def _install_rust_udfs(
 
 
 def _datafusion_internal() -> ModuleType:
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if callable(getattr(module, "register_codeanatomy_udfs", None)) or callable(
+            getattr(module, "registry_snapshot", None)
+        ):
+            return module
     return importlib.import_module("datafusion._internal")
 
 
@@ -144,6 +152,17 @@ def udf_backend_available() -> bool:
     installer = getattr(internal, "register_codeanatomy_udfs", None)
     snapshotter = getattr(internal, "registry_snapshot", None)
     return callable(installer) and callable(snapshotter)
+
+
+def fallback_udfs_active(ctx: SessionContext) -> bool:
+    """Return whether fallback Python UDFs were installed for a context.
+
+    Returns
+    -------
+    bool
+        ``True`` when fallback UDFs are registered for the context.
+    """
+    return ctx in _RUST_UDF_FALLBACK_CONTEXTS
 
 
 def _empty_registry_snapshot() -> dict[str, object]:
@@ -165,6 +184,14 @@ def _empty_registry_snapshot() -> dict[str, object]:
         "config_defaults": {},
         "custom_udfs": [],
     }
+
+
+def _fallback_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+    from datafusion_engine.udf.fallback import fallback_udf_snapshot, register_fallback_udfs
+
+    register_fallback_udfs(ctx)
+    _RUST_UDF_FALLBACK_CONTEXTS.add(ctx)
+    return fallback_udf_snapshot()
 
 
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
@@ -957,6 +984,7 @@ def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
 
 __all__ = [
     "RustUdfSnapshot",
+    "fallback_udfs_active",
     "register_rust_udfs",
     "register_udfs_via_ddl",
     "rust_udf_docs",

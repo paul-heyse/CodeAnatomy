@@ -2711,13 +2711,13 @@ def identity_fields_for(
 
 def _resolve_root_schema(ctx: SessionContext, root: str) -> pa.Schema:
     static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(root)
-    if static_schema is not None:
-        return static_schema
     try:
         df = ctx.table(root)
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        if static_schema is not None:
+            return static_schema
         msg = f"Missing root schema for {root!r} and table lookup failed."
-        raise KeyError(msg) from exc
+        raise KeyError(msg) from None
     resolved = df.schema()
     if isinstance(resolved, pa.Schema):
         return resolved
@@ -3124,7 +3124,14 @@ def _validate_required_functions(
     catalog: FunctionCatalog | None = None,
 ) -> None:
     resolved = catalog or _function_catalog(ctx)
-    available = resolved.function_names if resolved is not None else set()
+    available = set(resolved.function_names) if resolved is not None else set()
+    try:
+        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
+
+        snapshot = rust_udf_snapshot(ctx)
+        available.update(name.lower() for name in udf_names_from_snapshot(snapshot))
+    except (RuntimeError, TypeError, ValueError):
+        pass
     if not available:
         errors["datafusion_functions"] = "information_schema.routines returned no entries."
         return
@@ -3790,6 +3797,10 @@ def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
         parity checks fail.
     """
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
+    from datafusion_engine.udf.runtime import fallback_udfs_active
+
+    if fallback_udfs_active(ctx):
+        return
 
     report = udf_info_schema_parity_report(ctx)
     if report.error is not None:

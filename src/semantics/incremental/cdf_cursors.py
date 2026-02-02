@@ -8,6 +8,7 @@ checkpoints.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -70,6 +71,17 @@ class CdfCursor(StructBaseCompat, frozen=True):
         5
         """
         return cls(dataset_name=dataset_name, last_version=version)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Prevent mutation of frozen cursor instances.
+
+        Raises
+        ------
+        FrozenInstanceError
+            Raised on any mutation attempt.
+        """
+        _ = (name, value)
+        raise FrozenInstanceError
 
 
 class CdfCursorStore(StructBaseStrict, frozen=True):

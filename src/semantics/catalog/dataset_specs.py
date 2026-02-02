@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import SchemaLike
     from schema_spec.system import ContractSpec, DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
+    from semantics.migrations import MigrationFn
 
 
 def _strip_version(name: str) -> str:
@@ -35,6 +36,25 @@ def _strip_version(name: str) -> str:
     if sep and suffix.isdigit():
         return base
     return name
+
+
+def _parse_version(name: str) -> tuple[str, int | None]:
+    """Parse a dataset name into (base, version).
+
+    Parameters
+    ----------
+    name
+        Dataset name potentially containing a version suffix.
+
+    Returns
+    -------
+    tuple[str, int | None]
+        Base name and version number when present, otherwise None.
+    """
+    base, sep, suffix = name.rpartition("_v")
+    if sep and suffix.isdigit():
+        return base, int(suffix)
+    return name, None
 
 
 # Lazily-initialized caches
@@ -151,16 +171,40 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
     """
     global _DATASET_ALIASES_CACHE, _ALIASES_TO_NAME_CACHE  # noqa: PLW0603
     if _DATASET_ALIASES_CACHE is None or _ALIASES_TO_NAME_CACHE is None:
+        from semantics.migrations import migration_for
+
         aliases: dict[str, str] = {}
         reverse: dict[str, str] = {}
+        grouped: dict[str, list[tuple[str, int | None]]] = {}
         for row in _get_all_dataset_rows():
             alias = _strip_version(row.name)
-            aliases[row.name] = alias
-            existing = reverse.get(alias)
-            if existing is not None and existing != row.name:
-                msg = f"Duplicate semantic dataset alias: {alias!r}."
+            _, version = _parse_version(row.name)
+            grouped.setdefault(alias, []).append((row.name, version))
+
+        for alias, entries in grouped.items():
+            if len(entries) == 1:
+                name, _version = entries[0]
+                aliases[name] = alias
+                reverse[alias] = name
+                continue
+
+            if any(version is None for _name, version in entries):
+                msg = f"Duplicate semantic dataset alias with unversioned name: {alias!r}."
                 raise ValueError(msg)
-            reverse[alias] = row.name
+
+            latest_name, _latest_version = max(entries, key=lambda item: item[1] or 0)
+            for name, _version in entries:
+                aliases[name] = alias
+                if name == latest_name:
+                    continue
+                if migration_for(name, latest_name) is None:
+                    msg = (
+                        f"Missing migration from {name!r} to {latest_name!r} "
+                        f"for dataset alias {alias!r}."
+                    )
+                    raise ValueError(msg)
+            reverse[alias] = latest_name
+
         _DATASET_ALIASES_CACHE = aliases
         _ALIASES_TO_NAME_CACHE = reverse
     return _DATASET_ALIASES_CACHE, _ALIASES_TO_NAME_CACHE
@@ -320,6 +364,19 @@ def dataset_alias(name: str) -> str:
     raise KeyError(msg)
 
 
+def dataset_migration(source: str, target: str) -> MigrationFn | None:
+    """Return a migration function for the given dataset pair.
+
+    Returns
+    -------
+    MigrationFn | None
+        Migration function when registered, otherwise ``None``.
+    """
+    from semantics.migrations import migration_for
+
+    return migration_for(source, target)
+
+
 def dataset_contract(
     name: str,
     ctx: SessionContext | None = None,
@@ -425,6 +482,7 @@ __all__ = [
     "dataset_contract_schema",
     "dataset_input_schema",
     "dataset_merge_keys",
+    "dataset_migration",
     "dataset_name_from_alias",
     "dataset_names",
     "dataset_schema",

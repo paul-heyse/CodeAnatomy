@@ -81,7 +81,5 @@ def test_semantic_registry_hook_writes_registry(tmp_path: Path) -> None:
     driver = _DummyRegistryDriver([_DummyNode("semantic_table", tags)])
     hook.bind_driver(cast("Driver", driver))
     hook.run_before_graph_execution(run_id=run_id)
-    expected_path = (
-        tmp_path / "lineage" / run_id / f"semantic_registry_{plan_signature}.json"
-    )
+    expected_path = tmp_path / "lineage" / run_id / f"semantic_registry_{plan_signature}.json"
     assert expected_path.exists()

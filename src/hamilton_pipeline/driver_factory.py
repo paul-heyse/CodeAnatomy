@@ -781,10 +781,10 @@ def _resolve_config_payload(
             "determinism_override_override",
             determinism_override.value,
         )
-    config_payload.setdefault(
-        "enable_dynamic_scan_units",
-        (execution_mode or ExecutionMode.PLAN_PARALLEL) != ExecutionMode.DETERMINISTIC_SERIAL,
-    )
+    if (execution_mode or ExecutionMode.PLAN_PARALLEL) == ExecutionMode.DETERMINISTIC_SERIAL:
+        config_payload["enable_dynamic_scan_units"] = False
+    else:
+        config_payload.setdefault("enable_dynamic_scan_units", True)
     config_payload.setdefault("enable_output_validation", True)
     config_payload.setdefault("enable_graph_snapshot", True)
     config_payload.setdefault("hamilton.enable_power_user_mode", True)

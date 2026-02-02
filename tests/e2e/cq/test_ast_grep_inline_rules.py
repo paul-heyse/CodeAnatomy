@@ -25,8 +25,8 @@ def foo(x: int) -> int:
     file_path.write_text(source, encoding="utf-8")
 
     rules = (
-        AstGrepRule(pattern="def foo($$$): $$$"),
-        AstGrepRule(pattern="class Bar($$$): $$$"),
+        AstGrepRule(pattern="def foo($$$) -> $T: $$$"),
+        AstGrepRule(pattern="class Bar: $$$"),
     )
 
     findings, records, _ = _execute_ast_grep_rules(

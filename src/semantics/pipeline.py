@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewNode
     from semantics.adapters import RelationshipProjectionOptions
     from semantics.config import SemanticConfig
-    from semantics.ir import SemanticIR, SemanticIRJoinGroup
+    from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -119,6 +119,16 @@ class CpgViewSpecsRequest:
     runtime_profile: DataFusionRuntimeProfile | None
     requested_outputs: Collection[str] | None
     semantic_ir: SemanticIR | None
+
+
+@dataclass(frozen=True)
+class _IncrementalOutputRequest:
+    ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile
+    runtime_config: SemanticRuntimeConfig
+    input_mapping: Mapping[str, str]
+    use_cdf: bool
+    requested_outputs: Collection[str] | None
 
 
 @dataclass(frozen=True)
@@ -603,21 +613,15 @@ def _resolve_requested_outputs(
 
 
 def _incremental_requested_outputs(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    runtime_config: SemanticRuntimeConfig,
-    input_mapping: Mapping[str, str],
-    use_cdf: bool,
-    requested_outputs: Collection[str] | None,
+    request: _IncrementalOutputRequest,
 ) -> set[str] | None:
-    if requested_outputs is not None or not use_cdf:
+    if request.requested_outputs is not None or not request.use_cdf:
         return None
     changed_inputs = _cdf_changed_inputs(
-        ctx,
-        runtime_profile=runtime_profile,
-        runtime_config=runtime_config,
-        input_mapping=input_mapping,
+        request.ctx,
+        runtime_profile=request.runtime_profile,
+        runtime_config=request.runtime_config,
+        input_mapping=request.input_mapping,
     )
     if changed_inputs is None:
         return None
@@ -1263,22 +1267,21 @@ def _semantic_explain_markdown(
         "| --- | --- | --- | --- | --- |",
     ]
     stats_by_name = {row.get("name"): row for row in view_stats}
-    for view in semantic_ir.views:
-        stats = stats_by_name.get(view.name, {})
-        plan_fingerprint = stats.get("plan_fingerprint") or ""
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    view.name,
-                    view.kind,
-                    ", ".join(view.inputs),
-                    ", ".join(view.outputs),
-                    str(plan_fingerprint),
-                ]
-            )
-            + " |"
+    view_lines = [
+        "| "
+        + " | ".join(
+            [
+                view.name,
+                view.kind,
+                ", ".join(view.inputs),
+                ", ".join(view.outputs),
+                str((stats_by_name.get(view.name, {}) or {}).get("plan_fingerprint") or ""),
+            ]
         )
+        + " |"
+        for view in semantic_ir.views
+    ]
+    lines.extend(view_lines)
     if semantic_ir.join_groups:
         lines.extend(
             [
@@ -1288,20 +1291,21 @@ def _semantic_explain_markdown(
                 "| --- | --- | --- | --- | --- |",
             ]
         )
-        for group in semantic_ir.join_groups:
-            lines.append(
-                "| "
-                + " | ".join(
-                    [
-                        group.name,
-                        group.left_view,
-                        group.right_view,
-                        str(group.how),
-                        ", ".join(group.relationship_names),
-                    ]
-                )
-                + " |"
+        group_lines = [
+            "| "
+            + " | ".join(
+                [
+                    group.name,
+                    group.left_view,
+                    group.right_view,
+                    str(group.how),
+                    ", ".join(group.relationship_names),
+                ]
             )
+            + " |"
+            for group in semantic_ir.join_groups
+        ]
+        lines.extend(group_lines)
     return "\n".join(lines)
 
 
@@ -1382,12 +1386,14 @@ def build_cpg(
         snapshot = rust_udf_snapshot(ctx)
         resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
         incremental_outputs = _incremental_requested_outputs(
-            ctx,
-            runtime_profile=runtime_profile,
-            runtime_config=runtime_config,
-            input_mapping=input_mapping,
-            use_cdf=use_cdf,
-            requested_outputs=resolved.requested_outputs,
+            _IncrementalOutputRequest(
+                ctx=ctx,
+                runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
+                input_mapping=input_mapping,
+                use_cdf=use_cdf,
+                requested_outputs=resolved.requested_outputs,
+            )
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
@@ -1418,7 +1424,9 @@ def build_cpg(
                 validate_schema=resolved.validate_schema,
             ),
         )
-        plan_bundles = {node.name: node.plan_bundle for node in nodes}
+        plan_bundles: dict[str, DataFusionPlanBundle] = {
+            node.name: node.plan_bundle for node in nodes if node.plan_bundle is not None
+        }
         _record_semantic_compile_artifacts(
             ctx,
             runtime_profile=runtime_profile,
@@ -1928,12 +1936,14 @@ def build_cpg_from_inferred_deps(
         )
         resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
         incremental_outputs = _incremental_requested_outputs(
-            ctx,
-            runtime_profile=runtime_profile,
-            runtime_config=runtime_config,
-            input_mapping=input_mapping,
-            use_cdf=use_cdf,
-            requested_outputs=resolved.requested_outputs,
+            _IncrementalOutputRequest(
+                ctx=ctx,
+                runtime_profile=runtime_profile,
+                runtime_config=runtime_config,
+                input_mapping=input_mapping,
+                use_cdf=use_cdf,
+                requested_outputs=resolved.requested_outputs,
+            )
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs

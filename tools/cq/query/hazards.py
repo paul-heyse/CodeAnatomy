@@ -306,6 +306,25 @@ BUILTIN_HAZARDS: tuple[HazardSpec, ...] = (
         severity=HazardSeverity.WARNING,
         confidence_penalty=0.5,
     ),
+    # Contextual hazards
+    HazardSpec(
+        id="async_threading_wait",
+        pattern="threading.Event().wait($$$)",
+        message="threading.Event.wait blocks inside async function",
+        category=HazardCategory.PERFORMANCE,
+        severity=HazardSeverity.WARNING,
+        inside="async def $F($$$): $$$",
+        confidence_penalty=0.4,
+    ),
+    HazardSpec(
+        id="try_eval",
+        pattern="eval($$$)",
+        message="eval() inside try/except still executes arbitrary code",
+        category=HazardCategory.SECURITY,
+        severity=HazardSeverity.WARNING,
+        inside="try:\n    $$$\nexcept $E:\n    $$$",
+        confidence_penalty=0.3,
+    ),
     # Design hazards
     HazardSpec(
         id="mutable_default",
@@ -396,8 +415,11 @@ class HazardDetector:
         """
         import yaml
 
-        rules = {"rules": self.get_ast_grep_rules()}
-        return yaml.dump(rules, default_flow_style=False)
+        rules = self.get_ast_grep_rules()
+        return "\n---\n".join(
+            yaml.safe_dump(rule, sort_keys=False, default_flow_style=False).strip()
+            for rule in rules
+        )
 
     def get_spec(self, hazard_id: str) -> HazardSpec | None:
         """Get hazard spec by ID."""

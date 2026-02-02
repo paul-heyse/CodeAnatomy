@@ -1,0 +1,35 @@
+"""Fixture module for method name collision tests."""
+
+from __future__ import annotations
+
+
+class Alpha:
+    """Class without collide method."""
+
+    def do_work(self) -> int:
+        """Call a method name that exists on another class.
+
+        Returns
+        -------
+        int
+            Result of the collide call.
+        """
+        from collections.abc import Callable
+        from typing import cast
+
+        collide = cast("Callable[[], int]", self.collide)
+        return collide()
+
+
+class Beta:
+    """Class that defines the collide method."""
+
+    def collide(self) -> int:
+        """Return a constant value.
+
+        Returns
+        -------
+        int
+            Constant value used by tests.
+        """
+        return 1

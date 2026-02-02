@@ -218,3 +218,41 @@ def test_hazards_combined_with_name(
 
     # Query should complete successfully
     assert result.run.elapsed_ms >= 0
+
+
+@pytest.mark.e2e
+@pytest.mark.requires_ast_grep
+def test_contextual_hazard_async_sleep(
+    run_query: Callable[[str], CqResult],
+) -> None:
+    """Detect async-context hazard for time.sleep."""
+    result = run_query(
+        "entity=function name=async_blocking_sleep fields=hazards "
+        "in=tests/e2e/cq/_fixtures/control_flow.py"
+    )
+    hazard_kinds = {
+        finding.details.get("kind")
+        for section in result.sections
+        for finding in section.findings
+        if finding.category == "hazard"
+    }
+    assert "async_threading_wait" in hazard_kinds
+
+
+@pytest.mark.e2e
+@pytest.mark.requires_ast_grep
+def test_contextual_hazard_try_eval(
+    run_query: Callable[[str], CqResult],
+) -> None:
+    """Detect try-context hazard for eval usage."""
+    result = run_query(
+        "entity=function name=try_eval_single fields=hazards "
+        "in=tests/e2e/cq/_fixtures/control_flow.py"
+    )
+    hazard_kinds = {
+        finding.details.get("kind")
+        for section in result.sections
+        for finding in section.findings
+        if finding.category == "hazard"
+    }
+    assert "try_eval" in hazard_kinds

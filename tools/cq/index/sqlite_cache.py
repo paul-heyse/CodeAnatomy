@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 # Cache configuration constants
 INDEX_DIR = ".cq"
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "3"
 
 
 @dataclass
@@ -86,8 +86,11 @@ class IndexCache:
             Active database connection.
         """
         if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
+            self._conn = sqlite3.connect(str(self.db_path), timeout=30)
             self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA busy_timeout=30000")
         return self._conn
 
     def initialize(self) -> None:
@@ -105,7 +108,8 @@ class IndexCache:
                 mtime REAL NOT NULL,
                 rule_version TEXT NOT NULL,
                 records_json TEXT NOT NULL,
-                schema_version TEXT NOT NULL
+                schema_version TEXT NOT NULL,
+                record_types TEXT NOT NULL
             )
             """
         )
@@ -115,9 +119,14 @@ class IndexCache:
             ON scan_cache(rule_version)
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(scan_cache)")}
+        if "record_types" not in columns:
+            conn.execute(
+                "ALTER TABLE scan_cache ADD COLUMN record_types TEXT NOT NULL DEFAULT ''"
+            )
         conn.commit()
 
-    def needs_rescan(self, file_path: Path) -> bool:
+    def needs_rescan(self, file_path: Path, record_types: set[str] | None = None) -> bool:
         """Check if a file needs to be rescanned.
 
         A file needs rescanning if:
@@ -146,7 +155,7 @@ class IndexCache:
         conn = self._get_connection()
         cursor = conn.execute(
             """
-            SELECT content_hash, mtime, rule_version
+            SELECT content_hash, mtime, rule_version, schema_version, record_types
             FROM scan_cache
             WHERE file_path = ?
             """,
@@ -160,6 +169,8 @@ class IndexCache:
         cached_hash = row["content_hash"]
         cached_mtime = row["mtime"]
         cached_rule_version = row["rule_version"]
+        cached_schema_version = row["schema_version"]
+        cached_record_types = _deserialize_record_types(row["record_types"])
 
         # Need rescan if hash, mtime, or rule version changed
         if cached_hash != current_hash:
@@ -168,10 +179,19 @@ class IndexCache:
             return True
         if cached_rule_version != self.rule_version:
             return True
+        if cached_schema_version != SCHEMA_VERSION:
+            return True
+        if record_types is not None and not record_types.issubset(cached_record_types):
+            return True
 
         return False
 
-    def store(self, file_path: Path, records: Sequence[dict[str, object]]) -> None:
+    def store(
+        self,
+        file_path: Path,
+        records: Sequence[dict[str, object]],
+        record_types: set[str],
+    ) -> None:
         """Store scan results for a file.
 
         Parameters
@@ -185,13 +205,14 @@ class IndexCache:
         content_hash = compute_file_hash(file_path)
         mtime = file_path.stat().st_mtime
         records_json = json.dumps(records)
+        record_types_value = _serialize_record_types(record_types)
 
         conn = self._get_connection()
         conn.execute(
             """
             INSERT OR REPLACE INTO scan_cache
-            (file_path, content_hash, mtime, rule_version, records_json, schema_version)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (file_path, content_hash, mtime, rule_version, records_json, schema_version, record_types)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 file_path_str,
@@ -200,11 +221,16 @@ class IndexCache:
                 self.rule_version,
                 records_json,
                 SCHEMA_VERSION,
+                record_types_value,
             ),
         )
         conn.commit()
 
-    def retrieve(self, file_path: Path) -> list[dict[str, object]] | None:
+    def retrieve(
+        self,
+        file_path: Path,
+        record_types: set[str] | None = None,
+    ) -> list[dict[str, object]] | None:
         """Retrieve cached scan results for a file.
 
         Parameters
@@ -217,7 +243,7 @@ class IndexCache:
         list[dict[str, object]] | None
             Cached scan records if valid cache exists, None otherwise.
         """
-        if self.needs_rescan(file_path):
+        if self.needs_rescan(file_path, record_types):
             return None
 
         file_path_str = str(file_path.relative_to(self.repo_root))
@@ -303,6 +329,18 @@ class IndexCache:
         Ensures database connection is closed.
         """
         self.close()
+
+
+def _serialize_record_types(record_types: set[str]) -> str:
+    """Serialize record types for cache storage."""
+    return ",".join(sorted(record_types))
+
+
+def _deserialize_record_types(value: str) -> set[str]:
+    """Deserialize record types from cache storage."""
+    if not value:
+        return set()
+    return {item for item in value.split(",") if item}
 
 
 def compute_file_hash(file_path: Path) -> str:

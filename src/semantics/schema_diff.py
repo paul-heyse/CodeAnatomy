@@ -51,18 +51,23 @@ class SchemaDiff:
     @property
     def is_breaking(self) -> bool:
         """Return True when the diff is breaking."""
-        if self.removed or self.type_changes:
-            return True
-        if any(change.tightened for change in self.nullability_changes):
-            return True
-        if self.required_non_null_added:
-            return True
-        if self.key_fields_added or self.key_fields_removed:
-            return True
-        return False
+        return bool(
+            self.removed
+            or self.type_changes
+            or any(change.tightened for change in self.nullability_changes)
+            or self.required_non_null_added
+            or self.key_fields_added
+            or self.key_fields_removed
+        )
 
     def summary_lines(self) -> tuple[str, ...]:
-        """Return human-readable diff summary lines."""
+        """Return human-readable diff summary lines.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Summary lines describing schema changes.
+        """
         lines: list[str] = []
         if self.added:
             lines.append(f"added_fields={self.added}")
@@ -97,12 +102,24 @@ class SchemaDiff:
 
 
 def diff_contract_specs(source: ContractSpec, target: ContractSpec) -> SchemaDiff:
-    """Return a SchemaDiff for two contract specs."""
+    """Return a SchemaDiff for two contract specs.
+
+    Returns
+    -------
+    SchemaDiff
+        Diff summary for the contract specs.
+    """
     return diff_table_schema(source.table_schema, target.table_schema)
 
 
 def diff_table_schema(source: TableSchemaSpec, target: TableSchemaSpec) -> SchemaDiff:
-    """Return a SchemaDiff between two table schema specs."""
+    """Return a SchemaDiff between two table schema specs.
+
+    Returns
+    -------
+    SchemaDiff
+        Diff summary for the table schemas.
+    """
     source_fields = _field_index(source.fields)
     target_fields = _field_index(target.fields)
     source_names = set(source_fields)

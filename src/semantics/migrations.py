@@ -97,18 +97,24 @@ def migration_for(source: str, target: str) -> MigrationFn | None:
 
 
 def migration_skeleton(source: str, target: str, diff: SchemaDiff) -> str:
-    """Return a migration skeleton snippet for a schema diff."""
+    """Return a migration skeleton snippet for a schema diff.
+
+    Returns
+    -------
+    str
+        Migration skeleton snippet.
+    """
     function_name = _migration_fn_name(source, target)
     diff_lines = diff.summary_lines()
     change_lines = diff_lines or ("no schema changes detected",)
     change_comment = "\n".join(f"    # - {line}" for line in change_lines)
     return (
         f"def {function_name}(ctx: SessionContext) -> DataFrame:\n"
-        f"    \"\"\"Migrate {source} to {target}.\"\"\"\n"
-        f"    df = ctx.table(\"{source}\")\n"
+        f'    """Migrate {source} to {target}."""\n'
+        f'    df = ctx.table("{source}")\n'
         f"{change_comment}\n"
         f"    return df\n\n"
-        f"register_migration(\"{source}\", \"{target}\", {function_name})\n"
+        f'register_migration("{source}", "{target}", {function_name})\n'
     )
 
 

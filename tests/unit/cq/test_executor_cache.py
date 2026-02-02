@@ -14,7 +14,13 @@ from tools.cq.query.planner import compile_query
 
 
 def _build_toolchain() -> Toolchain:
-    """Build a minimal Toolchain instance for caching tests."""
+    """Build a minimal Toolchain instance for caching tests.
+
+    Returns
+    -------
+    Toolchain
+        Toolchain configured for the current Python runtime.
+    """
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     return Toolchain(
         rg_path=None,
@@ -57,5 +63,6 @@ def test_execute_plan_uses_query_cache(tmp_path: Path) -> None:
         )
 
     assert result.summary["note"] == "cached"
-    cache_info = result.summary.get("cache", {})
+    cache_info = result.summary.get("cache")
+    assert isinstance(cache_info, dict)
     assert cache_info.get("status") == "hit"

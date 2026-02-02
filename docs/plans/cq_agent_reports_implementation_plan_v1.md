@@ -81,11 +81,11 @@ if "raises" in query.expand:
 
 ### Implementation Checklist
 
-- [ ] Add per-file interval index and use it for callers/hazards attribution.
-- [ ] Execute `plan.sg_rules` for entity queries and intersect results.
-- [ ] Implement expander output sections for `callers`, `callees`, `raises`, `imports`, `scope`, `bytecode_surface`.
-- [ ] Add tests to validate relational constraints on entity queries.
-- [ ] Add regression tests for cross-file caller attribution.
+- [x] Add per-file interval index and use it for callers/hazards attribution.
+- [x] Execute `plan.sg_rules` for entity queries and intersect results.
+- [x] Implement expander output sections for `callers`, `callees`, `raises`, `imports`, `scope`, `bytecode_surface`.
+- [x] Add tests to validate relational constraints on entity queries.
+- [x] Add regression tests for cross-file caller attribution.
 
 ---
 
@@ -139,10 +139,10 @@ def scope_to_globs(scope: Scope) -> list[str]:
 
 ### Implementation Checklist
 
-- [ ] Add `globs` parameter to `sg_scan`.
-- [ ] Convert `scope.exclude` to ast-grep `!` globs.
-- [ ] Apply the same excludes to `rg` prefilter (`--glob !...`).
-- [ ] Add tests for `exclude=tests` and `globs=src/**/*.py`.
+- [x] Add `globs` parameter to `sg_scan`.
+- [x] Convert `scope.exclude` to ast-grep `!` globs.
+- [x] Apply the same excludes to `rg` prefilter (`--glob !...`).
+- [x] Add tests for `exclude=tests` and `globs=src/**/*.py`.
 
 ---
 
@@ -196,10 +196,10 @@ def _build_inline_rules_doc(rules: tuple[AstGrepRule, ...]) -> dict:
 
 ### Implementation Checklist
 
-- [ ] Create a multi-rule inline YAML document.
-- [ ] Execute one ast-grep scan and fan-out by rule id.
-- [ ] Preserve metavar filtering and match metadata.
-- [ ] Add unit tests for multi-rule pattern queries.
+- [x] Create a multi-rule inline YAML document.
+- [x] Execute one ast-grep scan and fan-out by rule id.
+- [x] Preserve metavar filtering and match metadata.
+- [x] Add unit tests for multi-rule pattern queries.
 
 ---
 
@@ -254,11 +254,11 @@ records = sg_scan(..., cache=index_cache)
 
 ### Implementation Checklist
 
-- [ ] Add `--cache/--no-cache` CLI flags for `q`.
-- [ ] Implement `QueryCacheKey` with stable plan signature.
-- [ ] Route all `q` executions through cache-aware executor.
-- [ ] Surface cache hits in `result.summary`.
-- [ ] Add tests verifying cache hit behavior.
+- [x] Add `--cache/--no-cache` CLI flags for `q`.
+- [x] Implement `QueryCacheKey` with stable plan signature.
+- [x] Route all `q` executions through cache-aware executor.
+- [x] Surface cache hits in `result.summary`.
+- [x] Add tests verifying cache hit behavior.
 
 ---
 
@@ -316,11 +316,11 @@ report_parser.set_defaults(func=_cmd_report_cli)
 
 ### Implementation Checklist
 
-- [ ] Define bundle schema and runner.
-- [ ] Implement `cq report <preset>` CLI entrypoint.
-- [ ] Merge bundle results into a single report with subsections per macro.
-- [ ] Add JSON artifact outputs per bundle run.
-- [ ] Add docs and examples in `tools/cq/README.md`.
+- [x] Define bundle schema and runner.
+- [x] Implement `cq report <preset>` CLI entrypoint.
+- [x] Merge bundle results into a single report with subsections per macro.
+- [x] Add JSON artifact outputs per bundle run.
+- [x] Add docs and examples in `tools/cq/README.md`.
 
 ---
 
@@ -370,9 +370,9 @@ HAZARD_RULES = (
 
 ### Implementation Checklist
 
-- [ ] Add symtable + dis evidence to call findings when available.
-- [ ] Use relational ast-grep rules for hazard context (inside async, inside try, etc.).
-- [ ] Add tests validating improved precision for method name collisions.
+- [x] Add symtable + dis evidence to call findings when available.
+- [x] Use relational ast-grep rules for hazard context (inside async, inside try, etc.).
+- [x] Add tests validating improved precision for method name collisions.
 
 ---
 
@@ -386,6 +386,13 @@ HAZARD_RULES = (
 - Cache integration reduces repeated scan costs.
 - Report bundles produce single-command, agent-usable outputs.
 
+## Status Notes (Post-Implementation)
+
+- Cache key stability is implemented via `_build_query_cache_key` (function-based) rather than a `QueryCacheKey` dataclass; behavior matches the intent.
+- Scope include/exclude tests use CQ fixtures paths rather than `src/**/*.py` literals; semantics covered.
+- Multi-rule pattern execution is covered by E2E inline-rule tests rather than a unit-only test.
+- Hazard rules now include async and try-context hazards using relational constraints.
+
 ---
 
 ## Implementation Notes
@@ -393,4 +400,3 @@ HAZARD_RULES = (
 - Keep all new code aligned with ruff/pyrefly/pyright strict rules.
 - Use `uv run` for any Python tool invocation.
 - Prefer ast-grep `--globs` over manual file expansion for accuracy and consistency.
-

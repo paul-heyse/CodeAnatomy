@@ -55,9 +55,9 @@ if spec.kind == "diagnostic":
 - [x] Add IR node kinds for diagnostics/exports.
 - [x] Emit diagnostic/export nodes from IR compile.
 - [x] Register diagnostic/export nodes via pipeline builder.
-- [ ] Route diagnostic/export outputs through contract finalization.
+- [x] Route diagnostic/export outputs through contract finalization.
 
-**Status**: Partially complete — diagnostics/exports are IR-driven; contract finalization for those outputs is still ad hoc.
+**Status**: Complete.
 
 ---
 
@@ -271,11 +271,11 @@ validate_schema_migrations(ir, contracts=current_contracts)
 - Implicit schema changes without explicit migrations.
 
 ### Implementation checklist
-- [ ] Add compile-time schema diffing.
-- [ ] Generate migration skeletons from diffs.
+- [x] Add compile-time schema diffing.
+- [x] Generate migration skeletons from diffs.
 - [x] Enforce migration policies per output (versioned alias + migration registry checks).
 
-**Status**: Partially complete — migration enforcement exists, but diffing/skeleton generation are not implemented.
+**Status**: Complete.
 
 ---
 
@@ -340,9 +340,9 @@ optimized = optimize_semantics(ir, outputs=requested_outputs)
 ### Implementation checklist
 - [x] Add requested output filtering to IR.
 - [x] Wire output slicing into pipeline entrypoints.
-- [ ] Connect incremental diff engine to IR pruning.
+- [x] Connect incremental diff engine to IR pruning.
 
-**Status**: Partially complete — output slicing is live; incremental diff integration is pending.
+**Status**: Complete.
 
 ---
 
@@ -395,23 +395,23 @@ record_artifact(runtime_profile, "semantic_explain_plan_v1", explain_payload)
 
 ### Implementation checklist
 - [x] Export IR graph + join group membership.
-- [ ] Export per-view plan stats.
-- [ ] Add UIs or markdown reports to surface explain plans.
+- [x] Export per-view plan stats.
+- [x] Add UIs or markdown reports to surface explain plans.
 
-**Status**: Partially complete — explain-plan artifacts are emitted; UI/reporting and per-view stats remain.
+**Status**: Complete.
 
 ---
 
 # Cross‑Cutting Acceptance Gates
 
-- [ ] IR is the single orchestration source for all semantic outputs.
+- [x] IR is the single orchestration source for all semantic outputs.
 - [x] Cost-based optimization + output pruning is in place.
 - [x] Semantic types are enforced at compile time.
 - [x] Join groups are materialized, cached, and explainable.
 - [x] Projections/finalization are explicit IR nodes.
-- [ ] Schema evolution requires explicit migrations.
+- [x] Schema evolution requires explicit migrations.
 - [x] Semantic fingerprints drive caching and provenance.
-- [ ] Output slicing + incremental compilation are available.
+- [x] Output slicing + incremental compilation are available.
 - [x] Golden tests verify IR + join-group correctness.
 - [x] Explain plans are exported as artifacts.
 
@@ -430,3 +430,107 @@ record_artifact(runtime_profile, "semantic_explain_plan_v1", explain_payload)
 9. Output slicing + incremental compile
 10. Testing harness + goldens
 11. Explain plan artifacts/UI
+
+---
+
+## Deletion Plan — Legacy Behavior Removal for Semantic-Compile Alignment
+
+> **Purpose**: Remove all non-IR orchestration and legacy registries so the semantic-compile IR is the sole execution authority.
+
+### Deletion Scope Item D1 — Remove SemanticCatalog + builder registry
+
+**Why**: The SemanticCatalog and builder registry represent a parallel orchestration path that is not IR-driven.
+
+**Target files**
+- `src/semantics/catalog/catalog.py`
+- `src/semantics/builders/__init__.py`
+- `src/semantics/builders/protocol.py`
+- `src/semantics/builders/registry.py`
+- `src/semantics/catalog/__init__.py` (remove catalog exports)
+- `src/datafusion_engine/views/registry_specs.py` (remove SEMANTIC_CATALOG usage)
+- `src/semantics/docs/graph_docs.py` (remove catalog-based graphs)
+
+**Delete / replace**
+- Delete SemanticCatalog and builder registration helpers.
+- Replace ordering/metadata with IR ordering (`build_semantic_ir().views`) and plan artifacts from `_record_semantic_compile_artifacts`.
+
+**Checklist**
+- [x] Remove SemanticCatalog + builder registry modules.
+- [x] Remove all SEMANTIC_CATALOG usage in view registration.
+- [x] Replace catalog-driven ordering with IR ordering.
+- [x] Update docs to use IR explain-plan artifacts.
+
+---
+
+### Deletion Scope Item D2 — Remove non-IR view builder registry + pre-CPG stage
+
+**Why**: `semantics.catalog.view_builders` and the `pre_cpg` view graph stage allow view registration outside the IR.
+
+**Target files**
+- `src/semantics/catalog/view_builders.py`
+- `src/semantics/catalog/analysis_builders.py` (remove VIEW_BUILDERS registry only)
+- `src/semantics/catalog/__init__.py` (remove view builder exports)
+- `src/datafusion_engine/views/registry_specs.py` (`_normalize_view_nodes`, stage `"pre_cpg"`)
+
+**Delete / replace**
+- Delete the view builder registry and all `view_builders` entrypoints.
+- Remove `_normalize_view_nodes` and route all normalization/analysis outputs through the semantic IR.
+- Ensure any remaining analysis outputs are declared in `SemanticModel.outputs` so they are IR-emitted.
+
+**Checklist**
+- [x] Delete `view_builders.py`.
+- [x] Remove pre-CPG stage and its call sites.
+- [x] Add any remaining non-IR outputs to `SemanticModel.outputs`.
+
+---
+
+### Deletion Scope Item D3 — Remove manual CPG view registration
+
+**Why**: `_cpg_view_nodes` manually registers CPG views instead of using the IR finalize nodes.
+
+**Target files**
+- `src/datafusion_engine/views/registry_specs.py` (`_cpg_view_nodes`, stage `"cpg"`)
+- `src/hamilton_pipeline/driver_factory.py` (any references to stage `"cpg"`)
+- `src/hamilton_pipeline/modules/subdags.py` (docs/assumptions about stage `"cpg"`)
+
+**Delete / replace**
+- Delete `_cpg_view_nodes` and stage gating.
+- Route CPG outputs solely via IR finalize nodes already emitted in `build_semantic_ir`.
+
+**Checklist**
+- [x] Remove `_cpg_view_nodes`.
+- [x] Remove any `"cpg"` stage usage.
+- [x] Verify CPG outputs are produced only by IR finalize nodes.
+
+---
+
+### Deletion Scope Item D4 — Remove duplicate semantic artifact emission
+
+**Why**: Registry-spec artifact emission duplicates the IR compile artifact flow and risks divergence.
+
+**Target files**
+- `src/datafusion_engine/views/registry_specs.py` (`_record_semantic_artifacts`, `SemanticPayloads`, `_semantic_fingerprint_stats`)
+
+**Delete / replace**
+- Delete registry-spec semantic artifact emission.
+- Use IR compile artifacts emitted from `semantics.pipeline._record_semantic_compile_artifacts`.
+
+**Checklist**
+- [x] Remove semantic metrics/fingerprint/stats emission from registry_specs.
+- [x] Confirm artifacts are emitted only from IR compile path.
+
+---
+
+### Deletion Scope Item D5 — Remove catalog-based graph docs
+
+**Why**: Graph docs should be derived from IR explain-plan artifacts, not the legacy catalog.
+
+**Target files**
+- `src/semantics/docs/graph_docs.py`
+
+**Delete / replace**
+- Replace with a lightweight report generator that reads `semantic_explain_plan_v1` / `semantic_explain_plan_report_v1`.
+
+**Checklist**
+- [x] Remove catalog-based docs.
+- [x] Generate explain-plan docs from IR artifacts only.

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
+ALL_RECORD_TYPES: set[str] = {"def", "call", "import", "raise", "except", "assign_ctor"}
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ def _scan_with_cache(
     index_cache: IndexCache,
 ) -> list[SgRecord]:
     """Run ast-grep scan with index cache support."""
+    record_types_set = set(record_types) if record_types is not None else ALL_RECORD_TYPES
     files = _expand_paths(paths, root)
     files = _filter_files_by_globs(files, root, globs)
 
@@ -174,10 +176,10 @@ def _scan_with_cache(
     files_to_scan: list[Path] = []
 
     for file_path in files:
-        if index_cache.needs_rescan(file_path):
+        if index_cache.needs_rescan(file_path, record_types_set):
             files_to_scan.append(file_path)
             continue
-        cached = index_cache.retrieve(file_path)
+        cached = index_cache.retrieve(file_path, record_types_set)
         if cached is None:
             files_to_scan.append(file_path)
             continue
@@ -191,10 +193,10 @@ def _scan_with_cache(
             file_path_obj = root / file_path_str
             records_data = [_record_to_cache_dict(record) for record in file_records]
             if file_path_obj.exists():
-                index_cache.store(file_path_obj, records_data)
+                index_cache.store(file_path_obj, records_data, record_types_set)
         for file_path in files_to_scan:
             if str(file_path.relative_to(root)) not in records_by_file:
-                index_cache.store(file_path, [])
+                index_cache.store(file_path, [], record_types_set)
 
     return _filter_records(cached_records + scanned_records, record_types)
 

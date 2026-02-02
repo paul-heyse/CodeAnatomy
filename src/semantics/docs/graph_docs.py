@@ -1,569 +1,286 @@
-"""Generate documentation from semantic catalog and relationship specs.
+"""Generate documentation from semantic explain-plan artifacts.
 
-This module auto-generates Mermaid flowchart diagrams and Markdown
-documentation from the registered semantic views and relationship
-specifications. The documentation reflects the actual pipeline structure
-defined in the spec registries.
+This module renders Markdown and Mermaid diagrams using the
+semantic_explain_plan_v1 and semantic_explain_plan_report_v1 artifacts
+emitted during semantic compilation. When artifacts are not provided,
+the helpers fall back to building an explain payload directly from the
+semantic IR.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from semantics.catalog import SemanticCatalog
-    from semantics.quality import QualityRelationshipSpec
-    from semantics.specs import RelationshipSpec, SemanticTableSpec
+ArtifactPayload = Mapping[str, object]
+ArtifactsSnapshot = Mapping[str, Sequence[ArtifactPayload]]
 
 
-def _build_extraction_subgraph() -> list[str]:
-    """Build Mermaid lines for extraction input subgraph.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram lines for extraction subgraph.
-    """
-    from semantics.spec_registry import SEMANTIC_NORMALIZATION_SPECS
-
-    sources = sorted({spec.source_table for spec in SEMANTIC_NORMALIZATION_SPECS})
-    lines = ["    subgraph Extraction"]
-    lines.extend([f"        {table}[{table}]" for table in sources])
-    lines.append("        scip_occurrences[scip_occurrences]")
-    lines.append("        file_line_index[file_line_index_v1]")
-    lines.append("    end")
-    return lines
+def _latest_artifact(
+    artifacts: ArtifactsSnapshot,
+    name: str,
+) -> ArtifactPayload | None:
+    rows = artifacts.get(name)
+    if not rows:
+        return None
+    return dict(rows[-1])
 
 
-def _build_normalization_subgraph() -> list[str]:
-    """Build Mermaid lines for normalization subgraph.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram lines for normalization subgraph.
-    """
-    from semantics.naming import canonical_output_name
-    from semantics.spec_registry import SEMANTIC_NORMALIZATION_SPECS
-
-    lines = ["    subgraph Normalization"]
-    lines.extend(
-        [
-            f"        {spec.normalized_name}[{spec.output_name}]"
-            for spec in SEMANTIC_NORMALIZATION_SPECS
-        ]
-    )
-    scip_output = canonical_output_name("scip_occurrences_norm")
-    lines.append(f"        scip_occurrences_norm[{scip_output}]")
-    lines.append("    end")
-    return lines
+def _coerce_str_list(value: object) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if isinstance(item, str)]
+    return []
 
 
-def _build_relationship_subgraph(
-    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
-) -> list[str]:
-    """Build Mermaid lines for relationship subgraph.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram lines for relationship subgraph.
-    """
-    lines = ["    subgraph Relationships"]
-    for spec in specs:
-        node_id = spec.name.replace("_v1", "").replace("-", "_")
-        lines.append(f"        {node_id}[{spec.name}]")
-    lines.append("    end")
-    return lines
+def _node_id(name: str) -> str:
+    sanitized = name.replace("-", "_").replace(".", "_").replace("/", "_").replace(":", "_")
+    return sanitized
 
 
-def _build_output_subgraph() -> list[str]:
-    """Build Mermaid lines for output subgraph.
+def _explain_payload_from_ir(outputs: Sequence[str] | None) -> dict[str, object]:
+    from semantics.ir_pipeline import build_semantic_ir
 
-    Returns
-    -------
-    list[str]
-        Mermaid diagram lines for output subgraph.
-    """
-    return [
-        "    subgraph Outputs",
-        "        cpg_nodes[cpg_nodes_v1]",
-        "        cpg_edges[cpg_edges_v1]",
-        "    end",
+    semantic_ir = build_semantic_ir(outputs=set(outputs) if outputs else None)
+    return {
+        "semantic_model_hash": semantic_ir.model_hash,
+        "semantic_ir_hash": semantic_ir.ir_hash,
+        "views": [
+            {
+                "name": view.name,
+                "kind": view.kind,
+                "inputs": view.inputs,
+                "outputs": view.outputs,
+            }
+            for view in semantic_ir.views
+        ],
+        "join_groups": [
+            {
+                "name": group.name,
+                "left_view": group.left_view,
+                "right_view": group.right_view,
+                "left_on": group.left_on,
+                "right_on": group.right_on,
+                "how": group.how,
+                "relationship_names": group.relationship_names,
+            }
+            for group in semantic_ir.join_groups
+        ],
+    }
+
+
+def _resolve_explain_payload(
+    *,
+    artifacts: ArtifactsSnapshot | None,
+    explain_payload: ArtifactPayload | None,
+    requested_outputs: Sequence[str] | None,
+) -> dict[str, object] | None:
+    if explain_payload is not None:
+        return dict(explain_payload)
+    if artifacts is not None:
+        payload = _latest_artifact(artifacts, "semantic_explain_plan_v1")
+        if payload is not None:
+            return dict(payload)
+    if requested_outputs is None and artifacts is None:
+        return _explain_payload_from_ir(outputs=None)
+    if requested_outputs is not None:
+        return _explain_payload_from_ir(outputs=requested_outputs)
+    return None
+
+
+def _resolve_report_markdown(
+    *,
+    artifacts: ArtifactsSnapshot | None,
+    report_payload: ArtifactPayload | None,
+) -> str | None:
+    if report_payload is not None:
+        markdown = report_payload.get("markdown")
+        if isinstance(markdown, str):
+            return markdown
+        return None
+    if artifacts is None:
+        return None
+    payload = _latest_artifact(artifacts, "semantic_explain_plan_report_v1")
+    if payload is None:
+        return None
+    markdown = payload.get("markdown")
+    if isinstance(markdown, str):
+        return markdown
+    return None
+
+
+def generate_mermaid_diagram(explain_payload: ArtifactPayload) -> str:
+    """Generate a Mermaid flowchart diagram from explain-plan payload."""
+    views = explain_payload.get("views")
+    if not isinstance(views, Sequence):
+        return "```mermaid\nflowchart TD\n```"
+
+    view_rows: list[Mapping[str, object]] = [
+        row for row in views if isinstance(row, Mapping) and "name" in row
     ]
+    nodes: dict[str, str] = {}
+    for row in view_rows:
+        name = row.get("name")
+        if isinstance(name, str):
+            nodes[name] = _node_id(name)
 
-
-def _build_extraction_edges() -> list[str]:
-    """Build Mermaid edges from extraction to normalization.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram edge lines.
-    """
-    from semantics.spec_registry import SEMANTIC_NORMALIZATION_SPECS
-
-    lines = ["", "    %% Extraction to Normalization"]
-    lines.extend(
-        [
-            f"    {spec.source_table} --> {spec.normalized_name}"
-            for spec in SEMANTIC_NORMALIZATION_SPECS
-        ]
-    )
-    lines.append("    scip_occurrences --> scip_occurrences_norm")
-    lines.append("    file_line_index --> scip_occurrences_norm")
-    return lines
-
-
-def _build_relationship_edges(
-    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
-) -> list[str]:
-    """Build Mermaid edges from normalization to relationships.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram edge lines.
-    """
-    lines = ["", "    %% Normalization to Relationships"]
-    for spec in specs:
-        node_id = spec.name.replace("_v1", "").replace("-", "_")
-        left_base, right_base = _relationship_left_right(spec)
-        left_base = left_base.replace("_v1", "").replace("-", "_")
-        right_base = right_base.replace("_v1", "").replace("-", "_")
-        lines.append(f"    {left_base} --> {node_id}")
-        lines.append(f"    {right_base} --> {node_id}")
-    return lines
-
-
-def _build_output_edges(
-    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
-) -> list[str]:
-    """Build Mermaid edges to final outputs.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram edge lines.
-    """
-    from semantics.spec_registry import SEMANTIC_NORMALIZATION_SPECS
-
-    lines = ["", "    %% To Final Outputs"]
-    lines.extend(
-        [
-            f"    {spec.normalized_name} --> cpg_nodes"
-            for spec in SEMANTIC_NORMALIZATION_SPECS
-            if spec.include_in_cpg_nodes
-        ]
-    )
-    for spec in specs:
-        node_id = spec.name.replace("_v1", "").replace("-", "_")
-        lines.append(f"    {node_id} --> cpg_edges")
-    return lines
-
-
-def _build_catalog_edges(catalog: SemanticCatalog) -> list[str]:
-    """Build additional Mermaid edges from catalog dependencies.
-
-    Returns
-    -------
-    list[str]
-        Mermaid diagram edge lines from catalog dependency graph.
-    """
-    lines: list[str] = []
-    if len(catalog) == 0:
-        return lines
-
-    lines.append("")
-    lines.append("    %% Catalog Dependencies")
-    dep_graph = catalog.dependency_graph()
-    for name, deps in dep_graph.items():
-        node_id = name.replace("_v1", "").replace("-", "_")
-        for dep in deps:
-            dep_id = dep.replace("_v1", "").replace("-", "_")
-            edge = f"    {dep_id} --> {node_id}"
-            if edge not in lines:
-                lines.append(edge)
-    return lines
-
-
-def generate_mermaid_diagram(
-    catalog: SemanticCatalog | None = None,
-) -> str:
-    """Generate Mermaid flowchart from registered views.
-
-    Generate a Mermaid diagram showing the data flow through the semantic
-    pipeline, including extraction inputs, normalization views, relationship
-    joins, and final CPG outputs.
-
-    Parameters
-    ----------
-    catalog
-        Semantic catalog with registered views. If provided, additional
-        dependency edges from the catalog are included.
-
-    Returns
-    -------
-    str
-        Mermaid diagram source code with markdown code fence.
-
-    Example
-    -------
-    >>> diagram = generate_mermaid_diagram()
-    >>> print(diagram[:50])
-    ```mermaid
-    flowchart TD
-        subgraph Extraction
-    """
-    from semantics.spec_registry import RELATIONSHIP_SPECS
+    edge_lines: list[str] = []
+    for row in view_rows:
+        view_name = row.get("name")
+        if not isinstance(view_name, str):
+            continue
+        inputs = _coerce_str_list(row.get("inputs"))
+        for dep in inputs:
+            nodes.setdefault(dep, _node_id(dep))
+            edge_lines.append(f"    {nodes[dep]} --> {nodes[view_name]}")
 
     lines = ["```mermaid", "flowchart TD"]
-
-    # Build subgraphs
-    lines.extend(_build_extraction_subgraph())
-    lines.extend(_build_normalization_subgraph())
-    lines.extend(_build_relationship_subgraph(RELATIONSHIP_SPECS))
-    lines.extend(_build_output_subgraph())
-
-    # Build edges
-    lines.extend(_build_extraction_edges())
-    lines.extend(_build_relationship_edges(RELATIONSHIP_SPECS))
-    lines.extend(_build_output_edges(RELATIONSHIP_SPECS))
-
-    # Add catalog-derived edges if available
-    if catalog is not None:
-        lines.extend(_build_catalog_edges(catalog))
-
+    for name, node_id in nodes.items():
+        lines.append(f"    {node_id}[{name}]")
+    if edge_lines:
+        lines.append("")
+        lines.append("    %% Dependencies")
+        lines.extend(edge_lines)
     lines.append("```")
-
     return "\n".join(lines)
 
 
-def _format_extraction_inputs() -> list[str]:
-    """Format extraction inputs section.
+def _format_explain_markdown(explain_payload: ArtifactPayload) -> str:
+    model_hash = explain_payload.get("semantic_model_hash") or ""
+    ir_hash = explain_payload.get("semantic_ir_hash") or ""
+    views = explain_payload.get("views")
+    join_groups = explain_payload.get("join_groups")
 
-    Returns
-    -------
-    list[str]
-        Markdown lines for extraction inputs section.
-    """
-    from semantics.input_registry import SEMANTIC_INPUT_SPECS
+    view_rows: list[Mapping[str, object]] = [
+        row for row in views if isinstance(row, Mapping)
+    ] if isinstance(views, Sequence) else []
+    group_rows: list[Mapping[str, object]] = [
+        row for row in join_groups if isinstance(row, Mapping)
+    ] if isinstance(join_groups, Sequence) else []
 
-    descriptions = {
-        "cst_refs": "Name references extracted from CST",
-        "cst_defs": "Definitions (functions, classes, etc.) from CST",
-        "cst_imports": "Import statements from CST",
-        "cst_callsites": "Function/method call sites from CST",
-        "cst_call_args": "Call argument spans from CST",
-        "cst_docstrings": "Docstring spans from CST",
-        "cst_decorators": "Decorator spans from CST",
-        "scip_occurrences": "Symbol occurrences from SCIP index",
-        "file_line_index_v1": "Line-to-byte offset mapping for SCIP normalization",
-    }
-
-    lines = [
-        "## Extraction Inputs",
+    lines: list[str] = [
+        "# Semantic Explain Plan",
         "",
-        "The pipeline consumes these extraction tables:",
+        f"- semantic_model_hash: {model_hash}",
+        f"- semantic_ir_hash: {ir_hash}",
+        f"- view_count: {len(view_rows)}",
+        f"- join_group_count: {len(group_rows)}",
         "",
-        "| Table | Description |",
-        "|-------|-------------|",
+        "## Views",
+        "| name | kind | inputs | outputs |",
+        "| --- | --- | --- | --- |",
     ]
-    for spec in SEMANTIC_INPUT_SPECS:
-        name = spec.extraction_source
-        desc = descriptions.get(spec.canonical_name) or descriptions.get(name)
-        if desc is None:
-            desc = "Extraction input table"
-        lines.append(f"| `{name}` | {desc} |")
-    lines.append("")
-    return lines
-
-
-def _format_table_spec(name: str, spec: SemanticTableSpec) -> list[str]:
-    """Format a single table specification.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for the table specification.
-    """
-    lines = [
-        f"### {name}",
-        "",
-        f"- **Primary span**: `{spec.primary_span.start_col}` to `{spec.primary_span.end_col}`",
-        f"- **Entity ID**: `{spec.entity_id.out_col}` (namespace: `{spec.entity_id.namespace}`)",
-    ]
-    if spec.foreign_keys:
-        fk_names = ", ".join(f"`{fk.out_col}`" for fk in spec.foreign_keys)
-        lines.append(f"- **Foreign keys**: {fk_names}")
-    if spec.text_cols:
-        text_names = ", ".join(f"`{col}`" for col in spec.text_cols)
-        lines.append(f"- **Text columns**: {text_names}")
-    lines.append("")
-    return lines
-
-
-def _format_table_specs(
-    specs: dict[str, SemanticTableSpec],
-) -> list[str]:
-    """Format table specifications section.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for table specifications section.
-    """
-    description = (
-        "Table specifications define how extraction tables are normalized with "
-        "byte-span anchoring and stable ID generation."
-    )
-    lines = [
-        "## Table Specifications",
-        "",
-        description,
-        "",
-    ]
-    for name, spec in specs.items():
-        lines.extend(_format_table_spec(name, spec))
-    return lines
-
-
-def _relationship_left_right(
-    spec: RelationshipSpec | QualityRelationshipSpec,
-) -> tuple[str, str]:
-    """Return left/right view names for a relationship spec.
-
-    Returns
-    -------
-    tuple[str, str]
-        Left and right view names.
-    """
-    from semantics.quality import QualityRelationshipSpec
-
-    if isinstance(spec, QualityRelationshipSpec):
-        return spec.left_view, spec.right_view
-    return spec.left_table, spec.right_table
-
-
-def _format_relationship_spec(
-    spec: RelationshipSpec | QualityRelationshipSpec,
-) -> list[str]:
-    """Format a single relationship specification.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for the relationship specification.
-    """
-    from semantics.quality import QualityRelationshipSpec
-
-    left_view, right_view = _relationship_left_right(spec)
-    lines = [
-        f"### {spec.name}",
-        "",
-        f"- **Left view**: `{left_view}`",
-        f"- **Right view**: `{right_view}`",
-    ]
-    if isinstance(spec, QualityRelationshipSpec):
-        join_pairs = ", ".join(
-            f"{left}={right}" for left, right in zip(spec.left_on, spec.right_on, strict=False)
+    for row in view_rows:
+        name = row.get("name")
+        kind = row.get("kind")
+        inputs = ", ".join(_coerce_str_list(row.get("inputs")))
+        outputs = ", ".join(_coerce_str_list(row.get("outputs")))
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(name or ""),
+                    str(kind or ""),
+                    inputs,
+                    outputs,
+                ]
+            )
+            + " |"
         )
-        lines.append(f"- **Join type**: `{spec.how}`")
-        if join_pairs:
-            lines.append(f"- **Join keys**: `{join_pairs}`")
-        lines.append(f"- **Origin**: `{spec.origin}`")
-        lines.append(f"- **Provider**: `{spec.provider}`")
-        if spec.rule_name is not None:
-            lines.append(f"- **Rule name**: `{spec.rule_name}`")
-    else:
-        lines.append(f"- **Join hint**: `{spec.join_hint}`")
-        lines.append(f"- **Origin**: `{spec.origin}`")
-        if spec.filter_sql:
-            lines.append(f"- **Filter**: `{spec.filter_sql}`")
-    lines.append("")
-    return lines
 
+    if group_rows:
+        lines.extend(
+            [
+                "",
+                "## Join Groups",
+                "| name | left_view | right_view | how | relationships |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for row in group_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(row.get("name") or ""),
+                        str(row.get("left_view") or ""),
+                        str(row.get("right_view") or ""),
+                        str(row.get("how") or ""),
+                        ", ".join(_coerce_str_list(row.get("relationship_names"))),
+                    ]
+                )
+                + " |"
+            )
 
-def _format_relationship_specs(
-    specs: tuple[RelationshipSpec | QualityRelationshipSpec, ...],
-) -> list[str]:
-    """Format relationship specifications section.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for relationship specifications section.
-    """
-    description = (
-        "Relationship specifications define how normalized tables are joined to "
-        "build CPG edges. New relationships can be added to the registry without "
-        "modifying pipeline code."
-    )
-    lines = [
-        "## Relationship Specifications",
-        "",
-        description,
-        "",
-    ]
-    for spec in specs:
-        lines.extend(_format_relationship_spec(spec))
-    return lines
-
-
-def _format_output_views() -> list[str]:
-    """Format output views section.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for output views section.
-    """
-    from semantics.naming import SEMANTIC_OUTPUT_NAMES
-
-    lines = [
-        "## Output Views",
-        "",
-        "All semantic outputs use versioned canonical names:",
-        "",
-        "| Internal Name | Output Name |",
-        "|---------------|-------------|",
-    ]
-    for internal, output in SEMANTIC_OUTPUT_NAMES.items():
-        lines.append(f"| `{internal}` | `{output}` |")
     lines.extend(
         [
             "",
-            "## Final CPG Outputs",
+            "## Data Flow Diagram",
             "",
-            "| Output | Description |",
-            "|--------|-------------|",
-            "| `semantic_nodes_union_v1` | Union of all normalized entity tables |",
-            "| `semantic_edges_union_v1` | Union of all relationship views |",
-            "| `cpg_nodes_v1` | Canonical CPG node output (stable IDs, spans) |",
-            "| `cpg_edges_v1` | Canonical CPG edge output (stable IDs, spans) |",
-            "",
+            generate_mermaid_diagram(explain_payload),
         ]
     )
-    return lines
-
-
-def _format_catalog_entries(catalog: SemanticCatalog) -> list[str]:
-    """Format catalog entries section.
-
-    Returns
-    -------
-    list[str]
-        Markdown lines for catalog entries section, or empty if no entries.
-    """
-    if len(catalog) == 0:
-        return []
-
-    lines = [
-        "## Catalog Entries",
-        "",
-        "Views registered in the semantic catalog:",
-        "",
-        "| View | Evidence Tier | Upstream Dependencies |",
-        "|------|---------------|----------------------|",
-    ]
-    for name in catalog.topological_order():
-        entry = catalog.get(name)
-        if entry is not None:
-            deps = ", ".join(f"`{d}`" for d in entry.upstream_deps) or "None"
-            lines.append(f"| `{name}` | {entry.evidence_tier} | {deps} |")
-    lines.append("")
-    return lines
+    return "\n".join(lines)
 
 
 def generate_markdown_docs(
-    catalog: SemanticCatalog | None = None,
+    *,
+    artifacts: ArtifactsSnapshot | None = None,
+    explain_payload: ArtifactPayload | None = None,
+    report_payload: ArtifactPayload | None = None,
+    requested_outputs: Sequence[str] | None = None,
 ) -> str:
-    """Generate Markdown documentation for semantic views.
-
-    Produce comprehensive Markdown documentation that describes the semantic
-    pipeline including table specifications, relationship specifications,
-    and the data flow diagram.
+    """Generate Markdown documentation from explain-plan artifacts.
 
     Parameters
     ----------
-    catalog
-        Semantic catalog with registered views. If None, catalog section
-        is omitted from the output.
-
-    Returns
-    -------
-    str
-        Complete Markdown documentation.
+    artifacts
+        Diagnostics artifact snapshot keyed by artifact name.
+    explain_payload
+        Explicit semantic_explain_plan_v1 payload.
+    report_payload
+        Explicit semantic_explain_plan_report_v1 payload.
+    requested_outputs
+        Optional output subset to build an IR-based explain payload when
+        artifacts are not provided.
     """
-    from semantics.spec_registry import RELATIONSHIP_SPECS, SEMANTIC_TABLE_SPECS
-
-    sections: list[str] = [
-        "# Semantic Pipeline Documentation",
-        "",
-        "## Overview",
-        "",
-        "The semantic pipeline transforms extraction outputs into CPG nodes and edges.",
-        "It uses a declarative specification-driven approach where relationships are",
-        "defined in the spec registry and automatically compiled into DataFusion views.",
-        "",
-    ]
-
-    sections.extend(_format_extraction_inputs())
-    sections.extend(_format_table_specs(SEMANTIC_TABLE_SPECS))
-    sections.extend(_format_relationship_specs(RELATIONSHIP_SPECS))
-    sections.extend(_format_output_views())
-
-    if catalog is not None:
-        sections.extend(_format_catalog_entries(catalog))
-
-    sections.extend(
-        [
-            "## Data Flow Diagram",
-            "",
-            generate_mermaid_diagram(catalog),
-        ]
+    report = _resolve_report_markdown(artifacts=artifacts, report_payload=report_payload)
+    explain_payload_resolved = _resolve_explain_payload(
+        artifacts=artifacts,
+        explain_payload=explain_payload,
+        requested_outputs=requested_outputs,
     )
-
-    return "\n".join(sections)
+    if report is not None:
+        report_text = report.rstrip()
+        if explain_payload_resolved is None:
+            return report_text
+        diagram = generate_mermaid_diagram(explain_payload_resolved)
+        return "\n".join([report_text, "", "## Data Flow Diagram", "", diagram])
+    if explain_payload_resolved is None:
+        return "# Semantic Explain Plan\n\nNo explain-plan artifacts available."
+    return _format_explain_markdown(explain_payload_resolved)
 
 
 def export_graph_documentation(
     output_path: str | None = None,
     *,
-    catalog: SemanticCatalog | None = None,
+    artifacts: ArtifactsSnapshot | None = None,
+    explain_payload: ArtifactPayload | None = None,
+    report_payload: ArtifactPayload | None = None,
+    requested_outputs: Sequence[str] | None = None,
 ) -> str:
-    """Export full documentation to file or return as string.
+    """Export semantic graph docs from explain-plan artifacts.
 
-    Generate comprehensive documentation for the semantic pipeline and
-    optionally write it to a file.
-
-    Parameters
-    ----------
-    output_path
-        Path to write documentation. If None, returns string only.
-    catalog
-        Semantic catalog to document. If None, uses default catalog.
-
-    Returns
-    -------
-    str
-        Generated documentation content.
-
-    Example
-    -------
-    >>> # Export to file
-    >>> export_graph_documentation("docs/semantic_graph.md")
-    '# Semantic Pipeline Documentation...'
-
-    >>> # Get as string only
-    >>> content = export_graph_documentation()
+    When no artifacts are provided, the documentation is generated directly
+    from the semantic IR using the requested outputs (if supplied).
     """
-    content = generate_markdown_docs(catalog)
-
+    content = generate_markdown_docs(
+        artifacts=artifacts,
+        explain_payload=explain_payload,
+        report_payload=report_payload,
+        requested_outputs=requested_outputs,
+    )
     if output_path:
         Path(output_path).write_text(content, encoding="utf-8")
-
     return content
 
 

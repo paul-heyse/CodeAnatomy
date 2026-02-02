@@ -4,7 +4,6 @@ Tests end-to-end behavior of the semantic pipeline components including:
 - SemanticCompiler normalization
 - Input validation
 - Join strategy inference
-- Catalog registration and lookup
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from semantics.catalog import SemanticCatalog
 from semantics.input_registry import require_semantic_inputs, validate_semantic_inputs
 from semantics.joins import JoinStrategyType, infer_join_strategy
 from semantics.naming import SEMANTIC_OUTPUT_NAMES, canonical_output_name
@@ -288,143 +286,6 @@ class TestSemanticPipelineIntegration:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS
-
-    def test_semantic_catalog_registration(self) -> None:
-        """Verify catalog registration and lookup."""
-        from datafusion import DataFrame
-        from datafusion import SessionContext as DFSessionContext
-
-        from semantics.builders.protocol import SemanticViewBuilder
-
-        class TestBuilder(SemanticViewBuilder):
-            """Test builder implementation."""
-
-            @property
-            def name(self) -> str:
-                return "test_view"
-
-            @property
-            def evidence_tier(self) -> int:
-                return 1
-
-            @property
-            def upstream_deps(self) -> tuple[str, ...]:
-                return ()
-
-            def build(self, ctx: DFSessionContext) -> DataFrame:
-                return ctx.sql("SELECT 1 as value")
-
-        catalog = SemanticCatalog()
-        entry = catalog.register(TestBuilder())
-
-        assert "test_view" in catalog
-        assert entry.evidence_tier == 1
-        assert entry.upstream_deps == ()
-        assert catalog.get("test_view") is not None
-
-    def test_semantic_catalog_topological_order(self) -> None:
-        """Verify catalog returns entries in dependency order."""
-        from datafusion import DataFrame
-        from datafusion import SessionContext as DFSessionContext
-
-        from semantics.builders.protocol import SemanticViewBuilder
-
-        class BaseBuilder(SemanticViewBuilder):
-            """Base builder with no dependencies."""
-
-            @property
-            def name(self) -> str:
-                return "base_view"
-
-            @property
-            def evidence_tier(self) -> int:
-                return 1
-
-            @property
-            def upstream_deps(self) -> tuple[str, ...]:
-                return ()
-
-            def build(self, ctx: DFSessionContext) -> DataFrame:
-                return ctx.sql("SELECT 1 as value")
-
-        class DependentBuilder(SemanticViewBuilder):
-            """Builder that depends on base_view."""
-
-            @property
-            def name(self) -> str:
-                return "dependent_view"
-
-            @property
-            def evidence_tier(self) -> int:
-                return 2
-
-            @property
-            def upstream_deps(self) -> tuple[str, ...]:
-                return ("base_view",)
-
-            def build(self, ctx: DFSessionContext) -> DataFrame:
-                return ctx.sql("SELECT * FROM base_view")
-
-        catalog = SemanticCatalog()
-        # Register in reverse dependency order
-        catalog.register(DependentBuilder())
-        catalog.register(BaseBuilder())
-
-        order = catalog.topological_order()
-
-        # base_view should come before dependent_view
-        assert order.index("base_view") < order.index("dependent_view")
-
-    def test_semantic_catalog_tier_filtering(self) -> None:
-        """Verify catalog filters entries by evidence tier."""
-        from datafusion import DataFrame
-        from datafusion import SessionContext as DFSessionContext
-
-        from semantics.builders.protocol import SemanticViewBuilder
-
-        class Tier1Builder(SemanticViewBuilder):
-            @property
-            def name(self) -> str:
-                return "tier1_view"
-
-            @property
-            def evidence_tier(self) -> int:
-                return 1
-
-            @property
-            def upstream_deps(self) -> tuple[str, ...]:
-                return ()
-
-            def build(self, ctx: DFSessionContext) -> DataFrame:
-                return ctx.sql("SELECT 1 as value")
-
-        class Tier2Builder(SemanticViewBuilder):
-            @property
-            def name(self) -> str:
-                return "tier2_view"
-
-            @property
-            def evidence_tier(self) -> int:
-                return 2
-
-            @property
-            def upstream_deps(self) -> tuple[str, ...]:
-                return ()
-
-            def build(self, ctx: DFSessionContext) -> DataFrame:
-                return ctx.sql("SELECT 2 as value")
-
-        catalog = SemanticCatalog()
-        catalog.register(Tier1Builder())
-        catalog.register(Tier2Builder())
-
-        tier1_entries = catalog.entries_by_tier(1)
-        tier2_entries = catalog.entries_by_tier(2)
-
-        assert len(tier1_entries) == 1
-        assert tier1_entries[0].name == "tier1_view"
-        assert len(tier2_entries) == 1
-        assert tier2_entries[0].name == "tier2_view"
 
     def test_annotated_schema_from_arrow(self) -> None:
         """Verify AnnotatedSchema correctly annotates Arrow schema."""

@@ -62,6 +62,17 @@ class Anchor:
             d["end_col"] = self.end_col
         return d
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Anchor:
+        """Create Anchor from a dict."""
+        return cls(
+            file=str(data.get("file", "")),
+            line=int(data.get("line", 0)),
+            col=data.get("col"),
+            end_line=data.get("end_line"),
+            end_col=data.get("end_col"),
+        )
+
 
 @dataclass
 class Finding:
@@ -103,6 +114,19 @@ class Finding:
             "details": self.details,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Finding:
+        """Create Finding from a dict."""
+        anchor_data = data.get("anchor")
+        anchor = Anchor.from_dict(anchor_data) if isinstance(anchor_data, dict) else None
+        return cls(
+            category=str(data.get("category", "")),
+            message=str(data.get("message", "")),
+            anchor=anchor,
+            severity=str(data.get("severity", "info")),
+            details=dict(data.get("details", {})),
+        )
+
 
 @dataclass
 class Section:
@@ -136,6 +160,17 @@ class Section:
             "collapsed": self.collapsed,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Section:
+        """Create Section from a dict."""
+        findings_data = data.get("findings", [])
+        findings = [Finding.from_dict(f) for f in findings_data if isinstance(f, dict)]
+        return cls(
+            title=str(data.get("title", "")),
+            findings=findings,
+            collapsed=bool(data.get("collapsed", False)),
+        )
+
 
 @dataclass
 class Artifact:
@@ -161,6 +196,14 @@ class Artifact:
             JSON-serializable representation.
         """
         return {"path": self.path, "format": self.format}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Artifact:
+        """Create Artifact from a dict."""
+        return cls(
+            path=str(data.get("path", "")),
+            format=str(data.get("format", "json")),
+        )
 
 
 @dataclass
@@ -211,6 +254,19 @@ class RunMeta:
             "toolchain": self.toolchain,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RunMeta:
+        """Create RunMeta from a dict."""
+        return cls(
+            schema_version=str(data.get("schema_version", "cq.v1")),
+            macro=str(data.get("macro", "")),
+            argv=list(data.get("argv", [])),
+            root=str(data.get("root", "")),
+            started_ms=float(data.get("started_ms", 0.0)),
+            elapsed_ms=float(data.get("elapsed_ms", 0.0)),
+            toolchain=dict(data.get("toolchain", {})),
+        )
+
 
 @dataclass
 class CqResult:
@@ -255,6 +311,40 @@ class CqResult:
             "sections": [s.to_dict() for s in self.sections],
             "artifacts": [a.to_dict() for a in self.artifacts],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CqResult:
+        """Create CqResult from a dict."""
+        run_data = data.get("run", {})
+        run = RunMeta.from_dict(run_data) if isinstance(run_data, dict) else RunMeta(
+            schema_version="cq.v1",
+            macro="",
+            argv=[],
+            root="",
+            started_ms=0.0,
+            elapsed_ms=0.0,
+            toolchain={},
+        )
+        key_findings = [
+            Finding.from_dict(f) for f in data.get("key_findings", []) if isinstance(f, dict)
+        ]
+        evidence = [
+            Finding.from_dict(f) for f in data.get("evidence", []) if isinstance(f, dict)
+        ]
+        sections = [
+            Section.from_dict(s) for s in data.get("sections", []) if isinstance(s, dict)
+        ]
+        artifacts = [
+            Artifact.from_dict(a) for a in data.get("artifacts", []) if isinstance(a, dict)
+        ]
+        return cls(
+            run=run,
+            summary=dict(data.get("summary", {})),
+            key_findings=key_findings,
+            evidence=evidence,
+            sections=sections,
+            artifacts=artifacts,
+        )
 
 
 def mk_runmeta(

@@ -544,12 +544,14 @@ def scope_to_paths(scope: Scope, root: Path) -> list[Path]:
     else:
         paths = [root]
 
-    # Apply glob patterns if specified
-    if scope.globs:
-        expanded: list[Path] = []
-        for path in paths:
-            for glob in scope.globs:
-                expanded.extend(path.glob(glob))
-        paths = expanded
-
     return paths
+
+
+def scope_to_globs(scope: Scope) -> list[str]:
+    """Convert scope constraints to ast-grep globs."""
+    globs: list[str] = []
+    if scope.globs:
+        globs.extend(scope.globs)
+    if scope.exclude:
+        globs.extend([f"!{pattern}" for pattern in scope.exclude])
+    return globs

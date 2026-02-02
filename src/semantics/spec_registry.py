@@ -33,6 +33,11 @@ spec_for_table = _registry.spec_for_table
 SpecKind = Literal[
     "normalize",
     "scip_normalize",
+    "diagnostic",
+    "export",
+    "projection",
+    "finalize",
+    "artifact",
     "join_group",
     "relate",
     "union_nodes",

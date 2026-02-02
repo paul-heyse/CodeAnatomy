@@ -269,7 +269,7 @@ def parse_exception_table(code: CodeType) -> list[ExceptionEntry]:
             # Python 3.13+ has _parse_exception_table
             if hasattr(dis, "_parse_exception_table"):
                 # Access internal parser
-                parse_func = getattr(dis, "_parse_exception_table")
+                parse_func = dis._parse_exception_table
                 for entry in parse_func(code):
                     entries.append(
                         ExceptionEntry(

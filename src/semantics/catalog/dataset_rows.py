@@ -635,6 +635,49 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
     )
 
 
+def _build_export_rows() -> tuple[SemanticDatasetRow, ...]:
+    """Build semantic rows for exportable artifacts.
+
+    Returns
+    -------
+    tuple[SemanticDatasetRow, ...]
+        Exportable dataset rows.
+    """
+    return (
+        SemanticDatasetRow(
+            name="dim_exported_defs_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "file_id",
+                "path",
+                "def_id",
+                "def_kind_norm",
+                "name",
+                "qname_id",
+                "qname",
+                "qname_source",
+                "symbol",
+                "symbol_roles",
+            ),
+            category="analysis",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=("file_id", "def_id", "qname_id"),
+            join_keys=("file_id", "def_id", "qname_id"),
+            template="exported_defs",
+            view_builder="exported_defs_df_builder",
+            register_view=True,
+            source_dataset=None,
+            entity="def",
+            grain="per_def",
+            stability="design",
+            materialization="delta",
+            materialized_name="semantic.dim_exported_defs_v1",
+        ),
+    )
+
+
 def _build_relation_output_row() -> SemanticDatasetRow:
     """Build the semantic row for relation_output union view.
 
@@ -922,6 +965,8 @@ def build_semantic_dataset_rows(model: SemanticModel) -> tuple[SemanticDatasetRo
     rows.extend(_build_relationship_rows(model))
     # Diagnostic quality reports
     rows.extend(_build_diagnostic_rows())
+    # Exportable artifacts
+    rows.extend(_build_export_rows())
     # Relation output union
     rows.append(_build_relation_output_row())
     # Final CPG outputs

@@ -79,46 +79,46 @@ class TestQueryCache:
 
     def test_set_and_get(self, cache: QueryCache, test_file: Path) -> None:
         """Store and retrieve cached value."""
-        cache.set("test_key", {"data": "value"}, test_file)
+        cache.set("test_key", {"data": "value"}, [test_file])
 
-        result = cache.get("test_key", test_file)
+        result = cache.get("test_key", [test_file])
         assert result == {"data": "value"}
 
     def test_get_missing_key(self, cache: QueryCache, test_file: Path) -> None:
         """Get returns None for missing key."""
-        result = cache.get("nonexistent", test_file)
+        result = cache.get("nonexistent", [test_file])
         assert result is None
 
     def test_get_invalidates_on_file_change(self, cache: QueryCache, test_file: Path) -> None:
         """Cache is invalidated when file content changes."""
-        cache.set("test_key", {"data": "original"}, test_file)
+        cache.set("test_key", {"data": "original"}, [test_file])
 
         # Verify cache hit
-        result = cache.get("test_key", test_file)
+        result = cache.get("test_key", [test_file])
         assert result == {"data": "original"}
 
         # Modify file content
         test_file.write_text("def bar(): pass", encoding="utf-8")
 
         # Cache should be invalidated
-        result = cache.get("test_key", test_file)
+        result = cache.get("test_key", [test_file])
         assert result is None
 
     def test_set_overwrites_existing(self, cache: QueryCache, test_file: Path) -> None:
         """Set overwrites existing cache entry."""
-        cache.set("test_key", {"version": 1}, test_file)
-        cache.set("test_key", {"version": 2}, test_file)
+        cache.set("test_key", {"version": 1}, [test_file])
+        cache.set("test_key", {"version": 2}, [test_file])
 
-        result = cache.get("test_key", test_file)
+        result = cache.get("test_key", [test_file])
         assert result == {"version": 2}
 
     def test_multiple_keys_same_file(self, cache: QueryCache, test_file: Path) -> None:
         """Multiple cache entries for same file."""
-        cache.set("key1", {"id": 1}, test_file)
-        cache.set("key2", {"id": 2}, test_file)
+        cache.set("key1", {"id": 1}, [test_file])
+        cache.set("key2", {"id": 2}, [test_file])
 
-        assert cache.get("key1", test_file) == {"id": 1}
-        assert cache.get("key2", test_file) == {"id": 2}
+        assert cache.get("key1", [test_file]) == {"id": 1}
+        assert cache.get("key2", [test_file]) == {"id": 2}
 
 
 class TestCacheInvalidation:
@@ -126,14 +126,14 @@ class TestCacheInvalidation:
 
     def test_invalidate_file(self, cache: QueryCache, test_file: Path) -> None:
         """Invalidate all entries for a file."""
-        cache.set("key1", {"data": 1}, test_file)
-        cache.set("key2", {"data": 2}, test_file)
+        cache.set("key1", {"data": 1}, [test_file])
+        cache.set("key2", {"data": 2}, [test_file])
 
         count = cache.invalidate_file(test_file)
         assert count == 2
 
-        assert cache.get("key1", test_file) is None
-        assert cache.get("key2", test_file) is None
+        assert cache.get("key1", [test_file]) is None
+        assert cache.get("key2", [test_file]) is None
 
     def test_invalidate_file_preserves_others(self, cache: QueryCache, tmp_path: Path) -> None:
         """Invalidating one file preserves other files."""
@@ -142,13 +142,13 @@ class TestCacheInvalidation:
         file1.write_text("# file 1", encoding="utf-8")
         file2.write_text("# file 2", encoding="utf-8")
 
-        cache.set("key1", {"file": 1}, file1)
-        cache.set("key2", {"file": 2}, file2)
+        cache.set("key1", {"file": 1}, [file1])
+        cache.set("key2", {"file": 2}, [file2])
 
         cache.invalidate_file(file1)
 
-        assert cache.get("key1", file1) is None
-        assert cache.get("key2", file2) == {"file": 2}
+        assert cache.get("key1", [file1]) is None
+        assert cache.get("key2", [file2]) == {"file": 2}
 
     def test_clear_removes_all(self, cache: QueryCache, tmp_path: Path) -> None:
         """Clear removes all cache entries."""
@@ -157,13 +157,13 @@ class TestCacheInvalidation:
         file1.write_text("# file 1", encoding="utf-8")
         file2.write_text("# file 2", encoding="utf-8")
 
-        cache.set("key1", {"data": 1}, file1)
-        cache.set("key2", {"data": 2}, file2)
+        cache.set("key1", {"data": 1}, [file1])
+        cache.set("key2", {"data": 2}, [file2])
 
         cache.clear()
 
-        assert cache.get("key1", file1) is None
-        assert cache.get("key2", file2) is None
+        assert cache.get("key1", [file1]) is None
+        assert cache.get("key2", [file2]) is None
 
 
 class TestCacheStats:
@@ -185,9 +185,9 @@ class TestCacheStats:
         file1.write_text("# 1", encoding="utf-8")
         file2.write_text("# 2", encoding="utf-8")
 
-        cache.set("key1", {}, file1)
-        cache.set("key2", {}, file1)
-        cache.set("key3", {}, file2)
+        cache.set("key1", {}, [file1])
+        cache.set("key2", {}, [file1])
+        cache.set("key3", {}, [file2])
 
         stats = cache.stats()
 
@@ -197,9 +197,9 @@ class TestCacheStats:
     def test_stats_timestamps(self, cache: QueryCache, test_file: Path) -> None:
         """Stats tracks timestamp range."""
         before = time.time()
-        cache.set("key1", {}, test_file)
+        cache.set("key1", {}, [test_file])
         time.sleep(0.01)  # Small delay
-        cache.set("key2", {}, test_file)
+        cache.set("key2", {}, [test_file])
         after = time.time()
 
         stats = cache.stats()
@@ -211,7 +211,7 @@ class TestCacheStats:
     def test_stats_database_size(self, cache: QueryCache, test_file: Path) -> None:
         """Stats tracks database size."""
         # Add some data
-        cache.set("key", {"large": "x" * 1000}, test_file)
+        cache.set("key", {"large": "x" * 1000}, [test_file])
 
         stats = cache.stats()
         assert stats.database_size_bytes > 0
@@ -223,17 +223,17 @@ class TestContextManager:
     def test_context_manager_usage(self, cache_dir: Path, test_file: Path) -> None:
         """Cache works as context manager."""
         with QueryCache(cache_dir) as cache:
-            cache.set("key", {"data": 1}, test_file)
-            result = cache.get("key", test_file)
+            cache.set("key", {"data": 1}, [test_file])
+            result = cache.get("key", [test_file])
             assert result == {"data": 1}
 
-    def test_context_manager_closes(self, cache_dir: Path) -> None:
+    def test_context_manager_closes(self, cache_dir: Path, test_file: Path) -> None:
         """Context manager closes connection on exit."""
         cache = QueryCache(cache_dir)
-        cache.set("key", {"data": 1}, test_file)
+        cache.set("key", {"data": 1}, [test_file])
         cache.__exit__(None, None, None)
-        cache.set("key2", {"data": 2}, test_file)
-        assert cache.get("key2", test_file) == {"data": 2}
+        cache.set("key2", {"data": 2}, [test_file])
+        assert cache.get("key2", [test_file]) == {"data": 2}
 
 
 class TestComputeFileHash:

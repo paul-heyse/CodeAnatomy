@@ -19,7 +19,10 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/cq q "pattern=..."` | Structural code patterns | Zero false positives from strings/comments |
 | `/cq q "...inside=..."` | Context-aware search | Find code in specific structural contexts |
 | `/cq q "...scope=closure"` | Before extracting nested functions | Identifies variable capture issues |
+| `/cq q "all=..." / "any=..."` | Combined/alternative patterns | Logical composition of queries |
+| `/cq q "fields=hazards"` | Security review | 30+ builtin security/correctness hazards |
 | `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
+| `/cq q --format mermaid-cfg` | Control flow analysis | Visualize function CFGs |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
 | `/datafusion-stack` | DataFusion/Delta/UDF operations | Don't guess APIs - probe versions |
 
@@ -35,7 +38,11 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 **Before extracting closures:** Run `/cq q "entity=function scope=closure in=<dir>"` to find variable captures.
 
-**Before security review:** Run `/cq q "pattern='eval(\$X)'"` or `/cq q "fields=hazards"` for hazard detection.
+**Before security review:** Run `/cq q "entity=function fields=hazards"` or pattern queries like `/cq q "pattern='eval(\$X)'"`.
+
+**Before combining conditions:** Use composite queries: `/cq q "all='pattern1,pattern2'"` (AND) or `/cq q "any='p1,p2'"` (OR).
+
+**Before disambiguating patterns:** Use pattern objects: `/cq q "pattern.context='...' pattern.selector=<kind>"`.
 
 **Rationale:** cq uses AST analysis, not text search. It catches indirect callers, forwarding patterns, and provides confidence scores. Guessing based on grep leads to missed call sites and broken code.
 
@@ -43,25 +50,47 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 Pattern queries (`/cq q "pattern=..."`) use ast-grep for structural matching:
 - **No false positives** from strings, comments, or variable names
-- **Metavariables** (`$X`, `$$$`) capture code structure
-- **Context-aware** via relational constraints (`inside`, `has`)
+- **Metavariables** (`$X`, `$$$`, `$$X`) capture and enforce code structure
+- **Meta-variable filtering** (`$X=~pattern`) constrains captures with regex
+- **Context-aware** via relational constraints (`inside`, `has`, `precedes`, `follows`)
+- **Composite logic** via `all`/`any`/`not` for complex queries
+- **Disambiguation** via `pattern.context` and `pattern.selector`
+- **Positional matching** via `nthChild` for argument/parameter positions
 
 **Example - Finding dynamic dispatch:**
 ```bash
 # Grep would match: log("getattr example")  # FALSE POSITIVE
 # Pattern query matches only actual getattr calls:
 /cq q "pattern='getattr(\$X, \$Y)'"
+
+# Find with meta-variable filter (string literal attrs only):
+/cq q "pattern='getattr(\$X, \$Y)' \$Y=~'^\"'"
 ```
 
 ### Understanding Code with Visualization
 
-Use `--format mermaid` or `--format dot` to visualize:
+Use `--format mermaid`, `--format mermaid-class`, `--format mermaid-cfg`, or `--format dot` to visualize:
 - Call graphs before refactoring
 - Class hierarchies before inheritance changes
+- Control flow graphs for complex functions
 - Import dependencies before restructuring
 
+| Format | Use Case |
+|--------|----------|
+| `--format mermaid` | Call graphs, data flow |
+| `--format mermaid-class` | Class hierarchies, inheritance |
+| `--format mermaid-cfg` | Control flow within functions |
+| `--format dot` | Complex graphs for Graphviz |
+
 ```bash
+# Call graph with transitive callers
 /cq q "entity=function name=build_cpg expand=callers(depth=2)" --format mermaid
+
+# Class hierarchy diagram
+/cq q "entity=class in=src/semantics/" --format mermaid-class
+
+# Control flow graph for a function
+/cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
 ## Build & Development Commands

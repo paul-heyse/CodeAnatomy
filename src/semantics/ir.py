@@ -57,6 +57,8 @@ class SemanticIR:
     cpg_node_specs: tuple[NodePlanSpec, ...] = ()
     cpg_prop_specs: tuple[PropTableSpec, ...] = ()
     join_groups: tuple[SemanticIRJoinGroup, ...] = ()
+    model_hash: str | None = None
+    ir_hash: str | None = None
 
 
 __all__ = [

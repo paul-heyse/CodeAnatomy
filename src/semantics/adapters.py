@@ -177,7 +177,7 @@ def legacy_relationship_projection_extended(
         else lit(options.score).cast(pa.float64()).alias("score")
     )
 
-    return df.select(
+    required_exprs = [
         col("entity_id").alias(options.entity_id_alias),
         col("symbol"),
         lit(None).cast(pa.int32()).alias("symbol_roles"),
@@ -199,7 +199,9 @@ def legacy_relationship_projection_extended(
         lit(None).cast(pa.string()).alias("reason"),
         lit(None).cast(pa.string()).alias("diag_source"),
         lit(None).cast(pa.string()).alias("severity"),
-    )
+    ]
+    optional_cols = {"ambiguity_group_id": pa.string()}
+    return _select_with_optional(df, required_exprs, optional_cols)
 
 
 def project_semantic_to_legacy(

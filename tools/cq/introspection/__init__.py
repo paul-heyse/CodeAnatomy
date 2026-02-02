@@ -5,6 +5,19 @@ Provides symtable and bytecode analysis for deeper code understanding.
 
 from __future__ import annotations
 
+from tools.cq.introspection.bytecode_index import (
+    BytecodeIndex,
+    ExceptionEntry,
+    InstructionFact,
+    extract_instruction_facts,
+    parse_exception_table,
+)
+from tools.cq.introspection.cfg_builder import (
+    BasicBlock,
+    CFG,
+    CFGEdge,
+    build_cfg,
+)
 from tools.cq.introspection.symtable_extract import (
     ScopeFact,
     ScopeGraph,
@@ -17,6 +30,18 @@ from tools.cq.introspection.symtable_extract import (
 )
 
 __all__ = [
+    # Bytecode
+    "BytecodeIndex",
+    "ExceptionEntry",
+    "InstructionFact",
+    "extract_instruction_facts",
+    "parse_exception_table",
+    # CFG
+    "BasicBlock",
+    "CFG",
+    "CFGEdge",
+    "build_cfg",
+    # Symtable
     "ScopeFact",
     "ScopeGraph",
     "ScopeType",

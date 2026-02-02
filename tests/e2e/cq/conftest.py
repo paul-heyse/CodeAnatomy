@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -16,9 +16,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from tools.cq.core.schema import CqResult, Finding
-
-type JsonDict = dict[str, object]
-
 
 def _find_repo_root() -> Path:
     """Find the CodeAnatomy repository root.
@@ -138,6 +135,8 @@ def run_query(
         ------
         RuntimeError
             If command fails or JSON parsing fails.
+        TypeError
+            If parsed JSON output is not a dictionary.
         """
         from tools.cq.core.schema import CqResult
 
@@ -166,56 +165,10 @@ def run_query(
             msg = f"Failed to parse JSON output: {e}\nOutput: {proc.stdout[:500]}"
             raise RuntimeError(msg) from e
 
-        # Reconstruct CqResult from dict
-        # This is a simplified reconstruction; adjust as needed for your schema
-        from dataclasses import fields
-
-        from tools.cq.core.schema import Anchor, Artifact, Finding, RunMeta, Section
-
-        def dict_to_anchor(d: JsonDict | None) -> Anchor | None:
-            if d is None:
-                return None
-            return Anchor(**{k: v for k, v in d.items() if k in {f.name for f in fields(Anchor)}})
-
-        def dict_to_finding(d: JsonDict) -> Finding:
-            anchor_data = d.get("anchor")
-            return Finding(
-                category=d["category"],
-                message=d["message"],
-                anchor=dict_to_anchor(anchor_data),
-                severity=d.get("severity", "info"),
-                details=d.get("details", {}),
-            )
-
-        def dict_to_section(d: JsonDict) -> Section:
-            return Section(
-                title=d["title"],
-                findings=[dict_to_finding(f) for f in d.get("findings", [])],
-                collapsed=d.get("collapsed", False),
-            )
-
-        def dict_to_artifact(d: JsonDict) -> Artifact:
-            return Artifact(path=d["path"], format=d.get("format", "json"))
-
-        run_data = data["run"]
-        run = RunMeta(
-            macro=run_data["macro"],
-            argv=run_data["argv"],
-            root=run_data["root"],
-            started_ms=run_data["started_ms"],
-            elapsed_ms=run_data["elapsed_ms"],
-            toolchain=run_data.get("toolchain", {}),
-            schema_version=run_data.get("schema_version", "0.1.0"),
-        )
-
-        return CqResult(
-            run=run,
-            summary=data.get("summary", {}),
-            key_findings=[dict_to_finding(f) for f in data.get("key_findings", [])],
-            evidence=[dict_to_finding(f) for f in data.get("evidence", [])],
-            sections=[dict_to_section(s) for s in data.get("sections", [])],
-            artifacts=[dict_to_artifact(a) for a in data.get("artifacts", [])],
-        )
+        if not isinstance(data, dict):
+            msg = "Expected CQ JSON output to be a dictionary."
+            raise TypeError(msg)
+        return CqResult.from_dict(cast("dict[str, Any]", data))
 
     return _query
 
@@ -374,22 +327,6 @@ def update_golden(request: pytest.FixtureRequest) -> bool:
     ...     assert result == read_golden()
     """
     return request.config.getoption("--update-golden", default=False)
-
-
-def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add custom command-line options for cq E2E tests.
-
-    Parameters
-    ----------
-    parser : pytest.Parser
-        Pytest argument parser.
-    """
-    parser.addoption(
-        "--update-golden",
-        action="store_true",
-        default=False,
-        help="Update golden snapshot files instead of comparing",
-    )
 
 
 def pytest_configure(config: pytest.Config) -> None:

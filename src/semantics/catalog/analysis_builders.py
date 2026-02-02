@@ -820,6 +820,19 @@ def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
     return report
 
 
+def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame of exported definitions for incremental analysis.
+
+    Returns
+    -------
+    DataFrame
+        Exported definitions DataFrame.
+    """
+    from semantics.incremental.export_builders import exported_defs_df_builder
+
+    return exported_defs_df_builder(ctx)
+
+
 # View builder registry mapping view names to builders
 VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "type_exprs_norm_v1": type_exprs_df_builder,
@@ -837,6 +850,7 @@ VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "relationship_decisions_v1": relationship_decisions_df_builder,
     "schema_anomalies_v1": schema_anomalies_df_builder,
     "file_coverage_report_v1": file_coverage_report_df_builder,
+    "dim_exported_defs_v1": exported_defs_df_builder,
 }
 
 
@@ -856,6 +870,7 @@ __all__ = [
     "cfg_edges_df_builder",
     "def_use_events_df_builder",
     "diagnostics_df_builder",
+    "exported_defs_df_builder",
     "file_coverage_report_df_builder",
     "file_quality_df_builder",
     "reaching_defs_df_builder",

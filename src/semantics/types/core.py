@@ -153,6 +153,18 @@ STANDARD_COLUMNS: Final[dict[str, SemanticColumnSpec]] = {
     ),
 }
 
+SEMANTIC_TYPE_COMPATIBILITY_GROUPS: Final[dict[SemanticType, tuple[CompatibilityGroup, ...]]] = {
+    SemanticType.FILE_ID: (CompatibilityGroup.FILE_IDENTITY,),
+    SemanticType.PATH: (CompatibilityGroup.FILE_IDENTITY,),
+    SemanticType.SPAN_START: (CompatibilityGroup.SPAN_POSITION,),
+    SemanticType.SPAN_END: (CompatibilityGroup.SPAN_POSITION,),
+    SemanticType.LINE_NO: (CompatibilityGroup.SPAN_POSITION,),
+    SemanticType.COL_NO: (CompatibilityGroup.SPAN_POSITION,),
+    SemanticType.ENTITY_ID: (CompatibilityGroup.ENTITY_IDENTITY,),
+    SemanticType.SYMBOL: (CompatibilityGroup.SYMBOL_IDENTITY,),
+    SemanticType.QNAME: (CompatibilityGroup.SYMBOL_IDENTITY,),
+}
+
 
 def _matches_pattern(lower_name: str, column_name: str, pattern: tuple[str, ...]) -> bool:
     """Check if column name matches a pattern specification.
@@ -228,6 +240,19 @@ def infer_semantic_type(column_name: str) -> SemanticType:
     return SemanticType.UNKNOWN
 
 
+def compatibility_groups_for_semantic_type(
+    sem_type: SemanticType,
+) -> tuple[CompatibilityGroup, ...]:
+    """Return compatibility groups for a semantic type.
+
+    Returns
+    -------
+    tuple[CompatibilityGroup, ...]
+        Compatibility groups for the semantic type.
+    """
+    return SEMANTIC_TYPE_COMPATIBILITY_GROUPS.get(sem_type, ())
+
+
 def get_compatibility_groups(column_name: str) -> tuple[CompatibilityGroup, ...]:
     """Get compatibility groups for a column.
 
@@ -243,7 +268,8 @@ def get_compatibility_groups(column_name: str) -> tuple[CompatibilityGroup, ...]
     """
     if column_name in STANDARD_COLUMNS:
         return STANDARD_COLUMNS[column_name].compatibility_groups
-    return ()
+    sem_type = infer_semantic_type(column_name)
+    return compatibility_groups_for_semantic_type(sem_type)
 
 
 def columns_are_joinable(left_col: str, right_col: str) -> bool:
@@ -272,6 +298,7 @@ __all__ = [
     "SemanticColumnSpec",
     "SemanticType",
     "columns_are_joinable",
+    "compatibility_groups_for_semantic_type",
     "get_compatibility_groups",
     "infer_semantic_type",
 ]

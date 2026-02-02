@@ -34,7 +34,12 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq q "pattern=..."` | Structural code search | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | `/cq q "...inside=..."` | Contextual code search | `/cq q "entity=function inside='class Config'"` |
 | `/cq q "...scope=..."` | Closure analysis | `/cq q "entity=function scope=closure"` |
+| `/cq q "all=..."` | Combined patterns (AND) | `/cq q "entity=function all='await \$X,return \$Y'"` |
+| `/cq q "any=..."` | Alternative patterns (OR) | `/cq q "any='logger.\$M(\$$$),print(\$$$)'"` |
+| `/cq q "not=..."` | Pattern exclusion | `/cq q "entity=function not.has='pass'"` |
+| `/cq q "fields=hazards"` | Security hazard scan | `/cq q "entity=function in=src/api/ fields=hazards"` |
 | `/cq q --format mermaid` | Visualize code structure | `/cq q "entity=function expand=callers" --format mermaid` |
+| `/cq q --format mermaid-cfg` | Control flow graphs | `/cq q "entity=function name=fn" --format mermaid-cfg` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
 | `/datafusion-stack` | DataFusion/Delta/UDF work | `/datafusion-stack` |
 
@@ -102,6 +107,76 @@ Pattern queries find structural code patterns without false positives from strin
 /cq q "entity=function scope=closure in=src/semantics/"
 ```
 
+### Advanced Query Patterns
+
+**Composite Queries (AND/OR/NOT):**
+```bash
+# Functions with both await AND return
+/cq q "entity=function all='await \$X,return \$Y'"
+
+# Any logging pattern
+/cq q "any='logger.\$M(\$$$),print(\$$$),console.log(\$$$)'"
+
+# Functions WITHOUT docstrings
+/cq q "entity=function not.has='\"\"\"'"
+
+# Async functions that don't await
+/cq q "entity=function has='async def' not.has='await'"
+```
+
+**Pattern Disambiguation:**
+```bash
+# When patterns are ambiguous, use context + selector
+/cq q "pattern.context='{ \"\$K\": \$V }' pattern.selector=pair"
+
+# Extract specific argument positions
+/cq q "pattern.context='func(\$A, \$B)' pattern.selector=argument"
+```
+
+**Security-Focused Queries:**
+```bash
+# Full security audit
+/cq q "entity=function in=src/ fields=hazards" --severity error
+
+# Find code execution hazards
+/cq q "any='eval(\$X),exec(\$X),compile(\$X, \$Y, \"exec\")'"
+
+# Find deserialization hazards
+/cq q "any='pickle.load(\$X),yaml.load(\$X),marshal.load(\$X)'"
+
+# Shell injection risks
+/cq q "pattern='subprocess.\$M(\$$$, shell=True)'"
+```
+
+**Bytecode Analysis:**
+```bash
+# Find functions using specific opcodes
+/cq q "entity=function bytecode.opname=LOAD_GLOBAL"
+
+# Visualize control flow
+/cq q "entity=function name=complex_fn" --format mermaid-cfg
+```
+
+### Query Selection Guide
+
+| Need | Query Type | Example |
+|------|-----------|---------|
+| Find by name | `entity=` + `name=` | `/cq q "entity=function name=~^build"` |
+| Structural pattern | `pattern=` | `/cq q "pattern='getattr(\$X, \$Y)'"` |
+| Combined conditions | `all=` | `/cq q "all='await \$X,try:'"` |
+| Alternative patterns | `any=` | `/cq q "any='log.\$M,print'"` |
+| Exclude matches | `not=` | `/cq q "entity=function not.has='pass'"` |
+| Context-aware | `inside=` / `has=` | `/cq q "pattern='\$X' inside='class Config'"` |
+| Security scan | `fields=hazards` | `/cq q "entity=function fields=hazards"` |
+| Closures | `scope=closure` | `/cq q "entity=function scope=closure"` |
+| Visualization | `--format mermaid*` | `/cq q "expand=callers" --format mermaid` |
+
+**When to Prefer Pattern Queries over Grep:**
+- Finding code in strings/comments → Pattern query (no false positives)
+- Dynamic dispatch patterns → Pattern query (AST-aware)
+- Combining multiple conditions → Composite queries
+- Security hazard detection → Hazard detection (30+ patterns)
+
 ### Why This Matters
 
 - **AST-based analysis** - No false positives from strings/comments
@@ -110,9 +185,12 @@ Pattern queries find structural code patterns without false positives from strin
 - **Transitive analysis** - Find indirect callers via `expand=callers(depth=N)`
 - **Hazard detection** - Spots dynamic dispatch, forwarding patterns
 - **Pattern queries** - Structural search without string/comment false positives
+- **Composite logic** - Combine patterns with `all`/`any`/`not` operators
+- **Pattern disambiguation** - Use `context`/`selector` for ambiguous patterns
 - **Relational constraints** - Find code in specific contexts (inside classes, containing patterns)
 - **Scope filtering** - Identify closures before extraction
-- **Visualization** - Understand call graphs and class hierarchies visually
+- **Visualization** - Call graphs, class diagrams, and CFGs via `--format mermaid*`
+- **Bytecode analysis** - Query opcodes, build CFGs, analyze stack effects
 - **30+ builtin hazards** - Security and correctness hazard patterns
 
 ---

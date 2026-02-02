@@ -15,6 +15,7 @@ from semantics.types.core import (
     STANDARD_COLUMNS,
     CompatibilityGroup,
     SemanticType,
+    get_compatibility_groups,
     infer_semantic_type,
 )
 
@@ -313,9 +314,7 @@ class AnnotatedSchema:
         columns = []
         for arrow_field in schema:
             sem_type = infer_semantic_type(arrow_field.name)
-            compat_groups: tuple[CompatibilityGroup, ...] = ()
-            if arrow_field.name in STANDARD_COLUMNS:
-                compat_groups = STANDARD_COLUMNS[arrow_field.name].compatibility_groups
+            compat_groups = get_compatibility_groups(arrow_field.name)
             columns.append(
                 AnnotatedColumn(
                     name=arrow_field.name,

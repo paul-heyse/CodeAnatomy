@@ -44,6 +44,7 @@ from semantics.config import SemanticConfig
 from semantics.join_helpers import join_by_span_contains, join_by_span_overlap
 from semantics.joins import JoinStrategy, JoinStrategyType
 from semantics.schema import SemanticSchema, SemanticSchemaError
+from semantics.types.core import columns_are_joinable
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -238,6 +239,53 @@ class SemanticCompiler:
         missing = [name for name in required if name and name not in names]
         if missing:
             msg = f"Table {table_name!r} missing required columns: {sorted(missing)!r}."
+            raise SemanticSchemaError(msg)
+
+    @staticmethod
+    def _validate_join_keys(
+        *,
+        left_info: TableInfo,
+        right_info: TableInfo,
+        left_on: Sequence[str],
+        right_on: Sequence[str],
+    ) -> None:
+        left_view = left_info.name
+        right_view = right_info.name
+        if not left_on or not right_on:
+            msg = (
+                "Quality relationship join requires non-empty keys: "
+                f"{left_view!r} -> {right_view!r}."
+            )
+            raise SemanticSchemaError(msg)
+        if len(left_on) != len(right_on):
+            msg = (
+                "Join key length mismatch for "
+                f"{left_view!r} ({len(left_on)}) vs {right_view!r} ({len(right_on)})."
+            )
+            raise SemanticSchemaError(msg)
+
+        left_missing = [key for key in left_on if key not in left_info.annotated]
+        right_missing = [key for key in right_on if key not in right_info.annotated]
+        if left_missing or right_missing:
+            msg = (
+                "Join keys missing in source tables: "
+                f"{left_view!r} missing={sorted(left_missing)!r}, "
+                f"{right_view!r} missing={sorted(right_missing)!r}."
+            )
+            raise SemanticSchemaError(msg)
+
+        for left_key, right_key in zip(left_on, right_on, strict=True):
+            if columns_are_joinable(left_key, right_key):
+                continue
+            left_col = left_info.annotated.get(left_key)
+            right_col = right_info.annotated.get(right_key)
+            left_type = left_col.semantic_type if left_col is not None else None
+            right_type = right_col.semantic_type if right_col is not None else None
+            msg = (
+                "Join key semantic type mismatch for "
+                f"{left_view!r}.{left_key} ({left_type}) vs "
+                f"{right_view!r}.{right_key} ({right_type})."
+            )
             raise SemanticSchemaError(msg)
 
     @staticmethod
@@ -1074,20 +1122,20 @@ class SemanticCompiler:
         right_on: Sequence[str],
         how: JoinHow,
     ) -> DataFrame:
-        left_df = self.ctx.table(left_view)
-        right_df = self.ctx.table(right_view)
+        left_info = self.get(left_view)
+        right_info = self.get(right_view)
+        self._validate_join_keys(
+            left_info=left_info,
+            right_info=right_info,
+            left_on=left_on,
+            right_on=right_on,
+        )
 
-        left_aliased = self._prefix_df(left_df, _LEFT_ALIAS_PREFIX)
-        right_aliased = self._prefix_df(right_df, _RIGHT_ALIAS_PREFIX)
+        left_aliased = self._prefix_df(left_info.df, _LEFT_ALIAS_PREFIX)
+        right_aliased = self._prefix_df(right_info.df, _RIGHT_ALIAS_PREFIX)
 
         left_keys = [f"{_LEFT_ALIAS_PREFIX}{k}" for k in left_on]
         right_keys = [f"{_RIGHT_ALIAS_PREFIX}{k}" for k in right_on]
-        if not left_keys or not right_keys:
-            msg = (
-                f"Quality relationship join requires non-empty keys: "
-                f"{left_view!r} -> {right_view!r}."
-            )
-            raise SemanticSchemaError(msg)
 
         return left_aliased.join(
             right_aliased,
@@ -1179,7 +1227,13 @@ class SemanticCompiler:
         """
         from datafusion import col, functions, lit
 
-        from semantics.exprs import ExprContextImpl, clamp, validate_expr_spec
+        from semantics.exprs import (
+            ExprContextImpl,
+            ExprSpec,
+            ExprValidationContext,
+            clamp,
+            validate_expr_spec,
+        )
 
         with stage_span(
             "semantics.compile_relationship_with_quality",
@@ -1238,13 +1292,34 @@ class SemanticCompiler:
             if spec.rule_name is not None:
                 rank_available.add("rule_name")
 
+            required_columns: set[str] = set()
+            required_columns.update({f"{_LEFT_ALIAS_PREFIX}{key}" for key in spec.left_on})
+            required_columns.update({f"{_RIGHT_ALIAS_PREFIX}{key}" for key in spec.right_on})
+
+            def _collect_expr_columns(
+                expr_spec: ExprSpec,
+                *,
+                available_columns: set[str],
+                expr_label: str,
+            ) -> set[str]:
+                validate_expr_spec(
+                    expr_spec,
+                    available_columns=available_columns,
+                    expr_label=expr_label,
+                )
+                validation_ctx = ExprValidationContext()
+                _ = expr_spec(validation_ctx)
+                return validation_ctx.used_columns()
+
             # 4. Apply hard predicates
             hard_columns: list[str] = []
             for index, hard_pred in enumerate(spec.signals.hard, start=1):
-                validate_expr_spec(
-                    hard_pred.predicate,
-                    available_columns=schema_names,
-                    expr_label=f"{spec.name}.hard[{index}]",
+                required_columns.update(
+                    _collect_expr_columns(
+                        hard_pred.predicate,
+                        available_columns=schema_names,
+                        expr_label=f"{spec.name}.hard[{index}]",
+                    )
                 )
                 pred_expr = hard_pred.predicate(expr_ctx)
                 hard_col = f"hard_{index}"
@@ -1255,10 +1330,12 @@ class SemanticCompiler:
             # 5. Add feature columns and compute score
             base_score = lit(spec.signals.base_score)
             for feature in spec.signals.features:
-                validate_expr_spec(
-                    feature.expr,
-                    available_columns=schema_names,
-                    expr_label=f"{spec.name}.feature[{feature.name}]",
+                required_columns.update(
+                    _collect_expr_columns(
+                        feature.expr,
+                        available_columns=schema_names,
+                        expr_label=f"{spec.name}.feature[{feature.name}]",
+                    )
                 )
                 feature_expr = feature.expr(expr_ctx)
                 feature_col = f"feat_{feature.name}"
@@ -1272,7 +1349,7 @@ class SemanticCompiler:
             quality_col = f"{_FILE_QUALITY_PREFIX}{spec.signals.quality_score_column}"
 
             # Check if quality column exists
-            schema_names = self._schema_names(joined)
+            schema_names = set(self._schema_names(joined))
             if quality_col in schema_names:
                 quality_adj = functions.coalesce(col(quality_col), lit(1000.0)) * lit(
                     spec.signals.quality_weight
@@ -1294,18 +1371,22 @@ class SemanticCompiler:
             # 8. Apply ranking if specified
             if spec.rank is not None:
                 # Build ambiguity group key
-                validate_expr_spec(
-                    spec.rank.ambiguity_key_expr,
-                    available_columns=schema_names,
-                    expr_label=f"{spec.name}.rank.ambiguity_key_expr",
+                required_columns.update(
+                    _collect_expr_columns(
+                        spec.rank.ambiguity_key_expr,
+                        available_columns=schema_names,
+                        expr_label=f"{spec.name}.rank.ambiguity_key_expr",
+                    )
                 )
                 group_key = spec.rank.ambiguity_key_expr(expr_ctx)
                 group_id_expr = group_key
                 if spec.rank.ambiguity_group_id_expr is not None:
-                    validate_expr_spec(
-                        spec.rank.ambiguity_group_id_expr,
-                        available_columns=schema_names,
-                        expr_label=f"{spec.name}.rank.ambiguity_group_id_expr",
+                    required_columns.update(
+                        _collect_expr_columns(
+                            spec.rank.ambiguity_group_id_expr,
+                            available_columns=schema_names,
+                            expr_label=f"{spec.name}.rank.ambiguity_group_id_expr",
+                        )
                     )
                     group_id_expr = spec.rank.ambiguity_group_id_expr(expr_ctx)
                 joined = joined.with_column("ambiguity_group_id", group_id_expr)
@@ -1316,10 +1397,12 @@ class SemanticCompiler:
 
                     order_exprs: list[SortKey] = []
                     for index, order in enumerate(spec.rank.order_by, start=1):
-                        validate_expr_spec(
-                            order.expr,
-                            available_columns=rank_available,
-                            expr_label=f"{spec.name}.rank.order_by[{index}]",
+                        required_columns.update(
+                            _collect_expr_columns(
+                                order.expr,
+                                available_columns=rank_available,
+                                expr_label=f"{spec.name}.rank.order_by[{index}]",
+                            )
                         )
                         order_exprs.append(
                             order.expr(expr_ctx).sort(ascending=(order.direction == "asc"))
@@ -1346,7 +1429,7 @@ class SemanticCompiler:
                 }
                 select_cols = []
                 for select_expr in spec.select_exprs:
-                    validate_expr_spec(
+                    _collect_expr_columns(
                         select_expr.expr,
                         available_columns=select_available,
                         expr_label=f"{spec.name}.select[{select_expr.alias}]",
@@ -1367,6 +1450,34 @@ class SemanticCompiler:
                     select_cols.append(col("rule_name"))
                 select_cols.extend(col(hard_col) for hard_col in hard_columns)
                 select_cols.extend(col(feature_name) for feature_name in sorted(feature_columns))
+                joined = joined.select(*select_cols)
+            else:
+                select_cols: list[Expr] = []
+                seen: set[str] = set()
+
+                def _append_col(name: str) -> None:
+                    if name in seen:
+                        return
+                    select_cols.append(col(name))
+                    seen.add(name)
+
+                join_cols = [f"{_LEFT_ALIAS_PREFIX}{key}" for key in spec.left_on] + [
+                    f"{_RIGHT_ALIAS_PREFIX}{key}" for key in spec.right_on
+                ]
+                for name in join_cols:
+                    _append_col(name)
+                for name in sorted(required_columns):
+                    _append_col(name)
+                for name in ("confidence", "score", "origin", "provider"):
+                    _append_col(name)
+                if spec.rule_name is not None:
+                    _append_col("rule_name")
+                if spec.rank is not None:
+                    _append_col("ambiguity_group_id")
+                for hard_col in hard_columns:
+                    _append_col(hard_col)
+                for feature_name in sorted(feature_columns):
+                    _append_col(feature_name)
                 joined = joined.select(*select_cols)
 
             return joined

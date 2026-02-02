@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from semantics.naming import canonical_output_name
 from semantics.quality import QualityRelationshipSpec
@@ -300,6 +300,18 @@ def relationship_names() -> tuple[str, ...]:
     return SEMANTIC_MODEL.relationship_names()
 
 
+SemanticOutputKind = Literal["table", "diagnostic", "export"]
+
+
+@dataclass(frozen=True)
+class SemanticOutputSpec:
+    """Output specification for semantic pipeline products."""
+
+    name: str
+    kind: SemanticOutputKind = "table"
+    contract_ref: str | None = None
+
+
 @dataclass(frozen=True)
 class SemanticModel:
     """Single source of truth for semantic normalization and relationships."""
@@ -308,6 +320,7 @@ class SemanticModel:
     relationship_specs: tuple[QualityRelationshipSpec, ...]
     semantic_nodes_union_name: str
     semantic_edges_union_name: str
+    outputs: tuple[SemanticOutputSpec, ...]
 
     def relationship_names(self) -> tuple[str, ...]:
         """Return names of all registered relationships.
@@ -390,6 +403,40 @@ class SemanticModel:
         return tuple(spec.output_name for spec in specs)
 
 
+def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
+    from relspec.view_defs import RELATION_OUTPUT_NAME
+    from semantics.diagnostics import SEMANTIC_DIAGNOSTIC_VIEW_NAMES
+    from semantics.naming import SEMANTIC_VIEW_NAMES
+
+    ordered: list[SemanticOutputSpec] = []
+    seen: set[str] = set()
+
+    def _append(spec: SemanticOutputSpec) -> None:
+        if spec.name in seen:
+            return
+        seen.add(spec.name)
+        ordered.append(spec)
+
+    for name in SEMANTIC_VIEW_NAMES:
+        _append(SemanticOutputSpec(name=name, kind="table", contract_ref=name))
+
+    _append(
+        SemanticOutputSpec(
+            name=RELATION_OUTPUT_NAME,
+            kind="table",
+            contract_ref=RELATION_OUTPUT_NAME,
+        )
+    )
+
+    for name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
+        _append(SemanticOutputSpec(name=name, kind="diagnostic", contract_ref=name))
+
+    for name in ("dim_exported_defs_v1",):
+        _append(SemanticOutputSpec(name=name, kind="export", contract_ref=name))
+
+    return tuple(ordered)
+
+
 def build_semantic_model() -> SemanticModel:
     """Build the canonical semantic model from registry specs.
 
@@ -403,6 +450,7 @@ def build_semantic_model() -> SemanticModel:
         relationship_specs=RELATIONSHIP_SPECS,
         semantic_nodes_union_name=canonical_output_name("semantic_nodes_union"),
         semantic_edges_union_name=canonical_output_name("semantic_edges_union"),
+        outputs=_build_output_specs(),
     )
 
 
@@ -415,6 +463,8 @@ __all__ = [
     "SEMANTIC_TABLE_SPECS",
     "SemanticModel",
     "SemanticNormalizationSpec",
+    "SemanticOutputKind",
+    "SemanticOutputSpec",
     "build_semantic_model",
     "normalization_output_name",
     "normalization_output_names",

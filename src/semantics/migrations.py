@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+
+from semantics.schema_diff import SchemaDiff
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -93,6 +96,28 @@ def migration_for(source: str, target: str) -> MigrationFn | None:
     return spec.migrate
 
 
+def migration_skeleton(source: str, target: str, diff: SchemaDiff) -> str:
+    """Return a migration skeleton snippet for a schema diff."""
+    function_name = _migration_fn_name(source, target)
+    diff_lines = diff.summary_lines()
+    change_lines = diff_lines or ("no schema changes detected",)
+    change_comment = "\n".join(f"    # - {line}" for line in change_lines)
+    return (
+        f"def {function_name}(ctx: SessionContext) -> DataFrame:\n"
+        f"    \"\"\"Migrate {source} to {target}.\"\"\"\n"
+        f"    df = ctx.table(\"{source}\")\n"
+        f"{change_comment}\n"
+        f"    return df\n\n"
+        f"register_migration(\"{source}\", \"{target}\", {function_name})\n"
+    )
+
+
+def _migration_fn_name(source: str, target: str) -> str:
+    normalized = f"migrate_{source}_to_{target}"
+    sanitized = re.sub(r"[^0-9a-zA-Z_]+", "_", normalized)
+    return sanitized.strip("_").lower()
+
+
 register_migration("cpg_nodes_v1", "cpg_nodes_v2", migrate_cpg_nodes_v1_to_v2)
 register_migration("cpg_edges_v1", "cpg_edges_v2", migrate_cpg_edges_v1_to_v2)
 
@@ -104,5 +129,6 @@ __all__ = [
     "migrate_cpg_edges_v1_to_v2",
     "migrate_cpg_nodes_v1_to_v2",
     "migration_for",
+    "migration_skeleton",
     "register_migration",
 ]

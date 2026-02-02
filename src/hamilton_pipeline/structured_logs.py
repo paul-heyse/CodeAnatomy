@@ -104,7 +104,8 @@ def _resolve_log_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
         return Path(cache_path).expanduser() / "structured_logs" / f"{run_id}.jsonl"
     return Path("build") / "structured_logs" / f"{run_id}.jsonl"
 
-class StructuredLogEvent(StructBaseCompat, tag=True, tag_field="event"):
+
+class StructuredLogEvent(StructBaseCompat, tag=True, tag_field="event", frozen=True):
     """Base structured log event."""
 
     run_id: str
@@ -112,11 +113,11 @@ class StructuredLogEvent(StructBaseCompat, tag=True, tag_field="event"):
     timestamp_ms: int
 
 
-class GraphStartEvent(StructuredLogEvent, tag="graph_start"):
+class GraphStartEvent(StructuredLogEvent, tag="graph_start", frozen=True):
     """Graph-start log event."""
 
 
-class GraphFinishEvent(StructuredLogEvent, tag="graph_finish"):
+class GraphFinishEvent(StructuredLogEvent, tag="graph_finish", frozen=True):
     """Graph-finish log event."""
 
     duration_ms: int | None = None

@@ -16,6 +16,11 @@ from datafusion_engine.catalog.provider_registry import ProviderRegistry
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter, ListingTableRegistration
+from datafusion_engine.session.runtime import (
+    DATAFUSION_MAJOR_VERSION,
+    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
+    record_runtime_setting_override,
+)
 from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.spec import table_spec_from_location
 
@@ -181,6 +186,10 @@ def _apply_scan_settings(
 ) -> None:
     if scan is None:
         return
+    skip_runtime_settings = (
+        DATAFUSION_MAJOR_VERSION is not None
+        and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+    )
     settings: list[tuple[str, object | None, bool]] = [
         ("datafusion.execution.collect_statistics", scan.collect_statistics, True),
         ("datafusion.execution.meta_fetch_concurrency", scan.meta_fetch_concurrency, False),
@@ -201,6 +210,9 @@ def _apply_scan_settings(
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
+        if skip_runtime_settings and key.startswith("datafusion.runtime."):
+            record_runtime_setting_override(ctx, key=key, value=text)
+            continue
         _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-from dataclasses import dataclass
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,8 +40,7 @@ _MAX_MESSAGE_LEN = 50
 _MESSAGE_TRIM = 47
 
 
-@dataclass
-class RaiseSite:
+class RaiseSite(msgspec.Struct):
     """A location where an exception is raised.
 
     Parameters
@@ -71,8 +70,7 @@ class RaiseSite:
     is_reraise: bool = False
 
 
-@dataclass
-class CatchSite:
+class CatchSite(msgspec.Struct):
     """A location where an exception is caught.
 
     Parameters

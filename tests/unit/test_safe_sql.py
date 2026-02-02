@@ -21,5 +21,5 @@ def test_safe_sql_blocks_ddl() -> None:
 def test_safe_sql_blocks_dml() -> None:
     """Reject DML statements when using safe SQL planning."""
     ctx = df_ctx()
-    with pytest.raises(ValueError, match=r"SQL execution failed under safe options"):
+    with pytest.raises(PermissionError, match=r"DML is blocked by SQL policy"):
         safe_sql(ctx, "INSERT INTO blocked VALUES (1)")

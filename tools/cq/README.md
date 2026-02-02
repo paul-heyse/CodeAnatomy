@@ -25,6 +25,11 @@ All commands support these global options:
 | `--format` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact output directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip artifact saving |
+| `--cache-dir` | `CQ_DISKCACHE_DIR` | `~/.cache/codeanatomy/cq` | DiskCache root directory |
+| `--cache-query-ttl` | `CQ_DISKCACHE_QUERY_TTL_SECONDS` | unset | Query cache TTL in seconds |
+| `--cache-query-size` | `CQ_DISKCACHE_QUERY_SIZE_LIMIT` | 536870912 | Query cache size limit (bytes) |
+| `--cache-index-size` | `CQ_DISKCACHE_INDEX_SIZE_LIMIT` | 268435456 | Index cache size limit (bytes) |
+| `--cache-query-shards` | `CQ_DISKCACHE_QUERY_SHARDS` | 4 | Query cache shard count |
 
 ### Output Formats
 
@@ -86,7 +91,7 @@ save_artifact = true
 
 ## Caching
 
-Query and report runs use caching by default. Disable with `--no-cache`.
+Query and report runs use DiskCache-backed caching by default. Disable with `--no-cache`.
 
 ## Artifacts
 

@@ -964,7 +964,7 @@ def index(
         cq index --stats      # Show statistics
         cq index --clear      # Clear index
     """
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
 
     actual_root = root or ctx.repo.repo_root
     rule_version = ctx.toolchain.sg_version or "unknown"
@@ -1069,7 +1069,7 @@ def cache(
         cq cache --stats    # Show statistics
         cq cache --clear    # Clear cache
     """
-    from tools.cq.index.query_cache import QueryCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
 
     actual_root = root or ctx.repo.repo_root
     cache_dir = actual_root / ".cq" / "cache"
@@ -1513,8 +1513,8 @@ def q(
     """
     from dataclasses import replace
 
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -1632,8 +1632,8 @@ def report(
         cq report change-propagation --target class:SemanticCompiler
     """
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
 
     try:
         target_spec = parse_target_spec(target)

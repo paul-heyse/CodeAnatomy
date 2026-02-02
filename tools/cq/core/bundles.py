@@ -23,8 +23,8 @@ from tools.cq.query.ir import Scope
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
 
 TargetKind = Literal["function", "class", "method", "module", "path"]
 

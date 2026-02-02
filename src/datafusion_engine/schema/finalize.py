@@ -21,7 +21,13 @@ from datafusion_engine.arrow.build import ColumnDefaultsSpec, ConstExpr
 from datafusion_engine.arrow.chunking import ChunkPolicy
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
-from datafusion_engine.arrow.interop import ArrayLike, DataTypeLike, SchemaLike, TableLike
+from datafusion_engine.arrow.interop import (
+    ArrayLike,
+    DataTypeLike,
+    SchemaLike,
+    TableLike,
+    empty_table_for_schema,
+)
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.kernels import (
@@ -260,10 +266,10 @@ class ErrorArtifactSpec:
         if error_parts:
             return pa.concat_tables(error_parts, promote_options="default")
 
-        empty_arrays = [pa.array([], type=schema_field.type) for schema_field in table.schema]
-        empty_arrays.extend(pa.array([], type=field_type) for _, field_type in self.detail_fields)
-        names = [*list(table.schema.names), *[name for name, _ in self.detail_fields]]
-        return pa.Table.from_arrays(empty_arrays, names=names)
+        base_fields = list(table.schema)
+        detail_fields = [pa.field(name, dtype) for name, dtype in self.detail_fields]
+        empty_schema = pa.schema([*base_fields, *detail_fields])
+        return empty_table_for_schema(empty_schema)
 
     @staticmethod
     def build_stats_table(errors: TableLike) -> TableLike:
@@ -499,10 +505,7 @@ def _empty_error_details_table(
     fields.extend((col, errors_schema.field(col).type) for col in provenance)
     fields.append(("error_detail", ERROR_DETAIL_LIST_DTYPE))
     empty_schema = pa.schema(fields)
-    return pa.Table.from_arrays(
-        [pa.array([], type=schema_field.type) for schema_field in empty_schema],
-        schema=empty_schema,
-    )
+    return empty_table_for_schema(empty_schema)
 
 
 _HASH_JOIN_SEPARATOR = "\x1f"

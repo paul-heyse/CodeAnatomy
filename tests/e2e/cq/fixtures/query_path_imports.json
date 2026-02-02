@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 24,
-        "end_line": 9,
-        "file": "tools/cq/cli.py",
-        "line": 9
+        "end_line": 6,
+        "file": "tools/cq/index/files.py",
+        "line": 6
       },
       "category": "from_import",
       "details": {
@@ -27,14 +27,14 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.11",
-      "rg": "15.0.0",
-      "sg": "0.40.5"
+      "rpygrep": "0.2.1",
+      "sgpy": "0.40.5"
     }
   },
   "sections": [],
   "summary": {
     "files_scanned": 1,
     "matches": 1,
-    "total_imports": 49
+    "total_imports": 15
   }
 }

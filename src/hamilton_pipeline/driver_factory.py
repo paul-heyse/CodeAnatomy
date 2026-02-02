@@ -72,9 +72,7 @@ def _ensure_hamilton_dataframe_types() -> None:
     from hamilton import registry as hamilton_registry
 
     registered = hamilton_registry.get_registered_dataframe_types()
-    if any(
-        htypes.custom_subclass_check(TableLike, df_type) for df_type in registered.values()
-    ):
+    if any(htypes.custom_subclass_check(TableLike, df_type) for df_type in registered.values()):
         return
     hamilton_registry.register_types("datafusion", TableLike, None)
 

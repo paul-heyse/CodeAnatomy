@@ -5,9 +5,10 @@ Compiles Query IR into a ToolPlan that specifies which tools to run.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.query.ir import (
     CompositeRule,
@@ -22,8 +23,7 @@ if TYPE_CHECKING:
     from tools.cq.query.ir import StrictnessMode
 
 
-@dataclass(frozen=True)
-class AstGrepRule:
+class AstGrepRule(msgspec.Struct, frozen=True):
     """ast-grep rule specification.
 
     Supports full ast-grep rule features including pattern objects and
@@ -171,8 +171,7 @@ class AstGrepRule:
         return rule
 
 
-@dataclass(frozen=True)
-class ToolPlan:
+class ToolPlan(msgspec.Struct, frozen=True):
     """Execution plan for a query.
 
     Attributes
@@ -195,7 +194,7 @@ class ToolPlan:
         Whether this is a pattern-based query
     """
 
-    scope: Scope = field(default_factory=Scope)
+    scope: Scope = msgspec.field(default_factory=Scope)
     sg_record_types: frozenset[str] = frozenset({"def", "call", "import"})
     need_symtable: bool = False
     need_bytecode: bool = False

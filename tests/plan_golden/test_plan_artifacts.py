@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -16,6 +15,7 @@ import pytest
 from test_support import datafusion_ext_stub
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion_udfs
+from utils.hashing import hash_msgpack_canonical
 
 
 def _stub_enabled() -> bool:
@@ -151,10 +151,24 @@ def _info_schema_hash(snapshot: Mapping[str, object]) -> str:
     str
         Hex digest of the snapshot payload.
     """
-    from serde_msgspec import dumps_msgpack
+    canonical = _canonicalize_snapshot(snapshot)
+    return hash_msgpack_canonical(canonical)
 
-    payload = dumps_msgpack(snapshot)
-    return hashlib.sha256(payload).hexdigest()
+
+def _canonical_sort_key(value: object) -> str:
+    return hash_msgpack_canonical(value)
+
+
+def _canonicalize_snapshot(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _canonicalize_snapshot(val) for key, val in sorted(value.items())}
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray, memoryview),
+    ):
+        normalized = [_canonicalize_snapshot(item) for item in value]
+        return sorted(normalized, key=_canonical_sort_key)
+    return value
 
 
 def _explain_rows(ctx: SessionContext, *, prefix: str, sql: str) -> list[dict[str, object]]:
@@ -249,6 +263,8 @@ def test_plan_artifact_golden_fixture() -> None:
     profile = DataFusionRuntimeProfile(
         enable_schema_registry=False,
         enable_schema_evolution_adapter=False,
+        enable_function_factory=False,
+        enable_udfs=False,
     )
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()

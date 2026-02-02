@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from core_types import JsonValue
 
+if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
-    from core_types import JsonValue
     from obs.otel import OtelBootstrapOptions
 
 

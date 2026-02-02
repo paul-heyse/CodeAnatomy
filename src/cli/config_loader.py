@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import msgspec
 
 from cli.config_models import RootConfig, RootConfigPatch
 from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
+from core_types import JsonValue
 from serde_msgspec import validation_error_payload
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from core_types import JsonValue
 
 
 def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
@@ -309,11 +306,57 @@ def _parse_env_value(value: str) -> JsonValue:
 
 def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootConfig:
     try:
-        return msgspec.convert(raw, type=RootConfig, strict=True)
+        config = msgspec.convert(raw, type=RootConfig, strict=True)
     except msgspec.ValidationError as exc:
         details = validation_error_payload(exc)
         msg = f"Config validation failed for {location}: {details}"
         raise ValueError(msg) from exc
+    _validate_json_payloads(config, location=location)
+    return config
+
+
+def _validate_json_payloads(config: RootConfig, *, location: str) -> None:
+    payloads: list[tuple[str, Mapping[str, object]]] = []
+    if config.graph_adapter is not None and config.graph_adapter.options is not None:
+        payloads.append(("graph_adapter.options", config.graph_adapter.options))
+    if config.graph_adapter_options is not None:
+        payloads.append(("graph_adapter_options", config.graph_adapter_options))
+    if config.hamilton_graph_adapter_options is not None:
+        payloads.append(("hamilton_graph_adapter_options", config.hamilton_graph_adapter_options))
+    if config.hamilton_tags is not None:
+        payloads.append(("hamilton_tags", config.hamilton_tags))
+    for field, payload in payloads:
+        _validate_json_mapping(payload, path=field, location=location)
+
+
+def _validate_json_mapping(
+    payload: Mapping[str, object],
+    *,
+    path: str,
+    location: str,
+) -> None:
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            msg = f"Config validation failed for {location}: {path} keys must be strings."
+            raise TypeError(msg)
+        _validate_json_value(value, path=f"{path}.{key}", location=location)
+
+
+def _validate_json_value(value: object, *, path: str, location: str) -> None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    if isinstance(value, Mapping):
+        _validate_json_mapping(value, path=path, location=location)
+        return
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray, memoryview),
+    ):
+        for index, item in enumerate(value):
+            _validate_json_value(item, path=f"{path}[{index}]", location=location)
+        return
+    msg = f"Config validation failed for {location}: {path} must be JSON-compatible."
+    raise ValueError(msg)
 
 
 def _config_to_mapping(config: RootConfig) -> dict[str, JsonValue]:

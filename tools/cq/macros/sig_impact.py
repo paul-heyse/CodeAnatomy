@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,8 +37,7 @@ if TYPE_CHECKING:
 _MAX_SITES_DISPLAY = 30
 
 
-@dataclass
-class SigParam:
+class SigParam(msgspec.Struct):
     """Parsed signature parameter.
 
     Parameters
@@ -62,8 +61,7 @@ class SigParam:
     is_kwarg: bool
 
 
-@dataclass(frozen=True)
-class SigImpactRequest:
+class SigImpactRequest(msgspec.Struct, frozen=True):
     """Inputs required for signature impact analysis."""
 
     tc: Toolchain

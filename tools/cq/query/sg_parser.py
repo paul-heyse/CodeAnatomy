@@ -19,7 +19,7 @@ from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
@@ -125,16 +125,19 @@ def _scan_with_cache(
                 resolved = (root / path_obj).resolve()
             if resolved.is_relative_to(root):
                 recorded_paths.add(str(resolved.relative_to(root)))
+        cache_payload: dict[Path, list[dict[str, object]]] = {}
         for file_path_str, file_records in records_by_file.items():
             file_path_obj = root / file_path_str
             records_data = [_record_to_cache_dict(record) for record in file_records]
             if file_path_obj.exists():
-                index_cache.store(file_path_obj, records_data, record_types_set)
+                cache_payload[file_path_obj] = records_data
         for file_path in files_to_scan:
             if not file_path.exists():
                 continue
             if str(file_path.relative_to(root)) not in recorded_paths:
-                index_cache.store(file_path, [], record_types_set)
+                cache_payload[file_path] = []
+        if cache_payload:
+            index_cache.store_many(cache_payload, record_types_set)
 
     return _filter_records(cached_records + scanned_records, record_types)
 

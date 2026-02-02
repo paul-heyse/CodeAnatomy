@@ -1,12 +1,12 @@
 {
   "determinism_audit": {
-    "df_settings_hash": "6aabcb5a7e52beb99047a01d779a2073b74907ac48a12868b994e6a625139a7f",
-    "function_registry_hash": "b1397a7058f6da0e851fcfd3266a8c7e2e1964df07b2f282a486722992e6b1cf",
-    "information_schema_hash": "2e93c8119991fd7d4e2cd3b7ffa4fde03719b90ac0abf63f2867eee72ff157b5",
-    "plan_fingerprint": "b1adff2ba9476f51fddcb56b9a09439069fd492b2ea25e646dcfe40d56c05f01",
+    "df_settings_hash": "bdd5a76f410eeac66db97cc10dfb8610ba96a75f4afcbc5d1259cc0d082f1762",
+    "function_registry_hash": "cc82c65cb004da0f3b5b9200eb7e5371914caed9fb4662d40c8affd6ee79342e",
+    "information_schema_hash": "9a24109cd5a5be57c8baa9bb720ed138e292aab7b4341dd507e1b7c5ffeb05cc",
+    "plan_fingerprint": "f729cf8714dcfeb0fe5357a3fbfb3e8428a623334ab5c339404d1a49c49563d4",
     "planning_env_hash": "78916891870ff7f11b1697ea495dad31f7b0ac603d972ad6046d24b17071e8a3",
     "rulepack_hash": "6a4a9f47d0de119c5a184c627e41a58d81f5b84c1024ec64ee3218606d82225e",
-    "schema_contract_hash": "70bdbf5dd3969d10d6e70dc035a0ffdb261762a9674df8597c0aa0a196adad05",
+    "schema_contract_hash": "753dc41fe87874fd86689b2087e245e437918542e10843e6ae4a50e8956633d0",
     "udf_snapshot_hash": "2d5966e233469e0da76e05013992d534b08decb822bd91725514a5a2efeb29fc"
   },
   "df_settings": {
@@ -454,7 +454,7 @@
     }
   ],
   "explain_verbose_rows": [],
-  "information_schema_hash": "3694fcb98ef97cc19ca06a070e01131839d71c62526de9985e948b8035b9c8b5",
+  "information_schema_hash": "97e1a7b9dd8260a710b6057d6196d3572c392646e3f6c1eb71d41ec4452ea21c",
   "information_schema_snapshot": {
     "columns": [
       {

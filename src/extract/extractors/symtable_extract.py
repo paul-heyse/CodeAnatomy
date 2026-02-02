@@ -14,6 +14,7 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions
+from extract.coordination.line_offsets import LineOffsets
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -21,6 +22,7 @@ from extract.helpers import (
     FileContext,
     SpanSpec,
     attrs_map,
+    bytes_from_file_ctx,
     extract_plan_from_rows,
     file_identity_row,
     materialize_extract_plan,
@@ -124,6 +126,13 @@ def _symtable_cache_key(
     if not file_ctx.file_id or file_ctx.file_sha256 is None:
         return None
     return (file_ctx.file_id, file_ctx.file_sha256, symtable_files_fingerprint(), compile_type)
+
+
+def _line_offsets(file_ctx: FileContext) -> LineOffsets | None:
+    data = bytes_from_file_ctx(file_ctx)
+    if data is None:
+        return None
+    return LineOffsets.from_bytes(data)
 
 
 def _effective_max_workers(
@@ -507,6 +516,7 @@ def _symtable_file_row(
     cache: Cache | FanoutCache | None,
     cache_ttl: float | None,
 ) -> dict[str, object] | None:
+    line_offsets = _line_offsets(file_ctx)
     scope_rows, symbol_rows, scope_edge_rows = _extract_symtable_for_context(
         file_ctx,
         compile_type=options.compile_type,
@@ -522,6 +532,7 @@ def _symtable_file_row(
         parent_map=parent_map,
         symbols_by_scope=symbols_by_scope,
         options=options,
+        line_offsets=line_offsets,
     )
 
     return {
@@ -566,6 +577,7 @@ def _build_scope_blocks(
     parent_map: Mapping[int, int],
     symbols_by_scope: Mapping[int, list[dict[str, object]]],
     options: SymtableExtractOptions,
+    line_offsets: LineOffsets | None,
 ) -> list[dict[str, object]]:
     blocks: list[dict[str, object]] = []
     for scope in scope_rows:
@@ -578,6 +590,7 @@ def _build_scope_blocks(
             parent_map=parent_map,
             symbols_by_scope=symbols_by_scope,
             options=options,
+            line_offsets=line_offsets,
         )
         blocks.append(block)
     return blocks
@@ -590,11 +603,12 @@ def _scope_block_payload(
     parent_map: Mapping[int, int],
     symbols_by_scope: Mapping[int, list[dict[str, object]]],
     options: SymtableExtractOptions,
+    line_offsets: LineOffsets | None,
 ) -> tuple[dict[str, object], str | None]:
     lineno = scope.get("lineno")
     lineno_int = int(lineno) if isinstance(lineno, int) and lineno > 0 else None
     line0 = lineno_int - 1 if lineno_int is not None else None
-    span_hint = _span_hint_from_line(line0)
+    span_hint = _span_hint_from_line(line0, line_offsets=line_offsets)
     scope_type_value = scope.get("scope_type")
     scope_type = scope_type_value if isinstance(scope_type_value, str) else None
     return (
@@ -627,17 +641,26 @@ def _scope_block_payload(
     )
 
 
-def _span_hint_from_line(line0: int | None) -> dict[str, object] | None:
+def _span_hint_from_line(
+    line0: int | None,
+    *,
+    line_offsets: LineOffsets | None,
+) -> dict[str, object] | None:
     if line0 is None:
         return None
+    byte_start = None
+    if line_offsets is not None:
+        byte_start = line_offsets.byte_offset(line0, 0)
     return span_dict(
         SpanSpec(
             start_line0=line0,
-            start_col=None,
+            start_col=0,
             end_line0=None,
             end_col=None,
             end_exclusive=True,
             col_unit="utf32",
+            byte_start=byte_start,
+            byte_len=None,
         )
     )
 

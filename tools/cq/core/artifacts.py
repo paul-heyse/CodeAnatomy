@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.cq.core.schema import Artifact, CqResult
+from tools.cq.core.serialization import dumps_json
 
 DEFAULT_ARTIFACT_DIR = ".cq/artifacts"
 
@@ -43,13 +43,14 @@ def save_artifact_json(
     # Generate filename if not provided
     if filename is None:
         ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        filename = f"{result.run.macro}_{ts}.json"
+        run_id = result.run.run_id or "no_run_id"
+        filename = f"{result.run.macro}_{ts}_{run_id}.json"
 
     filepath = artifact_dir / filename
 
     # Write JSON
     with Path(filepath).open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+        f.write(dumps_json(result, indent=2))
 
     # Return relative path from root
     try:

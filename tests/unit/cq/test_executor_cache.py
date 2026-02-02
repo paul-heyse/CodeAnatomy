@@ -5,9 +5,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from tools.cq.cache.diskcache_profile import DiskCacheKind, DiskCacheProfile, DiskCacheSettings
 from tools.cq.core.schema import mk_result, mk_runmeta, ms
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.index.query_cache import QueryCache
+from tools.cq.index.diskcache_query_cache import QueryCache
 from tools.cq.query.executor import _build_query_cache_key, _collect_cache_files, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -32,6 +33,14 @@ def _build_toolchain() -> Toolchain:
     )
 
 
+def _build_cache_profile(root: Path) -> DiskCacheProfile:
+    base = DiskCacheSettings(size_limit_bytes=64 * 1024 * 1024)
+    overrides: dict[DiskCacheKind, DiskCacheSettings] = {
+        "cq_query": DiskCacheSettings(size_limit_bytes=64 * 1024 * 1024)
+    }
+    return DiskCacheProfile(root=root / "cq_cache", base_settings=base, overrides=overrides)
+
+
 def test_execute_plan_uses_query_cache(tmp_path: Path) -> None:
     """execute_plan should return cached results when available."""
     root = tmp_path
@@ -50,9 +59,9 @@ def test_execute_plan_uses_query_cache(tmp_path: Path) -> None:
     cached_result = mk_result(cached_run)
     cached_result.summary["note"] = "cached"
 
-    cache_dir = root / "cache"
-    with QueryCache(cache_dir) as query_cache:
-        query_cache.set(cache_key, cached_result.to_dict(), cache_files)
+    profile = _build_cache_profile(root)
+    with QueryCache(root, profile=profile) as query_cache:
+        query_cache.set(cache_key, cached_result, cache_files)
         result = execute_plan(
             plan=plan,
             query=query,

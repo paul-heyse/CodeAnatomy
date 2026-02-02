@@ -1,18 +1,18 @@
 """Schema definitions for cq results.
 
-Dataclasses defining the structured output format for all cq macros.
+Structs defining the structured output format for all cq macros.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Literal
+
+import msgspec
 
 from tools.cq import SCHEMA_VERSION
 
 
-@dataclass
-class Anchor:
+class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
     """Source code location anchor.
 
     Parameters
@@ -30,7 +30,7 @@ class Anchor:
     """
 
     file: str
-    line: int
+    line: Annotated[int, msgspec.Meta(ge=1)]
     col: int | None = None
     end_line: int | None = None
     end_col: int | None = None
@@ -45,37 +45,8 @@ class Anchor:
         """
         return f"{self.file}:{self.line}"
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
 
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        d: dict[str, Any] = {"file": self.file, "line": self.line}
-        if self.col is not None:
-            d["col"] = self.col
-        if self.end_line is not None:
-            d["end_line"] = self.end_line
-        if self.end_col is not None:
-            d["end_col"] = self.end_col
-        return d
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Anchor:
-        """Create Anchor from a dict."""
-        return cls(
-            file=str(data.get("file", "")),
-            line=int(data.get("line", 0)),
-            col=data.get("col"),
-            end_line=data.get("end_line"),
-            end_col=data.get("end_col"),
-        )
-
-
-@dataclass
-class Finding:
+class Finding(msgspec.Struct):
     """A discrete analysis finding.
 
     Parameters
@@ -95,41 +66,11 @@ class Finding:
     category: str
     message: str
     anchor: Anchor | None = None
-    severity: str = "info"
-    details: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
-
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        return {
-            "category": self.category,
-            "message": self.message,
-            "anchor": self.anchor.to_dict() if self.anchor else None,
-            "severity": self.severity,
-            "details": self.details,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Finding:
-        """Create Finding from a dict."""
-        anchor_data = data.get("anchor")
-        anchor = Anchor.from_dict(anchor_data) if isinstance(anchor_data, dict) else None
-        return cls(
-            category=str(data.get("category", "")),
-            message=str(data.get("message", "")),
-            anchor=anchor,
-            severity=str(data.get("severity", "info")),
-            details=dict(data.get("details", {})),
-        )
+    severity: Literal["info", "warning", "error"] = "info"
+    details: dict[str, object] = msgspec.field(default_factory=dict)
 
 
-@dataclass
-class Section:
+class Section(msgspec.Struct):
     """A logical grouping of findings with a heading.
 
     Parameters
@@ -143,37 +84,11 @@ class Section:
     """
 
     title: str
-    findings: list[Finding] = field(default_factory=list)
+    findings: list[Finding] = msgspec.field(default_factory=list)
     collapsed: bool = False
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
 
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        return {
-            "title": self.title,
-            "findings": [f.to_dict() for f in self.findings],
-            "collapsed": self.collapsed,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Section:
-        """Create Section from a dict."""
-        findings_data = data.get("findings", [])
-        findings = [Finding.from_dict(f) for f in findings_data if isinstance(f, dict)]
-        return cls(
-            title=str(data.get("title", "")),
-            findings=findings,
-            collapsed=bool(data.get("collapsed", False)),
-        )
-
-
-@dataclass
-class Artifact:
+class Artifact(msgspec.Struct):
     """A saved analysis artifact reference.
 
     Parameters
@@ -187,27 +102,8 @@ class Artifact:
     path: str
     format: str = "json"
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
 
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        return {"path": self.path, "format": self.format}
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Artifact:
-        """Create Artifact from a dict."""
-        return cls(
-            path=str(data.get("path", "")),
-            format=str(data.get("format", "json")),
-        )
-
-
-@dataclass
-class RunMeta:
+class RunMeta(msgspec.Struct):
     """Metadata about a cq invocation.
 
     Parameters
@@ -226,6 +122,8 @@ class RunMeta:
         Available tool versions.
     schema_version : str
         Schema version string.
+    run_id : str | None
+        Stable run identifier for this invocation.
     """
 
     macro: str
@@ -233,43 +131,12 @@ class RunMeta:
     root: str
     started_ms: float
     elapsed_ms: float
-    toolchain: dict[str, str | None] = field(default_factory=dict)
+    toolchain: dict[str, str | None] = msgspec.field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
-
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        return {
-            "schema_version": self.schema_version,
-            "macro": self.macro,
-            "argv": self.argv,
-            "root": self.root,
-            "started_ms": self.started_ms,
-            "elapsed_ms": self.elapsed_ms,
-            "toolchain": self.toolchain,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> RunMeta:
-        """Create RunMeta from a dict."""
-        return cls(
-            schema_version=str(data.get("schema_version", "cq.v1")),
-            macro=str(data.get("macro", "")),
-            argv=list(data.get("argv", [])),
-            root=str(data.get("root", "")),
-            started_ms=float(data.get("started_ms", 0.0)),
-            elapsed_ms=float(data.get("elapsed_ms", 0.0)),
-            toolchain=dict(data.get("toolchain", {})),
-        )
+    run_id: str | None = None
 
 
-@dataclass
-class CqResult:
+class CqResult(msgspec.Struct):
     """Complete result of a cq macro invocation.
 
     Parameters
@@ -289,62 +156,11 @@ class CqResult:
     """
 
     run: RunMeta
-    summary: dict[str, Any] = field(default_factory=dict)
-    key_findings: list[Finding] = field(default_factory=list)
-    evidence: list[Finding] = field(default_factory=list)
-    sections: list[Section] = field(default_factory=list)
-    artifacts: list[Artifact] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict.
-
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable representation.
-        """
-        return {
-            "run": self.run.to_dict(),
-            "summary": self.summary,
-            "key_findings": [f.to_dict() for f in self.key_findings],
-            "evidence": [f.to_dict() for f in self.evidence],
-            "sections": [s.to_dict() for s in self.sections],
-            "artifacts": [a.to_dict() for a in self.artifacts],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CqResult:
-        """Create CqResult from a dict."""
-        run_data = data.get("run", {})
-        run = RunMeta.from_dict(run_data) if isinstance(run_data, dict) else RunMeta(
-            schema_version="cq.v1",
-            macro="",
-            argv=[],
-            root="",
-            started_ms=0.0,
-            elapsed_ms=0.0,
-            toolchain={},
-        )
-        key_findings = [
-            Finding.from_dict(f) for f in data.get("key_findings", []) if isinstance(f, dict)
-        ]
-        evidence = [
-            Finding.from_dict(f) for f in data.get("evidence", []) if isinstance(f, dict)
-        ]
-        sections = [
-            Section.from_dict(s) for s in data.get("sections", []) if isinstance(s, dict)
-        ]
-        artifacts = [
-            Artifact.from_dict(a) for a in data.get("artifacts", []) if isinstance(a, dict)
-        ]
-        return cls(
-            run=run,
-            summary=dict(data.get("summary", {})),
-            key_findings=key_findings,
-            evidence=evidence,
-            sections=sections,
-            artifacts=artifacts,
-        )
+    summary: dict[str, object] = msgspec.field(default_factory=dict)
+    key_findings: list[Finding] = msgspec.field(default_factory=list)
+    evidence: list[Finding] = msgspec.field(default_factory=list)
+    sections: list[Section] = msgspec.field(default_factory=list)
+    artifacts: list[Artifact] = msgspec.field(default_factory=list)
 
 
 def mk_runmeta(
@@ -375,6 +191,7 @@ def mk_runmeta(
         Populated metadata.
     """
     import time
+    from tools.cq.utils.uuid_factory import uuid7_str
 
     elapsed = time.time() * 1000 - started_ms
     return RunMeta(
@@ -384,6 +201,7 @@ def mk_runmeta(
         started_ms=started_ms,
         elapsed_ms=elapsed,
         toolchain=toolchain,
+        run_id=uuid7_str(),
     )
 
 
@@ -414,3 +232,16 @@ def ms() -> float:
     import time
 
     return time.time() * 1000
+
+
+__all__ = [
+    "Anchor",
+    "Artifact",
+    "CqResult",
+    "Finding",
+    "RunMeta",
+    "Section",
+    "mk_result",
+    "mk_runmeta",
+    "ms",
+]

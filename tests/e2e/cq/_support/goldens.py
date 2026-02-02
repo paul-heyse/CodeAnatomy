@@ -34,6 +34,12 @@ def _normalize_result_for_snapshot(result: CqResult) -> dict[str, Any]:
     if "run" in result_dict:
         result_dict["run"].pop("started_ms", None)
         result_dict["run"].pop("elapsed_ms", None)
+        result_dict["run"].pop("run_id", None)
+
+    summary = result_dict.get("summary")
+    if isinstance(summary, dict):
+        summary.pop("cache", None)
+        summary.pop("cache_stats", None)
 
     # Sort findings by file path and line number for deterministic ordering
     for key in ("key_findings", "evidence"):
@@ -73,9 +79,9 @@ def _result_to_dict(result: CqResult) -> dict[str, Any]:
     dict[str, Any]
         Result as dictionary.
     """
-    from dataclasses import asdict
+    from tools.cq.core.serialization import to_builtins
 
-    return asdict(result)
+    return to_builtins(result)
 
 
 def assert_json_snapshot(

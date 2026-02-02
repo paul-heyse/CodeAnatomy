@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cache, partial
@@ -441,9 +442,21 @@ def _parse_matcher_template(
 def _matcher_counts(module: cst.Module, options: CstExtractOptions) -> dict[str, str]:
     if not options.matcher_templates:
         return {}
+    source = module.code
+    def _prefilter(template: str) -> bool:
+        if not source:
+            return True
+        if template in source:
+            return True
+        match = re.search(r"[A-Za-z_][A-Za-z0-9_]*", template)
+        if match and match.group(0) not in source:
+            return False
+        return True
     config = module.config_for_parsing
     counts: dict[str, str] = {}
     for template in options.matcher_templates:
+        if not _prefilter(template):
+            continue
         parsed = _parse_matcher_template(template, config)
         if parsed is None:
             continue
@@ -455,6 +468,22 @@ def _matcher_counts(module: cst.Module, options: CstExtractOptions) -> dict[str,
         matches = m.findall(module, matcher)
         counts[f"matcher_template:{template}"] = str(len(matches))
     return counts
+
+
+def _should_collect(options: CstExtractOptions) -> bool:
+    return any(
+        (
+            options.include_refs,
+            options.include_imports,
+            options.include_callsites,
+            options.include_defs,
+            options.include_type_exprs,
+            options.include_docstrings,
+            options.include_decorators,
+            options.include_call_args,
+            bool(options.matcher_templates),
+        )
+    )
 
 
 def _iter_cst_children(
@@ -1311,7 +1340,8 @@ def _extract_cst_for_context(
             )
         )
 
-    _visit_with_collector(module, file_ctx=cst_file_ctx, ctx=ctx)
+    if _should_collect(ctx.options):
+        _visit_with_collector(module, file_ctx=cst_file_ctx, ctx=ctx)
     return module
 
 

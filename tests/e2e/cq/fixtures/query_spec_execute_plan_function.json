@@ -1,5 +1,5 @@
 {
-  "query": "entity=function name=execute_plan in=tools/cq/query/",
+  "query": "entity=function name=execute_plan in=tools/cq/query/executor.py",
   "expected_matches": 1,
   "expected_kind": "function",
   "description": "Query for the execute_plan function in the cq query executor"

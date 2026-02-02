@@ -20,16 +20,94 @@ def _ensure_reader_schema(
     if schema is None:
         return reader
     if reader.schema != schema:
-        msg = "Schema negotiation is not supported for this streaming source."
+        msg = "Schema negotiation is not supported"
         raise ValueError(msg)
     return reader
 
 
 def _reader_from_table(table: TableLike, *, schema: pa.Schema | None) -> pa.RecordBatchReader:
     if schema is not None and table.schema != schema:
-        msg = "Schema negotiation is not supported for table-backed readers."
+        msg = "Schema negotiation is not supported"
         raise ValueError(msg)
     return cast("pa.RecordBatchReader", table.to_reader())
+
+
+def _reader_from_reader_like(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    if not isinstance(obj, RecordBatchReaderLike):
+        return None
+    return _ensure_reader_schema(cast("pa.RecordBatchReader", obj), schema=schema)
+
+
+def _reader_from_scanner(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    if not isinstance(obj, ds.Scanner):
+        return None
+    if schema is not None:
+        msg = "Schema negotiation is not supported"
+        raise ValueError(msg)
+    scanner = cast("ds.Scanner", obj)
+    return scanner.to_reader()
+
+
+def _reader_from_table_like(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    if not isinstance(obj, TableLike):
+        return None
+    return _reader_from_table(obj, schema=schema)
+
+
+def _reader_from_arrow_stream(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    if not hasattr(obj, "__arrow_c_stream__"):
+        return None
+    return _ensure_reader_schema(
+        pa.RecordBatchReader.from_stream(obj, schema=schema),
+        schema=schema,
+    )
+
+
+def _reader_from_batches_provider(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    to_batches = getattr(obj, "to_pyarrow_batches", None)
+    if not callable(to_batches):
+        return None
+    if schema is not None:
+        msg = "Schema negotiation is not supported"
+        raise ValueError(msg)
+    return cast("pa.RecordBatchReader", to_batches())
+
+
+def _reader_from_reader_provider(
+    obj: object,
+    *,
+    schema: pa.Schema | None,
+) -> pa.RecordBatchReader | None:
+    to_reader_method = getattr(obj, "to_reader", None)
+    if not callable(to_reader_method):
+        return None
+    if schema is not None:
+        msg = "Schema negotiation is not supported"
+        raise ValueError(msg)
+    try:
+        return cast("pa.RecordBatchReader", to_reader_method())
+    except TypeError:
+        return None
 
 
 def _reader_from_object(
@@ -37,38 +115,19 @@ def _reader_from_object(
     *,
     schema: pa.Schema | None,
 ) -> pa.RecordBatchReader | None:
-    reader: pa.RecordBatchReader | None = None
-    if isinstance(obj, RecordBatchReaderLike):
-        reader = _ensure_reader_schema(cast("pa.RecordBatchReader", obj), schema=schema)
-    elif isinstance(obj, ds.Scanner):
-        if schema is not None:
-            msg = "Schema negotiation is not supported for dataset scanners."
-            raise ValueError(msg)
-        scanner = cast("ds.Scanner", obj)
-        reader = scanner.to_reader()
-    elif hasattr(obj, "__arrow_c_stream__"):
-        reader = _ensure_reader_schema(
-            pa.RecordBatchReader.from_stream(obj, schema=schema),
-            schema=schema,
-        )
-    else:
-        to_batches = getattr(obj, "to_pyarrow_batches", None)
-        if callable(to_batches):
-            if schema is not None:
-                msg = "Schema negotiation is not supported for to_pyarrow_batches sources."
-                raise ValueError(msg)
-            reader = cast("pa.RecordBatchReader", to_batches())
-        else:
-            to_reader_method = getattr(obj, "to_reader", None)
-            if callable(to_reader_method):
-                if schema is not None:
-                    msg = "Schema negotiation is not supported for to_reader sources."
-                    raise ValueError(msg)
-                try:
-                    reader = cast("pa.RecordBatchReader", to_reader_method())
-                except TypeError:
-                    reader = None
-    return reader
+    resolvers = (
+        _reader_from_reader_like,
+        _reader_from_scanner,
+        _reader_from_table_like,
+        _reader_from_arrow_stream,
+        _reader_from_batches_provider,
+        _reader_from_reader_provider,
+    )
+    for resolver in resolvers:
+        reader = resolver(obj, schema=schema)
+        if reader is not None:
+            return reader
+    return None
 
 
 def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatchReader:

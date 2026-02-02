@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from cyclopts import Parameter
+import msgspec
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
@@ -48,12 +49,11 @@ def q(
         cq q "entity=function name=detect expand=callers(depth=2) in=tools/cq/"
         cq q "entity=class in=src/relspec/ fields=def,hazards"
     """
-    from dataclasses import replace
-
     from tools.cq.cli_app.context import CliResult, FilterConfig
+    from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -80,7 +80,7 @@ def q(
         return CliResult(result=result, context=ctx, filters=filters)
 
     if explain_files and not parsed_query.explain:
-        parsed_query = replace(parsed_query, explain=True)
+        parsed_query = msgspec.structs.replace(parsed_query, explain=True)
 
     # Compile and execute
     plan = compile_query(parsed_query)
@@ -90,9 +90,10 @@ def q(
 
     if use_cache:
         rule_version = ctx.toolchain.sgpy_version or "unknown"
-        index_cache = IndexCache(ctx.root, rule_version)
+        profile = default_cq_diskcache_profile()
+        index_cache = IndexCache(ctx.root, rule_version, profile=profile)
         index_cache.initialize()
-        query_cache = QueryCache(ctx.root / ".cq" / "cache")
+        query_cache = QueryCache(ctx.root, profile=profile)
 
     if index_cache is None or query_cache is None:
         result = execute_plan(

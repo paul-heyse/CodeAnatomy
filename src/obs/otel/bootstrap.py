@@ -611,6 +611,9 @@ def configure_otel(
 
 def reset_providers_for_tests() -> None:
     """Reset global providers for test isolation."""
+    providers = _STATE["providers"]
+    if providers is not None:
+        providers.shutdown()
     _STATE["providers"] = None
     from opentelemetry._logs import _internal as logs_internal
     from opentelemetry.metrics import _internal as metrics_internal
@@ -619,6 +622,10 @@ def reset_providers_for_tests() -> None:
         trace._TRACER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
     with contextlib.suppress(AttributeError):
         metrics_internal._METER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
+    with contextlib.suppress(AttributeError):
+        metrics_internal._PROXY_METER_PROVIDER._real_meter_provider = None  # noqa: SLF001
+    with contextlib.suppress(AttributeError):
+        metrics_internal._PROXY_METER_PROVIDER._meters.clear()  # noqa: SLF001
     with contextlib.suppress(AttributeError):
         logs_internal._LOGGER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
     trace._TRACER_PROVIDER = None  # noqa: SLF001

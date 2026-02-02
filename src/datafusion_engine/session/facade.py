@@ -30,6 +30,7 @@ from datafusion_engine.plan.result_types import (
     ExecutionResult,
     ExecutionResultKind,
 )
+from datafusion_engine.session.runtime import session_runtime_for_context
 from obs.otel.metrics import record_datafusion_duration, record_error, record_write_duration
 from obs.otel.scopes import SCOPE_DATAFUSION
 from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
@@ -221,9 +222,9 @@ class DataFusionExecutionFacade:
         if self.runtime_profile is None:
             return None
         session_runtime = self.runtime_profile.session_runtime()
-        if session_runtime.ctx is not self.ctx:
-            return None
-        return session_runtime
+        if session_runtime.ctx is self.ctx:
+            return session_runtime
+        return session_runtime_for_context(self.runtime_profile, self.ctx)
 
     def compile_to_bundle(
         self,

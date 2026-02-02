@@ -16,6 +16,7 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from extract.coordination.line_offsets import LineOffsets
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.git.context import discover_repo_root_from_paths
 from extract.helpers import (
@@ -25,6 +26,7 @@ from extract.helpers import (
     FileContext,
     SpanSpec,
     attrs_map,
+    bytes_from_file_ctx,
     extract_plan_from_row_batches,
     extract_plan_from_rows,
     materialize_extract_plan,
@@ -264,18 +266,34 @@ def _node_scalar_attrs(node: ast.AST) -> dict[str, str]:
     return attrs
 
 
-def _span_spec_from_node(node: ast.AST) -> SpanSpec:
+def _span_spec_from_node(
+    node: ast.AST,
+    *,
+    line_offsets: LineOffsets | None = None,
+) -> SpanSpec:
     lineno = _maybe_int(getattr(node, "lineno", None))
     col_offset = _maybe_int(getattr(node, "col_offset", None))
     end_lineno = _maybe_int(getattr(node, "end_lineno", None))
     end_col_offset = _maybe_int(getattr(node, "end_col_offset", None))
+    start_line0 = lineno - AST_LINE_BASE if lineno is not None else None
+    end_line0 = end_lineno - AST_LINE_BASE if end_lineno is not None else None
+    byte_start = None
+    byte_len = None
+    if line_offsets is not None:
+        start_offset = line_offsets.byte_offset(start_line0, col_offset)
+        end_offset = line_offsets.byte_offset(end_line0, end_col_offset)
+        if start_offset is not None and end_offset is not None:
+            byte_start = start_offset
+            byte_len = max(0, end_offset - start_offset)
     return SpanSpec(
-        start_line0=lineno - AST_LINE_BASE if lineno is not None else None,
+        start_line0=start_line0,
         start_col=col_offset,
-        end_line0=end_lineno - AST_LINE_BASE if end_lineno is not None else None,
+        end_line0=end_line0,
         end_col=end_col_offset,
         end_exclusive=AST_END_EXCLUSIVE,
         col_unit=AST_COL_UNIT,
+        byte_start=byte_start,
+        byte_len=byte_len,
     )
 
 
@@ -297,6 +315,7 @@ def _docstring_row(
     *,
     ast_id: int,
     source: str,
+    line_offsets: LineOffsets | None,
 ) -> dict[str, object] | None:
     literal = _docstring_literal(node)
     if literal is None:
@@ -310,7 +329,7 @@ def _docstring_row(
         "owner_kind": type(node).__name__,
         "owner_name": _node_name(node),
         "docstring": docstring,
-        "span": span_dict(_span_spec_from_node(literal)),
+        "span": span_dict(_span_spec_from_node(literal, line_offsets=line_offsets)),
         "source": segment,
         "attrs": attrs_map({}),
     }
@@ -345,6 +364,7 @@ def _def_row(
     ast_id: int,
     parent_ast_id: int | None,
     source: str,
+    line_offsets: LineOffsets | None,
 ) -> dict[str, object] | None:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         type_params = getattr(node, "type_params", None)
@@ -392,7 +412,7 @@ def _def_row(
         "parent_ast_id": parent_ast_id,
         "kind": type(node).__name__,
         "name": _node_name(node),
-        "span": span_dict(_span_spec_from_node(node)),
+        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
         "attrs": attrs_map(attrs),
     }
 
@@ -402,6 +422,7 @@ def _import_rows(
     *,
     ast_id: int,
     parent_ast_id: int | None,
+    line_offsets: LineOffsets | None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     if isinstance(node, ast.Import):
@@ -416,7 +437,7 @@ def _import_rows(
         names = node.names
     else:
         return rows
-    span = span_dict(_span_spec_from_node(node))
+    span = span_dict(_span_spec_from_node(node, line_offsets=line_offsets))
     for idx, alias in enumerate(names):
         rows.append(
             {
@@ -440,6 +461,7 @@ def _call_row(
     *,
     ast_id: int,
     parent_ast_id: int | None,
+    line_offsets: LineOffsets | None,
 ) -> dict[str, object] | None:
     if not isinstance(node, ast.Call):
         return None
@@ -457,7 +479,7 @@ def _call_row(
         "parent_ast_id": parent_ast_id,
         "func_kind": type(func).__name__,
         "func_name": _node_name(func),
-        "span": span_dict(_span_spec_from_node(node)),
+        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
         "attrs": attrs_map(attrs),
     }
 
@@ -523,6 +545,13 @@ def _file_size_bytes(file_ctx: FileContext, text: str) -> int:
     if file_ctx.text is not None:
         return _text_size_bytes(file_ctx.text, file_ctx.encoding)
     return _text_size_bytes(text, file_ctx.encoding)
+
+
+def _line_offsets(file_ctx: FileContext) -> LineOffsets | None:
+    data = bytes_from_file_ctx(file_ctx)
+    if data is None:
+        return None
+    return LineOffsets.from_bytes(data)
 
 
 def _limit_errors(
@@ -735,6 +764,7 @@ def _node_row(
     parent_ast_id: int | None,
     field_name: str | None,
     field_pos: int | None,
+    line_offsets: LineOffsets | None,
 ) -> dict[str, object]:
     node_attr_values: dict[str, object] = {
         "field_name": field_name,
@@ -747,7 +777,7 @@ def _node_row(
         "kind": type(node).__name__,
         "name": _node_name(node),
         "value": _node_value_repr(node),
-        "span": span_dict(_span_spec_from_node(node)),
+        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
         "attrs": attrs_map(node_attr_values),
     }
 
@@ -777,10 +807,11 @@ def _append_docstring(
     *,
     ast_id: int,
     source: str,
+    line_offsets: LineOffsets | None,
 ) -> None:
     if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
         return
-    row = _docstring_row(node, ast_id=ast_id, source=source)
+    row = _docstring_row(node, ast_id=ast_id, source=source, line_offsets=line_offsets)
     if row is not None:
         rows.docstrings.append(row)
 
@@ -792,8 +823,15 @@ def _append_def(
     ast_id: int,
     parent_ast_id: int | None,
     source: str,
+    line_offsets: LineOffsets | None,
 ) -> None:
-    row = _def_row(node, ast_id=ast_id, parent_ast_id=parent_ast_id, source=source)
+    row = _def_row(
+        node,
+        ast_id=ast_id,
+        parent_ast_id=parent_ast_id,
+        source=source,
+        line_offsets=line_offsets,
+    )
     if row is not None:
         rows.defs.append(row)
 
@@ -804,8 +842,14 @@ def _append_call(
     *,
     ast_id: int,
     parent_ast_id: int | None,
+    line_offsets: LineOffsets | None,
 ) -> None:
-    row = _call_row(node, ast_id=ast_id, parent_ast_id=parent_ast_id)
+    row = _call_row(
+        node,
+        ast_id=ast_id,
+        parent_ast_id=parent_ast_id,
+        line_offsets=line_offsets,
+    )
     if row is not None:
         rows.calls.append(row)
 
@@ -815,6 +859,7 @@ def _append_type_ignore(
     node: ast.AST,
     *,
     ast_id: int,
+    line_offsets: LineOffsets | None,
 ) -> None:
     if not isinstance(node, ast.TypeIgnore):
         return
@@ -823,7 +868,7 @@ def _append_type_ignore(
         {
             "ast_id": ast_id,
             "tag": tag if isinstance(tag, str) else None,
-            "span": span_dict(_span_spec_from_node(node)),
+            "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
             "attrs": attrs_map({}),
         }
     )
@@ -834,6 +879,7 @@ def _walk_ast(
     *,
     source: str,
     max_nodes: int | None,
+    line_offsets: LineOffsets | None,
 ) -> _AstWalkResult:
     rows = _AstWalkAccumulator()
     stack: list[tuple[ast.AST, int | None, str | None, int | None]] = [(root, None, None, None)]
@@ -854,6 +900,7 @@ def _walk_ast(
                 parent_ast_id=parent_idx,
                 field_name=field_name,
                 field_pos=field_pos,
+                line_offsets=line_offsets,
             )
         )
         edge = _edge_row(
@@ -864,11 +911,37 @@ def _walk_ast(
         )
         if edge is not None:
             rows.edges.append(edge)
-        _append_docstring(rows, node, ast_id=ast_id, source=source)
-        rows.imports.extend(_import_rows(node, ast_id=ast_id, parent_ast_id=parent_idx))
-        _append_def(rows, node, ast_id=ast_id, parent_ast_id=parent_idx, source=source)
-        _append_call(rows, node, ast_id=ast_id, parent_ast_id=parent_idx)
-        _append_type_ignore(rows, node, ast_id=ast_id)
+        _append_docstring(
+            rows,
+            node,
+            ast_id=ast_id,
+            source=source,
+            line_offsets=line_offsets,
+        )
+        rows.imports.extend(
+            _import_rows(
+                node,
+                ast_id=ast_id,
+                parent_ast_id=parent_idx,
+                line_offsets=line_offsets,
+            )
+        )
+        _append_def(
+            rows,
+            node,
+            ast_id=ast_id,
+            parent_ast_id=parent_idx,
+            source=source,
+            line_offsets=line_offsets,
+        )
+        _append_call(
+            rows,
+            node,
+            ast_id=ast_id,
+            parent_ast_id=parent_idx,
+            line_offsets=line_offsets,
+        )
+        _append_type_ignore(rows, node, ast_id=ast_id, line_offsets=line_offsets)
 
         for child, field, pos in reversed(_iter_child_items(node)):
             stack.append((child, ast_id, field, pos))
@@ -882,6 +955,7 @@ def _parse_and_walk(
     filename: str,
     options: AstExtractOptions,
     max_nodes: int | None,
+    line_offsets: LineOffsets | None,
 ) -> tuple[_AstWalkResult | None, list[dict[str, object]]]:
     error_rows: list[dict[str, object]] = []
     root, err = _parse_ast_text(
@@ -894,7 +968,12 @@ def _parse_and_walk(
     if root is None:
         return None, error_rows
     try:
-        walk = _walk_ast(root, source=text, max_nodes=max_nodes)
+        walk = _walk_ast(
+            root,
+            source=text,
+            max_nodes=max_nodes,
+            line_offsets=line_offsets,
+        )
     except AstLimitError as exc:
         error_rows.append(_exception_error_row(exc))
         return None, error_rows
@@ -922,6 +1001,7 @@ def _extract_ast_for_context(
         text = text_from_file_ctx(file_ctx)
         if text is None:
             return None
+        line_offsets = _line_offsets(file_ctx)
         max_nodes, error_rows = _limit_errors(file_ctx, text=text, options=options)
         walk: _AstWalkResult | None = None
         if not error_rows:
@@ -930,6 +1010,7 @@ def _extract_ast_for_context(
                 filename=str(file_ctx.path),
                 options=options,
                 max_nodes=max_nodes,
+                line_offsets=line_offsets,
             )
             error_rows.extend(parse_errors)
             if (

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow.field_builders import int64_field, string_field
+from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.cache.commit_metadata import (
     CacheCommitMetadataRequest,
     cache_commit_metadata,
@@ -266,10 +267,7 @@ def _bootstrap_cache_ledger_table(
     operation: str,
 ) -> None:
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    empty = pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in schema],
-        schema=schema,
-    )
+    empty = empty_table_for_schema(schema)
     df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
     commit_metadata = cache_commit_metadata(
         CacheCommitMetadataRequest(

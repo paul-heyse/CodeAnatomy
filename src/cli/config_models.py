@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import msgspec
 
 from serde_msgspec import StructBaseStrict
-
-if TYPE_CHECKING:
-    from core_types import JsonValue
 
 
 class PlanConfig(StructBaseStrict, frozen=True):
@@ -38,7 +33,7 @@ class GraphAdapterConfig(StructBaseStrict, frozen=True):
     """Graph adapter configuration values."""
 
     kind: str | None = None
-    options: dict[str, JsonValue] | None = None
+    options: dict[str, object] | None = None
 
 
 class IncrementalConfig(StructBaseStrict, frozen=True):
@@ -98,9 +93,9 @@ class RootConfig(StructBaseStrict, frozen=True):
     cache_opt_in: bool | None = None
 
     graph_adapter_kind: str | None = None
-    graph_adapter_options: dict[str, JsonValue] | None = None
+    graph_adapter_options: dict[str, object] | None = None
     hamilton_graph_adapter_kind: str | None = None
-    hamilton_graph_adapter_options: dict[str, JsonValue] | None = None
+    hamilton_graph_adapter_options: dict[str, object] | None = None
 
     incremental_enabled: bool | None = None
     incremental_state_dir: str | None = None
@@ -138,7 +133,7 @@ class RootConfig(StructBaseStrict, frozen=True):
     hamilton_capture_data_statistics: bool | None = None
     hamilton_max_list_length_capture: int | None = None
     hamilton_max_dict_length_capture: int | None = None
-    hamilton_tags: dict[str, JsonValue] | None = None
+    hamilton_tags: dict[str, object] | None = None
     hamilton_project_id: int | None = None
     hamilton_username: str | None = None
     hamilton_dag_name: str | None = None

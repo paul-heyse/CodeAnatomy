@@ -6,12 +6,23 @@ Provides ast-grep rule generation for hazard detection.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Callable, Literal
+
+try:  # pragma: no cover - optional dependency
+    from diskcache import memoize_stampede
+except ImportError:  # pragma: no cover - optional dependency
+    def memoize_stampede(cache, expire=None):  # type: ignore[no-redef]  # noqa: ARG001
+        def decorator(func: Callable[..., str]) -> Callable[..., str]:
+            return func
+
+        return decorator
 
 from tools.cq.core.schema import Anchor
+from tools.cq.cache.diskcache_profile import cache_for_kind, default_cq_diskcache_profile
 from tools.cq.query.sg_parser import SgRecord
 
 # Hazard types
@@ -477,6 +488,23 @@ def detect_hazards(
         hazards.extend(detected)
 
     return hazards
+
+
+_HAZARD_PROFILE = default_cq_diskcache_profile()
+_HAZARD_CACHE = cache_for_kind(_HAZARD_PROFILE, "cq_coordination")
+
+
+@memoize_stampede(_HAZARD_CACHE, expire=300)
+def cached_hazard_rules_yaml() -> str:
+    """Return cached hazard rules YAML for query cache hashing."""
+    detector = HazardDetector()
+    return detector.build_inline_rules_yaml()
+
+
+def hazard_rules_hash() -> str:
+    """Return stable hash for hazard rule content."""
+    yaml_text = cached_hazard_rules_yaml()
+    return hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
 
 
 def _analyze_record(record: SgRecord) -> list[Hazard]:

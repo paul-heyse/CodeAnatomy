@@ -32,10 +32,11 @@ def report(
 ) -> CliResult:
     """Run target-scoped report bundles."""
     from tools.cq.cli_app.context import CliResult, FilterConfig
+    from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
-    from tools.cq.index.query_cache import QueryCache
-    from tools.cq.index.sqlite_cache import IndexCache
+    from tools.cq.index.diskcache_query_cache import QueryCache
+    from tools.cq.index.diskcache_index_cache import IndexCache
 
     if ctx is None:
         msg = "Context not injected"
@@ -80,9 +81,10 @@ def report(
 
     if use_cache:
         rule_version = ctx.toolchain.sgpy_version or "unknown"
-        index_cache = IndexCache(ctx.root, rule_version)
+        profile = default_cq_diskcache_profile()
+        index_cache = IndexCache(ctx.root, rule_version, profile=profile)
         index_cache.initialize()
-        query_cache = QueryCache(ctx.root / ".cq" / "cache")
+        query_cache = QueryCache(ctx.root, profile=profile)
 
     bundle_ctx = BundleContext(
         tc=ctx.toolchain,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from tools.cq.search.adapter import (
@@ -14,12 +13,9 @@ from tools.cq.search.adapter import (
 )
 from tools.cq.search.profiles import SearchLimits
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
 
 @pytest.fixture
-def sample_repo(tmp_path: Path) -> Iterator[Path]:
+def sample_repo(tmp_path: Path) -> Path:
     """Create a temporary directory with sample Python files.
 
     Returns

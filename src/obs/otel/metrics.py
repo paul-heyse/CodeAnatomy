@@ -203,6 +203,34 @@ def metric_views() -> list[View]:
                 AttributeName.CACHE_RESULT.value,
             },
         ),
+        View(
+            instrument_name=_DATASET_ROWS,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.DATASET.value,
+            },
+        ),
+        View(
+            instrument_name=_DATASET_COLUMNS,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.DATASET.value,
+            },
+        ),
+        View(
+            instrument_name=_SCAN_ROW_GROUPS,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.DATASET.value,
+            },
+        ),
+        View(
+            instrument_name=_SCAN_FRAGMENTS,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.DATASET.value,
+            },
+        ),
     ]
 
 

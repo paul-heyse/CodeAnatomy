@@ -74,7 +74,8 @@ class TestSyncTimeout:
         """Test timeout wrapper preserves function exceptions."""
 
         def failing_function() -> None:
-            raise ValueError("test error")
+            msg = "test error"
+            raise ValueError(msg)
 
         with pytest.raises(ValueError, match="test error"):
             search_sync_with_timeout(failing_function, timeout=1.0)
@@ -110,7 +111,9 @@ class TestAsyncTimeout:
         """Test timeout wrapper preserves coroutine exceptions."""
 
         async def failing_coroutine() -> None:
-            raise ValueError("async error")
+            await asyncio.sleep(0)
+            msg = "async error"
+            raise ValueError(msg)
 
         with pytest.raises(ValueError, match="async error"):
             await search_async_with_timeout(failing_coroutine(), timeout=1.0)
@@ -124,10 +127,11 @@ class TestAsyncTimeout:
             nonlocal cancelled
             try:
                 await asyncio.sleep(10.0)
-                return "should not reach"
             except asyncio.CancelledError:
                 cancelled = True
                 raise
+            else:
+                return "should not reach"
 
         with pytest.raises(TimeoutError):
             await search_async_with_timeout(cancellable_coroutine(), timeout=0.1)
@@ -159,6 +163,7 @@ class TestTimeoutEdgeCases:
         """Test zero timeout behavior for async."""
 
         async def instant_coroutine() -> str:
+            await asyncio.sleep(0)
             return "result"
 
         # Zero timeout is valid
@@ -182,6 +187,7 @@ class TestTimeoutEdgeCases:
         """Test negative timeout raises ValueError."""
 
         async def any_coroutine() -> str:
+            await asyncio.sleep(0)
             return "result"
 
         with pytest.raises(ValueError, match="Timeout must be positive"):
@@ -197,14 +203,14 @@ class TestTimeoutEdgeCases:
         result = search_sync_with_timeout(quick_function, timeout=timeout)
         assert result == timeout
 
-    @pytest.mark.parametrize("timeout", [0.1, 0.5, 1.0, 5.0])
+    @pytest.mark.parametrize("timeout_seconds", [0.1, 0.5, 1.0, 5.0])
     @pytest.mark.asyncio
-    async def test_various_timeouts_async(self, timeout: float) -> None:
+    async def test_various_timeouts_async(self, timeout_seconds: float) -> None:
         """Test timeout wrapper with various timeout values."""
 
         async def quick_coroutine() -> float:
             await asyncio.sleep(0.01)
-            return timeout
+            return timeout_seconds
 
-        result = await search_async_with_timeout(quick_coroutine(), timeout=timeout)
-        assert result == timeout
+        result = await search_async_with_timeout(quick_coroutine(), timeout=timeout_seconds)
+        assert result == timeout_seconds

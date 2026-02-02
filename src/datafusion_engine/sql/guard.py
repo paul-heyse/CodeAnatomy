@@ -238,8 +238,8 @@ def _preflight_sql(
         msg = "SQL execution failed under safe options: DDL statements are disabled."
         raise ValueError(msg)
     if not policy.allow_dml and _sql_starts_with(head, _SQL_DML_PREFIXES):
-        msg = "SQL execution failed under safe options: DML statements are disabled."
-        raise ValueError(msg)
+        msg = "DML is blocked by SQL policy."
+        raise PermissionError(msg)
     if not policy.allow_statements and _sql_starts_with(head, _SQL_STATEMENT_PREFIXES):
         msg = "SQL execution failed under safe options: statements are disabled."
         raise ValueError(msg)

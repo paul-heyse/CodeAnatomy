@@ -27,6 +27,7 @@ from serde_msgspec import (
     convert,
     validation_error_payload,
 )
+from utils.file_io import decode_bytes
 
 if TYPE_CHECKING:
     from core_types import DeterminismTier
@@ -292,11 +293,8 @@ def text_from_file_ctx(file_ctx: FileContext) -> str | None:
     data = bytes_from_file_ctx(file_ctx)
     if data is None:
         return None
-    encoding = file_ctx.encoding or "utf-8"
-    try:
-        return data.decode(encoding, errors="replace")
-    except UnicodeError:
-        return None
+    _encoding, text = decode_bytes(data)
+    return text
 
 
 def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:

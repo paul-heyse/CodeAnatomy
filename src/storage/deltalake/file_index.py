@@ -8,6 +8,8 @@ from typing import Any
 
 import pyarrow as pa
 
+from datafusion_engine.arrow.interop import empty_table_for_schema
+
 
 @dataclass(frozen=True)
 class FileIndexEntry:
@@ -368,12 +370,7 @@ def _empty_file_index_table() -> pa.Table:
             pa.field("num_records", pa.int64()),
         ]
     )
-    return pa.table(
-        {
-            name: pa.array([], type=field.type)
-            for name, field in zip(schema.names, schema, strict=True)
-        }
-    )
+    return empty_table_for_schema(schema)
 
 
 __all__ = [

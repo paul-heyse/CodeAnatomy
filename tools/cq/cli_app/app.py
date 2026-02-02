@@ -79,11 +79,41 @@ def launcher(
     output_format: Annotated[OutputFormat, Parameter(name="--format", group=global_group, help="Output format")] = OutputFormat.md,
     artifact_dir: Annotated[Path | None, Parameter(name="--artifact-dir", group=global_group, help="Artifact directory")] = None,
     no_save_artifact: Annotated[bool, Parameter(name="--no-save-artifact", group=global_group, help="Don't save artifact")] = False,
+    cache_dir: Annotated[
+        Path | None,
+        Parameter(name="--cache-dir", group=global_group, help="DiskCache root directory"),
+    ] = None,
+    cache_query_ttl: Annotated[
+        float | None,
+        Parameter(name="--cache-query-ttl", group=global_group, help="Query cache TTL seconds"),
+    ] = None,
+    cache_query_size: Annotated[
+        int | None,
+        Parameter(name="--cache-query-size", group=global_group, help="Query cache size limit (bytes)"),
+    ] = None,
+    cache_index_size: Annotated[
+        int | None,
+        Parameter(name="--cache-index-size", group=global_group, help="Index cache size limit (bytes)"),
+    ] = None,
+    cache_query_shards: Annotated[
+        int | None,
+        Parameter(name="--cache-query-shards", group=global_group, help="Query cache shard count"),
+    ] = None,
 ) -> int:
     """Global option handler and command dispatcher."""
     # Rebuild config if --config or --no-config specified
     if config or no_config:
         app.config = build_config_chain(config_file=config, no_config=no_config)
+
+    from tools.cq.cli_app.params import DiskCacheOptions
+
+    DiskCacheOptions(
+        cache_dir=cache_dir,
+        cache_query_ttl=cache_query_ttl,
+        cache_query_size=cache_query_size,
+        cache_index_size=cache_index_size,
+        cache_query_shards=cache_query_shards,
+    ).apply_env()
 
     # Build context
     ctx = CliContext.build(

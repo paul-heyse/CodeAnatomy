@@ -84,6 +84,7 @@ from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema.contracts import (
+    EvolutionPolicy,
     schema_contract_from_table_schema_contract,
     table_constraint_definitions,
     table_constraints_from_location,
@@ -93,7 +94,12 @@ from datafusion_engine.schema.introspection import (
     table_constraint_rows,
 )
 from datafusion_engine.schema.validation import _datafusion_type_name
-from datafusion_engine.session.runtime import schema_introspector_for_profile
+from datafusion_engine.session.runtime import (
+    DATAFUSION_MAJOR_VERSION,
+    DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
+    record_runtime_setting_override,
+    schema_introspector_for_profile,
+)
 from datafusion_engine.sql import options as _sql_options
 from datafusion_engine.tables.metadata import (
     TableProviderCapsule,
@@ -197,6 +203,7 @@ logger = logging.getLogger(__name__)
 def _sql_type_name(dtype: pa.DataType) -> str:
     dtype_name = _datafusion_type_name(dtype)
     return _DDL_TYPE_ALIASES.get(dtype_name, dtype_name)
+
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -896,6 +903,10 @@ def _apply_scan_settings(
 ) -> None:
     if scan is None:
         return
+    skip_runtime_settings = (
+        DATAFUSION_MAJOR_VERSION is not None
+        and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+    )
     settings: list[tuple[str, object | None, bool]] = [
         ("datafusion.execution.collect_statistics", scan.collect_statistics, True),
         ("datafusion.execution.meta_fetch_concurrency", scan.meta_fetch_concurrency, False),
@@ -916,6 +927,9 @@ def _apply_scan_settings(
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
+        if skip_runtime_settings and key.startswith("datafusion.runtime."):
+            record_runtime_setting_override(ctx, key=key, value=text)
+            continue
         _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
 
 
@@ -1966,9 +1980,16 @@ def _apply_projection_exprs(
         return ctx.table(table_name)
     _ = sql_options
     df = ctx.table(table_name)
-    schema_names = set(df.schema().names)
+    schema_fields = list(df.schema().names)
+    schema_names = set(schema_fields)
     resolved_exprs: list[Expr | str] = []
+    expanded_star = False
     for expr_text in projection_exprs:
+        if expr_text.strip() == "*":
+            if not expanded_star:
+                resolved_exprs.extend(col(name) for name in schema_fields)
+                expanded_star = True
+            continue
         if expr_text in schema_names:
             resolved_exprs.append(col(expr_text))
             continue
@@ -2215,9 +2236,13 @@ def _validate_schema_contracts(context: DataFusionRegistrationContext) -> None:
     )
     cache.invalidate()
     snapshot = cache.snapshot
+    evolution_policy = EvolutionPolicy.STRICT
+    if scan is not None and scan.projection_exprs and scan.table_schema_contract is None:
+        evolution_policy = EvolutionPolicy.ADDITIVE
     schema_contract = schema_contract_from_table_schema_contract(
         table_name=context.name,
         contract=contract,
+        evolution_policy=evolution_policy,
     )
     violations = schema_contract.validate_against_introspection(snapshot)
     if not violations:

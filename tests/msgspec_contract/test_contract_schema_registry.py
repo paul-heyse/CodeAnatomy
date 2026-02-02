@@ -59,3 +59,17 @@ def test_schema_registry_metadata_present() -> None:
         assert "description" in schema, f"Schema {name} missing description"
         if name in schema_names:
             assert "x-codeanatomy-domain" in schema, f"Schema {name} missing domain tag"
+
+
+def test_schema_contract_index_matches_registry() -> None:
+    """Ensure contract index entries match the registered schema types."""
+    payload = schema_contract_payload()
+    index = payload.get("contract_index")
+    assert isinstance(index, list)
+    assert len(index) == len(SCHEMA_TYPES)
+    expected_names = sorted({schema_type.__name__ for schema_type in SCHEMA_TYPES})
+    index_names = [entry.get("name") for entry in index if isinstance(entry, dict)]
+    assert index_names == expected_names
+    for entry in index:
+        assert isinstance(entry, dict)
+        assert "type_info" in entry

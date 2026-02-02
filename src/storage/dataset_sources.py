@@ -25,7 +25,7 @@ from datafusion_engine.arrow.interop import (
 class OneShotDataset:
     """Wrap a dataset to enforce single-scan semantics."""
 
-    dataset: ds.Dataset
+    dataset: ds.Dataset | None
     reader: pa.RecordBatchReader | None = None
     _scanned: bool = field(default=False, init=False, repr=False)
 
@@ -37,9 +37,17 @@ class OneShotDataset:
         -------
         SchemaLike
             Arrow schema for the dataset.
+
+        Raises
+        ------
+        ValueError
+            Raised when the dataset wrapper has no dataset or reader.
         """
         if self.reader is not None:
             return self.reader.schema
+        if self.dataset is None:
+            msg = "One-shot dataset has no dataset or reader."
+            raise ValueError(msg)
         return self.dataset.schema
 
     @classmethod
@@ -51,8 +59,7 @@ class OneShotDataset:
         OneShotDataset
             Wrapper that enforces single-scan semantics.
         """
-        dataset = ds.dataset(reader, schema=reader.schema)
-        return cls(dataset=dataset, reader=reader)
+        return cls(dataset=None, reader=reader)
 
     def consume(self) -> ds.Dataset:
         """Return the wrapped dataset, enforcing single-use semantics.
@@ -71,7 +78,12 @@ class OneShotDataset:
             msg = "One-shot dataset has already been scanned."
             raise ValueError(msg)
         self._scanned = True
-        return self.dataset
+        if self.dataset is not None:
+            return self.dataset
+        if self.reader is None:
+            msg = "One-shot dataset has no dataset or reader."
+            raise ValueError(msg)
+        return ds.dataset(self.reader, schema=self.reader.schema)
 
     def scanner(self, *args: object, **kwargs: object) -> ds.Scanner:
         """Return a scanner while enforcing single-use semantics.
@@ -91,7 +103,14 @@ class OneShotDataset:
             raise ValueError(msg)
         self._scanned = True
         if self.reader is None:
+            if self.dataset is None:
+                msg = "One-shot dataset has no dataset or reader."
+                raise ValueError(msg)
             return self.dataset.scanner(*args, **kwargs)
+        columns = kwargs.get("columns")
+        if isinstance(columns, tuple):
+            kwargs = dict(kwargs)
+            kwargs["columns"] = list(columns)
         return ds.Scanner.from_batches(self.reader, **kwargs)
 
     def __getattr__(self, name: str) -> object:
@@ -101,7 +120,14 @@ class OneShotDataset:
         -------
         object
             Attribute from the wrapped dataset.
+
+        Raises
+        ------
+        AttributeError
+            Raised when the dataset wrapper has no dataset to delegate to.
         """
+        if self.dataset is None:
+            raise AttributeError(name)
         return getattr(self.dataset, name)
 
 

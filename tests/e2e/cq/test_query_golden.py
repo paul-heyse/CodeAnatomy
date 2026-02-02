@@ -53,7 +53,7 @@ def test_toolchain_class_golden(
     update_golden : bool
         Whether to update golden files.
     """
-    query_text = "entity=class name=Toolchain in=tools/cq/"
+    query_text = "entity=class name=Toolchain in=tools/cq/core/toolchain.py"
     query = parse_query(query_text)
     plan = compile_query(query)
     result = execute_plan(plan, query, toolchain, repo_root)
@@ -79,7 +79,7 @@ def test_execute_plan_function_golden(
     update_golden : bool
         Whether to update golden files.
     """
-    query_text = "entity=function name=execute_plan in=tools/cq/query/"
+    query_text = "entity=function name=execute_plan in=tools/cq/query/executor.py"
     query = parse_query(query_text)
     plan = compile_query(query)
     result = execute_plan(plan, query, toolchain, repo_root)
@@ -105,7 +105,7 @@ def test_parse_imports_golden(
     update_golden : bool
         Whether to update golden files.
     """
-    query_text = "entity=import name=Path in=tools/cq/cli.py"
+    query_text = "entity=import name=Path in=tools/cq/index/files.py"
     query = parse_query(query_text)
     plan = compile_query(query)
     result = execute_plan(plan, query, toolchain, repo_root)

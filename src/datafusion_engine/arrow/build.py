@@ -538,8 +538,7 @@ def record_batch_reader_from_row_batches(
     resolved = _resolve_schema(schema)
     storage_schema = _storage_schema(resolved)
     batches = [
-        pa.RecordBatch.from_pylist(list(batch), schema=storage_schema)
-        for batch in row_batches
+        pa.RecordBatch.from_pylist(list(batch), schema=storage_schema) for batch in row_batches
     ]
     return pa.RecordBatchReader.from_batches(storage_schema, batches)
 

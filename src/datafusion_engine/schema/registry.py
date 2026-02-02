@@ -1675,6 +1675,43 @@ DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
     ),
 )
 
+
+def _relationship_schema(name: str, entity_id_col: str) -> pa.Schema:
+    return _schema_with_metadata(
+        name,
+        pa.schema(
+            [
+                pa.field(entity_id_col, pa.string()),
+                pa.field("symbol", pa.string()),
+                pa.field("symbol_roles", pa.int32()),
+                pa.field("path", pa.string()),
+                pa.field("edge_owner_file_id", pa.string()),
+                pa.field("bstart", pa.int64()),
+                pa.field("bend", pa.int64()),
+                pa.field("resolution_method", pa.string()),
+                pa.field("confidence", pa.float64()),
+                pa.field("score", pa.float64()),
+                pa.field("task_name", pa.string()),
+                pa.field("task_priority", pa.int32()),
+            ]
+        ),
+    )
+
+
+REL_NAME_SYMBOL_SCHEMA = _relationship_schema("rel_name_symbol_v1", "ref_id")
+REL_IMPORT_SYMBOL_SCHEMA = _relationship_schema("rel_import_symbol_v1", "import_alias_id")
+REL_DEF_SYMBOL_SCHEMA = _relationship_schema("rel_def_symbol_v1", "def_id")
+REL_CALLSITE_SYMBOL_SCHEMA = _relationship_schema("rel_callsite_symbol_v1", "call_id")
+
+RELATIONSHIP_SCHEMA_BY_NAME: ImmutableRegistry[str, pa.Schema] = ImmutableRegistry.from_dict(
+    {
+        "rel_name_symbol_v1": REL_NAME_SYMBOL_SCHEMA,
+        "rel_import_symbol_v1": REL_IMPORT_SYMBOL_SCHEMA,
+        "rel_def_symbol_v1": REL_DEF_SYMBOL_SCHEMA,
+        "rel_callsite_symbol_v1": REL_CALLSITE_SYMBOL_SCHEMA,
+    }
+)
+
 PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     "param_file_ids_v1",
     pa.schema(
@@ -2291,6 +2328,37 @@ def extract_base_schema_for(name: str) -> pa.Schema:
     schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(name)
     if schema is None:
         msg = f"Unknown extract base schema: {name!r}."
+        raise KeyError(msg)
+    return schema
+
+
+def relationship_schema_names() -> tuple[str, ...]:
+    """Return relationship schema names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted relationship schema names.
+    """
+    return tuple(sorted(RELATIONSHIP_SCHEMA_BY_NAME))
+
+
+def relationship_schema_for(name: str) -> pa.Schema:
+    """Return the schema for a relationship dataset.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Schema for the named relationship dataset.
+
+    Raises
+    ------
+    KeyError
+        Raised when the relationship schema name is not registered.
+    """
+    schema = RELATIONSHIP_SCHEMA_BY_NAME.get(name)
+    if schema is None:
+        msg = f"Unknown relationship schema: {name!r}."
         raise KeyError(msg)
     return schema
 
@@ -3865,6 +3933,11 @@ __all__ = [
     "HAMILTON_TASK_SUBMISSION_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
+    "RELATIONSHIP_SCHEMA_BY_NAME",
+    "REL_CALLSITE_SYMBOL_SCHEMA",
+    "REL_DEF_SYMBOL_SCHEMA",
+    "REL_IMPORT_SYMBOL_SCHEMA",
+    "REL_NAME_SYMBOL_SCHEMA",
     "SCIP_DIAGNOSTICS_SCHEMA",
     "SCIP_DOCUMENTS_SCHEMA",
     "SCIP_DOCUMENT_SYMBOLS_SCHEMA",
@@ -3913,6 +3986,8 @@ __all__ = [
     "nested_view_spec",
     "nested_view_specs",
     "registered_table_names",
+    "relationship_schema_for",
+    "relationship_schema_names",
     "schema_contract_for_table",
     "struct_for_path",
     "validate_ast_views",

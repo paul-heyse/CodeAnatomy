@@ -129,6 +129,29 @@ def _normalized_rows(table: pa.Table) -> list[dict[str, object]]:
     return [{str(key).lower(): value for key, value in row.items()} for row in table.to_pylist()]
 
 
+def _sortable_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _sortable_int(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _row_sort_key(row: Mapping[str, object], keys: Sequence[str]) -> tuple[str, ...]:
+    return tuple(_sortable_text(row.get(key)) for key in keys)
+
+
 def _constraint_rows_from_snapshot(
     snapshot: IntrospectionSnapshot,
     *,
@@ -917,7 +940,14 @@ class SchemaIntrospector:
         snapshot = self.snapshot
         if snapshot is None:
             return []
-        return [dict(row) for row in snapshot.tables.to_pylist()]
+        rows = [dict(row) for row in snapshot.tables.to_pylist()]
+        return sorted(
+            rows,
+            key=lambda row: _row_sort_key(
+                row,
+                ("table_catalog", "table_schema", "table_name", "table_type"),
+            ),
+        )
 
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
@@ -930,7 +960,11 @@ class SchemaIntrospector:
         snapshot = self.snapshot
         if snapshot is None:
             return []
-        return [dict(row) for row in snapshot.schemata.to_pylist()]
+        rows = [dict(row) for row in snapshot.schemata.to_pylist()]
+        return sorted(
+            rows,
+            key=lambda row: _row_sort_key(row, ("catalog_name", "schema_name")),
+        )
 
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
@@ -943,7 +977,17 @@ class SchemaIntrospector:
         snapshot = self.snapshot
         if snapshot is None:
             return []
-        return [dict(row) for row in snapshot.columns.to_pylist()]
+        rows = [dict(row) for row in snapshot.columns.to_pylist()]
+        return sorted(
+            rows,
+            key=lambda row: (
+                _sortable_text(row.get("table_catalog")),
+                _sortable_text(row.get("table_schema")),
+                _sortable_text(row.get("table_name")),
+                _sortable_int(row.get("ordinal_position")),
+                _sortable_text(row.get("column_name")),
+            ),
+        )
 
     def table_schema(self, table_name: str) -> pa.Schema:
         """Return Arrow schema from DataFusion catalog for a table.
@@ -974,7 +1018,14 @@ class SchemaIntrospector:
             Routine inventory rows including name and type.
         """
         table = routines_snapshot_table(self.ctx, sql_options=self.sql_options)
-        return [dict(row) for row in table.to_pylist()]
+        rows = [dict(row) for row in table.to_pylist()]
+        return sorted(
+            rows,
+            key=lambda row: _row_sort_key(
+                row,
+                ("routine_catalog", "routine_schema", "routine_name", "specific_name"),
+            ),
+        )
 
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
@@ -987,7 +1038,17 @@ class SchemaIntrospector:
         table = parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
         if table is None:
             return []
-        return [dict(row) for row in table.to_pylist()]
+        rows = [dict(row) for row in table.to_pylist()]
+        return sorted(
+            rows,
+            key=lambda row: (
+                _sortable_text(row.get("specific_catalog")),
+                _sortable_text(row.get("specific_schema")),
+                _sortable_text(row.get("specific_name")),
+                _sortable_int(row.get("ordinal_position")),
+                _sortable_text(row.get("parameter_name")),
+            ),
+        )
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False
@@ -1046,7 +1107,8 @@ class SchemaIntrospector:
         snapshot = self.snapshot
         if snapshot is None:
             return []
-        return [dict(row) for row in snapshot.settings.to_pylist()]
+        rows = [dict(row) for row in snapshot.settings.to_pylist()]
+        return sorted(rows, key=lambda row: _row_sort_key(row, ("name", "setting_name", "key")))
 
     def table_column_defaults(self, table_name: str) -> dict[str, object]:
         """Return column default metadata for a table when available.

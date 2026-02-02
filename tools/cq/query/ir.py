@@ -5,8 +5,9 @@ Defines the dataclasses that represent parsed queries before execution.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
+
+import msgspec
 
 # Entity types that can be queried
 EntityType = Literal["function", "class", "method", "module", "callsite", "import", "decorator"]
@@ -84,8 +85,7 @@ PYTHON_AST_FIELDS: frozenset[str] = frozenset({
 })
 
 
-@dataclass(frozen=True)
-class Expander:
+class Expander(msgspec.Struct, frozen=True):
     """Graph expansion operator.
 
     Attributes
@@ -97,11 +97,10 @@ class Expander:
     """
 
     kind: ExpanderKind
-    depth: int = 1
+    depth: Annotated[int, msgspec.Meta(ge=1)] = 1
 
 
-@dataclass(frozen=True)
-class Scope:
+class Scope(msgspec.Struct, frozen=True):
     """File scope constraints for queries.
 
     Attributes
@@ -119,8 +118,7 @@ class Scope:
     globs: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class MetaVarCapture:
+class MetaVarCapture(msgspec.Struct, frozen=True):
     """Captured metavariable from pattern match.
 
     Represents a value captured by a metavariable during ast-grep pattern matching.
@@ -152,8 +150,7 @@ class MetaVarCapture:
     nodes: list[str] | None = None
 
 
-@dataclass(frozen=True)
-class MetaVarFilter:
+class MetaVarFilter(msgspec.Struct, frozen=True):
     """Filter on captured metavariable values.
 
     Used to post-filter pattern matches based on captured metavariable content.
@@ -203,8 +200,7 @@ class MetaVarFilter:
         return not match if self.negate else match
 
 
-@dataclass(frozen=True)
-class NthChildSpec:
+class NthChildSpec(msgspec.Struct, frozen=True):
     """Positional matching specification for nthChild queries.
 
     Attributes
@@ -222,8 +218,7 @@ class NthChildSpec:
     of_rule: str | None = None
 
 
-@dataclass(frozen=True)
-class PatternSpec:
+class PatternSpec(msgspec.Struct, frozen=True):
     """Pattern specification for ast-grep based queries.
 
     Supports full ast-grep pattern objects for disambiguation and advanced matching.
@@ -313,8 +308,7 @@ class PatternSpec:
         return result
 
 
-@dataclass(frozen=True)
-class RelationalConstraint:
+class RelationalConstraint(msgspec.Struct, frozen=True):
     """Relational constraint for structural queries.
 
     Supports ast-grep relational rules: inside, has, precedes, follows.
@@ -382,8 +376,7 @@ class RelationalConstraint:
 CompositeOp = Literal["all", "any", "not"]
 
 
-@dataclass(frozen=True)
-class CompositeRule:
+class CompositeRule(msgspec.Struct, frozen=True):
     """Composite rule for combining multiple pattern rules.
 
     Supports ast-grep composite rules: all, any, not.
@@ -442,8 +435,7 @@ class CompositeRule:
         return {self.operator: rules}
 
 
-@dataclass(frozen=True)
-class ScopeFilter:
+class ScopeFilter(msgspec.Struct, frozen=True):
     """Scope-based filter using symtable analysis.
 
     Attributes
@@ -461,8 +453,7 @@ class ScopeFilter:
     has_cells: bool | None = None
 
 
-@dataclass(frozen=True)
-class DecoratorFilter:
+class DecoratorFilter(msgspec.Struct, frozen=True):
     """Filter for decorator-related queries.
 
     Attributes
@@ -480,8 +471,7 @@ class DecoratorFilter:
     decorator_count_max: int | None = None
 
 
-@dataclass(frozen=True)
-class JoinTarget:
+class JoinTarget(msgspec.Struct, frozen=True):
     """Target for join queries.
 
     Attributes
@@ -517,8 +507,7 @@ class JoinTarget:
         return cls(entity=entity_str, name=name)  # type: ignore[arg-type]
 
 
-@dataclass(frozen=True)
-class JoinConstraint:
+class JoinConstraint(msgspec.Struct, frozen=True):
     """Join constraint for cross-entity queries.
 
     Attributes
@@ -533,8 +522,7 @@ class JoinConstraint:
     target: JoinTarget
 
 
-@dataclass(frozen=True)
-class Query:
+class Query(msgspec.Struct, frozen=True):
     """Parsed query representation.
 
     Supports two modes:
@@ -578,7 +566,7 @@ class Query:
     entity: EntityType | None = None
     name: str | None = None
     expand: tuple[Expander, ...] = ()
-    scope: Scope = field(default_factory=Scope)
+    scope: Scope = msgspec.field(default_factory=Scope)
     fields: tuple[FieldType, ...] = ("def",)
     limit: int | None = None
     explain: bool = False

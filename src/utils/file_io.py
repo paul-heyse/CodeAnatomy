@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tokenize
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -88,7 +90,28 @@ def read_pyproject_toml(path: Path) -> Mapping[str, object]:
     return read_toml(path)
 
 
+def detect_encoding(data: bytes, *, default: str = "utf-8") -> str:
+    """Detect file encoding using tokenize rules."""
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    except (LookupError, SyntaxError):
+        return default
+    return encoding
+
+
+def decode_bytes(data: bytes, *, default: str = "utf-8") -> tuple[str, str | None]:
+    """Detect encoding and decode bytes best-effort."""
+    encoding = detect_encoding(data, default=default)
+    try:
+        text = data.decode(encoding, errors="replace")
+    except (LookupError, UnicodeError):
+        return encoding, None
+    return encoding, text
+
+
 __all__ = [
+    "decode_bytes",
+    "detect_encoding",
     "read_json",
     "read_pyproject_toml",
     "read_text",

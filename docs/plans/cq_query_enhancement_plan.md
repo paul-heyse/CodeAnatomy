@@ -2655,7 +2655,7 @@ def make_cache_key(query_type: str, file: str, params: dict) -> str:
 ```python
 # In tools/cq/query/executor.py
 
-from tools.cq.index.query_cache import QueryCache, make_cache_key
+from tools.cq.index.diskcache_query_cache import QueryCache, make_cache_key
 
 
 class CachedExecutor:

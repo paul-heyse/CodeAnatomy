@@ -6,7 +6,7 @@ Detects known blocking calls (time.sleep, requests.*, subprocess.*) inside async
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -69,8 +69,7 @@ DEFAULT_BLOCKING = {
 }
 
 
-@dataclass
-class AsyncHazard:
+class AsyncHazard(msgspec.Struct):
     """A detected async hazard.
 
     Parameters
@@ -157,8 +156,7 @@ class AsyncHazardVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-@dataclass(frozen=True)
-class AsyncHazardsRequest:
+class AsyncHazardsRequest(msgspec.Struct, frozen=True):
     """Inputs required for async hazards analysis."""
 
     tc: Toolchain

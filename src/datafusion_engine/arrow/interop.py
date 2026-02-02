@@ -451,10 +451,10 @@ def reader_from_arrow_stream(
 
     Raises
     ------
-    RuntimeError
-        Raised when schema projection requires unavailable C stream support.
     TypeError
         Raised when the object does not expose the Arrow C stream protocol.
+    ValueError
+        Raised when schema negotiation is not supported by the provider.
 
     Notes
     -----
@@ -469,12 +469,13 @@ def reader_from_arrow_stream(
     if requested_schema is not None:
         try:
             capsule = stream_provider(requested_schema=requested_schema)
-        except TypeError:
-            capsule = stream_provider()
+        except TypeError as exc:
+            msg = "Schema negotiation is not supported"
+            raise ValueError(msg) from exc
         importer = getattr(pa.RecordBatchReader, "_import_from_c", None)
         if not callable(importer):
-            msg = "Requested schema projection requires RecordBatchReader._import_from_c."
-            raise RuntimeError(msg)
+            msg = "Schema negotiation is not supported"
+            raise ValueError(msg)
         return cast("RecordBatchReaderLike", importer(capsule))
     return cast("RecordBatchReaderLike", pa.RecordBatchReader.from_stream(obj))
 
@@ -609,6 +610,17 @@ def concat_readers(readers: Sequence[RecordBatchReaderLike]) -> RecordBatchReade
             yield from resolved
 
     return cast("RecordBatchReaderLike", pa.RecordBatchReader.from_batches(schema, _batches()))
+
+
+def empty_table_for_schema(schema: pa.Schema) -> pa.Table:
+    """Return an empty table preserving schema metadata and complex types.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty table with the provided schema.
+    """
+    return pa.Table.from_batches([], schema=schema)
 
 
 class ComputeModule(Protocol):
@@ -771,6 +783,7 @@ __all__ = [
     "concat_readers",
     "concat_tables",
     "dictionary",
+    "empty_table_for_schema",
     "ensure_expression",
     "field",
     "float32",

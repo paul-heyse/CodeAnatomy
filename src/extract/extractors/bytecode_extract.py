@@ -23,6 +23,7 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.schema_ops import ExtractNormalizeOptions
+from extract.coordination.line_offsets import LineOffsets
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -30,6 +31,7 @@ from extract.helpers import (
     FileContext,
     SpanSpec,
     attrs_map,
+    bytes_from_file_ctx,
     extract_plan_from_rows,
     file_identity_row,
     materialize_extract_plan,
@@ -288,13 +290,31 @@ def _code_unit_key(row: Mapping[str, RowValue]) -> tuple[str, str, int]:
     return qualpath_str, co_name_str, firstlineno_int
 
 
-def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+def _instruction_entry(
+    row: Mapping[str, RowValue],
+    *,
+    line_offsets: LineOffsets | None,
+) -> dict[str, object]:
     start_line = row.get("pos_start_line")
     end_line = row.get("pos_end_line")
     start_col = row.get("pos_start_col")
     end_col = row.get("pos_end_col")
     start_line0 = int(start_line) - BC_LINE_BASE if isinstance(start_line, int) else None
     end_line0 = int(end_line) - BC_LINE_BASE if isinstance(end_line, int) else None
+    byte_start = None
+    byte_len = None
+    if line_offsets is not None:
+        start_offset = line_offsets.byte_offset(
+            start_line0,
+            int(start_col) if isinstance(start_col, int) else None,
+        )
+        end_offset = line_offsets.byte_offset(
+            end_line0,
+            int(end_col) if isinstance(end_col, int) else None,
+        )
+        if start_offset is not None and end_offset is not None:
+            byte_start = start_offset
+            byte_len = max(0, end_offset - start_offset)
     return {
         "instr_index": row.get("instr_index"),
         "offset": row.get("offset"),
@@ -324,6 +344,8 @@ def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
                 end_col=int(end_col) if isinstance(end_col, int) else None,
                 end_exclusive=None,
                 col_unit=None,
+                byte_start=byte_start,
+                byte_len=byte_len,
             )
         ),
         "attrs": attrs_map(
@@ -571,6 +593,13 @@ def _estimate_context_bytes(file_ctx: FileContext) -> int | None:
         except OSError:
             return None
     return None
+
+
+def _line_offsets(file_ctx: FileContext) -> LineOffsets | None:
+    data = bytes_from_file_ctx(file_ctx)
+    if data is None:
+        return None
+    return LineOffsets.from_bytes(data)
 
 
 def _should_parallelize(
@@ -1326,7 +1355,12 @@ def _group_code_unit_buffers(buffers: BytecodeRowBuffers) -> CodeUnitGroups:
     )
 
 
-def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
+def _code_object_entry(
+    row: Row,
+    groups: CodeUnitGroups,
+    *,
+    line_offsets: LineOffsets | None,
+) -> dict[str, object]:
     qualpath = row.get("qualpath")
     co_qualname = row.get("co_qualname")
     co_filename = row.get("co_filename")
@@ -1335,7 +1369,7 @@ def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
     code_id = None
     key = _code_unit_key(row)
     instructions = [
-        _instruction_entry(item)
+        _instruction_entry(item, line_offsets=line_offsets)
         for item in _sorted_rows(groups.instructions_by_key.get(key, []), key="instr_index")
     ]
     exceptions = [
@@ -1397,9 +1431,16 @@ def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
     }
 
 
-def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, object]]:
+def _code_objects_from_buffers(
+    buffers: BytecodeRowBuffers,
+    *,
+    line_offsets: LineOffsets | None,
+) -> list[dict[str, object]]:
     groups = _group_code_unit_buffers(buffers)
-    return [_code_object_entry(row, groups) for row in buffers.code_unit_rows]
+    return [
+        _code_object_entry(row, groups, line_offsets=line_offsets)
+        for row in buffers.code_unit_rows
+    ]
 
 
 def _cached_bytecode_payload(
@@ -1433,6 +1474,7 @@ def _bytecode_row_from_context(
     text = text_from_file_ctx(bc_ctx.file_ctx)
     if text is None:
         return None
+    line_offsets = _line_offsets(bc_ctx.file_ctx)
     buffers = BytecodeRowBuffers(
         code_unit_rows=[],
         instruction_rows=[],
@@ -1449,7 +1491,7 @@ def _bytecode_row_from_context(
     if top is not None:
         code_unit_keys = _assign_code_units(top, bc_ctx, buffers.code_unit_rows)
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
-    code_objects = _code_objects_from_buffers(buffers)
+    code_objects = _code_objects_from_buffers(buffers, line_offsets=line_offsets)
     errors = [_error_entry(row) for row in buffers.error_rows]
     if cache is not None and cache_key is not None:
         cache_set(

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, cast
+from weakref import WeakKeyDictionary
 
 import datafusion
 import pyarrow as pa
@@ -41,7 +42,12 @@ from cache.diskcache_factory import (
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow.coercion import to_arrow_table
-from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from datafusion_engine.arrow.interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    empty_table_for_schema,
+)
 from datafusion_engine.arrow.metadata import schema_constraints_from_metadata
 from datafusion_engine.arrow.schema import (
     map_entry_type,
@@ -84,7 +90,10 @@ from datafusion_engine.schema.registry import (
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
     extract_nested_dataset_names,
+    extract_nested_schema_for,
     missing_schema_names,
+    relationship_schema_for,
+    relationship_schema_names,
     validate_nested_types,
     validate_required_engine_functions,
     validate_semantic_types,
@@ -1512,8 +1521,7 @@ class SchemaRegistryValidationResult:
 
 def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
     """Register a schema-only table via an empty table provider."""
-    arrays = [pa.array([], type=field.type) for field in schema]
-    table = pa.Table.from_arrays(arrays, schema=schema)
+    table = empty_table_for_schema(schema)
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
@@ -1690,7 +1698,16 @@ def settings_snapshot_for_profile(
         Table of settings from information_schema.df_settings.
     """
     cache = _introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
-    return cache.snapshot.settings
+    base_table = cache.snapshot.settings
+    rows = [dict(row) for row in base_table.to_pylist()]
+    rows = _merge_runtime_settings_rows(
+        rows,
+        schema=base_table.schema,
+        profile=profile,
+        ctx=ctx,
+    )
+    rows = sorted(rows, key=lambda row: _settings_row_name(row) or "")
+    return pa.Table.from_pylist(rows, schema=base_table.schema)
 
 
 def catalog_snapshot_for_profile(
@@ -2762,6 +2779,7 @@ class SessionRuntime:
 
 
 _SESSION_RUNTIME_CACHE: dict[str, SessionRuntime] = {}
+_RUNTIME_SETTINGS_OVERLAY: WeakKeyDictionary[SessionContext, dict[str, str]] = WeakKeyDictionary()
 
 _SESSION_RUNTIME_HASH_VERSION = 1
 
@@ -2787,6 +2805,130 @@ def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str,
         value = row.get("value")
         mapping[str(name)] = "" if value is None else str(value)
     return mapping
+
+
+def _build_session_runtime_from_context(
+    ctx: SessionContext,
+    *,
+    profile: DataFusionRuntimeProfile,
+) -> SessionRuntime:
+    from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
+    from datafusion_engine.udf.catalog import rewrite_tag_index
+    from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+
+    snapshot = rust_udf_snapshot(ctx)
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    tag_index = rewrite_tag_index(snapshot)
+    rewrite_tags = tuple(sorted(tag_index))
+    planner_names = domain_planner_names_from_snapshot(snapshot)
+    df_settings: Mapping[str, str]
+    try:
+        settings_table = settings_snapshot_for_profile(profile, ctx)
+        df_settings = _settings_rows_to_mapping(settings_table.to_pylist())
+    except (RuntimeError, TypeError, ValueError):
+        df_settings = {}
+    return SessionRuntime(
+        ctx=ctx,
+        profile=profile,
+        udf_snapshot_hash=snapshot_hash,
+        udf_rewrite_tags=rewrite_tags,
+        domain_planner_names=planner_names,
+        udf_snapshot=snapshot,
+        df_settings=df_settings,
+    )
+
+
+def _settings_row_name(row: Mapping[str, object]) -> str | None:
+    value = row.get("name") or row.get("setting_name") or row.get("key")
+    if value is None:
+        return None
+    return str(value)
+
+
+def _settings_name_key(schema: pa.Schema) -> str:
+    for name in ("name", "setting_name", "key"):
+        if name in schema.names:
+            return name
+    return "name"
+
+
+def _settings_value_key(schema: pa.Schema) -> str:
+    for name in ("value", "setting_value"):
+        if name in schema.names:
+            return name
+    return "value"
+
+
+def _settings_row_template(schema: pa.Schema) -> dict[str, object]:
+    return {field.name: None for field in schema}
+
+
+def _runtime_settings_from_profile(
+    profile: DataFusionRuntimeProfile | None,
+) -> dict[str, str]:
+    if profile is None:
+        return {}
+    return {
+        key: value
+        for key, value in profile.settings_payload().items()
+        if key.startswith("datafusion.runtime.")
+    }
+
+
+def record_runtime_setting_override(
+    ctx: SessionContext,
+    *,
+    key: str,
+    value: str,
+) -> None:
+    """Record runtime settings that DataFusion does not surface via SQL."""
+    if not key.startswith("datafusion.runtime."):
+        return
+    overrides = _RUNTIME_SETTINGS_OVERLAY.setdefault(ctx, {})
+    overrides[key] = value
+
+
+def runtime_setting_overrides(ctx: SessionContext) -> Mapping[str, str]:
+    """Return recorded runtime setting overrides for a SessionContext.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Runtime setting overrides keyed by setting name.
+    """
+    overrides = _RUNTIME_SETTINGS_OVERLAY.get(ctx)
+    return dict(overrides) if overrides else {}
+
+
+def _merge_runtime_settings_rows(
+    rows: list[dict[str, object]],
+    *,
+    schema: pa.Schema,
+    profile: DataFusionRuntimeProfile | None,
+    ctx: SessionContext,
+) -> list[dict[str, object]]:
+    name_key = _settings_name_key(schema)
+    value_key = _settings_value_key(schema)
+    name_to_row = {name: row for row in rows if (name := _settings_row_name(row)) is not None}
+    defaults = _runtime_settings_from_profile(profile)
+    for key, value in defaults.items():
+        if key in name_to_row:
+            continue
+        row = _settings_row_template(schema)
+        row[name_key] = key
+        row[value_key] = value
+        rows.append(row)
+        name_to_row[key] = row
+    overrides = runtime_setting_overrides(ctx)
+    for key, value in overrides.items():
+        row = name_to_row.get(key)
+        if row is None:
+            row = _settings_row_template(schema)
+            rows.append(row)
+        row[name_key] = key
+        row[value_key] = value
+        name_to_row[key] = row
+    return rows
 
 
 def build_session_runtime(
@@ -2822,10 +2964,8 @@ def build_session_runtime(
     planner_names = domain_planner_names_from_snapshot(snapshot)
     df_settings: Mapping[str, str]
     try:
-        from datafusion_engine.schema.introspection import SchemaIntrospector
-
-        introspector = SchemaIntrospector(ctx)
-        df_settings = _settings_rows_to_mapping(introspector.settings_snapshot())
+        settings_table = settings_snapshot_for_profile(profile, ctx)
+        df_settings = _settings_rows_to_mapping(settings_table.to_pylist())
     except (RuntimeError, TypeError, ValueError):
         df_settings = {}
     runtime = SessionRuntime(
@@ -3348,30 +3488,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         SessionRuntime
             Planning-ready session runtime for the provided context.
         """
-        from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-        from datafusion_engine.udf.catalog import rewrite_tag_index
-        from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
-
-        snapshot = rust_udf_snapshot(ctx)
-        snapshot_hash = rust_udf_snapshot_hash(snapshot)
-        tag_index = rewrite_tag_index(snapshot)
-        rewrite_tags = tuple(sorted(tag_index))
-        planner_names = domain_planner_names_from_snapshot(snapshot)
-        df_settings: Mapping[str, str]
-        try:
-            introspector = SchemaIntrospector(ctx)
-            df_settings = _settings_rows_to_mapping(introspector.settings_snapshot())
-        except (RuntimeError, TypeError, ValueError):
-            df_settings = {}
-        return SessionRuntime(
-            ctx=ctx,
-            profile=self,
-            udf_snapshot_hash=snapshot_hash,
-            udf_rewrite_tags=rewrite_tags,
-            domain_planner_names=planner_names,
-            udf_snapshot=snapshot,
-            df_settings=df_settings,
-        )
+        return _build_session_runtime_from_context(ctx, profile=self)
 
     def session_runtime(self) -> SessionRuntime:
         """Return a planning-ready SessionRuntime for the profile.
@@ -4787,6 +4904,36 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             view_errors["semantic_types"] = str(exc)
         return view_errors
 
+    @staticmethod
+    def _register_schema_tables(
+        ctx: SessionContext,
+        *,
+        names: Sequence[str],
+        resolver: Callable[[str], pa.Schema],
+    ) -> None:
+        for name in names:
+            if ctx.table_exist(name):
+                continue
+            schema = resolver(name)
+            _register_schema_table(ctx, name, schema)
+
+    @staticmethod
+    def _schema_registry_issues(validation: SchemaRegistryValidationResult) -> dict[str, object]:
+        issues: dict[str, object] = {}
+        if validation.missing:
+            issues["missing"] = list(validation.missing)
+        if validation.type_errors:
+            issues["type_errors"] = dict(validation.type_errors)
+        if validation.view_errors:
+            issues["view_errors"] = dict(validation.view_errors)
+        if validation.constraint_drift:
+            issues["constraint_drift"] = list(validation.constraint_drift)
+        if validation.relationship_constraint_errors:
+            issues["relationship_constraint_errors"] = dict(
+                validation.relationship_constraint_errors
+            )
+        return issues
+
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context.
 
@@ -4811,7 +4958,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
-        expected_names: tuple[str, ...] = ()
+        self._register_schema_tables(
+            ctx,
+            names=extract_nested_dataset_names(),
+            resolver=extract_nested_schema_for,
+        )
+        self._register_schema_tables(
+            ctx,
+            names=relationship_schema_names(),
+            resolver=relationship_schema_for,
+        )
         self._validate_catalog_autoloads(
             ctx,
             ast_registration=ast_registration,
@@ -4824,24 +4980,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         view_errors = self._validate_schema_views(ctx, ast_view_names=ast_view_names)
         validation = self._record_schema_registry_validation(
             ctx,
-            expected_names=expected_names,
+            expected_names=(),
             expected_schemas=None,
             view_errors=view_errors or None,
             tree_sitter_checks=tree_sitter_checks,
         )
-        issues: dict[str, object] = {}
-        if validation.missing:
-            issues["missing"] = list(validation.missing)
-        if validation.type_errors:
-            issues["type_errors"] = dict(validation.type_errors)
-        if validation.view_errors:
-            issues["view_errors"] = dict(validation.view_errors)
-        if validation.constraint_drift:
-            issues["constraint_drift"] = list(validation.constraint_drift)
-        if validation.relationship_constraint_errors:
-            issues["relationship_constraint_errors"] = dict(
-                validation.relationship_constraint_errors
-            )
+        issues = self._schema_registry_issues(validation)
         if issues:
             msg = f"Schema registry validation failed: {issues}."
             raise ValueError(msg)
@@ -6115,6 +6259,23 @@ def _apply_table_schema_metadata(
     return table.cast(pa.schema(fields, metadata=metadata))
 
 
+def session_runtime_for_context(
+    profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+) -> SessionRuntime | None:
+    """Return a SessionRuntime for the provided context when compatible.
+
+    Returns
+    -------
+    SessionRuntime | None
+        Session runtime for the context when compatible, otherwise ``None``.
+    """
+    try:
+        return _build_session_runtime_from_context(ctx, profile=profile)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _align_projection_exprs(
     *,
     schema: pa.Schema,
@@ -6408,11 +6569,15 @@ __all__ = [
     "feature_state_snapshot",
     "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
+    "record_runtime_setting_override",
     "record_schema_snapshots_for_profile",
     "register_cdf_inputs_for_profile",
     "run_diskcache_maintenance",
+    "runtime_setting_overrides",
     "semantic_output_locations_for_profile",
+    "session_runtime_for_context",
     "session_runtime_hash",
+    "settings_snapshot_for_profile",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]

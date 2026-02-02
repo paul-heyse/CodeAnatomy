@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from datafusion_engine.compile.options import resolve_sql_policy
-from tests.test_helpers.datafusion_runtime import df_ctx
+from datafusion_engine.sql.guard import safe_sql
+from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
 
 require_datafusion()
@@ -26,8 +29,7 @@ def test_sql_policy_presets() -> None:
 
 def test_dml_policy_enforces_read_only() -> None:
     """Reject DML statements when read-only policy is applied."""
-    ctx = df_ctx()
-    policy = resolve_sql_policy("read_only")
-    options = policy.to_sql_options()
-    with pytest.raises(RuntimeError, match=r".*"):
-        ctx.sql_with_options("INSERT INTO missing_table VALUES (1)", options).collect()
+    profile = replace(df_profile(), sql_policy_name="read_only")
+    ctx = profile.session_context()
+    with pytest.raises(PermissionError, match=r"DML is blocked by SQL policy"):
+        safe_sql(ctx, "INSERT INTO missing_table VALUES (1)", runtime_profile=profile)

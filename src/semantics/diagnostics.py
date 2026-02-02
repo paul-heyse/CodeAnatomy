@@ -24,6 +24,7 @@ import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
+from datafusion_engine.arrow.interop import empty_table_for_schema
 from obs.metrics import quality_issue_rows
 
 if TYPE_CHECKING:
@@ -50,8 +51,8 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
 def _empty_table(
     ctx: SessionContext, schema_fields: Sequence[tuple[str, pa.DataType]]
 ) -> DataFrame:
-    arrays = {name: pa.array([], type=dtype) for name, dtype in schema_fields}
-    table = pa.table(arrays, schema=pa.schema(schema_fields))
+    schema = pa.schema(schema_fields)
+    table = empty_table_for_schema(schema)
     return ctx.from_arrow(table)
 
 

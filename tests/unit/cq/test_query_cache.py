@@ -14,7 +14,8 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tools.cq.index.query_cache import (
+from tools.cq.cache.diskcache_profile import DiskCacheKind, DiskCacheProfile, DiskCacheSettings
+from tools.cq.index.diskcache_query_cache import (
     CacheStats,
     QueryCache,
     _compute_file_hash,
@@ -23,15 +24,20 @@ from tools.cq.index.query_cache import (
 
 
 @pytest.fixture
-def cache_dir(tmp_path: Path) -> Path:
-    """Create a temporary cache directory.
+def cache_profile(tmp_path: Path) -> DiskCacheProfile:
+    """Create a temporary DiskCache profile for tests.
 
     Returns
     -------
-    Path
-        Cache directory path.
+    DiskCacheProfile
+        DiskCache profile rooted in tmp_path.
     """
-    return tmp_path / "cache"
+    root = tmp_path / "cq_cache"
+    base = DiskCacheSettings(size_limit_bytes=64 * 1024 * 1024)
+    overrides: dict[DiskCacheKind, DiskCacheSettings] = {
+        "cq_query": DiskCacheSettings(size_limit_bytes=64 * 1024 * 1024)
+    }
+    return DiskCacheProfile(root=root, base_settings=base, overrides=overrides)
 
 
 @pytest.fixture
@@ -49,7 +55,7 @@ def test_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def cache(cache_dir: Path) -> Generator[QueryCache]:
+def cache(tmp_path: Path, cache_profile: DiskCacheProfile) -> Generator[QueryCache]:
     """Create a query cache instance.
 
     Yields
@@ -57,7 +63,7 @@ def cache(cache_dir: Path) -> Generator[QueryCache]:
     QueryCache
         Cache instance for tests.
     """
-    c = QueryCache(cache_dir)
+    c = QueryCache(tmp_path, profile=cache_profile)
     yield c
     c.close()
 
@@ -65,17 +71,17 @@ def cache(cache_dir: Path) -> Generator[QueryCache]:
 class TestQueryCache:
     """Tests for QueryCache class."""
 
-    def test_creates_cache_dir(self, tmp_path: Path) -> None:
+    def test_creates_cache_dir(self, tmp_path: Path, cache_profile: DiskCacheProfile) -> None:
         """Cache directory is created if it doesn't exist."""
-        cache_dir = tmp_path / "new" / "cache" / "dir"
-        assert not cache_dir.exists()
+        cache_root = cache_profile.root
+        assert not (cache_root / "cq_query").exists()
 
-        QueryCache(cache_dir)
-        assert cache_dir.exists()
+        QueryCache(tmp_path, profile=cache_profile)
+        assert (cache_root / "cq_query").exists()
 
-    def test_db_path(self, cache: QueryCache, cache_dir: Path) -> None:
-        """Database path is in cache directory."""
-        assert cache.db_path == cache_dir / "query_cache.db"
+    def test_repo_root_property(self, cache: QueryCache, tmp_path: Path) -> None:
+        """Repo root is preserved on the cache."""
+        assert cache.repo_root == tmp_path
 
     def test_set_and_get(self, cache: QueryCache, test_file: Path) -> None:
         """Store and retrieve cached value."""
@@ -220,18 +226,23 @@ class TestCacheStats:
 class TestContextManager:
     """Tests for context manager protocol."""
 
-    def test_context_manager_usage(self, cache_dir: Path, test_file: Path) -> None:
+    def test_context_manager_usage(
+        self, tmp_path: Path, cache_profile: DiskCacheProfile, test_file: Path
+    ) -> None:
         """Cache works as context manager."""
-        with QueryCache(cache_dir) as cache:
+        with QueryCache(tmp_path, profile=cache_profile) as cache:
             cache.set("key", {"data": 1}, [test_file])
             result = cache.get("key", [test_file])
             assert result == {"data": 1}
 
-    def test_context_manager_closes(self, cache_dir: Path, test_file: Path) -> None:
+    def test_context_manager_closes(
+        self, tmp_path: Path, cache_profile: DiskCacheProfile, test_file: Path
+    ) -> None:
         """Context manager closes connection on exit."""
-        cache = QueryCache(cache_dir)
+        cache = QueryCache(tmp_path, profile=cache_profile)
         cache.set("key", {"data": 1}, [test_file])
         cache.__exit__(None, None, None)
+        cache = QueryCache(tmp_path, profile=cache_profile)
         cache.set("key2", {"data": 2}, [test_file])
         assert cache.get("key2", [test_file]) == {"data": 2}
 
@@ -320,13 +331,14 @@ class TestCacheEntryDataclass:
 
     def test_create_cache_entry(self) -> None:
         """Create CacheEntry instance."""
-        from tools.cq.index.query_cache import CacheEntry
+        from tools.cq.index.diskcache_query_cache import CacheEntry
 
         entry = CacheEntry(
             key="test_key",
             value={"data": 123},
             file_hash="abc123",
             timestamp=1234567890.0,
+            file_paths=["test.py"],
         )
 
         assert entry.key == "test_key"

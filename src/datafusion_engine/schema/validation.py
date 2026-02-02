@@ -12,7 +12,12 @@ from datafusion import functions as f
 from pyarrow import Table as ArrowTable
 
 from datafusion_engine.arrow.coercion import to_arrow_table
-from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike, TableLike
+from datafusion_engine.arrow.interop import (
+    DataTypeLike,
+    SchemaLike,
+    TableLike,
+    empty_table_for_schema,
+)
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
@@ -481,13 +486,14 @@ def _stats_table(
 
 
 def _empty_error_table() -> TableLike:
-    return pa.table(
-        {
-            "error_code": pa.array([], type=pa.string()),
-            "error_column": pa.array([], type=pa.string()),
-            "error_count": pa.array([], type=pa.int64()),
-        }
+    schema = pa.schema(
+        [
+            pa.field("error_code", pa.string()),
+            pa.field("error_column", pa.string()),
+            pa.field("error_count", pa.int64()),
+        ]
     )
+    return empty_table_for_schema(schema)
 
 
 def _build_validation_report(

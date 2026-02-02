@@ -2,8 +2,8 @@
 
 Date: 2026-02-02  
 Owner: Codex (design phase)  
-Status: draft  
-Validated: pending
+Status: implemented (pending quality gate)  
+Validated: pending quality gate
 
 ## Purpose
 Expand msgspec usage beyond the current artifact and policy contracts to become the **primary typed boundary** for configuration, metadata payloads, diagnostics, and schema introspection. This plan prioritizes a best-in-class target architecture aligned with the semantic IR approach, even if it requires breaking changes.
@@ -20,6 +20,14 @@ Expand msgspec usage beyond the current artifact and policy contracts to become 
 - **Deterministic encoding**: all serialized payloads use shared msgspec encoders and stable ordering.
 - **Compatibility by design**: explicit versioning and forward-compatible decoding for persisted payloads.
 - **Breaking changes acceptable**: prefer long-term correctness over short-term compatibility.
+
+---
+
+## Implementation Status (2026-02-02)
+- ✅ Scopes 1–7 implemented in code.
+- ✅ Contract index exported into schema registry artifacts.
+- ✅ Typed config validation tests added.
+- ⚠️ Quality gate partially executed; `pytest -q` was interrupted and needs to be re-run to confirm test status.
 
 ---
 
@@ -63,10 +71,10 @@ normalized = normalize_config_contents(raw)
 - `src/utils/file_io.py::read_toml` (replace with typed decoding)
 
 ### Implementation checklist
-- [ ] Introduce `src/cli/config_models.py` with msgspec Structs for all config sections.
-- [ ] Replace `tomllib` parsing in `config_loader` with `msgspec.toml.decode` + typed validation.
-- [ ] Normalize config with typed inputs; ensure `validation_error_payload` is used for friendly CLI errors.
-- [ ] Add tests for typed config error surfaces (invalid types, unknown fields).
+- [x] Introduce `src/cli/config_models.py` with msgspec Structs for all config sections.
+- [x] Replace `tomllib` parsing in `config_loader` with `msgspec.toml.decode` + typed validation.
+- [x] Normalize config with typed inputs; ensure `validation_error_payload` is used for friendly CLI errors.
+- [x] Add tests for typed config error surfaces (invalid types, unknown fields).
 
 ---
 
@@ -96,9 +104,9 @@ decoded = loads_msgpack(raw, target_type=MetadataMapPayload, strict=True)
 - Manual map/list validation in `metadata_codec.py` (remove bespoke checks)
 
 ### Implementation checklist
-- [ ] Define msgspec payload structs for metadata map/list/scalar forms.
-- [ ] Encode/decode metadata payloads via `dumps_msgpack/loads_msgpack` with typed targets.
-- [ ] Add version field and forward-compat decoding rules.
+- [x] Define msgspec payload structs for metadata map/list/scalar forms.
+- [x] Encode/decode metadata payloads via `dumps_msgpack/loads_msgpack` with typed targets.
+- [x] Add version field and forward-compat decoding rules.
 
 ---
 
@@ -131,9 +139,9 @@ handle.write(encoder.encode_lines(events))
 - dataclass-only report payloads that are solely serialized (replace with Structs)
 
 ### Implementation checklist
-- [ ] Introduce msgspec Structs for log/report payloads.
-- [ ] Replace JSONL emission with `msgspec.json.Encoder.encode_lines`.
-- [ ] Ensure deterministic ordering for all diagnostic JSON outputs.
+- [x] Introduce msgspec Structs for log/report payloads.
+- [x] Replace JSONL emission with `msgspec.json.Encoder.encode_lines`.
+- [x] Ensure deterministic ordering for all diagnostic JSON outputs.
 
 ---
 
@@ -162,9 +170,9 @@ payload = convert(payload_raw, target_type=ViewArtifactPayload, strict=True)
 - Hand-rolled type checks for payload shape
 
 ### Implementation checklist
-- [ ] Identify all mapping-normalization points at external boundaries.
-- [ ] Replace manual logic with `convert` or typed `decode`.
-- [ ] Standardize ValidationError reporting via `validation_error_payload`.
+- [x] Identify all mapping-normalization points at external boundaries.
+- [x] Replace manual logic with `convert` or typed `decode`.
+- [x] Standardize ValidationError reporting via `validation_error_payload`.
 
 ---
 
@@ -195,9 +203,9 @@ resolved = {
 - Boolean/None sentinel hacks in config overrides
 
 ### Implementation checklist
-- [ ] Identify fields where “missing vs null” matters (config, policy, runtime overrides).
-- [ ] Add patch structs using `UNSET` and reuse `coalesce_unset` helpers.
-- [ ] Ensure UNSET not used with `array_like=True` structs.
+- [x] Identify fields where “missing vs null” matters (config, policy, runtime overrides).
+- [x] Add patch structs using `UNSET` and reuse `coalesce_unset` helpers.
+- [x] Ensure UNSET not used with `array_like=True` structs.
 
 ---
 
@@ -226,9 +234,9 @@ contract_index = [
 - None (new capability)
 
 ### Implementation checklist
-- [ ] Create a contract index payload from `inspect.multi_type_info`.
-- [ ] Export contract index alongside JSON Schema/OpenAPI artifacts.
-- [ ] Add a small validation gate to ensure schema registry and inspect index are consistent.
+- [x] Create a contract index payload from `inspect.multi_type_info`.
+- [x] Export contract index alongside JSON Schema/OpenAPI artifacts.
+- [x] Add a small validation gate to ensure schema registry and inspect index are consistent.
 
 ---
 
@@ -261,9 +269,9 @@ class VacuumReport(StructBaseCompat, frozen=True):
 - Dataclass report payloads that are only used for serialization
 
 ### Implementation checklist
-- [ ] Identify persisted/reporting dataclasses and group by ownership.
-- [ ] Migrate to msgspec Structs with appropriate base type (Strict vs Compat).
-- [ ] Replace `asdict` and manual JSON dumps with msgspec encoders.
+- [x] Identify persisted/reporting dataclasses and group by ownership.
+- [x] Migrate to msgspec Structs with appropriate base type (Strict vs Compat).
+- [x] Replace `asdict` and manual JSON dumps with msgspec encoders.
 
 ---
 
@@ -281,4 +289,3 @@ class VacuumReport(StructBaseCompat, frozen=True):
 - Config ingestion is typed, validated, and emits uniform errors.
 - Logs and diagnostics are deterministic and schema-controlled.
 - Manual mapping normalization and ad-hoc payload coercion are eliminated.
-

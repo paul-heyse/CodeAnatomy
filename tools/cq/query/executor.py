@@ -8,13 +8,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ast_grep_py import SgRoot
+import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
+from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, mk_result, mk_runmeta, ms
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -33,9 +36,9 @@ if TYPE_CHECKING:
 
     from tools.cq.core.toolchain import Toolchain
 from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.query_cache import QueryCache
+from tools.cq.index.diskcache_query_cache import QueryCache
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.index.sqlite_cache import IndexCache
+from tools.cq.index.diskcache_index_cache import IndexCache
 from tools.cq.query.ir import Query, Scope
 
 QUERY_CACHE_VERSION = "9"
@@ -148,44 +151,74 @@ def execute_plan(
     started_ms = ms()
     cache_key: str | None = None
     cache_files: list[Path] | None = None
+    auto_stack: ExitStack | None = None
+    own_index_cache = False
+    own_query_cache = False
 
-    if use_cache and query_cache is not None:
-        cache_files = _collect_cache_files(plan, root)
-        if cache_files:
-            cache_key = _build_query_cache_key(query, plan, root, tc)
-            cached = query_cache.get(cache_key, cache_files)
-            if cached is not None:
-                result = CqResult.from_dict(cached)
-                result.summary["cache"] = {"status": "hit", "key": cache_key}
-                return result
+    if use_cache and (index_cache is None or query_cache is None):
+        profile = default_cq_diskcache_profile()
+        if index_cache is None:
+            rule_version = tc.sgpy_version or "unknown"
+            index_cache = IndexCache(root, rule_version, profile=profile)
+            own_index_cache = True
+        if query_cache is None:
+            query_cache = QueryCache(root, profile=profile)
+            own_query_cache = True
+        if own_index_cache or own_query_cache:
+            auto_stack = ExitStack()
+            if own_index_cache:
+                auto_stack.enter_context(index_cache)
+            if own_query_cache:
+                auto_stack.enter_context(query_cache)
 
-    # Dispatch to pattern query executor if this is a pattern query
-    if plan.is_pattern_query:
-        result = _execute_pattern_query(
-            plan,
-            query,
-            tc,
-            root,
-            argv,
-            started_ms,
-            index_cache,
-        )
-    else:
-        result = _execute_entity_query(
-            plan,
-            query,
-            tc,
-            root,
-            argv,
-            started_ms,
-            index_cache,
-        )
+    try:
+        if use_cache and query_cache is not None:
+            cache_files = _collect_cache_files(plan, root)
+            if cache_files:
+                cache_key = _build_query_cache_key(query, plan, root, tc)
+                cached = query_cache.get(cache_key, cache_files)
+                if cached is not None:
+                    if isinstance(cached, CqResult):
+                        result = cached
+                    elif isinstance(cached, dict):
+                        result = msgspec.convert(cached, type=CqResult)
+                    else:
+                        result = cached
+                    result.summary["cache"] = {"status": "hit", "key": cache_key}
+                    result.summary["cache_stats"] = _cache_stats_dict(query_cache)
+                    return result
 
-    if use_cache and query_cache is not None and cache_key and cache_files:
-        query_cache.set(cache_key, result.to_dict(), cache_files)
-        result.summary["cache"] = {"status": "miss", "key": cache_key}
+        # Dispatch to pattern query executor if this is a pattern query
+        if plan.is_pattern_query:
+            result = _execute_pattern_query(
+                plan,
+                query,
+                tc,
+                root,
+                argv,
+                started_ms,
+                index_cache,
+            )
+        else:
+            result = _execute_entity_query(
+                plan,
+                query,
+                tc,
+                root,
+                argv,
+                started_ms,
+                index_cache,
+            )
 
-    return result
+        if use_cache and query_cache is not None and cache_key and cache_files:
+            query_cache.set(cache_key, result, cache_files)
+            result.summary["cache"] = {"status": "miss", "key": cache_key}
+            result.summary["cache_stats"] = _cache_stats_dict(query_cache)
+
+        return result
+    finally:
+        if auto_stack is not None:
+            auto_stack.close()
 
 
 def _execute_entity_query(
@@ -861,23 +894,20 @@ def _build_query_cache_key(
     """Build a stable cache key for a query execution."""
     hazard_rules_hash: str | None = None
     if "hazards" in query.fields:
-        from tools.cq.query.hazards import HazardDetector
+        from tools.cq.query.hazards import hazard_rules_hash
 
-        detector = HazardDetector()
-        hazard_rules_hash = hashlib.sha256(
-            detector.build_inline_rules_yaml().encode("utf-8")
-        ).hexdigest()
+        hazard_rules_hash = hazard_rules_hash()
     plan_signature = {
-        "scope": asdict(plan.scope),
+        "scope": msgspec.to_builtins(plan.scope),
         "sg_record_types": sorted(plan.sg_record_types),
         "need_symtable": plan.need_symtable,
         "need_bytecode": plan.need_bytecode,
-        "expand_ops": [asdict(exp) for exp in plan.expand_ops],
+        "expand_ops": [msgspec.to_builtins(exp) for exp in plan.expand_ops],
         "is_pattern_query": plan.is_pattern_query,
         "sg_rules": [rule.to_yaml_dict() for rule in plan.sg_rules],
     }
     payload = {
-        "query": asdict(query),
+        "query": msgspec.to_builtins(query),
         "plan": plan_signature,
         "root": str(root),
         "toolchain": tc.to_dict(),
@@ -886,6 +916,11 @@ def _build_query_cache_key(
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _cache_stats_dict(query_cache: QueryCache) -> dict[str, object]:
+    stats = query_cache.stats()
+    return asdict(stats)
 
 
 def _process_import_query(

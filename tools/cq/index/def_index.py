@@ -12,6 +12,21 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:  # pragma: no cover - optional dependency
+    from diskcache import Lock
+except ImportError:  # pragma: no cover - optional dependency
+    class Lock:  # type: ignore[no-redef]
+        def __init__(self, cache, key) -> None:  # noqa: ARG002
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # noqa: ARG002
+            return None
+
+from tools.cq.cache.diskcache_profile import cache_for_kind, default_cq_diskcache_profile
+
 _SELF_CLS: set[str] = {"self", "cls"}
 
 
@@ -462,24 +477,29 @@ class DefIndex:
                 "**/dist/**",
             ]
 
-        index = DefIndex(root=str(root_path))
-        for filepath in _iter_source_files(
-            root_path,
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
-            max_files=max_files,
-        ):
-            rel_path = str(filepath.relative_to(root_path))
-            try:
-                source = filepath.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(filepath))
-            except (SyntaxError, OSError, UnicodeDecodeError):
-                continue
-            visitor = DefIndexVisitor(rel_path)
-            visitor.visit(tree)
-            index.modules[rel_path] = visitor.to_module_info()
+        profile = default_cq_diskcache_profile()
+        lock_cache = cache_for_kind(profile, "cq_coordination")
+        lock_key = f"def_index:{root_path}"
 
-        return index
+        with Lock(lock_cache, lock_key):
+            index = DefIndex(root=str(root_path))
+            for filepath in _iter_source_files(
+                root_path,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                max_files=max_files,
+            ):
+                rel_path = str(filepath.relative_to(root_path))
+                try:
+                    source = filepath.read_text(encoding="utf-8")
+                    tree = ast.parse(source, filename=str(filepath))
+                except (SyntaxError, OSError, UnicodeDecodeError):
+                    continue
+                visitor = DefIndexVisitor(rel_path)
+                visitor.visit(tree)
+                index.modules[rel_path] = visitor.to_module_info()
+
+            return index
 
     def all_functions(self) -> Iterator[FnDecl]:
         """Iterate over all function declarations.

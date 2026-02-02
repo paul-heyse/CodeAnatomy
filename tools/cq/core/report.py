@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 
 # Maximum evidence items to show before truncating
@@ -94,7 +96,14 @@ def _render_summary(summary: dict[str, object]) -> list[str]:
     if not summary:
         return []
     lines = ["## Summary"]
-    lines.extend([f"- **{key}**: {value}" for key, value in summary.items()])
+    formatted: list[str] = []
+    for key, value in summary.items():
+        if isinstance(value, dict):
+            rendered = json.dumps(value, sort_keys=True)
+        else:
+            rendered = str(value)
+        formatted.append(f"- **{key}**: {rendered}")
+    lines.extend(formatted)
     lines.append("")
     return lines
 

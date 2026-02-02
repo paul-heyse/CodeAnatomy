@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-if TYPE_CHECKING:
-    from core_types import JsonValue
+from core_types import JsonValue
 
 
 def parse_kv_pairs(values: tuple[str, ...]) -> dict[str, str]:

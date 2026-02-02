@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +13,7 @@ from tools.cq.core.renderers import (
     render_mermaid_flowchart,
 )
 from tools.cq.core.report import render_markdown, render_summary
+from tools.cq.core.serialization import dumps_json
 
 if TYPE_CHECKING:
     from tools.cq.cli_app.context import CliResult, FilterConfig
@@ -77,7 +77,7 @@ def render_result(
     format_value = str(output_format)
 
     if format_value == "json":
-        return json.dumps(result.to_dict(), indent=2)
+        return dumps_json(result, indent=2)
 
     if format_value == "md":
         return render_markdown(result)
@@ -87,7 +87,7 @@ def render_result(
 
     if format_value == "both":
         md = render_markdown(result)
-        js = json.dumps(result.to_dict(), indent=2)
+        js = dumps_json(result, indent=2)
         return f"{md}\n\n---\n\n{js}"
 
     if format_value == "mermaid":

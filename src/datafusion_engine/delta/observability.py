@@ -19,6 +19,7 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
+from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
@@ -422,10 +423,7 @@ def _bootstrap_observability_table(
     operation: str,
 ) -> None:
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    empty = pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in schema],
-        schema=schema,
-    )
+    empty = empty_table_for_schema(schema)
     df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
     pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
     pipeline.write(

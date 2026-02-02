@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -16,9 +16,8 @@ from datafusion_engine.arrow.schema import version_field
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.telemetry.hamilton import HamiltonTelemetryProfile, HamiltonTrackerConfig
 from serde_artifacts import RuntimeProfileSnapshot
-from serde_msgspec import dumps_msgpack, to_builtins
+from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
-from utils.env_utils import env_bool, env_value
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
@@ -36,8 +35,11 @@ _PROFILE_HASH_SCHEMA = pa.schema(
 )
 
 
-@dataclass(frozen=True)
-class RuntimeProfileSpec:
+_ENV_TRUE_VALUES = frozenset({"1", "true", "yes", "y"})
+_ENV_FALSE_VALUES = frozenset({"0", "false", "no", "n"})
+
+
+class RuntimeProfileSpec(StructBaseStrict, frozen=True):
     """Resolved runtime profile and determinism tier."""
 
     name: str
@@ -77,6 +79,19 @@ class RuntimeProfileSpec:
         return self.runtime_profile_snapshot().profile_hash
 
 
+class RuntimeProfileEnvPatch(StructBaseStrict, frozen=True):
+    """Patch payload for runtime profile environment overrides."""
+
+    config_policy_name: str | msgspec.UnsetType | None = msgspec.UNSET
+    catalog_auto_load_location: str | msgspec.UnsetType | None = msgspec.UNSET
+    catalog_auto_load_format: str | msgspec.UnsetType | None = msgspec.UNSET
+    cache_output_root: str | msgspec.UnsetType | None = msgspec.UNSET
+    runtime_artifact_cache_root: str | msgspec.UnsetType | None = msgspec.UNSET
+    runtime_artifact_cache_enabled: bool | msgspec.UnsetType = msgspec.UNSET
+    metadata_cache_snapshot_enabled: bool | msgspec.UnsetType = msgspec.UNSET
+    diagnostics_sink: object | msgspec.UnsetType | None = msgspec.UNSET
+
+
 def _cpu_count() -> int:
     count = os.cpu_count()
     return count if count is not None and count > 0 else 1
@@ -89,6 +104,69 @@ def _settings_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _env_patch_text(name: str) -> str | msgspec.UnsetType | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return msgspec.UNSET
+    value = raw.strip()
+    if not value:
+        return msgspec.UNSET
+    lowered = value.lower()
+    if lowered in {"none", "null"}:
+        return None
+    return value
+
+
+def _env_patch_bool(name: str) -> bool | msgspec.UnsetType:
+    raw = os.environ.get(name)
+    if raw is None:
+        return msgspec.UNSET
+    value = raw.strip().lower()
+    if not value or value in {"none", "null"}:
+        return msgspec.UNSET
+    if value in _ENV_TRUE_VALUES:
+        return True
+    if value in _ENV_FALSE_VALUES:
+        return False
+    return msgspec.UNSET
+
+
+def _env_patch_diagnostics_sink(name: str) -> object | msgspec.UnsetType | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return msgspec.UNSET
+    value = raw.strip()
+    if not value:
+        return msgspec.UNSET
+    return _diagnostics_sink_from_value(value)
+
+
+def _runtime_profile_env_patch() -> RuntimeProfileEnvPatch:
+    return RuntimeProfileEnvPatch(
+        config_policy_name=_env_patch_text("CODEANATOMY_DATAFUSION_POLICY"),
+        catalog_auto_load_location=_env_patch_text("CODEANATOMY_DATAFUSION_CATALOG_LOCATION"),
+        catalog_auto_load_format=_env_patch_text("CODEANATOMY_DATAFUSION_CATALOG_FORMAT"),
+        cache_output_root=_env_patch_text("CODEANATOMY_CACHE_OUTPUT_ROOT"),
+        runtime_artifact_cache_root=_env_patch_text("CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ROOT"),
+        runtime_artifact_cache_enabled=_env_patch_bool(
+            "CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ENABLED",
+        ),
+        metadata_cache_snapshot_enabled=_env_patch_bool(
+            "CODEANATOMY_METADATA_CACHE_SNAPSHOT_ENABLED",
+        ),
+        diagnostics_sink=_env_patch_diagnostics_sink("CODEANATOMY_DIAGNOSTICS_SINK"),
+    )
+
+
+def _coalesce_diagnostics_sink(
+    value: object | msgspec.UnsetType | None,
+    default: DiagnosticsSink | None,
+) -> DiagnosticsSink | None:
+    if value is msgspec.UNSET:
+        return default
+    return cast("DiagnosticsSink | None", value)
 
 
 def _profile_hash_payload(
@@ -259,42 +337,35 @@ def _apply_memory_overrides(
 
 
 def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
-    policy_override = env_value("CODEANATOMY_DATAFUSION_POLICY")
-    if policy_override is not None:
-        profile = replace(profile, config_policy_name=policy_override)
-    catalog_location = env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
-    if catalog_location is not None:
-        profile = replace(profile, catalog_auto_load_location=catalog_location)
-    catalog_format = env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
-    if catalog_format is not None:
-        profile = replace(profile, catalog_auto_load_format=catalog_format)
-    cache_output_root = env_value("CODEANATOMY_CACHE_OUTPUT_ROOT")
-    if cache_output_root is not None:
-        profile = replace(profile, cache_output_root=cache_output_root)
-    runtime_artifact_cache_root = env_value("CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ROOT")
-    if runtime_artifact_cache_root is not None:
-        profile = replace(profile, runtime_artifact_cache_root=runtime_artifact_cache_root)
-    runtime_artifact_cache_enabled = env_bool(
-        "CODEANATOMY_RUNTIME_ARTIFACT_CACHE_ENABLED",
+    patch = _runtime_profile_env_patch()
+    return replace(
+        profile,
+        config_policy_name=coalesce_unset(patch.config_policy_name, profile.config_policy_name),
+        catalog_auto_load_location=coalesce_unset(
+            patch.catalog_auto_load_location,
+            profile.catalog_auto_load_location,
+        ),
+        catalog_auto_load_format=coalesce_unset(
+            patch.catalog_auto_load_format,
+            profile.catalog_auto_load_format,
+        ),
+        cache_output_root=coalesce_unset(patch.cache_output_root, profile.cache_output_root),
+        runtime_artifact_cache_root=coalesce_unset(
+            patch.runtime_artifact_cache_root,
+            profile.runtime_artifact_cache_root,
+        ),
+        runtime_artifact_cache_enabled=coalesce_unset(
+            patch.runtime_artifact_cache_enabled,
+            profile.runtime_artifact_cache_enabled,
+        ),
+        metadata_cache_snapshot_enabled=coalesce_unset(
+            patch.metadata_cache_snapshot_enabled,
+            profile.metadata_cache_snapshot_enabled,
+        ),
+        diagnostics_sink=_coalesce_diagnostics_sink(
+            patch.diagnostics_sink, profile.diagnostics_sink
+        ),
     )
-    if runtime_artifact_cache_enabled is not None:
-        profile = replace(
-            profile,
-            runtime_artifact_cache_enabled=runtime_artifact_cache_enabled,
-        )
-    metadata_cache_snapshot_enabled = env_bool(
-        "CODEANATOMY_METADATA_CACHE_SNAPSHOT_ENABLED",
-    )
-    if metadata_cache_snapshot_enabled is not None:
-        profile = replace(
-            profile,
-            metadata_cache_snapshot_enabled=metadata_cache_snapshot_enabled,
-        )
-    diagnostics_sink_value = env_value("CODEANATOMY_DIAGNOSTICS_SINK")
-    if diagnostics_sink_value is not None:
-        diagnostics_sink = _diagnostics_sink_from_value(diagnostics_sink_value)
-        profile = replace(profile, diagnostics_sink=diagnostics_sink)
-    return profile
 
 
 def _diagnostics_sink_from_value(value: str) -> DiagnosticsSink | None:

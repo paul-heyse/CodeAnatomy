@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from core_types import JsonValue
+from core_types import JsonValue
 
 
 def validate_config_mutual_exclusion(config: Mapping[str, JsonValue]) -> None:

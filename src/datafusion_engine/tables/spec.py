@@ -16,8 +16,8 @@ import pyarrow as pa
 from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
-    from datafusion_engine.dataset.registry import DatasetLocation
-    from schema_spec.system import DatasetSpec
+    from datafusion_engine.dataset.registry import DataFusionProvider, DatasetLocation
+    from schema_spec.system import DataFusionScanOptions, DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,10 @@ class TableSpec:
         PyArrow schema for the table.
     storage_location
         Path to the table data (local or cloud).
+    datafusion_scan
+        Optional DataFusion scan overrides (listing/cache behavior).
+    datafusion_provider
+        Optional DataFusion provider override (listing vs delta CDF).
     format
         Storage format (e.g., 'delta', 'parquet', 'csv').
     delta_version
@@ -55,6 +59,8 @@ class TableSpec:
     schema: pa.Schema
     storage_location: str
     dataset_spec: DatasetSpec | None = None
+    datafusion_scan: DataFusionScanOptions | None = None
+    datafusion_provider: DataFusionProvider | None = None
     format: str = "delta"
     delta_version: int | None = None
     delta_timestamp: str | None = None
@@ -80,6 +86,8 @@ class TableSpec:
             name=self.name,
             schema=self.schema,
             dataset_spec=self.dataset_spec,
+            datafusion_scan=self.datafusion_scan,
+            datafusion_provider=self.datafusion_provider,
             storage_location=self.storage_location,
             format=self.format,
             delta_version=version,
@@ -151,6 +159,8 @@ def table_spec_from_location(
         name=name,
         schema=schema,
         dataset_spec=location.dataset_spec,
+        datafusion_scan=location.datafusion_scan,
+        datafusion_provider=location.datafusion_provider,
         storage_location=str(location.path),
         format=location.format or "delta",
         delta_version=location.delta_version,

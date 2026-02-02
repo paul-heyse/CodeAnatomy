@@ -6,8 +6,9 @@ import time
 from pathlib import Path
 
 import pytest
+from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.index.sqlite_cache import IndexCache
+from tools.cq.index.diskcache_index_cache import IndexCache
 from tools.cq.query.executor import execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -51,7 +52,8 @@ def index_cache(repo_root: Path) -> IndexCache:
     IndexCache
         Configured cache instance.
     """
-    return IndexCache(repo_root=repo_root, rule_version="test")
+    profile = default_cq_diskcache_profile()
+    return IndexCache(repo_root=repo_root, rule_version="test", profile=profile)
 
 
 @pytest.mark.benchmark
@@ -118,7 +120,8 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
         Repository root path.
     """
     start = time.perf_counter()
-    cache = IndexCache(repo_root=repo_root, rule_version="benchmark")
+    profile = default_cq_diskcache_profile()
+    cache = IndexCache(repo_root=repo_root, rule_version="benchmark", profile=profile)
     # Trigger index build by executing a query
     query_text = "entity=class"
     query = parse_query(query_text)

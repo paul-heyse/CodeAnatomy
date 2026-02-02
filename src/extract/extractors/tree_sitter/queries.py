@@ -47,9 +47,12 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
         name="defs",
         source="""
         (function_definition name: (identifier) @def.name) @def.node
+        (async_function_definition name: (identifier) @def.name) @def.node
         (class_definition name: (identifier) @def.name) @def.node
         (decorated_definition
           definition: (function_definition name: (identifier) @def.name) @def.node)
+        (decorated_definition
+          definition: (async_function_definition name: (identifier) @def.name) @def.node)
         (decorated_definition
           definition: (class_definition name: (identifier) @def.name) @def.node)
         """,
@@ -94,6 +97,8 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
         (class_definition
           body: (block . (expression_statement (string) @doc.string))) @doc.owner
         (function_definition
+          body: (block . (expression_statement (string) @doc.string))) @doc.owner
+        (async_function_definition
           body: (block . (expression_statement (string) @doc.string))) @doc.owner
         """,
     ),

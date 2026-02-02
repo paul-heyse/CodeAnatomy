@@ -31,6 +31,7 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.hashing import span_id
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from extract.coordination.line_offsets import LineOffsets
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.extractors.tree_sitter.cache import TreeSitterCache, TreeSitterParseResult
 from extract.extractors.tree_sitter.queries import TreeSitterQueryPack, compile_query_pack
@@ -432,20 +433,11 @@ def _point_parts(point: object | None) -> tuple[int | None, int | None]:
     return _maybe_int(getattr(point, "row", None)), _maybe_int(getattr(point, "column", None))
 
 
-def _point_from_byte(data: SourceBuffer, byte_offset: int) -> Point:
-    if byte_offset <= 0:
-        return Point(0, 0)
-    offset = min(byte_offset, len(data))
-    prefix = bytes(data[:offset])
-    row = prefix.count(b"\n")
-    last_newline = prefix.rfind(b"\n")
-    col = offset if last_newline == -1 else offset - last_newline - 1
-    return Point(int(row), int(col))
-
-
 def _included_ranges(
     data: SourceBuffer,
     options: TreeSitterExtractOptions,
+    *,
+    offsets: LineOffsets,
 ) -> tuple[Range, ...] | None:
     ranges = options.included_ranges
     if not ranges:
@@ -456,10 +448,12 @@ def _included_ranges(
         end_byte = min(len(data), max(start_byte, int(end)))
         if end_byte == start_byte:
             continue
+        start_line0, start_col = offsets.point_from_byte(start_byte)
+        end_line0, end_col = offsets.point_from_byte(end_byte)
         resolved.append(
             Range(
-                _point_from_byte(data, start_byte),
-                _point_from_byte(data, end_byte),
+                Point(start_line0, start_col),
+                Point(end_line0, end_col),
                 start_byte,
                 end_byte,
             )
@@ -1155,7 +1149,13 @@ def _parse_tree(
     data = context.data
     parser = context.parser
     cache = context.cache
-    ranges = _included_ranges(data, options)
+    ranges = None
+    if options.included_ranges:
+        ranges = _included_ranges(
+            data,
+            options,
+            offsets=LineOffsets.from_bytes(bytes(data)),
+        )
     if ranges is not None:
         parser.included_ranges = list(ranges)
     try:

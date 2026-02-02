@@ -18,6 +18,7 @@ from engine.session import EngineSession
 from engine.session_factory import build_engine_session
 from extract.extractors.scip.extract import ScipExtractOptions, SCIPParseOptions
 from extract.scanning.repo_scan import default_repo_scan_options
+from hamilton_pipeline.io_contracts import OutputRuntimeContext
 from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from hamilton_pipeline.types import (
@@ -167,7 +168,34 @@ def runtime_profile_spec(
         cache_output_root=cache_root,
         registry_catalogs=registry_catalogs,
     )
-    return replace(resolved, datafusion=updated_profile)
+    return RuntimeProfileSpec(
+        name=resolved.name,
+        datafusion=updated_profile,
+        determinism_tier=resolved.determinism_tier,
+        tracker_config=resolved.tracker_config,
+        hamilton_telemetry=resolved.hamilton_telemetry,
+    )
+
+
+@cache(behavior="ignore")
+@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
+def ctx(
+    runtime_profile_spec: RuntimeProfileSpec,
+    output_config: OutputConfig,
+    cache_context: CacheRuntimeContext,
+) -> OutputRuntimeContext:
+    """Return the output runtime context for caching and execution.
+
+    Returns
+    -------
+    OutputRuntimeContext
+        Runtime context for cache and output operations.
+    """
+    return OutputRuntimeContext(
+        runtime_profile_spec=runtime_profile_spec,
+        output_config=output_config,
+        cache_context=cache_context,
+    )
 
 
 def _normalize_output_root(output_config: OutputConfig) -> str | None:

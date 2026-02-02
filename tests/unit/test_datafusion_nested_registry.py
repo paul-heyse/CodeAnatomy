@@ -29,7 +29,13 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 
 def test_nested_schema_for_cst_parse_manifest() -> None:
-    """Ensure nested schema derivation for LibCST parse manifest."""
+    """Ensure nested schema derivation for LibCST parse manifest.
+
+    Raises
+    ------
+    AssertionError
+        Raised when the nested view spec builder is missing.
+    """
     profile = df_profile()
     ctx = profile.session_context()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
@@ -49,7 +55,13 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
 
 
 def test_nested_schema_for_cst_refs() -> None:
-    """Ensure nested schema derivation for LibCST references."""
+    """Ensure nested schema derivation for LibCST references.
+
+    Raises
+    ------
+    AssertionError
+        Raised when the nested view spec builder is missing.
+    """
     profile = df_profile()
     ctx = profile.session_context()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
@@ -69,7 +81,13 @@ def test_nested_schema_for_cst_refs() -> None:
 
 
 def test_nested_schema_for_cst_call_args() -> None:
-    """Ensure nested schema derivation for LibCST call arguments."""
+    """Ensure nested schema derivation for LibCST call arguments.
+
+    Raises
+    ------
+    AssertionError
+        Raised when the nested view spec builder is missing.
+    """
     profile = df_profile()
     ctx = profile.session_context()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)

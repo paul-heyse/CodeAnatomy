@@ -260,7 +260,13 @@ def _schema_enc_hook(obj: object) -> object:
 
 
 def schema_contract_index() -> list[dict[str, object]]:
-    """Return a structured contract index from msgspec.inspect."""
+    """Return a structured contract index from msgspec.inspect.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        List of contract entries with type info payloads.
+    """
     type_info = msgspec.inspect.multi_type_info(SCHEMA_TYPES)
     entries: list[dict[str, object]] = []
     for schema_type, info in zip(SCHEMA_TYPES, type_info, strict=False):

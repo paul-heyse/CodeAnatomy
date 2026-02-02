@@ -5,10 +5,10 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 39,
-        "end_line": 159,
+        "end_col": 37,
+        "end_line": 157,
         "file": "tools/cq/core/toolchain.py",
-        "line": 14
+        "line": 12
       },
       "category": "definition",
       "details": {
@@ -23,6 +23,72 @@
       },
       "message": "class: Toolchain",
       "severity": "info"
+    },
+    {
+      "anchor": {
+        "col": 0,
+        "end_col": 37,
+        "end_line": 157,
+        "file": "tools/cq/core/toolchain.py",
+        "line": 12
+      },
+      "category": "definition",
+      "details": {
+        "calls_within": 0,
+        "confidence_bucket": "high",
+        "confidence_score": 0.95,
+        "evidence_kind": "resolved_ast",
+        "impact_bucket": "low",
+        "impact_score": 0.0275,
+        "kind": "class_bases",
+        "name": "Toolchain"
+      },
+      "message": "class_bases: Toolchain",
+      "severity": "info"
+    },
+    {
+      "anchor": {
+        "col": 0,
+        "end_col": 37,
+        "end_line": 157,
+        "file": "tools/cq/core/toolchain.py",
+        "line": 12
+      },
+      "category": "definition",
+      "details": {
+        "calls_within": 0,
+        "confidence_bucket": "high",
+        "confidence_score": 0.95,
+        "evidence_kind": "resolved_ast",
+        "impact_bucket": "low",
+        "impact_score": 0.0275,
+        "kind": "class_typeparams",
+        "name": "Toolchain"
+      },
+      "message": "class_typeparams: Toolchain",
+      "severity": "info"
+    },
+    {
+      "anchor": {
+        "col": 0,
+        "end_col": 37,
+        "end_line": 157,
+        "file": "tools/cq/core/toolchain.py",
+        "line": 12
+      },
+      "category": "definition",
+      "details": {
+        "calls_within": 0,
+        "confidence_bucket": "high",
+        "confidence_score": 0.95,
+        "evidence_kind": "resolved_ast",
+        "impact_bucket": "low",
+        "impact_score": 0.0275,
+        "kind": "class_typeparams_bases",
+        "name": "Toolchain"
+      },
+      "message": "class_typeparams_bases: Toolchain",
+      "severity": "info"
     }
   ],
   "run": {
@@ -32,15 +98,15 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.11",
-      "rg": "15.0.0",
-      "sg": "0.40.5"
+      "rpygrep": "0.2.1",
+      "sgpy": "0.40.5"
     }
   },
   "sections": [],
   "summary": {
     "files_scanned": 1,
-    "matches": 1,
+    "matches": 4,
     "total_calls": 0,
-    "total_defs": 6
+    "total_defs": 16
   }
 }

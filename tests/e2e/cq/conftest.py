@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import msgspec
 import pytest
 
 if TYPE_CHECKING:
@@ -161,15 +162,10 @@ def run_query(
             raise RuntimeError(msg)
 
         try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError as e:
-            msg = f"Failed to parse JSON output: {e}\nOutput: {proc.stdout[:500]}"
+            return msgspec.json.decode(proc.stdout.encode("utf-8"), type=CqResult)
+        except msgspec.ValidationError as e:
+            msg = f"Failed to decode CQ JSON output: {e}\nOutput: {proc.stdout[:500]}"
             raise RuntimeError(msg) from e
-
-        if not isinstance(data, dict):
-            msg = "Expected CQ JSON output to be a dictionary."
-            raise TypeError(msg)
-        return CqResult.from_dict(cast("dict[str, Any]", data))
 
     return _query
 

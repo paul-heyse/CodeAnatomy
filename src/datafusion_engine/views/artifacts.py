@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
@@ -14,6 +13,8 @@ from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema.contracts import SCHEMA_ABI_FINGERPRINT_META
 from serde_artifacts import ViewArtifactPayload
 from serde_msgspec import (
+    StructBaseCompat,
+    StructBaseStrict,
     convert,
     dumps_msgpack,
     to_builtins,
@@ -27,8 +28,18 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
 
 
-@dataclass(frozen=True)
-class DataFusionViewArtifact:
+def _coerce_payload_list(value: object, *, field: str) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    msg = f"Expected {field} to be a list."
+    raise TypeError(msg)
+
+
+class DataFusionViewArtifact(StructBaseCompat, frozen=True):
     """DataFusion-native view artifact using plan bundles.
 
     Attributes
@@ -79,7 +90,20 @@ class DataFusionViewArtifact:
             required_udfs=tuple(self.required_udfs),
             referenced_tables=tuple(self.referenced_tables),
         )
-        return cast("dict[str, object]", to_builtins(payload, str_keys=True))
+        payload_dict = cast("dict[str, object]", to_builtins(payload, str_keys=True))
+        payload_dict["schema_describe"] = _coerce_payload_list(
+            payload_dict.get("schema_describe"),
+            field="schema_describe",
+        )
+        payload_dict["required_udfs"] = _coerce_payload_list(
+            payload_dict.get("required_udfs"),
+            field="required_udfs",
+        )
+        payload_dict["referenced_tables"] = _coerce_payload_list(
+            payload_dict.get("referenced_tables"),
+            field="referenced_tables",
+        )
+        return payload_dict
 
     def diagnostics_payload(self, *, event_time_unix_ms: int) -> dict[str, object]:
         """Return a stable diagnostics payload.
@@ -149,16 +173,14 @@ def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | No
     return hash_msgpack_canonical(payload)
 
 
-@dataclass(frozen=True)
-class ViewArtifactLineage:
+class ViewArtifactLineage(StructBaseStrict, frozen=True):
     """Lineage inputs for view artifact construction."""
 
     required_udfs: tuple[str, ...]
     referenced_tables: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class ViewArtifactRequest:
+class ViewArtifactRequest(StructBaseStrict, frozen=True):
     """Inputs required to build a view artifact."""
 
     name: str

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from tree_sitter import Parser, Point, Range, Tree
 
+from extract.coordination.line_offsets import LineOffsets
+
 
 @dataclass(frozen=True)
 class InputEdit:
@@ -113,9 +115,14 @@ def _compute_edit(old: bytes, new: bytes) -> InputEdit | None:
     old_suffix_len = _common_suffix_len(old, new, prefix_len)
     old_end = len(old) - old_suffix_len
     new_end = len(new) - old_suffix_len
-    start_point = _point_from_byte(old, prefix_len)
-    old_end_point = _point_from_byte(old, old_end)
-    new_end_point = _point_from_byte(new, new_end)
+    old_offsets = LineOffsets.from_bytes(old)
+    new_offsets = LineOffsets.from_bytes(new)
+    start_line0, start_col = old_offsets.point_from_byte(prefix_len)
+    old_end_line0, old_end_col = old_offsets.point_from_byte(old_end)
+    new_end_line0, new_end_col = new_offsets.point_from_byte(new_end)
+    start_point = Point(start_line0, start_col)
+    old_end_point = Point(old_end_line0, old_end_col)
+    new_end_point = Point(new_end_line0, new_end_col)
     return InputEdit(
         start_byte=prefix_len,
         old_end_byte=old_end,
@@ -145,17 +152,6 @@ def _common_suffix_len(left: bytes, right: bytes, prefix_len: int) -> int:
         right_idx -= 1
         count += 1
     return count
-
-
-def _point_from_byte(data: bytes, byte_offset: int) -> Point:
-    if byte_offset <= 0:
-        return Point(0, 0)
-    offset = min(byte_offset, len(data))
-    prefix = data[:offset]
-    row = prefix.count(b"\n")
-    last_newline = prefix.rfind(b"\n")
-    col = offset if last_newline == -1 else offset - last_newline - 1
-    return Point(row, col)
 
 
 def _parse_result(tree: Tree | None, *, used_incremental: bool) -> TreeSitterParseResult:

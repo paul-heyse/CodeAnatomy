@@ -1,0 +1,11 @@
+id: py_call_name
+language: python
+severity: hint
+rule:
+  kind: call
+  has:
+    kind: identifier
+    field: function
+metadata:
+  record: call
+  kind: name_call

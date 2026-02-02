@@ -26,6 +26,9 @@ from datafusion_engine.schema.registry import (
 )
 from datafusion_engine.udf.platform import ensure_rust_udfs
 from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.optional_deps import require_datafusion_udfs
+
+require_datafusion_udfs()
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:

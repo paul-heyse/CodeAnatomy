@@ -1,0 +1,32 @@
+id: py_from_import
+snapshots:
+  from collections import defaultdict:
+    labels:
+    - source: from collections import defaultdict
+      style: primary
+      start: 0
+      end: 35
+    - source: defaultdict
+      style: secondary
+      start: 24
+      end: 35
+  from os import path:
+    labels:
+    - source: from os import path
+      style: primary
+      start: 0
+      end: 19
+    - source: path
+      style: secondary
+      start: 15
+      end: 19
+  from typing import Optional:
+    labels:
+    - source: from typing import Optional
+      style: primary
+      start: 0
+      end: 27
+    - source: Optional
+      style: secondary
+      start: 19
+      end: 27

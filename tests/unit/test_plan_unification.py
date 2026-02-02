@@ -44,6 +44,14 @@ if not TYPE_CHECKING:
     RegistryViewNode = ViewNode
 
 
+class ManagedSQLiteMetadataStore(SQLiteMetadataStore):
+    """SQLite metadata store with a public close hook for tests."""
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        self._close_connection()
+
+
 def _install_introspection_stub() -> None:
     if "datafusion_engine.introspection" in sys.modules:
         return
@@ -205,7 +213,7 @@ def _cache_module(module_name: str) -> ModuleType:
 
 def _apply_cache(builder: driver.Builder, cache_dir: Path) -> driver.Builder:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    metadata_store = SQLiteMetadataStore(path=str(cache_dir / "meta.sqlite"))
+    metadata_store = ManagedSQLiteMetadataStore(path=str(cache_dir / "meta.sqlite"))
     results_dir = cache_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     result_store = FileResultStore(path=str(results_dir))
@@ -478,3 +486,7 @@ def test_plan_signature_participates_in_cache_keys(tmp_path: Path) -> None:
     driver_b = _build_cached_driver(plan_b, cache_dir, suffix="b")
     version_b = _data_versions_for_runs(driver_b, runs=1)[0]
     assert version_b != versions_a[0]
+    store_a = cast("ManagedSQLiteMetadataStore", driver_a.cache.metadata_store)
+    store_b = cast("ManagedSQLiteMetadataStore", driver_b.cache.metadata_store)
+    store_a.close()
+    store_b.close()

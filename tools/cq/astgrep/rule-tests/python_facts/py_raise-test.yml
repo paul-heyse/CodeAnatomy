@@ -1,0 +1,9 @@
+id: py_raise
+valid:
+  - "x = 1"
+  - "raise ValueError() from other"
+  - "raise"
+invalid:
+  - "raise ValueError()"
+  - "raise Exception('error')"
+  - "raise RuntimeError(msg)"

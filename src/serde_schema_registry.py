@@ -205,6 +205,7 @@ def _external_schema_components() -> dict[str, object]:
             continue
         if "x-codeanatomy-domain" not in payload:
             payload["x-codeanatomy-domain"] = "protocol"
+        payload.setdefault("description", "Delta protocol schema component.")
         components[title] = payload
     return components
 

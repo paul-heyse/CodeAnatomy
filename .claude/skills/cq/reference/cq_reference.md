@@ -1,6 +1,6 @@
 # Code Query (cq) Reference Documentation
 
-> Version 0.2.0 | Schema: cq.v1
+> Version 0.3.0 | Schema: cq.v1
 
 ## Overview
 
@@ -440,6 +440,138 @@ Default: `globals,attrs,constants`
 
 ---
 
+### q - Declarative Entity Queries
+
+The `q` command provides a composable, declarative query system for finding and analyzing code entities using ast-grep.
+
+```bash
+/cq q "<query_string>"
+```
+
+**How it works:**
+1. Parses query string into structured Query IR
+2. Planner determines which ast-grep record types to collect
+3. Optional ripgrep prefilter narrows files by name pattern
+4. ast-grep scans files, collecting matching records
+5. Executor filters by entity type and name, builds findings
+
+**Query Syntax:**
+
+```
+entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS] [expand=KIND(depth=N)] [fields=FIELDS] [limit=N] [explain=true]
+```
+
+**Entity Types:**
+
+| Entity | ast-grep Kinds | Description |
+|--------|---------------|-------------|
+| `function` | function, async_function | Function definitions |
+| `class` | class, class_bases | Class definitions |
+| `method` | function (in class context) | Method definitions |
+| `import` | import, import_as, from_import, from_import_as, from_import_multi, from_import_paren | All import forms |
+| `callsite` | call_name, call_attr | Call sites |
+
+**Name Patterns:**
+
+- **Exact match**: `name=build_graph_product`
+- **Regex match**: `name=~^build.*` (prefix with `~`)
+
+The planner generates ripgrep patterns to prefilter files:
+- Functions: `def\s+NAME\s*\(`
+- Classes: `class\s+NAME\s*[:\[]`
+- Imports: `import\s+NAME` or `from\s+\S+\s+import\s+.*NAME`
+
+**Scope Constraints:**
+
+| Parameter | Example | Description |
+|-----------|---------|-------------|
+| `in=` | `in=src/semantics/` | Search only in directory |
+| `exclude=` | `exclude=tests,venv` | Exclude directories (comma-separated) |
+
+**Expanders:**
+
+Graph expansion operators for traversing relationships:
+
+| Expander | Default Depth | Description |
+|----------|---------------|-------------|
+| `callers` | 1 | Find functions calling the target |
+| `callees` | 1 | Find functions called by target |
+| `imports` | 1 | Find related imports |
+| `raises` | 1 | Find exception handling |
+| `scope` | 1 | Analyze closure captures |
+
+Depth syntax: `expand=callers(depth=2)` for transitive analysis.
+
+**Output Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `def` | Definition signature and location (default) |
+| `callers` | Section showing calling functions |
+| `callees` | Section showing called functions |
+| `hazards` | Hazard detection (dynamic dispatch, forwarding) |
+| `evidence` | Supporting evidence with scores |
+
+**Output Structure:**
+
+For `entity=import`, findings have:
+- `category`: "import" or "from_import"
+- `message`: e.g., "from_import: Path"
+- `anchor`: file, line, col, end_line, end_col
+- `details`: kind, name, text
+
+For `entity=function/class`, findings have:
+- `category`: "definition"
+- `message`: e.g., "function: build_graph_product"
+- `details`: kind, name, calls_within, impact_score, confidence_score
+
+**Hazard Detection:**
+
+When `fields=hazards` is specified:
+
+| Hazard | Pattern | Reason |
+|--------|---------|--------|
+| dynamic_dispatch | `getattr(...)` | May resolve dynamically |
+| forwarding | `*args`/`**kwargs` in call | Obscures call target |
+
+**Examples:**
+
+```bash
+# Find all imports of a specific module
+/cq q "entity=import name=Path"
+
+# Find imports with regex pattern
+/cq q "entity=import name=~pandas"
+
+# Find functions in a directory
+/cq q "entity=function in=src/semantics/"
+
+# Find functions by pattern with caller analysis
+/cq q "entity=function name=~^compile expand=callers(depth=2)"
+
+# Class definitions with hazards
+/cq q "entity=class fields=def,hazards in=src/"
+
+# Limit results
+/cq q "entity=import limit=20"
+
+# Show query execution plan
+/cq q "entity=function name=build explain=true"
+```
+
+**Comparison: Macros vs Query Command:**
+
+| Aspect | Macros (`impact`, `calls`) | Query (`q`) |
+|--------|---------------------------|-------------|
+| Purpose | High-level domain analyses | Low-level composable queries |
+| Input | Named CLI flags | Key=value query string |
+| Flexibility | Fixed analysis patterns | User-defined combinations |
+| Use case | Common analysis tasks | Custom entity searches |
+
+Use macros for specific analyses (parameter flow, signature changes). Use `q` for flexible entity discovery and custom queries.
+
+---
+
 ## Filtering Options
 
 All commands support these filtering options:
@@ -721,3 +853,607 @@ apt install ripgrep   # Debian/Ubuntu
 Default: `.cq/artifacts/`
 Override: `--artifact-dir /custom/path`
 Disable: `--no-save-artifact`
+
+---
+
+## Pattern Queries (Structural Search)
+
+Pattern queries use ast-grep syntax for structural code matching. Unlike regex, patterns match actual code structure without false positives from strings or comments.
+
+### Pattern Syntax
+
+Patterns use metavariables to capture code structure:
+
+| Metavariable | Meaning |
+|--------------|---------|
+| `$X` | Match a single AST node (expression, identifier, etc.) |
+| `$$$` | Match zero or more AST nodes (variadic) |
+| `$$X` | Match zero or more nodes and bind to name X |
+| `$_` | Match a single node (anonymous, no binding) |
+
+### Query Syntax
+
+```bash
+/cq q "pattern='<ast-grep-pattern>'" [strictness=MODE]
+```
+
+### Strictness Modes
+
+| Mode | Description |
+|------|-------------|
+| `cst` | Exact CST match (whitespace-sensitive) |
+| `smart` | Default - balances precision and recall |
+| `ast` | Pure AST match (ignores whitespace, parentheses) |
+| `relaxed` | Looser matching for exploratory queries |
+| `signature` | Match function signatures only |
+
+### Pattern Examples
+
+```bash
+# Find dynamic attribute access
+/cq q "pattern='getattr(\$X, \$Y)'"
+
+# Find all f-string usages
+/cq q "pattern='f\"\$\$\$\"'"
+
+# Find specific decorator usage
+/cq q "pattern='@dataclass'"
+
+# Find eval/exec hazards
+/cq q "pattern='eval(\$X)'"
+
+# Find pickle.load (security hazard)
+/cq q "pattern='pickle.load(\$X)'"
+
+# Find functions that take **kwargs
+/cq q "pattern='def \$F(\$\$\$, **\$K)'"
+
+# Find try blocks without except
+/cq q "pattern='try: \$\$\$ finally: \$\$\$'"
+
+# Find async function definitions
+/cq q "pattern='async def \$F(\$$$)'"
+
+# Match with strictness
+/cq q "pattern='def \$F(\$_): ...' strictness=signature"
+```
+
+### Pattern vs Regex
+
+| Aspect | Pattern Query | Grep/Regex |
+|--------|--------------|------------|
+| False positives | None from strings/comments | Common |
+| Structure awareness | Yes (AST-based) | No (text-based) |
+| Metavariables | Yes (`$X`, `$$$`) | Capture groups only |
+| Context constraints | Yes (`inside`, `has`) | No |
+
+---
+
+## Relational Constraints (Contextual Search)
+
+Find code patterns in specific structural contexts using relational constraints.
+
+### Available Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| `inside='<pattern>'` | Pattern must be within a containing pattern |
+| `has='<pattern>'` | Pattern must contain a nested pattern |
+| `precedes='<pattern>'` | Pattern must appear before another |
+| `follows='<pattern>'` | Pattern must appear after another |
+
+### Stop-by Modes
+
+For `inside` and `has`, control how far to search:
+
+| Mode | Description |
+|------|-------------|
+| `neighbor` | Stop at immediate neighbors (default) |
+| `end` | Search to end of containing scope |
+
+### Examples
+
+```bash
+# Find methods inside Config classes
+/cq q "entity=function inside='class Config'"
+
+# Find functions that contain getattr calls
+/cq q "entity=function has='getattr(\$X, \$Y)'"
+
+# Find functions inside async context managers
+/cq q "entity=function inside='async with \$X'"
+
+# Find return statements inside try blocks
+/cq q "pattern='return \$X' inside='try: \$\$\$'"
+
+# Find assignments that precede return statements
+/cq q "pattern='\$X = \$Y' precedes='return'"
+```
+
+### Combining Constraints
+
+Multiple constraints can be combined:
+
+```bash
+# Find getattr inside Config classes that has a string literal
+/cq q "pattern='getattr(\$X, \$Y)' inside='class Config' has='\"\$S\"'"
+```
+
+---
+
+## Scope Filtering (Closure Analysis)
+
+Filter functions by scope characteristics using Python's symtable module. Essential for safe refactoring of nested functions.
+
+### Scope Types
+
+| Type | Description |
+|------|-------------|
+| `module` | Module-level (top-level) functions |
+| `function` | Functions nested inside other functions |
+| `class` | Methods defined inside classes |
+| `closure` | Functions that capture variables from enclosing scope |
+
+### Query Syntax
+
+```bash
+/cq q "entity=function scope=TYPE"
+```
+
+### Scope Filters
+
+| Filter | Description |
+|--------|-------------|
+| `scope=closure` | Functions that capture variables (have free vars) |
+| `scope=module` | Top-level module functions |
+| `scope=class` | Methods in classes |
+| `captures=<var>` | Functions capturing a specific variable |
+| `has_cells=true` | Functions that provide variables to nested scopes |
+
+### Examples
+
+```bash
+# Find all closures in the codebase
+/cq q "entity=function scope=closure"
+
+# Find closures in a specific directory
+/cq q "entity=function scope=closure in=src/semantics/"
+
+# Find functions capturing a specific variable
+/cq q "entity=function captures=config"
+
+# Find functions that provide variables to nested scopes
+/cq q "entity=function has_cells=true"
+
+# Find module-level functions only
+/cq q "entity=function scope=module in=src/"
+```
+
+### Understanding Scope Output
+
+The scope analysis output includes:
+
+| Field | Description |
+|-------|-------------|
+| `free_vars` | Variables captured from enclosing scope |
+| `cell_vars` | Variables provided to nested scopes |
+| `nonlocals` | Explicit `nonlocal` declarations |
+| `globals_used` | Global variable references |
+
+**Use case:** Before extracting a nested function, use scope filtering to identify captured variables that would break when moved.
+
+---
+
+## Decorator Queries
+
+Find decorated functions or analyze decorator usage patterns.
+
+### Entity Type
+
+```bash
+/cq q "entity=decorator"  # Find decorator definitions
+```
+
+### Decorator Filters
+
+| Filter | Description |
+|--------|-------------|
+| `decorated_by=<name>` | Functions with specific decorator |
+| `decorator_count_min=N` | Functions with at least N decorators |
+| `decorator_count_max=N` | Functions with at most N decorators |
+
+### Examples
+
+```bash
+# Find all @pytest.fixture decorated functions
+/cq q "entity=function decorated_by=fixture"
+
+# Find @dataclass decorated classes
+/cq q "entity=class decorated_by=dataclass"
+
+# Find heavily decorated functions (3+ decorators)
+/cq q "entity=function decorator_count_min=3"
+
+# Find functions with @staticmethod decorator
+/cq q "entity=function decorated_by=staticmethod"
+
+# Find functions with @property decorator
+/cq q "entity=function decorated_by=property"
+
+# Find async functions with decorators
+/cq q "entity=function decorated_by=asynccontextmanager"
+```
+
+### Decorator Extraction
+
+When using `fields=def`, decorator information is included:
+
+```json
+{
+  "name": "my_function",
+  "decorators": ["staticmethod", "cache"],
+  "decorator_count": 2
+}
+```
+
+---
+
+## Join Queries (Cross-Entity Relationships)
+
+Find entities by their relationships to other entities using join operations.
+
+### Join Target Syntax
+
+```
+entity:name
+```
+
+Where `entity` is the entity type and `name` is the entity name.
+
+### Available Joins
+
+| Join | Description |
+|------|-------------|
+| `used_by=function:name` | Find entities called by the named function |
+| `defines=class:name` | Find modules that define the named class |
+| `raises=class:Exception` | Find functions that raise the named exception |
+| `exports=function:name` | Find modules that export the named function |
+
+### Examples
+
+```bash
+# Find functions called by main
+/cq q "entity=function used_by=function:main"
+
+# Find modules that define Config class
+/cq q "entity=module defines=class:Config"
+
+# Find functions that raise ValueError
+/cq q "entity=function raises=class:ValueError"
+
+# Find modules that export build_graph_product
+/cq q "entity=module exports=function:build_graph_product"
+
+# Find functions used by build_cpg
+/cq q "entity=function used_by=function:build_cpg"
+```
+
+### Join Depth
+
+Joins can be combined with `expand` for transitive analysis:
+
+```bash
+# Find all functions transitively called by main
+/cq q "entity=function used_by=function:main expand=callees(depth=3)"
+```
+
+---
+
+## Hazard Detection
+
+cq includes builtin hazard detection for security, correctness, design, and performance issues.
+
+### Hazard Categories
+
+| Category | Description |
+|----------|-------------|
+| `SECURITY` | Security vulnerabilities (eval, pickle, etc.) |
+| `CORRECTNESS` | Logic errors, type issues |
+| `DESIGN` | Design smells, complexity issues |
+| `PERFORMANCE` | Performance anti-patterns |
+
+### Hazard Severity
+
+| Severity | Description |
+|----------|-------------|
+| `ERROR` | Critical issues requiring immediate attention |
+| `WARNING` | Issues that should be addressed |
+| `INFO` | Informational notes |
+
+### Builtin Hazards
+
+| Pattern | Category | Severity | Message |
+|---------|----------|----------|---------|
+| `eval($X)` | SECURITY | ERROR | Dynamic code execution |
+| `exec($X)` | SECURITY | ERROR | Dynamic code execution |
+| `pickle.load($X)` | SECURITY | ERROR | Unsafe deserialization |
+| `pickle.loads($X)` | SECURITY | ERROR | Unsafe deserialization |
+| `yaml.load($X)` | SECURITY | WARNING | Potentially unsafe YAML load |
+| `subprocess.shell=True` | SECURITY | WARNING | Shell injection risk |
+| `getattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute access |
+| `setattr($X, $Y, $Z)` | CORRECTNESS | INFO | Dynamic attribute modification |
+| `__import__($X)` | CORRECTNESS | WARNING | Dynamic import |
+| `globals()` | CORRECTNESS | INFO | Global namespace access |
+| `locals()` | CORRECTNESS | INFO | Local namespace access |
+
+### Using Hazard Detection
+
+```bash
+# Include hazards in output
+/cq q "entity=function fields=hazards"
+
+# Find functions with hazards in a directory
+/cq q "entity=function in=src/ fields=def,hazards"
+
+# Combine with pattern search
+/cq q "pattern='eval(\$X)'"
+```
+
+### Hazard Output Format
+
+When `fields=hazards` is specified, findings include:
+
+```json
+{
+  "hazards": [
+    {
+      "category": "SECURITY",
+      "severity": "ERROR",
+      "pattern": "eval($X)",
+      "message": "Dynamic code execution",
+      "anchor": {"file": "src/foo.py", "line": 42}
+    }
+  ]
+}
+```
+
+---
+
+## Visualization Outputs
+
+Generate visual representations of code structure for understanding complex relationships.
+
+### Output Formats
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| Mermaid Flowchart | `--format mermaid` | Call graphs, data flow |
+| Mermaid Class Diagram | `--format mermaid-class` | Class hierarchies |
+| Graphviz DOT | `--format dot` | Complex graphs for external tools |
+
+### Mermaid Flowchart
+
+```bash
+# Generate call graph for a function
+/cq q "entity=function name=build_cpg expand=callers" --format mermaid
+```
+
+Output:
+```mermaid
+flowchart TD
+    build_cpg --> pipeline_run
+    build_cpg --> semantic_compile
+    pipeline_run --> main
+```
+
+### Mermaid Class Diagram
+
+```bash
+# Generate class diagram for a module
+/cq q "entity=class in=src/semantics/" --format mermaid-class
+```
+
+Output:
+```mermaid
+classDiagram
+    SemanticCompiler <|-- IncrementalCompiler
+    SemanticCompiler : +compile()
+    SemanticCompiler : +normalize()
+```
+
+### Graphviz DOT
+
+```bash
+# Export for Graphviz
+/cq q "entity=function expand=callees" --format dot > graph.dot
+
+# Render with Graphviz
+dot -Tpng graph.dot -o graph.png
+```
+
+### When to Use Each Format
+
+| Use Case | Format |
+|----------|--------|
+| Quick visualization in docs | `mermaid` |
+| Class hierarchy documentation | `mermaid-class` |
+| Complex graphs for analysis | `dot` |
+| CI integration | `dot` (machine-readable) |
+
+### Visualization Examples
+
+```bash
+# Visualize call hierarchy before refactoring
+/cq q "entity=function name=compile_query expand=callers(depth=2)" --format mermaid
+
+# Visualize class inheritance
+/cq q "entity=class name=~^Semantic expand=bases" --format mermaid-class
+
+# Export full call graph
+/cq q "entity=function in=src/semantics/ expand=callees" --format dot
+```
+
+---
+
+## Cache Management
+
+cq uses intelligent caching to speed up repeated queries.
+
+### Cache Architecture
+
+- Query results cached by query fingerprint + file modification times
+- Cache invalidated when source files change
+- SQLite-based storage in `.cq/cache/`
+
+### Cache Commands
+
+```bash
+# Show cache statistics
+/cq cache --stats
+
+# Clear the cache
+/cq cache --clear
+```
+
+### Cache Stats Output
+
+```
+Cache Statistics:
+  Location: .cq/cache/query_cache.db
+  Entries: 1,247
+  Size: 12.3 MB
+  Hit rate: 78.4%
+  Last pruned: 2024-01-15 14:23:00
+```
+
+### Bypassing Cache
+
+```bash
+# Run query without using cache
+/cq q "entity=function" --no-cache
+```
+
+### Cache Invalidation
+
+The cache is automatically invalidated when:
+- Source files are modified (based on mtime)
+- File hashes change
+- Query parameters change
+
+### Cache Configuration
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CQ_CACHE_DIR` | `.cq/cache` | Cache directory location |
+| `CQ_CACHE_TTL` | `3600` | Cache TTL in seconds |
+| `CQ_CACHE_DISABLED` | `false` | Disable caching entirely |
+
+---
+
+## Complete Query Reference
+
+### Full Query Syntax
+
+```
+entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
+  [pattern='<ast-grep>'] [strictness=MODE]
+  [inside='<pattern>'] [has='<pattern>']
+  [precedes='<pattern>'] [follows='<pattern>']
+  [scope=TYPE] [captures=VAR] [has_cells=BOOL]
+  [decorated_by=NAME] [decorator_count_min=N] [decorator_count_max=N]
+  [used_by=TYPE:NAME] [defines=TYPE:NAME] [raises=TYPE:NAME]
+  [expand=KIND(depth=N)] [fields=FIELDS]
+  [limit=N] [explain=true]
+```
+
+### Parameter Reference
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `entity` | function, class, import, callsite, decorator, module | Entity type to find |
+| `name` | exact or `~regex` | Name pattern |
+| `in` | directory path | Search scope |
+| `exclude` | comma-separated dirs | Exclusions |
+| `pattern` | ast-grep pattern | Structural pattern |
+| `strictness` | cst, smart, ast, relaxed, signature | Pattern matching mode |
+| `inside` | ast-grep pattern | Containing context |
+| `has` | ast-grep pattern | Nested context |
+| `precedes` | ast-grep pattern | Sequential before |
+| `follows` | ast-grep pattern | Sequential after |
+| `scope` | module, function, class, closure | Scope type filter |
+| `captures` | variable name | Captured variable filter |
+| `has_cells` | true/false | Cell variable filter |
+| `decorated_by` | decorator name | Decorator filter |
+| `decorator_count_min` | integer | Minimum decorator count |
+| `decorator_count_max` | integer | Maximum decorator count |
+| `used_by` | type:name | Usage join |
+| `defines` | type:name | Definition join |
+| `raises` | type:name | Exception join |
+| `expand` | callers, callees, imports, raises, scope | Graph expansion |
+| `fields` | def, callers, callees, hazards, evidence | Output fields |
+| `limit` | integer | Result limit |
+| `explain` | true | Show query plan |
+
+---
+
+## Advanced Examples
+
+### Security Audit
+
+```bash
+# Find all security hazards
+/cq q "entity=function fields=hazards" | grep -i security
+
+# Find eval/exec usage
+/cq q "pattern='eval(\$X)'"
+/cq q "pattern='exec(\$X)'"
+
+# Find unsafe deserialization
+/cq q "pattern='pickle.load(\$X)'"
+/cq q "pattern='yaml.load(\$X)'"
+```
+
+### Pre-Refactoring Analysis
+
+```bash
+# Understand function usage before changing signature
+/cq calls function_name
+/cq sig-impact function_name --to "function_name(new, sig)"
+
+# Find all closures before extracting functions
+/cq q "entity=function scope=closure in=src/module/"
+
+# Visualize call hierarchy
+/cq q "entity=function name=target expand=callers(depth=3)" --format mermaid
+```
+
+### Codebase Understanding
+
+```bash
+# Find all entry points (module-level functions)
+/cq q "entity=function scope=module decorated_by=main"
+
+# Find all dataclasses
+/cq q "entity=class decorated_by=dataclass"
+
+# Find complex functions (many decorators)
+/cq q "entity=function decorator_count_min=3"
+
+# Understand class hierarchy
+/cq q "entity=class in=src/semantics/" --format mermaid-class
+```
+
+### Debugging Patterns
+
+```bash
+# Find all logging calls
+/cq q "pattern='logger.\$METHOD(\$$$)'"
+
+# Find print statements
+/cq q "pattern='print(\$$$)'"
+
+# Find assertion usage
+/cq q "pattern='assert \$X'"
+```

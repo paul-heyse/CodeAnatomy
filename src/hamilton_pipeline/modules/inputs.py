@@ -34,6 +34,7 @@ from hamilton_pipeline.types import (
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
 from semantics.incremental import IncrementalConfig
+from semantics.runtime import SemanticRuntimeConfig
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc_utils import IpcWriteConfig
 from utils.env_utils import env_bool, env_value
@@ -41,7 +42,11 @@ from utils.env_utils import env_bool, env_value
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetCatalog
     from obs.otel import OtelBootstrapOptions
-    from semantics.runtime import SemanticRuntimeConfig
+else:
+    try:
+        from obs.otel import OtelBootstrapOptions
+    except ImportError:
+        OtelBootstrapOptions = object
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:

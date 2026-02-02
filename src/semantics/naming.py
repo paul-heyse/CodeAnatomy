@@ -29,6 +29,9 @@ SEMANTIC_OUTPUT_NAMES: Final[dict[str, str]] = {
     "rel_def_symbol": "rel_def_symbol_v1",
     "rel_import_symbol": "rel_import_symbol_v1",
     "rel_callsite_symbol": "rel_callsite_symbol_v1",
+    # Semantic union layer outputs
+    "semantic_nodes_union": "semantic_nodes_union_v1",
+    "semantic_edges_union": "semantic_edges_union_v1",
     # Final CPG outputs
     "cpg_nodes": "cpg_nodes_v1",
     "cpg_edges": "cpg_edges_v1",

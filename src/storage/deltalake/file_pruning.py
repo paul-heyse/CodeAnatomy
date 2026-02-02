@@ -12,6 +12,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
 from core.config_base import FingerprintableConfig, config_fingerprint
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
 from datafusion_engine.udf.shims import list_extract, map_extract
 
@@ -327,7 +328,7 @@ def _map_value_expr(map_col: str, key: str, *, cast_type: str | None = None) -> 
     value_expr = list_extract(map_extract(col(map_col), key), 1)
     if cast_type is None:
         return value_expr
-    return f.arrow_cast(value_expr, lit(cast_type))
+    return safe_cast(value_expr, cast_type)
 
 
 def _partition_filter_expr(filter_spec: PartitionFilter) -> Expr:
@@ -352,7 +353,7 @@ def _stats_filter_expr(filter_spec: StatsFilter) -> Expr:
     min_expr = _map_value_expr("stats_min", filter_spec.column, cast_type=filter_spec.cast_type)
     max_expr = _map_value_expr("stats_max", filter_spec.column, cast_type=filter_spec.cast_type)
     value_expr = (
-        f.arrow_cast(lit(filter_spec.value), lit(filter_spec.cast_type))
+        safe_cast(lit(filter_spec.value), filter_spec.cast_type)
         if filter_spec.cast_type is not None
         else lit(filter_spec.value)
     )

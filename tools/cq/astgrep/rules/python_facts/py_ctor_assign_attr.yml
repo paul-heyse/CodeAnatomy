@@ -1,0 +1,17 @@
+id: py_ctor_assign_attr
+language: python
+severity: hint
+rule:
+  kind: assignment
+  has:
+    kind: call
+    has:
+      kind: attribute
+      field: function
+      has:
+        kind: identifier
+        field: attribute
+        regex: "^[A-Z]"
+metadata:
+  record: assign_ctor
+  kind: ctor_assign_attr

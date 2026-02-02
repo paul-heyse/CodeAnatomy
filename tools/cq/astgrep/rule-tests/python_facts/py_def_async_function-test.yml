@@ -1,0 +1,11 @@
+id: py_def_async_function
+valid:
+  - "def foo(): pass"
+  - "class Foo: pass"
+invalid:
+  - |
+    async def foo():
+        pass
+  - |
+    async def fetch(url):
+        return await get(url)

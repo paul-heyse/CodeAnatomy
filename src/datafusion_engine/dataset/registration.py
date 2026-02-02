@@ -1030,14 +1030,21 @@ def _validate_constraints_and_defaults(
 
 
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal."
-        raise RuntimeError(msg) from exc
+    module = None
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            candidate = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if hasattr(candidate, "install_schema_evolution_adapter_factory"):
+            module = candidate
+            break
+    if module is None:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
     installer = getattr(module, "install_schema_evolution_adapter_factory", None)
     if not callable(installer):
-        msg = "Schema evolution adapter installer is unavailable in datafusion._internal."
+        msg = "Schema evolution adapter installer is unavailable in the extension module."
         raise TypeError(msg)
     installer(ctx)
 
@@ -1518,16 +1525,31 @@ def _build_delta_provider_registration(
     )
 
 
+def _provider_for_registration(provider: object) -> object:
+    if hasattr(provider, "__datafusion_table_provider__"):
+        return provider
+    try:
+        import pyarrow.dataset as ds
+        from datafusion.catalog import Table
+        from datafusion.dataframe import DataFrame
+    except ImportError:
+        return TableProviderCapsule(provider)
+    if isinstance(provider, (ds.Dataset, DataFrame, Table)):
+        return provider
+    return TableProviderCapsule(provider)
+
+
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
     registration = _build_delta_provider_registration(context)
     resolution = registration.resolution
     provider = resolution.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
+    provider_to_register = _provider_for_registration(provider)
     if resolution.provider_kind == "delta_cdf":
-        adapter.register_delta_cdf_provider(context.name, TableProviderCapsule(provider))
+        adapter.register_delta_cdf_provider(context.name, provider_to_register)
     else:
-        adapter.register_delta_table_provider(context.name, TableProviderCapsule(provider))
+        adapter.register_delta_table_provider(context.name, provider_to_register)
     df = context.ctx.table(context.name)
     schema_identity_hash_value, ddl_fingerprint, fingerprint_details = (
         _update_table_provider_fingerprints(
@@ -2256,14 +2278,21 @@ def _requires_schema_evolution_adapter(evolution: object) -> bool:
 
 
 def _schema_evolution_adapter_factory() -> object:
-    try:
-        module = importlib.import_module("datafusion._internal")
-    except ImportError as exc:
-        msg = "Schema evolution adapter requires datafusion._internal."
-        raise RuntimeError(msg) from exc
+    module = None
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            candidate = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if hasattr(candidate, "schema_evolution_adapter_factory"):
+            module = candidate
+            break
+    if module is None:
+        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        raise RuntimeError(msg)
     factory = getattr(module, "schema_evolution_adapter_factory", None)
     if not callable(factory):
-        msg = "schema_evolution_adapter_factory is not available in datafusion._internal."
+        msg = "schema_evolution_adapter_factory is unavailable in the extension module."
         raise TypeError(msg)
     return factory()
 

@@ -1,0 +1,11 @@
+id: py_def_function_typeparams
+valid:
+  - "def foo(): pass"
+  - "def bar(x): pass"
+invalid:
+  - |
+    def foo[T]():
+        pass
+  - |
+    def identity[T](x: T) -> T:
+        return x

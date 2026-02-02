@@ -1,0 +1,11 @@
+id: py_except
+language: python
+severity: hint
+rule:
+  kind: except_clause
+  regex: "^except [A-Za-z]"
+  not:
+    regex: " as "
+metadata:
+  record: except
+  kind: except

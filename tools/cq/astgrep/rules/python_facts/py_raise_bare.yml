@@ -1,0 +1,9 @@
+id: py_raise_bare
+language: python
+severity: hint
+rule:
+  kind: raise_statement
+  regex: "^raise$"
+metadata:
+  record: raise
+  kind: raise_bare

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+_NODE_BUNDLE_COLUMNS: tuple[str, ...] = ("path", "span", "bstart", "bend", "file_id")
+_EDGE_BUNDLE_COLUMNS: tuple[str, ...] = ("path", "span", "bstart", "bend")
+
 _NODE_OUTPUT_COLUMNS: tuple[str, ...] = (
     "node_id",
     "node_kind",
     "path",
+    "span",
     "bstart",
     "bend",
     "file_id",
@@ -21,6 +25,7 @@ _EDGE_OUTPUT_COLUMNS: tuple[str, ...] = (
     "src_node_id",
     "dst_node_id",
     "path",
+    "span",
     "bstart",
     "bend",
     "origin",
@@ -49,6 +54,13 @@ _PROP_OUTPUT_COLUMNS: tuple[str, ...] = (
     "task_priority",
 )
 
+_NODE_OUTPUT_FIELDS: tuple[str, ...] = tuple(
+    name for name in _NODE_OUTPUT_COLUMNS if name not in _NODE_BUNDLE_COLUMNS
+)
+_EDGE_OUTPUT_FIELDS: tuple[str, ...] = tuple(
+    name for name in _EDGE_OUTPUT_COLUMNS if name not in _EDGE_BUNDLE_COLUMNS
+)
+
 
 @dataclass(frozen=True)
 class CpgPropOptions:
@@ -59,7 +71,9 @@ class CpgPropOptions:
 
 __all__ = [
     "_EDGE_OUTPUT_COLUMNS",
+    "_EDGE_OUTPUT_FIELDS",
     "_NODE_OUTPUT_COLUMNS",
+    "_NODE_OUTPUT_FIELDS",
     "_PROP_OUTPUT_COLUMNS",
     "CpgPropOptions",
 ]

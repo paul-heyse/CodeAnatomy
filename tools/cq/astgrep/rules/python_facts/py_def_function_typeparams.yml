@@ -1,0 +1,10 @@
+id: py_def_function_typeparams
+language: python
+severity: hint
+rule:
+  kind: function_definition
+  has:
+    kind: type_parameter
+metadata:
+  record: def
+  kind: function_typeparams

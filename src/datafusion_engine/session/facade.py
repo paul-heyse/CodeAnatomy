@@ -131,7 +131,10 @@ class DataFusionExecutionFacade:
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
+            native_udf_platform_available,
         )
+
+        platform_strict = native_udf_platform_available()
 
         if self.runtime_profile is None:
             # Default configuration: enable all planner extensions
@@ -140,7 +143,7 @@ class DataFusionExecutionFacade:
                 enable_function_factory=True,
                 enable_expr_planners=True,
                 expr_planner_names=("codeanatomy_domain",),
-                strict=True,
+                strict=platform_strict,
             )
             install_rust_udf_platform(self.ctx, options=options)
             return
@@ -156,7 +159,7 @@ class DataFusionExecutionFacade:
             function_factory_hook=self.runtime_profile.function_factory_hook,
             expr_planner_hook=self.runtime_profile.expr_planner_hook,
             expr_planner_names=self.runtime_profile.expr_planner_names,
-            strict=True,
+            strict=platform_strict,
         )
         install_rust_udf_platform(self.ctx, options=options)
 

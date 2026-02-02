@@ -1,0 +1,16 @@
+id: py_def_function
+valid:
+  - "x = 1"
+  - "class Foo: pass"
+  - "async def foo(): pass"
+invalid:
+  - |
+    def foo():
+        pass
+  - |
+    def bar(a, b):
+        return a + b
+  - |
+    def process(data):
+        result = data * 2
+        return result

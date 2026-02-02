@@ -10,6 +10,7 @@ from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.metadata import encoding_policy_from_schema
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
+from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from semantics.catalog.dataset_specs import dataset_name_from_alias
 from semantics.incremental.delta_context import (
@@ -31,6 +32,8 @@ from storage.deltalake import (
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+_STREAMING_ROW_THRESHOLD: int = 100_000
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,12 @@ def write_overwrite_dataset(
     if write_result.delta_result is None:
         msg = f"Overwrite delta write returned no result for {spec.name!r}."
         raise RuntimeError(msg)
+    if data.num_rows > _STREAMING_ROW_THRESHOLD:
+        record_artifact(
+            context.runtime.profile,
+            "incremental_streaming_writes_v1",
+            {"dataset_name": spec.name, "row_count": data.num_rows},
+        )
     return {spec.name: write_result.delta_result.path}
 
 

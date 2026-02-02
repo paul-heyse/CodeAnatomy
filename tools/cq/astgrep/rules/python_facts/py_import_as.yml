@@ -1,0 +1,10 @@
+id: py_import_as
+language: python
+severity: hint
+rule:
+  kind: import_statement
+  has:
+    kind: aliased_import
+metadata:
+  record: import
+  kind: import_as

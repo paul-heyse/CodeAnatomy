@@ -293,10 +293,23 @@ def table_names_snapshot(
     set[str]
         Set of table names registered in the session.
     """
-    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    if "table_name" not in snapshot.tables.column_names:
-        return set()
-    return {str(name) for name in snapshot.tables["table_name"].to_pylist() if name is not None}
+    try:
+        snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+        if "table_name" in snapshot.tables.column_names:
+            return {
+                str(name) for name in snapshot.tables["table_name"].to_pylist() if name is not None
+            }
+    except (ValueError, RuntimeError, TypeError, KeyError):
+        pass
+    tables = getattr(ctx, "tables", None)
+    if callable(tables):
+        try:
+            names = tables()
+            if isinstance(names, Iterable) and not isinstance(names, (str, bytes, bytearray)):
+                return {str(name) for name in names if name is not None}
+        except (RuntimeError, TypeError, ValueError):
+            return set()
+    return set()
 
 
 def settings_snapshot_table(

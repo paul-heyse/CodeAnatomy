@@ -1,0 +1,30 @@
+id: py_def_class_bases
+snapshots:
+  ? |
+    class Child(Parent, Mixin):
+        x = 1
+  : labels:
+    - source: |-
+        class Child(Parent, Mixin):
+            x = 1
+      style: primary
+      start: 0
+      end: 37
+    - source: (Parent, Mixin)
+      style: secondary
+      start: 11
+      end: 26
+  ? |
+    class Foo(Bar):
+        pass
+  : labels:
+    - source: |-
+        class Foo(Bar):
+            pass
+      style: primary
+      start: 0
+      end: 24
+    - source: (Bar)
+      style: secondary
+      start: 9
+      end: 14

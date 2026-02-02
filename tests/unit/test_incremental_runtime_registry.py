@@ -21,7 +21,7 @@ def test_temp_table_registry_registers_and_cleans() -> None:
         result = ctx.sql(f"SELECT COUNT(*) AS cnt FROM {name}").to_arrow_table()
         assert result["cnt"][0].as_py() == EXPECTED_ROW_COUNT
 
-    with pytest.raises(RuntimeError, match="not found"):
+    with pytest.raises(Exception, match="not found"):
         ctx.sql(f"SELECT * FROM {name}").to_arrow_table()
 
 

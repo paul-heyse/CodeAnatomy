@@ -10,7 +10,6 @@ import pyarrow as pa
 from datafusion_engine.arrow.interop import (
     RecordBatchReader,
     RecordBatchReaderLike,
-    TableLike,
 )
 
 
@@ -170,16 +169,18 @@ def coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None:
         return None
     if isinstance(value, RecordBatchReader):
         return value
-    if isinstance(value, TableLike):
-        return cast(
-            "RecordBatchReaderLike",
-            pa.RecordBatchReader.from_batches(value.schema, value.to_batches()),
-        )
     if isinstance(value, pa.RecordBatch):
         record_batch = cast("pa.RecordBatch", value)
         return cast(
             "RecordBatchReaderLike",
             pa.RecordBatchReader.from_batches(record_batch.schema, [record_batch]),
+        )
+    schema = getattr(value, "schema", None)
+    to_batches = getattr(value, "to_batches", None)
+    if schema is not None and callable(to_batches):
+        return cast(
+            "RecordBatchReaderLike",
+            pa.RecordBatchReader.from_batches(schema, to_batches()),
         )
     if isinstance(value, Sequence):
         batches = [batch for batch in value if isinstance(batch, pa.RecordBatch)]

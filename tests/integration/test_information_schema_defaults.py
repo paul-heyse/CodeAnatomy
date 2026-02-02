@@ -14,9 +14,9 @@ from datafusion_engine.schema.introspection import SchemaIntrospector
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from tests.test_helpers.datafusion_runtime import df_profile
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
-require_datafusion()
+require_datafusion_udfs()
 pytest.importorskip("datafusion_ext")
 
 

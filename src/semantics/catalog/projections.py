@@ -284,7 +284,7 @@ def relation_output_builder(
 
 
 def cpg_nodes_builder() -> DataFrameBuilder:
-    """Build CPG nodes projection from union_nodes_v1.
+    """Build CPG nodes projection from semantic_nodes_union_v1.
 
     Returns
     -------
@@ -293,13 +293,13 @@ def cpg_nodes_builder() -> DataFrameBuilder:
     """
 
     def _builder(ctx: SessionContext) -> DataFrame:
-        return ctx.table("union_nodes_v1")
+        return ctx.table("semantic_nodes_union_v1")
 
     return _builder
 
 
 def cpg_edges_builder() -> DataFrameBuilder:
-    """Build CPG edges projection from union_edges_v1.
+    """Build CPG edges projection from semantic_edges_union_v1.
 
     Returns
     -------
@@ -308,7 +308,7 @@ def cpg_edges_builder() -> DataFrameBuilder:
     """
 
     def _builder(ctx: SessionContext) -> DataFrame:
-        return ctx.table("union_edges_v1")
+        return ctx.table("semantic_edges_union_v1")
 
     return _builder
 

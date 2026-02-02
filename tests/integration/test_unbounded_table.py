@@ -12,9 +12,9 @@ from datafusion_engine.dataset.registration import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions
 from tests.test_helpers.datafusion_runtime import df_profile
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
-require_datafusion()
+require_datafusion_udfs()
 
 EXPECTED_ROWS = 2
 

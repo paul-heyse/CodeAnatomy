@@ -1,0 +1,19 @@
+id: py_except_bare
+valid:
+  - |
+    try:
+        pass
+    except ValueError:
+        pass
+  - |
+    try:
+        pass
+    except ValueError as e:
+        pass
+  - "x = 1"
+invalid:
+  - |
+    try:
+        pass
+    except:
+        pass

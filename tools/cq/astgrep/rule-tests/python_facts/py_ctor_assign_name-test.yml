@@ -1,0 +1,10 @@
+id: py_ctor_assign_name
+valid:
+  - "x = foo()"
+  - "y = bar(a, b)"
+  - "x = 1"
+  - "obj = module.Foo()"
+invalid:
+  - "x = Foo()"
+  - "obj = MyClass(arg)"
+  - "instance = Config()"

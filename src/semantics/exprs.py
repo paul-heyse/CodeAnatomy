@@ -644,6 +644,182 @@ def span_contains_span(
     return _build
 
 
+def span_start_expr(span_column: str) -> ExprSpec:
+    """Extract span start from a span struct column.
+
+    Parameters
+    ----------
+    span_column
+        Column name containing the span struct.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns the span start expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        from datafusion_engine.udf.shims import span_start
+
+        return span_start(ctx.col(span_column))
+
+    return _build
+
+
+def span_end_expr(span_column: str) -> ExprSpec:
+    """Extract span end from a span struct column.
+
+    Parameters
+    ----------
+    span_column
+        Column name containing the span struct.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns the span end expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        from datafusion_engine.udf.shims import span_end
+
+        return span_end(ctx.col(span_column))
+
+    return _build
+
+
+def span_overlaps_expr(left_span: str, right_span: str) -> ExprSpec:
+    """Span overlap predicate using span struct columns.
+
+    Parameters
+    ----------
+    left_span
+        Column name for the left span struct.
+    right_span
+        Column name for the right span struct.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns an overlap expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        from datafusion_engine.udf.shims import span_overlaps
+
+        return span_overlaps(ctx.col(left_span), ctx.col(right_span))
+
+    return _build
+
+
+def span_contains_expr(outer_span: str, inner_span: str) -> ExprSpec:
+    """Span containment predicate using span struct columns.
+
+    Parameters
+    ----------
+    outer_span
+        Column name for the outer span struct.
+    inner_span
+        Column name for the inner span struct.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns a containment expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        from datafusion_engine.udf.shims import span_contains
+
+        return span_contains(ctx.col(outer_span), ctx.col(inner_span))
+
+    return _build
+
+
+def eq_expr(left: ExprSpec, right: ExprSpec) -> ExprSpec:
+    """Equality predicate between two expressions.
+
+    Parameters
+    ----------
+    left
+        Left expression spec.
+    right
+        Right expression spec.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns an equality expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        return left(ctx) == right(ctx)
+
+    return _build
+
+
+def case_eq_expr(left: ExprSpec, right: ExprSpec) -> ExprSpec:
+    """Case expression returning 1 if expressions are equal, 0 otherwise.
+
+    Parameters
+    ----------
+    left
+        Left expression spec.
+    right
+        Right expression spec.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns a case expression (1 or 0).
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        return f.when(left(ctx) == right(ctx), ctx.lit(1)).otherwise(ctx.lit(0))
+
+    return _build
+
+
+def is_not_null_expr(expr: ExprSpec) -> ExprSpec:
+    """Predicate returning True if expression is not null.
+
+    Parameters
+    ----------
+    expr
+        Expression spec to evaluate.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns a not-null expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        return expr(ctx).is_not_null()
+
+    return _build
+
+
+def is_null_expr(expr: ExprSpec) -> ExprSpec:
+    """Predicate returning True if expression is null.
+
+    Parameters
+    ----------
+    expr
+        Expression spec to evaluate.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns a null expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        return expr(ctx).is_null()
+
+    return _build
+
+
 def case_eq(column: str, match_column: str) -> ExprSpec:
     """Case expression returning 1 if columns match, 0 otherwise.
 
@@ -894,21 +1070,29 @@ __all__ = [
     "between_overlap",
     "c",
     "case_eq",
+    "case_eq_expr",
     "case_eq_value",
     "clamp",
     "coalesce_default",
     "eq",
+    "eq_expr",
     "eq_value",
     "gt",
     "gte",
     "is_not_null",
+    "is_not_null_expr",
     "is_null",
+    "is_null_expr",
     "lt",
     "lte",
     "mul",
     "or_",
     "sort_expr",
+    "span_contains_expr",
     "span_contains_span",
+    "span_end_expr",
+    "span_overlaps_expr",
+    "span_start_expr",
     "stable_hash64",
     "v",
     "validate_expr_spec",

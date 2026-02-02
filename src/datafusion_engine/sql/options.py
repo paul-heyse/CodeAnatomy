@@ -32,6 +32,23 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
     )
 
 
+def safe_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
+    """Return read-only SQL options for guardrail execution.
+
+    Returns
+    -------
+    SQLOptions
+        SQL options that disallow DDL/DML statements.
+    """
+    _ = profile
+    return (
+        SQLOptions()
+        .with_allow_ddl(allow=False)
+        .with_allow_dml(allow=False)
+        .with_allow_statements(allow=False)
+    )
+
+
 def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
     """Return statement SQL options derived from a runtime profile, if available.
 
@@ -72,6 +89,7 @@ def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions
 
 __all__ = [
     "planning_sql_options",
+    "safe_sql_options_for_profile",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]

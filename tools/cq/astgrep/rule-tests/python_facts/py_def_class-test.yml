@@ -1,0 +1,11 @@
+id: py_def_class
+valid:
+  - "def foo(): pass"
+  - "x = 1"
+invalid:
+  - |
+    class Foo:
+        pass
+  - |
+    class MyClass:
+        x = 1

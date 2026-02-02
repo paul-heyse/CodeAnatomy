@@ -1,0 +1,8 @@
+id: py_raise_bare
+snapshots:
+  raise:
+    labels:
+    - source: raise
+      style: primary
+      start: 0
+      end: 5

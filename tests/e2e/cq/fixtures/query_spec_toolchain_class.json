@@ -1,0 +1,6 @@
+{
+  "query": "entity=class name=Toolchain in=tools/cq/",
+  "expected_matches": 1,
+  "expected_kind": "class",
+  "description": "Query for the Toolchain class in the cq tool"
+}

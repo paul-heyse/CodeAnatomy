@@ -1,0 +1,9 @@
+id: py_ctor_assign_attr
+valid:
+  - "x = Foo()"
+  - "y = foo()"
+  - "x = 1"
+invalid:
+  - "x = module.Foo()"
+  - "obj = pkg.MyClass(arg)"
+  - "instance = os.path.Path()"

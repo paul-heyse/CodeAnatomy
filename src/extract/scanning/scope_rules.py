@@ -60,14 +60,10 @@ def build_scope_rules(
     include_list = [str(line) for line in include_lines if str(line)]
     exclude_list = [str(line) for line in exclude_lines if str(line)]
     include_spec = (
-        PathSpec.from_lines("gitwildmatch", cast("list[Any]", include_list))
-        if include_list
-        else None
+        PathSpec.from_lines("gitignore", cast("list[Any]", include_list)) if include_list else None
     )
     exclude_spec = (
-        PathSpec.from_lines("gitwildmatch", cast("list[Any]", exclude_list))
-        if exclude_list
-        else None
+        PathSpec.from_lines("gitignore", cast("list[Any]", exclude_list)) if exclude_list else None
     )
     return ScopeRuleSet(
         include_spec=include_spec,

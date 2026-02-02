@@ -1,0 +1,9 @@
+id: py_import
+valid:
+  - "import foo as bar"
+  - "from x import y"
+  - "x = 1"
+invalid:
+  - "import os"
+  - "import sys"
+  - "import collections"

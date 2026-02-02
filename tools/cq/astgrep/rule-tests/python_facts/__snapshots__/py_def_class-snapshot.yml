@@ -1,0 +1,22 @@
+id: py_def_class
+snapshots:
+  ? |
+    class Foo:
+        pass
+  : labels:
+    - source: |-
+        class Foo:
+            pass
+      style: primary
+      start: 0
+      end: 19
+  ? |
+    class MyClass:
+        x = 1
+  : labels:
+    - source: |-
+        class MyClass:
+            x = 1
+      style: primary
+      start: 0
+      end: 24

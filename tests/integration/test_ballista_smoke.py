@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.optional_deps import require_datafusion_udfs
 
 ballista = pytest.importorskip("ballista")
-require_datafusion()
+require_datafusion_udfs()
 
 
 @pytest.mark.integration

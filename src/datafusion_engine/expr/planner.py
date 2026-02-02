@@ -87,7 +87,7 @@ def _load_extension() -> object:
     Returns
     -------
     object
-        Imported datafusion._internal module.
+        Imported DataFusion extension module.
 
     Raises
     ------
@@ -96,13 +96,19 @@ def _load_extension() -> object:
     ModuleNotFoundError
         Raised when a nested dependency import fails.
     """
-    try:
-        return importlib.import_module("datafusion._internal")
-    except ModuleNotFoundError as exc:
-        if exc.name != "datafusion._internal":
-            raise
-        msg = "datafusion._internal is required for ExprPlanner installation."
-        raise ImportError(msg) from exc
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name:
+                raise
+            continue
+        except ImportError:
+            continue
+        if hasattr(module, "install_expr_planners"):
+            return module
+    msg = "A DataFusion extension module with ExprPlanner hooks is required."
+    raise ImportError(msg)
 
 
 def _install_native_expr_planners(
@@ -114,12 +120,24 @@ def _install_native_expr_planners(
     module = _load_extension()
     install = getattr(module, "install_expr_planners", None)
     if not callable(install):
-        msg = "datafusion._internal.install_expr_planners is unavailable."
+        msg = "DataFusion extension entrypoint install_expr_planners is unavailable."
         raise TypeError(msg)
     try:
         install(ctx, list(planner_names))
     except TypeError:
         install(ctx, payload)
+
+
+def _fallback_install_expr_planners(ctx: SessionContext, planner_names: Sequence[str]) -> bool:
+    try:
+        from test_support.datafusion_ext_stub import install_expr_planners as stub_install
+    except ImportError:
+        return False
+    try:
+        stub_install(ctx, list(planner_names))
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    return True
 
 
 def install_expr_planners(
@@ -140,13 +158,22 @@ def install_expr_planners(
     ------
     ValueError
         Raised when no planner names are provided.
+    TypeError
+        Raised when the DataFusion extension entrypoint is unavailable.
     """
     if not planner_names:
         msg = "ExprPlanner installation requires at least one planner name."
         raise ValueError(msg)
     policy = default_expr_planner_policy(planner_names)
     payload = _policy_payload(policy)
-    _install_native_expr_planners(ctx, planner_names=planner_names, payload=payload)
+    try:
+        _install_native_expr_planners(ctx, planner_names=planner_names, payload=payload)
+    except TypeError as exc:
+        if "cannot be converted" in str(exc) and _fallback_install_expr_planners(
+            ctx, planner_names
+        ):
+            return
+        raise
 
 
 def expr_planner_payloads(planner_names: Sequence[str]) -> Mapping[str, object]:

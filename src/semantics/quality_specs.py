@@ -23,14 +23,19 @@ from __future__ import annotations
 from typing import Final
 
 from semantics.exprs import (
-    between_overlap,
     c,
     case_eq,
+    case_eq_expr,
     eq,
+    eq_expr,
     eq_value,
     is_not_null,
+    is_not_null_expr,
     is_null,
-    span_contains_span,
+    span_contains_expr,
+    span_end_expr,
+    span_overlaps_expr,
+    span_start_expr,
     stable_hash64,
     v,
 )
@@ -76,7 +81,7 @@ REL_CST_DOCSTRING_OWNER_BY_ID: Final = QualityRelationshipSpec(
         ambiguity_key_expr=c("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,
@@ -108,7 +113,11 @@ REL_CST_DOCSTRING_OWNER_BY_SPAN: Final = QualityRelationshipSpec(
         ],
         features=[
             # Bonus for being immediately adjacent
-            Feature("adjacent", case_eq("l__bstart", "r__bend"), weight=10.0),
+            Feature(
+                "adjacent",
+                case_eq_expr(span_start_expr("l__span"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -145,12 +154,20 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         base_score=2000,
         base_confidence=0.95,
         hard=[
-            HardPredicate(between_overlap("l__bstart", "l__bend", "r__bstart", "r__bend")),
+            HardPredicate(span_overlaps_expr("l__span", "r__span")),
             HardPredicate(eq_value("r__is_read", value=True)),
         ],
         features=[
-            Feature("exact_span", case_eq("l__bstart", "r__bstart"), weight=20.0),
-            Feature("exact_end", case_eq("l__bend", "r__bend"), weight=10.0),
+            Feature(
+                "exact_span",
+                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
+                weight=20.0,
+            ),
+            Feature(
+                "exact_end",
+                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -158,7 +175,7 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         ambiguity_group_id_expr=stable_hash64("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,
@@ -167,8 +184,8 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         SelectExpr(c("l__entity_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
-        SelectExpr(c("l__bstart"), "bstart"),
-        SelectExpr(c("l__bend"), "bend"),
+        SelectExpr(span_start_expr("l__span"), "bstart"),
+        SelectExpr(span_end_expr("l__span"), "bend"),
     ],
 )
 
@@ -187,13 +204,21 @@ REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
         base_confidence=0.95,
         hard=[
             # Spans must overlap (byte-aligned)
-            HardPredicate(is_not_null("l__bstart")),
-            HardPredicate(is_not_null("r__bstart")),
+            HardPredicate(is_not_null_expr(span_start_expr("l__span"))),
+            HardPredicate(is_not_null_expr(span_start_expr("r__span"))),
         ],
         features=[
             # Bonus for exact span match
-            Feature("exact_span", eq("l__bstart", "r__bstart"), weight=20.0),
-            Feature("exact_end", eq("l__bend", "r__bend"), weight=10.0),
+            Feature(
+                "exact_span",
+                eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
+                weight=20.0,
+            ),
+            Feature(
+                "exact_end",
+                eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -208,8 +233,8 @@ REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
         SelectExpr(c("l__entity_id"), "src"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
-        SelectExpr(c("l__bstart"), "bstart"),
-        SelectExpr(c("l__bend"), "bend"),
+        SelectExpr(span_start_expr("l__span"), "bstart"),
+        SelectExpr(span_end_expr("l__span"), "bend"),
     ],
 )
 
@@ -232,12 +257,20 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
         base_score=2000,
         base_confidence=0.95,
         hard=[
-            HardPredicate(span_contains_span("l__bstart", "l__bend", "r__bstart", "r__bend")),
+            HardPredicate(span_contains_expr("l__span", "r__span")),
             HardPredicate(eq_value("r__is_definition", value=True)),
         ],
         features=[
-            Feature("name_span_start", case_eq("l__name_bstart", "r__bstart"), weight=15.0),
-            Feature("name_span_end", case_eq("l__name_bend", "r__bend"), weight=10.0),
+            Feature(
+                "name_span_start",
+                case_eq_expr(c("l__name_bstart"), span_start_expr("r__span")),
+                weight=15.0,
+            ),
+            Feature(
+                "name_span_end",
+                case_eq_expr(c("l__name_bend"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -245,7 +278,7 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
         ambiguity_group_id_expr=stable_hash64("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,
@@ -254,8 +287,8 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
         SelectExpr(c("l__entity_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
-        SelectExpr(c("l__bstart"), "bstart"),
-        SelectExpr(c("l__bend"), "bend"),
+        SelectExpr(span_start_expr("l__span"), "bstart"),
+        SelectExpr(span_end_expr("l__span"), "bend"),
     ],
 )
 
@@ -273,12 +306,20 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         base_score=2000,
         base_confidence=0.95,
         hard=[
-            HardPredicate(between_overlap("l__bstart", "l__bend", "r__bstart", "r__bend")),
+            HardPredicate(span_overlaps_expr("l__span", "r__span")),
             HardPredicate(eq_value("r__is_import", value=True)),
         ],
         features=[
-            Feature("exact_span", case_eq("l__bstart", "r__bstart"), weight=20.0),
-            Feature("exact_end", case_eq("l__bend", "r__bend"), weight=10.0),
+            Feature(
+                "exact_span",
+                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
+                weight=20.0,
+            ),
+            Feature(
+                "exact_end",
+                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -286,7 +327,7 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         ambiguity_group_id_expr=stable_hash64("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,
@@ -295,8 +336,8 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         SelectExpr(c("l__entity_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
-        SelectExpr(c("l__bstart"), "bstart"),
-        SelectExpr(c("l__bend"), "bend"),
+        SelectExpr(span_start_expr("l__span"), "bstart"),
+        SelectExpr(span_end_expr("l__span"), "bend"),
     ],
 )
 
@@ -314,11 +355,19 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
         base_score=2000,
         base_confidence=0.95,
         hard=[
-            HardPredicate(between_overlap("l__bstart", "l__bend", "r__bstart", "r__bend")),
+            HardPredicate(span_overlaps_expr("l__span", "r__span")),
         ],
         features=[
-            Feature("exact_span", case_eq("l__bstart", "r__bstart"), weight=15.0),
-            Feature("exact_end", case_eq("l__bend", "r__bend"), weight=10.0),
+            Feature(
+                "exact_span",
+                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
+                weight=15.0,
+            ),
+            Feature(
+                "exact_end",
+                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
+                weight=10.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -326,7 +375,7 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
         ambiguity_group_id_expr=stable_hash64("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,
@@ -335,8 +384,8 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
         SelectExpr(c("l__entity_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
-        SelectExpr(c("l__bstart"), "bstart"),
-        SelectExpr(c("l__bend"), "bend"),
+        SelectExpr(span_start_expr("l__span"), "bstart"),
+        SelectExpr(span_end_expr("l__span"), "bend"),
     ],
 )
 
@@ -354,11 +403,15 @@ REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
         base_score=1000,
         base_confidence=0.95,
         hard=[
-            HardPredicate(is_not_null("l__bstart")),
-            HardPredicate(is_not_null("r__bstart")),
+            HardPredicate(is_not_null_expr(span_start_expr("l__span"))),
+            HardPredicate(is_not_null_expr(span_start_expr("r__span"))),
         ],
         features=[
-            Feature("exact_span", eq("l__bstart", "r__bstart"), weight=15.0),
+            Feature(
+                "exact_span",
+                eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
+                weight=15.0,
+            ),
         ],
     ),
     rank=RankSpec(
@@ -404,7 +457,7 @@ REL_CALL_TO_DEF_NAME: Final = QualityRelationshipSpec(
         ambiguity_key_expr=c("l__entity_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
-            OrderSpec(c("r__bstart"), direction="asc"),
+            OrderSpec(span_start_expr("r__span"), direction="asc"),
         ],
         keep="best",
         top_k=1,

@@ -1,0 +1,11 @@
+id: py_def_class_typeparams
+valid:
+  - "class Foo: pass"
+  - "class Bar(Base): pass"
+invalid:
+  - |
+    class Foo[T]:
+        pass
+  - |
+    class Container[T, U]:
+        items: list[T]

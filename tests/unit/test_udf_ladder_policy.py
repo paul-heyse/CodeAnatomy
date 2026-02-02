@@ -6,6 +6,9 @@ from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.udf.catalog import get_default_udf_catalog
 from datafusion_engine.udf.platform import ensure_rust_udfs
 from tests.test_helpers.datafusion_runtime import df_ctx
+from tests.test_helpers.optional_deps import require_datafusion_udfs
+
+require_datafusion_udfs()
 
 
 def test_udf_tier_tags_and_lane_precedence() -> None:

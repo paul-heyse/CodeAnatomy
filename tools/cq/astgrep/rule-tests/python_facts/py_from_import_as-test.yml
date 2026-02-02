@@ -1,0 +1,8 @@
+id: py_from_import_as
+valid:
+  - "import os"
+  - "from x import y"
+  - "x = 1"
+invalid:
+  - "from os import path as p"
+  - "from typing import Optional as Opt"

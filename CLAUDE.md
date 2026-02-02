@@ -2,9 +2,67 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Follow @AGENTS.md for agent-specific protocols.
+
 ## Project Overview
 
 CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python. It extracts multiple evidence layers from Python source code (LibCST, AST, symtable, bytecode, SCIP, tree-sitter, introspection) and compiles them into a rich, queryable graph representation using a Hamilton-driven DAG pipeline with PyArrow Acero for deterministic, contract-validated transformations.
+
+## Skills (Use Before Guessing)
+
+**IMPORTANT:** Always use these skills to understand code before proposing changes. They provide high-signal analysis that prevents incorrect assumptions.
+
+| Skill | When to Use | Why |
+|-------|-------------|-----|
+| `/cq` | Before ANY refactor, rename, or signature change | Finds all callsites, impact, and breaking changes |
+| `/cq q "entity=..."` | Finding functions/classes/imports | Entity-based code discovery |
+| `/cq q "pattern=..."` | Structural code patterns | Zero false positives from strings/comments |
+| `/cq q "...inside=..."` | Context-aware search | Find code in specific structural contexts |
+| `/cq q "...scope=closure"` | Before extracting nested functions | Identifies variable capture issues |
+| `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
+| `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
+| `/datafusion-stack` | DataFusion/Delta/UDF operations | Don't guess APIs - probe versions |
+
+### Mandatory cq Usage
+
+**Before modifying a function:** Run `/cq calls <function>` to find all call sites.
+
+**Before changing a parameter:** Run `/cq impact <function> --param <param>` to trace data flow.
+
+**Before changing a signature:** Run `/cq sig-impact <function> --to "<new_sig>"` to classify breakages.
+
+**Before refactoring imports:** Run `/cq q "entity=import in=<dir>"` to understand import structure.
+
+**Before extracting closures:** Run `/cq q "entity=function scope=closure in=<dir>"` to find variable captures.
+
+**Before security review:** Run `/cq q "pattern='eval(\$X)'"` or `/cq q "fields=hazards"` for hazard detection.
+
+**Rationale:** cq uses AST analysis, not text search. It catches indirect callers, forwarding patterns, and provides confidence scores. Guessing based on grep leads to missed call sites and broken code.
+
+### Why Pattern Queries > Grep
+
+Pattern queries (`/cq q "pattern=..."`) use ast-grep for structural matching:
+- **No false positives** from strings, comments, or variable names
+- **Metavariables** (`$X`, `$$$`) capture code structure
+- **Context-aware** via relational constraints (`inside`, `has`)
+
+**Example - Finding dynamic dispatch:**
+```bash
+# Grep would match: log("getattr example")  # FALSE POSITIVE
+# Pattern query matches only actual getattr calls:
+/cq q "pattern='getattr(\$X, \$Y)'"
+```
+
+### Understanding Code with Visualization
+
+Use `--format mermaid` or `--format dot` to visualize:
+- Call graphs before refactoring
+- Class hierarchies before inheritance changes
+- Import dependencies before restructuring
+
+```bash
+/cq q "entity=function name=build_cpg expand=callers(depth=2)" --format mermaid
+```
 
 ## Build & Development Commands
 
@@ -12,10 +70,10 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 # One-time setup (REQUIRED)
 scripts/bootstrap_codex.sh && uv sync
 
-# Quality gates (run in order)
+# Quality gates (run AFTER task completion, not during implementation)
 uv run ruff check --fix          # Lint + autofix
-uv run pyrefly check             # Type/contract validation
-uv run pyright --warnings --pythonversion=3.13  # Strict type checking
+uv run pyrefly check             # Type/contract validation (the strict gate)
+uv run pyright --warnings --pythonversion=3.13  # IDE-level type checking (basic mode)
 
 # Testing
 uv run pytest tests/unit/                    # Unit tests only
@@ -29,13 +87,15 @@ uv run ruff format
 
 **Critical:** Always use `uv run` for Python commands. Direct `python` calls will fail due to missing module imports.
 
+**Quality gate timing:** Complete the implementation first, then run quality checks. Don't interrupt workflow with mid-task linting or type checking.
+
 ## Architecture
 
 **Four-Stage Pipeline:**
-1. **Extraction** → Evidence tables from multiple sources (LibCST, AST, symtable, bytecode, SCIP, tree-sitter)
-2. **Semantic Catalog + Normalization** → Canonical byte spans, stable IDs, join-ready shape
-3. **Task/Plan Catalog + Scheduling** → TaskSpec builders → PlanCatalog → inferred TaskGraph → schedule
-4. **CPG Build** → Node/edge/property emission → final outputs
+1. **Extraction** - Evidence tables from multiple sources (LibCST, AST, symtable, bytecode, SCIP, tree-sitter)
+2. **Semantic Catalog + Normalization** - Canonical byte spans, stable IDs, join-ready shape
+3. **Task/Plan Catalog + Scheduling** - TaskSpec builders - PlanCatalog - inferred TaskGraph - schedule
+4. **CPG Build** - Node/edge/property emission - final outputs
 
 **Core Modules (`src/`):**
 - `extract/` - Multi-source extractors (repo scan, AST, CST, symtable, bytecode, SCIP)
@@ -92,7 +152,7 @@ The semantic module (`src/semantics/`) provides centralized, rule-based CPG rela
 
 **Data Flow:**
 ```
-Extraction → Input Registry → SemanticCompiler → View Graph → Hamilton DAG → CPG Outputs
+Extraction - Input Registry - SemanticCompiler - View Graph - Hamilton DAG - CPG Outputs
 ```
 
 **Key Modules:**
@@ -127,9 +187,8 @@ Extraction → Input Registry → SemanticCompiler → View Graph → Hamilton D
 
 - **Byte Spans Are Canonical**: All normalizations anchor to byte offsets (`bstart`, `bend`)
 - **Determinism Contract**: All Acero plans must be reproducible; include `policy_hash` and `ddl_fingerprint`
-- **Inference-Driven**: Don't specify intermediate schemas—only strict boundaries (relationship outputs, final CPG)
+- **Inference-Driven**: Don't specify intermediate schemas-only strict boundaries (relationship outputs, final CPG)
 - **Graceful Degradation**: Missing optional inputs produce correct-schema empty outputs, not exceptions
-- **No Monkeypatching**: Tests use dependency injection and configuration, never `unittest.mock` or `monkeypatch`
 
 ## Code Style Requirements
 
@@ -137,12 +196,18 @@ Extraction → Input Registry → SemanticCompiler → View Graph → Hamilton D
 - **Formatting**: 100-char lines, 4-space indent, double quotes, trailing commas
 - **Typing**: All functions fully typed; no bare `Any`; strict Optional handling
 - **Docstrings**: NumPy convention; imperative mood summary; Parameters/Returns/Raises sections
-- **Complexity**: Cyclomatic ≤ 10, max 12 branches, max 6 return statements
+- **Complexity**: Cyclomatic <= 10, max 12 branches, max 6 return statements
 
 **Every module must have:**
 ```python
 from __future__ import annotations
 ```
+
+## Project-Specific Rules
+
+See `.claude/rules/` for detailed policies:
+- `.claude/rules/python-quality.md` - Quality rules beyond ruff
+- `.claude/rules/testing-policy.md` - Testing philosophy, allowed mocking patterns
 
 ## Consolidated Utilities
 
@@ -180,7 +245,7 @@ Use the shared utilities before introducing new helpers:
 ## Git Protocol
 
 - Do not use `git checkout` or destructive git operations
-- Do not worry about git cleanliness—`.gitignore` is properly configured
+- Do not worry about git cleanliness-`.gitignore` is properly configured
 - The user handles uncommitted file changes independently
 
 ## Environment

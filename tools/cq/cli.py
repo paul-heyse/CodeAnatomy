@@ -9,6 +9,11 @@ from pathlib import Path
 
 from tools.cq.core.artifacts import save_artifact_json
 from tools.cq.core.findings_table import apply_filters, build_frame, flatten_result, rehydrate_result
+from tools.cq.core.renderers import (
+    render_dot,
+    render_mermaid_class_diagram,
+    render_mermaid_flowchart,
+)
 from tools.cq.core.report import render_markdown, render_summary
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
@@ -21,6 +26,11 @@ from tools.cq.macros.imports import ImportRequest, cmd_imports
 from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
+from tools.cq.index.query_cache import QueryCache
+from tools.cq.index.sqlite_cache import IndexCache
+from tools.cq.query.executor import execute_plan
+from tools.cq.query.parser import QueryParseError, parse_query
+from tools.cq.query.planner import compile_query
 
 
 def _find_repo_root(start: Path | None = None) -> Path:
@@ -162,6 +172,12 @@ def _output_result(
         sys.stdout.write(f"{render_markdown(result)}\n")
         sys.stdout.write("\n---\n\n")
         sys.stdout.write(f"{json.dumps(result.to_dict(), indent=2)}\n")
+    elif format_type == "mermaid":
+        sys.stdout.write(f"{render_mermaid_flowchart(result)}\n")
+    elif format_type == "mermaid-class":
+        sys.stdout.write(f"{render_mermaid_class_diagram(result)}\n")
+    elif format_type == "dot":
+        sys.stdout.write(f"{render_dot(result)}\n")
     else:
         sys.stdout.write(f"{render_markdown(result)}\n")
 
@@ -176,10 +192,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--format",
-        choices=["md", "json", "both", "summary"],
+        choices=["md", "json", "both", "summary", "mermaid", "mermaid-class", "dot"],
         default="md",
         dest="output_format",
-        help="Output format (default: md)",
+        help="Output format (default: md). Visualization formats: mermaid, mermaid-class, dot",
     )
     parser.add_argument(
         "--artifact-dir",
@@ -395,6 +411,194 @@ def _cmd_bytecode_cli(args: argparse.Namespace, tc: Toolchain) -> CqResult:
     return cmd_bytecode_surface(request)
 
 
+def _cmd_index_cli(args: argparse.Namespace, tc: Toolchain) -> int:
+    """Handle index command.
+
+    Returns
+    -------
+    int
+        Exit code (0 for success).
+    """
+    root = args.root or _find_repo_root()
+
+    # Get rule version from ast-grep if available
+    rule_version = tc.sg_version or "unknown"
+
+    with IndexCache(root, rule_version) as cache:
+        if args.clear:
+            cache.clear()
+            sys.stdout.write("Index cleared.\n")
+            return 0
+
+        if args.stats:
+            stats = cache.get_stats()
+            sys.stdout.write(f"Index Statistics:\n")
+            sys.stdout.write(f"  Files cached: {stats.total_files}\n")
+            sys.stdout.write(f"  Total records: {stats.total_records}\n")
+            sys.stdout.write(f"  Rule version: {stats.rule_version}\n")
+            sys.stdout.write(f"  Database size: {stats.database_size_bytes:,} bytes\n")
+            return 0
+
+        if args.rebuild:
+            cache.clear()
+            sys.stdout.write("Index cleared for rebuild.\n")
+
+        # Update index by scanning Python files
+        from tools.cq.query.sg_parser import sg_scan
+
+        # Find all Python files
+        py_files = list(root.glob("**/*.py"))
+        # Exclude common non-source directories
+        py_files = [
+            f for f in py_files
+            if not any(
+                part in f.parts
+                for part in ("__pycache__", ".git", ".venv", "venv", "node_modules", "build", "dist")
+            )
+        ]
+
+        sys.stdout.write(f"Found {len(py_files)} Python files.\n")
+
+        # Check which files need rescanning
+        files_to_scan: list[Path] = []
+        for path in py_files:
+            if cache.needs_rescan(path):
+                files_to_scan.append(path)
+
+        if not files_to_scan:
+            sys.stdout.write("Index is up to date.\n")
+            return 0
+
+        sys.stdout.write(f"Scanning {len(files_to_scan)} changed files...\n")
+
+        # Scan in batches to avoid memory issues
+        batch_size = 100
+        total_records = 0
+
+        for i in range(0, len(files_to_scan), batch_size):
+            batch = files_to_scan[i : i + batch_size]
+            records = sg_scan(batch, root=root)
+
+            # Group records by file and store
+            from tools.cq.query.sg_parser import group_records_by_file
+
+            records_by_file = group_records_by_file(records)
+
+            # Store records for files that had matches
+            for file_path_str, file_records in records_by_file.items():
+                # Convert records to serializable format
+                records_data = [
+                    {
+                        "record": r.record,
+                        "kind": r.kind,
+                        "file": r.file,
+                        "start_line": r.start_line,
+                        "start_col": r.start_col,
+                        "end_line": r.end_line,
+                        "end_col": r.end_col,
+                        "text": r.text,
+                        "rule_id": r.rule_id,
+                    }
+                    for r in file_records
+                ]
+
+                # Store uses Path and computes hash/mtime internally
+                file_path_obj = Path(file_path_str)
+                if file_path_obj.exists():
+                    cache.store(file_path_obj, records_data)
+                    total_records += len(file_records)
+
+            # Also store empty records for files in the batch that had no matches
+            for file_path in batch:
+                if str(file_path) not in records_by_file:
+                    cache.store(file_path, [])
+
+            sys.stdout.write(f"  Processed {min(i + batch_size, len(files_to_scan))}/{len(files_to_scan)} files\n")
+
+        sys.stdout.write(f"Index updated: {len(files_to_scan)} files, {total_records} records.\n")
+        return 0
+
+
+def _cmd_cache_cli(args: argparse.Namespace) -> int:
+    """Handle cache command.
+
+    Returns
+    -------
+    int
+        Exit code (0 for success).
+    """
+    root = args.root or _find_repo_root()
+    cache_dir = root / ".cq" / "cache"
+
+    with QueryCache(cache_dir) as cache:
+        if args.clear:
+            cache.clear()
+            sys.stdout.write("Query cache cleared.\n")
+            return 0
+
+        if args.stats:
+            stats = cache.stats()
+            sys.stdout.write("Query Cache Statistics:\n")
+            sys.stdout.write(f"  Total entries: {stats.total_entries}\n")
+            sys.stdout.write(f"  Unique files: {stats.unique_files}\n")
+            sys.stdout.write(f"  Database size: {stats.database_size_bytes:,} bytes\n")
+            if stats.oldest_entry:
+                import datetime
+
+                oldest = datetime.datetime.fromtimestamp(stats.oldest_entry)
+                newest = datetime.datetime.fromtimestamp(stats.newest_entry or 0)
+                sys.stdout.write(f"  Oldest entry: {oldest.isoformat()}\n")
+                sys.stdout.write(f"  Newest entry: {newest.isoformat()}\n")
+            return 0
+
+        # Default: show stats
+        stats = cache.stats()
+        sys.stdout.write("Query Cache Statistics:\n")
+        sys.stdout.write(f"  Total entries: {stats.total_entries}\n")
+        sys.stdout.write(f"  Unique files: {stats.unique_files}\n")
+        sys.stdout.write(f"  Database size: {stats.database_size_bytes:,} bytes\n")
+        return 0
+
+
+def _cmd_query_cli(args: argparse.Namespace, tc: Toolchain) -> CqResult:
+    """Handle q (query) command.
+
+    Returns
+    -------
+    CqResult
+        Query command result.
+    """
+    root = args.root or _find_repo_root()
+
+    # Parse the query string
+    try:
+        query = parse_query(args.query_string)
+    except QueryParseError as e:
+        from tools.cq.core.schema import mk_result, mk_runmeta, ms
+
+        started_ms = ms()
+        run = mk_runmeta(
+            macro="q",
+            argv=sys.argv[1:],
+            root=str(root),
+            started_ms=started_ms,
+            toolchain=tc.to_dict(),
+        )
+        result = mk_result(run)
+        result.summary["error"] = str(e)
+        return result
+
+    # Compile and execute
+    plan = compile_query(query)
+    return execute_plan(
+        plan=plan,
+        query=query,
+        tc=tc,
+        root=root,
+        argv=sys.argv[1:],
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser.
 
@@ -553,6 +757,117 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_args(bytecode_parser)
 
+    # q (query) command - declarative search DSL
+    query_parser = subparsers.add_parser(
+        "q",
+        help="Declarative code query using ast-grep",
+        description="""
+Query syntax: key=value pairs separated by spaces.
+
+Required:
+  entity=TYPE    Entity type (function, class, method, module, callsite, import)
+
+Optional:
+  name=PATTERN   Name to match (exact or ~regex)
+  expand=KIND    Graph expansion (callers, callees, imports, raises, scope)
+                 Use KIND(depth=N) to set depth (default: 1)
+  in=DIR         Search only in directory
+  exclude=DIRS   Exclude directories (comma-separated)
+  fields=FIELDS  Output fields (def,loc,callers,callees,evidence,hazards)
+  limit=N        Maximum results
+  explain=true   Include query plan explanation
+
+Examples:
+  cq q "entity=function name=build_graph_product"
+  cq q "entity=function name=detect expand=callers(depth=2) in=tools/cq/"
+  cq q "entity=class in=src/relspec/ fields=def,hazards"
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    query_parser.add_argument(
+        "query_string",
+        help='Query string (e.g., "entity=function name=foo")',
+    )
+    query_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable query result caching",
+    )
+    _add_common_args(query_parser)
+
+    # index command - manage ast-grep scan cache
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Manage the ast-grep scan index cache",
+        description="""
+Manage the incremental scan index for faster queries.
+
+The index caches ast-grep scan results and only rescans files that have changed.
+This significantly speeds up repeated queries on large codebases.
+
+Operations:
+  cq index           Update index for changed files (default)
+  cq index --rebuild Full rebuild of the index
+  cq index --stats   Show index statistics
+  cq index --clear   Clear the index
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    index_parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Force full rebuild of the index",
+    )
+    index_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show index statistics",
+    )
+    index_parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear the index cache",
+    )
+    index_parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Repository root (default: auto-detect)",
+    )
+
+    # cache command - manage query result cache
+    cache_parser = subparsers.add_parser(
+        "cache",
+        help="Manage the query result cache",
+        description="""
+Manage the query result cache for faster repeated queries.
+
+The cache stores query results and invalidates them when source files change.
+This significantly speeds up repeated queries on large codebases.
+
+Operations:
+  cq cache --stats   Show cache statistics
+  cq cache --clear   Clear the cache
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    cache_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show cache statistics",
+    )
+    cache_parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear the query cache",
+    )
+    cache_parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Repository root (default: auto-detect)",
+    )
+
     return parser
 
 
@@ -575,6 +890,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         tc = Toolchain.detect()
 
+        # Handle index command specially (doesn't return CqResult)
+        if args.command == "index":
+            return _cmd_index_cli(args, tc)
+
+        # Handle cache command specially (doesn't return CqResult)
+        if args.command == "cache":
+            return _cmd_cache_cli(args)
+
         handlers = {
             "impact": _cmd_impact_cli,
             "calls": _cmd_calls_cli,
@@ -585,6 +908,7 @@ def main(argv: list[str] | None = None) -> int:
             "scopes": _cmd_scopes_cli,
             "async-hazards": _cmd_async_hazards_cli,
             "bytecode-surface": _cmd_bytecode_cli,
+            "q": _cmd_query_cli,
         }
 
         handler = handlers.get(args.command)

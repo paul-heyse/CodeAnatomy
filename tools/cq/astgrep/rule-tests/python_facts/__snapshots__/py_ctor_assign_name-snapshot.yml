@@ -1,0 +1,44 @@
+id: py_ctor_assign_name
+snapshots:
+  instance = Config():
+    labels:
+    - source: instance = Config()
+      style: primary
+      start: 0
+      end: 19
+    - source: Config
+      style: secondary
+      start: 11
+      end: 17
+    - source: Config()
+      style: secondary
+      start: 11
+      end: 19
+  obj = MyClass(arg):
+    labels:
+    - source: obj = MyClass(arg)
+      style: primary
+      start: 0
+      end: 18
+    - source: MyClass
+      style: secondary
+      start: 6
+      end: 13
+    - source: MyClass(arg)
+      style: secondary
+      start: 6
+      end: 18
+  x = Foo():
+    labels:
+    - source: x = Foo()
+      style: primary
+      start: 0
+      end: 9
+    - source: Foo
+      style: secondary
+      start: 4
+      end: 7
+    - source: Foo()
+      style: secondary
+      start: 4
+      end: 9

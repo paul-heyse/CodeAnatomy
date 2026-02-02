@@ -14,15 +14,38 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final, Literal, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 DatasetCategory = Literal["semantic", "analysis", "diagnostic"]
+
+if TYPE_CHECKING:
+    from semantics.registry import SemanticModel
 
 # Schema version for semantic dataset rows
 SEMANTIC_SCHEMA_VERSION: Final[int] = 1
 
 # Normalize schema version (mirrors normalize.dataset_rows.SCHEMA_VERSION)
 _NORMALIZE_SCHEMA_VERSION: Final[int] = 1
+
+
+def _bundle_field_names(bundles: Sequence[str]) -> set[str]:
+    from semantics.catalog.spec_builder import _bundle
+
+    field_names: set[str] = set()
+    for bundle_name in bundles:
+        try:
+            bundle = _bundle(bundle_name)
+        except KeyError:
+            continue
+        field_names.update(field.name for field in bundle.fields)
+    return field_names
+
+
+def _drop_bundle_fields(fields: Sequence[str], bundles: Sequence[str]) -> tuple[str, ...]:
+    excluded = _bundle_field_names(bundles)
+    if not excluded:
+        return tuple(fields)
+    return tuple(name for name in fields if name not in excluded)
 
 
 @dataclass(frozen=True)
@@ -259,7 +282,9 @@ _NORMALIZE_DATASET_ROWS: Final[tuple[SemanticDatasetRow, ...]] = (
 # Semantic normalization outputs and relationship outputs
 
 
-def _build_semantic_normalization_rows() -> tuple[SemanticDatasetRow, ...]:
+def _build_semantic_normalization_rows(
+    model: SemanticModel,
+) -> tuple[SemanticDatasetRow, ...]:
     """Build semantic rows from semantic normalization specs.
 
     Returns
@@ -267,9 +292,6 @@ def _build_semantic_normalization_rows() -> tuple[SemanticDatasetRow, ...]:
     tuple[SemanticDatasetRow, ...]
         Semantic dataset rows for CST normalization outputs.
     """
-    # Lazy import to avoid circular dependencies
-    from semantics.spec_registry import SEMANTIC_NORMALIZATION_SPECS
-
     return tuple(
         SemanticDatasetRow(
             name=spec.output_name,
@@ -286,7 +308,7 @@ def _build_semantic_normalization_rows() -> tuple[SemanticDatasetRow, ...]:
             register_view=True,
             source_dataset=spec.source_table,
         )
-        for spec in SEMANTIC_NORMALIZATION_SPECS
+        for spec in model.normalization_specs
     )
 
 
@@ -318,7 +340,9 @@ def _build_scip_normalization_row() -> SemanticDatasetRow:
     )
 
 
-def _build_relationship_rows() -> tuple[SemanticDatasetRow, ...]:
+def _build_relationship_rows(
+    model: SemanticModel,
+) -> tuple[SemanticDatasetRow, ...]:
     """Build semantic rows from relationship specs.
 
     Returns
@@ -338,7 +362,6 @@ def _build_relationship_rows() -> tuple[SemanticDatasetRow, ...]:
         SemanticProjectionConfig,
         semantic_projection_options,
     )
-    from semantics.spec_registry import RELATIONSHIP_SPECS
 
     projection_options = semantic_projection_options(
         SemanticProjectionConfig(
@@ -347,9 +370,17 @@ def _build_relationship_rows() -> tuple[SemanticDatasetRow, ...]:
             rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
             rel_def_output=REL_DEF_SYMBOL_OUTPUT,
             rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
-            relationship_specs=RELATIONSHIP_SPECS,
+            relationship_specs=model.relationship_specs,
         )
     )
+    feature_fields = tuple(
+        f"feat_{name}"
+        for name in sorted(
+            {feature.name for spec in model.relationship_specs for feature in spec.signals.features}
+        )
+    )
+    max_hard = max((len(spec.signals.hard) for spec in model.relationship_specs), default=0)
+    hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
 
     def _relationship_fields(entity_id_alias: str) -> tuple[str, ...]:
         return (
@@ -365,10 +396,12 @@ def _build_relationship_rows() -> tuple[SemanticDatasetRow, ...]:
             "score",
             "task_name",
             "task_priority",
+            *hard_fields,
+            *feature_fields,
         )
 
     rows: list[SemanticDatasetRow] = []
-    for spec in RELATIONSHIP_SPECS:
+    for spec in model.relationship_specs:
         options = projection_options[spec.name]
         join_keys = (options.entity_id_alias, "symbol")
         rows.append(
@@ -438,6 +471,16 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
     tuple[SemanticDatasetRow, ...]
         Semantic dataset rows for diagnostic reports.
     """
+    from semantics.registry import RELATIONSHIP_SPECS
+
+    feature_fields = tuple(
+        f"feat_{name}"
+        for name in sorted(
+            {feature.name for spec in RELATIONSHIP_SPECS for feature in spec.signals.features}
+        )
+    )
+    max_hard = max((len(spec.signals.hard) for spec in RELATIONSHIP_SPECS), default=0)
+    hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
     return (
         SemanticDatasetRow(
             name="relationship_quality_metrics_v1",
@@ -485,6 +528,86 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
             join_keys=("relationship_name",),
             template="relationship_ambiguity_report",
             view_builder="relationship_ambiguity_report_df_builder",
+            register_view=True,
+            source_dataset=None,
+        ),
+        SemanticDatasetRow(
+            name="relationship_candidates_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "relationship_name",
+                "src",
+                "dst",
+                "path",
+                "bstart",
+                "bend",
+                "confidence",
+                "score",
+                "ambiguity_group_id",
+                "task_name",
+                "task_priority",
+                "edge_kind",
+                *hard_fields,
+                *feature_fields,
+            ),
+            category="diagnostic",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=("relationship_name", "src", "dst"),
+            join_keys=("relationship_name", "src", "dst"),
+            template="relationship_candidates",
+            view_builder="relationship_candidates_df_builder",
+            register_view=True,
+            source_dataset=None,
+        ),
+        SemanticDatasetRow(
+            name="relationship_decisions_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "relationship_name",
+                "src",
+                "dst",
+                "path",
+                "bstart",
+                "bend",
+                "confidence",
+                "score",
+                "ambiguity_group_id",
+                "task_name",
+                "task_priority",
+                "edge_kind",
+                *hard_fields,
+                *feature_fields,
+            ),
+            category="diagnostic",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=("relationship_name", "src", "dst"),
+            join_keys=("relationship_name", "src", "dst"),
+            template="relationship_decisions",
+            view_builder="relationship_decisions_df_builder",
+            register_view=True,
+            source_dataset=None,
+        ),
+        SemanticDatasetRow(
+            name="schema_anomalies_v1",
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=(),
+            fields=(
+                "view_name",
+                "violation_type",
+                "column_name",
+                "detail",
+            ),
+            category="diagnostic",
+            supports_cdf=False,
+            partition_cols=(),
+            merge_keys=("view_name", "violation_type", "column_name"),
+            join_keys=("view_name", "violation_type", "column_name"),
+            template="schema_anomalies",
+            view_builder="schema_anomalies_df_builder",
             register_view=True,
             source_dataset=None,
         ),
@@ -574,7 +697,7 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
         Semantic dataset rows for cpg_nodes and cpg_edges.
     """
     # Lazy import to avoid circular dependencies
-    from cpg.emit_specs import _EDGE_OUTPUT_COLUMNS, _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS
+    from cpg.emit_specs import _EDGE_OUTPUT_FIELDS, _NODE_OUTPUT_FIELDS, _PROP_OUTPUT_COLUMNS
     from semantics.naming import canonical_output_name
 
     nodes_name = canonical_output_name("cpg_nodes")
@@ -586,15 +709,19 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
     edges_by_src_name = canonical_output_name("cpg_edges_by_src")
     edges_by_dst_name = canonical_output_name("cpg_edges_by_dst")
 
+    node_fields = _drop_bundle_fields(_NODE_OUTPUT_FIELDS, ("file_identity", "span"))
+    edge_fields = _drop_bundle_fields(_EDGE_OUTPUT_FIELDS, ("file_identity", "span"))
+    prop_fields = _drop_bundle_fields(_PROP_OUTPUT_COLUMNS, ("file_identity",))
+
     nodes_quality_fields = (
-        *_NODE_OUTPUT_COLUMNS,
+        *node_fields,
         "cpg_nodes_path_depth",
         "cpg_nodes_span_length",
         "cpg_nodes_has_file_id",
         "cpg_nodes_has_task_name",
     )
     props_quality_fields = (
-        *_PROP_OUTPUT_COLUMNS,
+        *prop_fields,
         "cpg_props_value_present",
         "cpg_props_value_is_numeric",
         "cpg_props_key_length",
@@ -605,7 +732,7 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
             name=nodes_name,
             version=SEMANTIC_SCHEMA_VERSION,
             bundles=("file_identity", "span"),
-            fields=_NODE_OUTPUT_COLUMNS,
+            fields=node_fields,
             category="semantic",
             supports_cdf=True,
             partition_cols=(),
@@ -624,8 +751,8 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
         SemanticDatasetRow(
             name=edges_name,
             version=SEMANTIC_SCHEMA_VERSION,
-            bundles=("file_identity",),
-            fields=_EDGE_OUTPUT_COLUMNS,
+            bundles=("file_identity", "span"),
+            fields=edge_fields,
             category="semantic",
             supports_cdf=True,
             partition_cols=(),
@@ -645,7 +772,7 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
             name=props_name,
             version=SEMANTIC_SCHEMA_VERSION,
             bundles=("file_identity",),
-            fields=_PROP_OUTPUT_COLUMNS,
+            fields=prop_fields,
             category="semantic",
             supports_cdf=True,
             partition_cols=(),
@@ -769,8 +896,13 @@ def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
 # -----------------------------------------------------------------------------
 
 
-def _build_all_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
+def build_semantic_dataset_rows(model: SemanticModel) -> tuple[SemanticDatasetRow, ...]:
     """Build the complete semantic dataset row registry.
+
+    Parameters
+    ----------
+    model
+        Semantic model defining normalization and relationship specs.
 
     Returns
     -------
@@ -781,13 +913,13 @@ def _build_all_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     # Normalize layer datasets (foundation)
     rows.extend(_NORMALIZE_DATASET_ROWS)
     # Semantic normalization outputs
-    rows.extend(_build_semantic_normalization_rows())
+    rows.extend(_build_semantic_normalization_rows(model))
     # SCIP normalization
     rows.append(_build_scip_normalization_row())
     # File quality signals (used by quality-aware relationships)
     rows.append(_build_file_quality_row())
     # Relationship outputs
-    rows.extend(_build_relationship_rows())
+    rows.extend(_build_relationship_rows(model))
     # Diagnostic quality reports
     rows.extend(_build_diagnostic_rows())
     # Relation output union
@@ -812,7 +944,9 @@ def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """
     global _SEMANTIC_DATASET_ROWS_CACHE  # noqa: PLW0603
     if _SEMANTIC_DATASET_ROWS_CACHE is None:
-        _SEMANTIC_DATASET_ROWS_CACHE = _build_all_semantic_dataset_rows()
+        from semantics.ir_pipeline import build_semantic_ir
+
+        _SEMANTIC_DATASET_ROWS_CACHE = build_semantic_ir().dataset_rows
     return _SEMANTIC_DATASET_ROWS_CACHE
 
 
@@ -974,6 +1108,7 @@ __all__ = [
     "SEMANTIC_SCHEMA_VERSION",
     "DatasetCategory",
     "SemanticDatasetRow",
+    "build_semantic_dataset_rows",
     "dataset_names",
     "dataset_names_by_category",
     "dataset_row",

@@ -1,0 +1,12 @@
+id: py_call_name
+valid:
+  - "obj.method()"
+  - "self.foo()"
+  - "x + y"
+  - "x = 1"
+invalid:
+  - "foo()"
+  - "Bar()"
+  - "print(x)"
+  - "len(items)"
+  - "func(a, b, c)"

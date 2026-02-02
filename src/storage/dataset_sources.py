@@ -253,7 +253,7 @@ def normalize_dataset_source(
         Raised when a union dataset has no members or normalization fails.
     """
     resolved = options or DatasetSourceOptions()
-    if resolved.dataset_format == "delta":
+    if resolved.dataset_format == "delta" and _requires_datafusion_provider(source):
         msg = "Delta datasets must be registered via DataFusion TableProvider."
         raise ValueError(msg)
     dataset = _dataset_from_inputs(source, options=resolved)
@@ -261,6 +261,32 @@ def normalize_dataset_source(
         msg = "Failed to normalize dataset source."
         raise ValueError(msg)
     return dataset
+
+
+def _datafusion_table_types() -> tuple[type[object] | None, type[object] | None]:
+    try:
+        from datafusion.catalog import Table
+        from datafusion.dataframe import DataFrame
+    except ImportError:
+        return None, None
+    return Table, DataFrame
+
+
+def _requires_datafusion_provider(source: object) -> bool:
+    datafusion_table, datafusion_dataframe = _datafusion_table_types()
+    checks = (
+        _is_dataset_sequence(source),
+        isinstance(source, ds.Dataset),
+        is_one_shot_dataset(source),
+        isinstance(source, _DatasetFactory),
+        isinstance(source, TableLike),
+        isinstance(source, RecordBatchReaderLike),
+        hasattr(source, "__datafusion_table_provider__"),
+        datafusion_table is not None and isinstance(source, datafusion_table),
+        datafusion_dataframe is not None and isinstance(source, datafusion_dataframe),
+        _has_arrow_capsule(source),
+    )
+    return not any(checks)
 
 
 def _dataset_from_inputs(

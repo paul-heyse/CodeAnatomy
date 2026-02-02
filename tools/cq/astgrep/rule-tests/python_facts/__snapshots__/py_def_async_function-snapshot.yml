@@ -1,0 +1,22 @@
+id: py_def_async_function
+snapshots:
+  ? |
+    async def fetch(url):
+        return await get(url)
+  : labels:
+    - source: |-
+        async def fetch(url):
+            return await get(url)
+      style: primary
+      start: 0
+      end: 47
+  ? |
+    async def foo():
+        pass
+  : labels:
+    - source: |-
+        async def foo():
+            pass
+      style: primary
+      start: 0
+      end: 25

@@ -29,13 +29,22 @@ class SemanticInputSpec:
 
 
 def _fallback_names(output: str) -> tuple[str, ...]:
+    candidates: list[str] = []
     try:
         dataset = dataset_name_for_output(output)
     except KeyError:
-        return ()
-    if dataset is None or dataset == output:
-        return ()
-    return (dataset,)
+        dataset = None
+    if dataset is not None and dataset != output:
+        candidates.append(dataset)
+    versioned = f"{output}_v1"
+    if versioned != output:
+        try:
+            dataset_versioned = dataset_name_for_output(versioned)
+        except KeyError:
+            dataset_versioned = None
+        if dataset_versioned is not None and dataset_versioned not in candidates:
+            candidates.append(dataset_versioned)
+    return tuple(candidates)
 
 
 # Canonical input specifications
@@ -120,8 +129,10 @@ def validate_semantic_inputs(ctx: SessionContext) -> InputValidationResult:
     InputValidationResult
         Validation result with missing tables and resolved names.
     """
+    from datafusion_engine.catalog.introspection import invalidate_introspection_cache
     from datafusion_engine.schema.introspection import table_names_snapshot
 
+    invalidate_introspection_cache(ctx)
     available = set(table_names_snapshot(ctx))
     missing_required: list[str] = []
     missing_optional: list[str] = []

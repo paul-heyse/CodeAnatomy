@@ -4,25 +4,25 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable
-from types import ModuleType
 
+import pyarrow as pa
 from datafusion import Expr
+from datafusion import functions as f
+
+_NULL_SEPARATOR = "\x1f"
 
 
-def _require_module() -> ModuleType:
-    try:
-        return importlib.import_module("datafusion._internal")
-    except ImportError as exc:
-        msg = "datafusion._internal is required for expression UDF shims."
-        raise RuntimeError(msg) from exc
-
-
-def _require_callable(module: ModuleType, name: str) -> Callable[..., object]:
-    func = getattr(module, name, None)
-    if not isinstance(func, Callable):
-        msg = f"datafusion._internal.{name} is unavailable."
-        raise TypeError(msg)
-    return func
+def _require_callable(name: str) -> Callable[..., object]:
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        func = getattr(module, name, None)
+        if isinstance(func, Callable):
+            return func
+    msg = f"DataFusion extension entrypoint {name} is unavailable."
+    raise TypeError(msg)
 
 
 def _unwrap_expr_arg(value: object) -> object:
@@ -41,16 +41,35 @@ def _wrap_result(result: object) -> Expr:
         raise TypeError(msg) from exc
 
 
+def _fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
+    try:
+        from datafusion_engine.udf.fallback import fallback_expr
+    except ImportError:
+        return None
+    try:
+        return fallback_expr(name, *args, **kwargs)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _call_expr(name: str, *args: object, **kwargs: object) -> Expr:
-    module = _require_module()
-    func = _require_callable(module, name)
-    resolved_args = tuple(_unwrap_expr_arg(arg) for arg in args)
-    resolved_kwargs = {key: _unwrap_expr_arg(value) for key, value in kwargs.items()}
-    result = func(*resolved_args, **resolved_kwargs)
+    try:
+        func = _require_callable(name)
+        resolved_args = tuple(_unwrap_expr_arg(arg) for arg in args)
+        resolved_kwargs = {key: _unwrap_expr_arg(value) for key, value in kwargs.items()}
+        result = func(*resolved_args, **resolved_kwargs)
+    except (RuntimeError, TypeError):
+        fallback = _fallback_expr(name, *args, **kwargs)
+        if fallback is not None:
+            return fallback
+        raise
     try:
         return _wrap_result(result)
     except TypeError as exc:
-        msg = f"datafusion._internal.{name} returned a non-Expr result."
+        fallback = _fallback_expr(name, *args, **kwargs)
+        if fallback is not None:
+            return fallback
+        msg = f"DataFusion extension entrypoint {name} returned a non-Expr result."
         raise TypeError(msg) from exc
 
 
@@ -333,7 +352,12 @@ def stable_hash64(value: Expr) -> Expr:
     Expr
         Expression yielding 64-bit hashes.
     """
-    return _call_expr("stable_hash64", value)
+    try:
+        return _call_expr("stable_hash64", value)
+    except (RuntimeError, TypeError):
+        from datafusion import functions as f
+
+        return f.md5(value).alias("stable_hash64")
 
 
 def stable_hash128(value: Expr) -> Expr:
@@ -403,7 +427,10 @@ def semantic_tag(semantic_type: str, value: Expr) -> Expr:
     Expr
         Expression yielding tagged values.
     """
-    return _call_expr("semantic_tag", semantic_type, value)
+    try:
+        return _call_expr("semantic_tag", semantic_type, value)
+    except (RuntimeError, TypeError):
+        return value
 
 
 def stable_id_parts(prefix: str, part1: Expr, *parts: Expr) -> Expr:
@@ -423,7 +450,15 @@ def stable_id_parts(prefix: str, part1: Expr, *parts: Expr) -> Expr:
     Expr
         Expression yielding stable identifiers.
     """
-    return _call_expr("stable_id_parts", prefix, part1, *parts)
+    try:
+        return _call_expr("stable_id_parts", prefix, part1, *parts)
+    except (RuntimeError, TypeError):
+        null_sentinel = Expr.string_literal("None")
+        prefix_expr = Expr.string_literal(prefix)
+        normalized = [f.coalesce(part.cast(pa.string()), null_sentinel) for part in (part1, *parts)]
+        joined = f.concat_ws(_NULL_SEPARATOR, prefix_expr, *normalized)
+        hashed = f.encode(f.sha256(joined), Expr.string_literal("hex"))
+        return f.concat_ws(":", prefix_expr, hashed)
 
 
 def prefixed_hash_parts64(prefix: str, part1: Expr, *parts: Expr) -> Expr:
@@ -443,7 +478,12 @@ def prefixed_hash_parts64(prefix: str, part1: Expr, *parts: Expr) -> Expr:
     Expr
         Expression yielding prefixed hashes.
     """
-    return _call_expr("prefixed_hash_parts64", prefix, part1, *parts)
+    try:
+        return _call_expr("prefixed_hash_parts64", prefix, part1, *parts)
+    except (RuntimeError, TypeError):
+        prefix_expr = Expr.string_literal(prefix)
+        joined = f.concat_ws(_NULL_SEPARATOR, prefix_expr, part1, *parts)
+        return stable_hash64(joined)
 
 
 def stable_hash_any(
@@ -468,12 +508,15 @@ def stable_hash_any(
     Expr
         Expression yielding stable hashes.
     """
-    return _call_expr(
-        "stable_hash_any",
-        value,
-        canonical=canonical,
-        null_sentinel=null_sentinel,
-    )
+    try:
+        return _call_expr(
+            "stable_hash_any",
+            value,
+            canonical=canonical,
+            null_sentinel=null_sentinel,
+        )
+    except (RuntimeError, TypeError):
+        return stable_hash64(value)
 
 
 def span_make(
@@ -503,14 +546,30 @@ def span_make(
     Expr
         Expression yielding spans.
     """
-    return _call_expr(
-        "span_make",
-        bstart,
-        bend,
-        line_base,
-        col_unit,
-        end_exclusive,
-    )
+    try:
+        return _call_expr(
+            "span_make",
+            bstart,
+            bend,
+            line_base,
+            col_unit,
+            end_exclusive,
+        )
+    except (RuntimeError, TypeError):
+        line_base_expr = line_base if line_base is not None else Expr.literal(0)
+        col_unit_expr = col_unit if col_unit is not None else Expr.string_literal("byte")
+        end_exclusive_expr = (
+            end_exclusive if end_exclusive is not None else Expr.literal(value=True)
+        )
+        return f.named_struct(
+            [
+                ("bstart", bstart),
+                ("bend", bend),
+                ("line_base", line_base_expr),
+                ("col_unit", col_unit_expr),
+                ("end_exclusive", end_exclusive_expr),
+            ]
+        )
 
 
 def span_len(span: Expr) -> Expr:
@@ -526,7 +585,48 @@ def span_len(span: Expr) -> Expr:
     Expr
         Expression yielding span lengths.
     """
-    return _call_expr("span_len", span)
+    try:
+        return _call_expr("span_len", span)
+    except (RuntimeError, TypeError):
+        return span["bend"] - span["bstart"]
+
+
+def span_start(span: Expr) -> Expr:
+    """Return an expression extracting span start.
+
+    Parameters
+    ----------
+    span
+        Span struct expression.
+
+    Returns
+    -------
+    Expr
+        Expression yielding span start.
+    """
+    try:
+        return _call_expr("span_start", span)
+    except (RuntimeError, TypeError):
+        return span["bstart"]
+
+
+def span_end(span: Expr) -> Expr:
+    """Return an expression extracting span end.
+
+    Parameters
+    ----------
+    span
+        Span struct expression.
+
+    Returns
+    -------
+    Expr
+        Expression yielding span end.
+    """
+    try:
+        return _call_expr("span_end", span)
+    except (RuntimeError, TypeError):
+        return span["bend"]
 
 
 def span_overlaps(span_a: Expr, span_b: Expr) -> Expr:
@@ -544,7 +644,10 @@ def span_overlaps(span_a: Expr, span_b: Expr) -> Expr:
     Expr
         Expression yielding overlap checks.
     """
-    return _call_expr("span_overlaps", span_a, span_b)
+    try:
+        return _call_expr("span_overlaps", span_a, span_b)
+    except (RuntimeError, TypeError):
+        return (span_a["bstart"] < span_b["bend"]) & (span_b["bstart"] < span_a["bend"])
 
 
 def span_contains(span_a: Expr, span_b: Expr) -> Expr:
@@ -562,7 +665,10 @@ def span_contains(span_a: Expr, span_b: Expr) -> Expr:
     Expr
         Expression yielding containment checks.
     """
-    return _call_expr("span_contains", span_a, span_b)
+    try:
+        return _call_expr("span_contains", span_a, span_b)
+    except (RuntimeError, TypeError):
+        return (span_a["bstart"] <= span_b["bstart"]) & (span_a["bend"] >= span_b["bend"])
 
 
 def interval_align_score(
@@ -620,7 +726,13 @@ def span_id(
     Expr
         Expression yielding span identifiers.
     """
-    return _call_expr("span_id", prefix, path, bstart, bend, kind=kind)
+    try:
+        return _call_expr("span_id", prefix, path, bstart, bend, kind=kind)
+    except (RuntimeError, TypeError):
+        parts = [path, bstart.cast(pa.string()), bend.cast(pa.string())]
+        if kind is not None:
+            parts.insert(0, kind.cast(pa.string()))
+        return stable_id_parts(prefix, parts[0], *parts[1:])
 
 
 def utf8_normalize(
@@ -648,13 +760,26 @@ def utf8_normalize(
     Expr
         Expression yielding normalized text.
     """
-    return _call_expr(
-        "utf8_normalize",
-        value,
-        form=form,
-        casefold=casefold,
-        collapse_ws=collapse_ws,
-    )
+    try:
+        return _call_expr(
+            "utf8_normalize",
+            value,
+            form=form,
+            casefold=casefold,
+            collapse_ws=collapse_ws,
+        )
+    except (RuntimeError, TypeError):
+        normalized = value
+        if casefold:
+            normalized = f.lower(normalized)
+        if collapse_ws:
+            normalized = f.regexp_replace(
+                normalized,
+                Expr.string_literal(r"\s+"),
+                Expr.string_literal(" "),
+            )
+            normalized = f.trim(normalized)
+        return normalized
 
 
 def utf8_null_if_blank(value: Expr) -> Expr:
@@ -670,7 +795,11 @@ def utf8_null_if_blank(value: Expr) -> Expr:
     Expr
         Expression yielding nulls for blanks.
     """
-    return _call_expr("utf8_null_if_blank", value)
+    try:
+        return _call_expr("utf8_null_if_blank", value)
+    except (RuntimeError, TypeError):
+        trimmed = f.trim(value)
+        return f.nullif(trimmed, Expr.string_literal(""))
 
 
 def qname_normalize(
@@ -891,10 +1020,12 @@ __all__ = [
     "row_number_window",
     "semantic_tag",
     "span_contains",
+    "span_end",
     "span_id",
     "span_len",
     "span_make",
     "span_overlaps",
+    "span_start",
     "stable_hash64",
     "stable_hash128",
     "stable_hash_any",

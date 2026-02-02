@@ -118,8 +118,8 @@ _CPG_EDGES_BY_SRC_SCHEMA = (("src_node_id", "string"), ("edges", "string"))
 _CPG_EDGES_BY_DST_SCHEMA = (("dst_node_id", "string"), ("edges", "string"))
 
 
-@schema.output(*_CPG_NODES_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_nodes"))
+@schema.output(*_CPG_NODES_SCHEMA)
 def cpg_nodes(cpg_nodes_raw: TableLike) -> TableLike:
     """Return the canonical CPG nodes output table.
 
@@ -131,8 +131,8 @@ def cpg_nodes(cpg_nodes_raw: TableLike) -> TableLike:
     return cpg_nodes_raw
 
 
-@schema.output(*_CPG_EDGES_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_edges"))
+@schema.output(*_CPG_EDGES_SCHEMA)
 def cpg_edges(cpg_edges_raw: TableLike) -> TableLike:
     """Return the canonical CPG edges output table.
 
@@ -144,8 +144,8 @@ def cpg_edges(cpg_edges_raw: TableLike) -> TableLike:
     return cpg_edges_raw
 
 
-@schema.output(*_CPG_PROPS_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_props"))
+@schema.output(*_CPG_PROPS_SCHEMA)
 def cpg_props(cpg_props_raw: TableLike) -> TableLike:
     """Return the canonical CPG properties output table.
 
@@ -157,8 +157,8 @@ def cpg_props(cpg_props_raw: TableLike) -> TableLike:
     return cpg_props_raw
 
 
-@schema.output(*_CPG_PROPS_MAP_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_props_map"))
+@schema.output(*_CPG_PROPS_MAP_SCHEMA)
 def cpg_props_map(cpg_props_map_v1: TableLike) -> TableLike:
     """Return the canonical CPG property map table.
 
@@ -170,8 +170,8 @@ def cpg_props_map(cpg_props_map_v1: TableLike) -> TableLike:
     return cpg_props_map_v1
 
 
-@schema.output(*_CPG_EDGES_BY_SRC_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_edges_by_src"))
+@schema.output(*_CPG_EDGES_BY_SRC_SCHEMA)
 def cpg_edges_by_src(cpg_edges_by_src_v1: TableLike) -> TableLike:
     """Return CPG edges grouped by source node.
 
@@ -183,8 +183,8 @@ def cpg_edges_by_src(cpg_edges_by_src_v1: TableLike) -> TableLike:
     return cpg_edges_by_src_v1
 
 
-@schema.output(*_CPG_EDGES_BY_DST_SCHEMA)
 @apply_tag(semantic_tag_policy("cpg_edges_by_dst"))
+@schema.output(*_CPG_EDGES_BY_DST_SCHEMA)
 def cpg_edges_by_dst(cpg_edges_by_dst_v1: TableLike) -> TableLike:
     """Return CPG edges grouped by destination node.
 

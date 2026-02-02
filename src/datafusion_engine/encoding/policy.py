@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext, col, lit
-from datafusion import functions as f
+from datafusion import SessionContext, col
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.arrow.chunking import ChunkPolicy
@@ -18,6 +17,7 @@ from datafusion_engine.arrow.interop import (
     DataTypeLike,
     TableLike,
 )
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
 from utils.validation import ensure_table
 
@@ -83,11 +83,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     resolved = ensure_table(table, label="table")
     with temp_table(df_ctx, resolved, prefix="_encoding_") as table_name:
         df = df_ctx.table(table_name)
-        selections = _encoding_select_expr(
-            schema=resolved.schema,
-            policy=policy,
-            ctx=df_ctx,
-        )
+        selections = _encoding_select_expr(schema=resolved.schema, policy=policy)
         return df.select(*selections).to_arrow_table()
 
 
@@ -109,7 +105,6 @@ def _encoding_select_expr(
     *,
     schema: pa.Schema,
     policy: EncodingPolicy,
-    ctx: SessionContext,
 ) -> list[Expr]:
     selections: list[Expr] = []
     for schema_field in schema:
@@ -124,13 +119,12 @@ def _encoding_select_expr(
         if index_type is None:
             index_type = DEFAULT_DICTIONARY_INDEX_TYPE
         ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
-        dict_type = _dictionary_type_name(
-            ctx,
-            index_type,
-            schema_field.type,
+        dict_type = pa.dictionary(
+            _ensure_arrow_dtype(index_type),
+            _ensure_arrow_dtype(schema_field.type),
             ordered=ordered,
         )
-        selections.append(f.arrow_cast(col(name), lit(dict_type)).alias(name))
+        selections.append(safe_cast(col(name), dict_type).alias(name))
     return selections
 
 
@@ -139,30 +133,6 @@ def _datafusion_context() -> SessionContext:
 
     profile = DataFusionRuntimeProfile()
     return profile.session_runtime().ctx
-
-
-def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
-    table = pa.table({"value": pa.array([None], type=dtype)})
-    with temp_table(ctx, table, prefix="_dtype_") as temp_name:
-        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
-        value = df.to_arrow_table()["dtype"][0].as_py()
-    if not isinstance(value, str):
-        msg = "Failed to resolve DataFusion type name."
-        raise TypeError(msg)
-    return value
-
-
-def _dictionary_type_name(
-    ctx: SessionContext,
-    index_type: DataTypeLike,
-    value_type: DataTypeLike,
-    *,
-    ordered: bool,
-) -> str:
-    index_name = _arrow_type_name(ctx, _ensure_arrow_dtype(index_type))
-    value_name = _arrow_type_name(ctx, _ensure_arrow_dtype(value_type))
-    _ = ordered
-    return f"Dictionary({index_name}, {value_name})"
 
 
 def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:

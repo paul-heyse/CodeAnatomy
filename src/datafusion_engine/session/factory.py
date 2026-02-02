@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
@@ -114,6 +115,88 @@ def _apply_explain_analyze_level(
     if level is None or not supported:
         return config
     return config.set("datafusion.explain.analyze_level", level)
+
+
+@dataclass(frozen=True)
+class _DeltaSessionBuildResult:
+    ctx: SessionContext | None
+    available: bool
+    installed: bool
+    error: str | None
+    cause: Exception | None
+
+
+def _build_delta_session_context(
+    profile: DataFusionRuntimeProfile,
+    runtime_env: RuntimeEnvBuilder,
+) -> _DeltaSessionBuildResult:
+    from datafusion_engine.session.runtime import delta_runtime_env_options
+
+    available = True
+    error: str | None = None
+    cause: Exception | None = None
+    builder: object | None = None
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            available = False
+            error = str(exc)
+            cause = exc
+            continue
+        builder = getattr(module, "delta_session_context", None)
+        if callable(builder):
+            break
+        error = f"{module_name}.delta_session_context is unavailable."
+        cause = TypeError(error)
+        builder = None
+    if builder is None:
+        return _DeltaSessionBuildResult(
+            ctx=None,
+            available=available,
+            installed=False,
+            error=error,
+            cause=cause,
+        )
+    builder_fn = cast(
+        "Callable[[list[tuple[str, str]], RuntimeEnvBuilder, object | None], SessionContext]",
+        builder,
+    )
+    try:
+        settings = profile.settings_payload()
+        settings["datafusion.catalog.information_schema"] = str(
+            profile.enable_information_schema
+        ).lower()
+        delta_runtime = delta_runtime_env_options(profile)
+        ctx = builder_fn(
+            list(settings.items()),
+            runtime_env,
+            delta_runtime,
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return _DeltaSessionBuildResult(
+            ctx=None,
+            available=available,
+            installed=False,
+            error=str(exc),
+            cause=exc,
+        )
+    if not isinstance(ctx, SessionContext):
+        message = "Delta session context must return a SessionContext."
+        return _DeltaSessionBuildResult(
+            ctx=None,
+            available=available,
+            installed=False,
+            error=message,
+            cause=TypeError(message),
+        )
+    return _DeltaSessionBuildResult(
+        ctx=ctx,
+        available=available,
+        installed=True,
+        error=None,
+        cause=None,
+    )
 
 
 @dataclass(frozen=True)
@@ -258,68 +341,24 @@ class SessionFactory:
 
     def _build_local_context(self) -> SessionContext:
         profile = self.profile
-        from datafusion_engine.session.runtime import (
-            delta_runtime_env_options,
-            record_delta_session_defaults,
-        )
+        from datafusion_engine.session.runtime import record_delta_session_defaults
 
         if not profile.enable_delta_session_defaults:
             return SessionContext(self.build_config(), self.build_runtime_env())
-        available = True
-        installed = False
-        error: str | None = None
-        cause: Exception | None = None
-        ctx: SessionContext | None = None
-        try:
-            module = __import__("datafusion._internal", fromlist=["delta_session_context"])
-        except ImportError as exc:
-            available = False
-            error = str(exc)
-            cause = exc
-        else:
-            builder = getattr(module, "delta_session_context", None)
-            if not callable(builder):
-                error = "datafusion._internal.delta_session_context is unavailable."
-                cause = TypeError(error)
-            else:
-                builder_fn = cast(
-                    "Callable[[list[tuple[str, str]], RuntimeEnvBuilder, object | None], SessionContext]",
-                    builder,
-                )
-                try:
-                    settings = profile.settings_payload()
-                    settings["datafusion.catalog.information_schema"] = str(
-                        profile.enable_information_schema
-                    ).lower()
-                    delta_runtime = delta_runtime_env_options(profile)
-                    ctx = builder_fn(
-                        list(settings.items()),
-                        self.build_runtime_env(),
-                        delta_runtime,
-                    )
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    error = str(exc)
-                    cause = exc
-                else:
-                    if not isinstance(ctx, SessionContext):
-                        error = "datafusion._internal.delta_session_context must return a SessionContext."
-                        cause = TypeError(error)
-                        ctx = None
-                    else:
-                        installed = True
+        result = _build_delta_session_context(profile, self.build_runtime_env())
         record_delta_session_defaults(
             profile,
-            available=available,
-            installed=installed,
-            error=error,
+            available=result.available,
+            installed=result.installed,
+            error=result.error,
         )
-        if error is not None:
-            msg = "Delta session defaults require datafusion._internal."
-            raise RuntimeError(msg) from cause
-        if ctx is None:
+        if result.error is not None:
+            msg = "Delta session defaults require datafusion._internal or datafusion_ext."
+            raise RuntimeError(msg) from result.cause
+        if result.ctx is None:
             msg = "Delta session context construction failed."
             raise RuntimeError(msg)
-        return ctx
+        return result.ctx
 
 
 __all__ = ["SessionFactory"]

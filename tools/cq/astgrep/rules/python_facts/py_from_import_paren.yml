@@ -1,0 +1,9 @@
+id: py_from_import_paren
+language: python
+severity: hint
+rule:
+  kind: import_from_statement
+  regex: "\\("
+metadata:
+  record: import
+  kind: from_import_paren

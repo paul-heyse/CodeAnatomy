@@ -100,8 +100,8 @@ _CPG_NODES_QUALITY_COLUMNS = (
     TableSchemaValidator(expected_columns=_CPG_NODES_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@schema.output(*tuple((col, "string") for col in _CPG_NODES_QUALITY_COLUMNS))
 @apply_tag(semantic_tag_policy("cpg_nodes_quality"))
+@schema.output(*tuple((col, "string") for col in _CPG_NODES_QUALITY_COLUMNS))
 def cpg_nodes_quality(cpg_nodes_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG nodes quality output as Arrow.
 
@@ -191,8 +191,8 @@ _CPG_PROPS_QUALITY_COLUMNS = (
     TableSchemaValidator(expected_columns=_CPG_PROPS_QUALITY_COLUMNS, importance="fail"),
     NonEmptyTableValidator(),
 )
-@schema.output(*tuple((col, "string") for col in _CPG_PROPS_QUALITY_COLUMNS))
 @apply_tag(semantic_tag_policy("cpg_props_quality"))
+@schema.output(*tuple((col, "string") for col in _CPG_PROPS_QUALITY_COLUMNS))
 def cpg_props_quality(cpg_props_quality_polars: pl.DataFrame) -> TableLike:
     """Return CPG properties quality output as Arrow.
 

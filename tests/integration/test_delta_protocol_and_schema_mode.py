@@ -9,9 +9,9 @@ import pytest
 
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.diagnostics import diagnostic_profile
-from tests.test_helpers.optional_deps import require_datafusion, require_deltalake
+from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
 
-require_datafusion()
+require_datafusion_udfs()
 require_deltalake()
 
 try:  # pragma: no cover - skip when native extensions are unavailable

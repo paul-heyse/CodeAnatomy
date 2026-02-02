@@ -1,0 +1,11 @@
+# ast-grep configuration for CodeAnatomy cq tool
+# This file defines the structure and locations for ast-grep rules, tests, and utilities
+
+ruleDirs:
+  - rules/python_facts
+
+testConfigs:
+  - testDir: rule-tests/python_facts
+
+utilDirs:
+  - utils

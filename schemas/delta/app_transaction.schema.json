@@ -2,6 +2,7 @@
   "$id": "schemas/delta/app_transaction.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "DeltaAppTransaction",
+  "description": "Delta application transaction metadata.",
   "type": "object",
   "properties": {
     "app_id": {

@@ -32,6 +32,7 @@ Usage
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -48,6 +49,8 @@ if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
     from datafusion.expr import Expr
 
+    from semantics.ir import SemanticIRJoinGroup
+    from semantics.quality import JoinHow
     from semantics.specs import SemanticTableSpec
     from semantics.types import AnnotatedSchema
 
@@ -69,6 +72,10 @@ CANONICAL_EDGE_SCHEMA: tuple[tuple[str, pa.DataType], ...] = (
     ("bend", pa.int64()),
     ("origin", pa.string()),
 )
+
+_LEFT_ALIAS_PREFIX = "l__"
+_RIGHT_ALIAS_PREFIX = "r__"
+_FILE_QUALITY_PREFIX = "fq__"
 
 
 @dataclass(frozen=True)
@@ -1058,11 +1065,88 @@ class SemanticCompiler:
     # Quality-aware relationship compilation
     # -------------------------------------------------------------------------
 
+    def _build_joined_tables(
+        self,
+        *,
+        left_view: str,
+        right_view: str,
+        left_on: Sequence[str],
+        right_on: Sequence[str],
+        how: JoinHow,
+    ) -> DataFrame:
+        left_df = self.ctx.table(left_view)
+        right_df = self.ctx.table(right_view)
+
+        left_aliased = self._prefix_df(left_df, _LEFT_ALIAS_PREFIX)
+        right_aliased = self._prefix_df(right_df, _RIGHT_ALIAS_PREFIX)
+
+        left_keys = [f"{_LEFT_ALIAS_PREFIX}{k}" for k in left_on]
+        right_keys = [f"{_RIGHT_ALIAS_PREFIX}{k}" for k in right_on]
+        if not left_keys or not right_keys:
+            msg = (
+                f"Quality relationship join requires non-empty keys: "
+                f"{left_view!r} -> {right_view!r}."
+            )
+            raise SemanticSchemaError(msg)
+
+        return left_aliased.join(
+            right_aliased,
+            left_on=left_keys,
+            right_on=right_keys,
+            how=how,
+        )
+
+    def build_join_group(self, group: SemanticIRJoinGroup) -> DataFrame:
+        """Build a shared join group for multiple relationships.
+
+        Returns
+        -------
+        DataFrame
+            Joined DataFrame with left/right prefixes.
+        """
+        return self._build_joined_tables(
+            left_view=group.left_view,
+            right_view=group.right_view,
+            left_on=group.left_on,
+            right_on=group.right_on,
+            how=group.how,
+        )
+
+    def compile_relationship_from_join(
+        self,
+        joined: DataFrame,
+        spec: QualityRelationshipSpec,
+        *,
+        file_quality_df: DataFrame | None = None,
+    ) -> DataFrame:
+        """Compile a relationship from a pre-joined DataFrame.
+
+        Parameters
+        ----------
+        joined
+            Pre-joined DataFrame with left/right prefixes.
+        spec
+            Quality relationship specification.
+        file_quality_df
+            Optional file quality DataFrame for confidence adjustment.
+
+        Returns
+        -------
+        DataFrame
+            Compiled relationship output.
+        """
+        return self.compile_relationship_with_quality(
+            spec,
+            file_quality_df=file_quality_df,
+            joined=joined,
+        )
+
     def compile_relationship_with_quality(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         spec: QualityRelationshipSpec,
         *,
         file_quality_df: DataFrame | None = None,
+        joined: DataFrame | None = None,
     ) -> DataFrame:
         """Compile a relationship with quality signals.
 
@@ -1084,16 +1168,14 @@ class SemanticCompiler:
         file_quality_df
             Optional pre-built file quality DataFrame. If None and
             spec.join_file_quality is True, will try to use file_quality_v1.
+        joined
+            Optional pre-joined DataFrame with left/right prefixes.
 
         Returns
         -------
         DataFrame
             Compiled relationship with confidence, score, and ambiguity_group_id.
 
-        Raises
-        ------
-        SemanticSchemaError
-            If left_on or right_on are empty.
         """
         from datafusion import col, functions, lit
 
@@ -1111,32 +1193,17 @@ class SemanticCompiler:
                 "codeanatomy.join_file_quality": spec.join_file_quality,
             },
         ):
-            # 1. Get and alias tables
-            left_df = self.ctx.table(spec.left_view)
-            right_df = self.ctx.table(spec.right_view)
+            # 1. Build equi-join (require keys) unless pre-joined is provided
+            if joined is None:
+                joined = self._build_joined_tables(
+                    left_view=spec.left_view,
+                    right_view=spec.right_view,
+                    left_on=spec.left_on,
+                    right_on=spec.right_on,
+                    how=spec.how,
+                )
 
-            left_prefix = "l__"
-            right_prefix = "r__"
-            left_aliased = self._prefix_df(left_df, left_prefix)
-            right_aliased = self._prefix_df(right_df, right_prefix)
-
-            # 2. Build join keys with prefixes
-            left_keys = [f"{left_prefix}{k}" for k in spec.left_on]
-            right_keys = [f"{right_prefix}{k}" for k in spec.right_on]
-
-            # 3. Perform equi-join (require keys)
-            if not left_keys or not right_keys:
-                msg = f"Quality relationship {spec.name!r} requires non-empty left_on and right_on."
-                raise SemanticSchemaError(msg)
-
-            joined = left_aliased.join(
-                right_aliased,
-                left_on=left_keys,
-                right_on=right_keys,
-                how=spec.how,
-            )
-
-            # 4. Optionally join file quality signals
+            # 2. Optionally join file quality signals
             if spec.join_file_quality:
                 fq_df = file_quality_df
                 if fq_df is None:
@@ -1146,11 +1213,9 @@ class SemanticCompiler:
                         fq_df = None
 
                 if fq_df is not None:
-                    # Join on file_id from left table
-                    fq_prefix = "fq__"
-                    fq_aliased = self._prefix_df(fq_df, fq_prefix)
-                    left_file_id = f"{left_prefix}file_id"
-                    fq_file_id = f"{fq_prefix}file_id"
+                    fq_aliased = self._prefix_df(fq_df, _FILE_QUALITY_PREFIX)
+                    left_file_id = f"{_LEFT_ALIAS_PREFIX}file_id"
+                    fq_file_id = f"{_FILE_QUALITY_PREFIX}file_id"
                     joined = joined.join(
                         fq_aliased,
                         left_on=[left_file_id],
@@ -1158,10 +1223,10 @@ class SemanticCompiler:
                         how="left",
                     )
 
-            # 5. Set up expression context with prefixes
+            # 3. Set up expression context with prefixes
             expr_ctx = ExprContextImpl(left_alias="l", right_alias="r")
             schema_names = set(self._schema_names(joined))
-            feature_columns = {f"_feat_{feature.name}" for feature in spec.signals.features}
+            feature_columns = {f"feat_{feature.name}" for feature in spec.signals.features}
             rank_available = {
                 *schema_names,
                 *feature_columns,
@@ -1173,7 +1238,8 @@ class SemanticCompiler:
             if spec.rule_name is not None:
                 rank_available.add("rule_name")
 
-            # 6. Apply hard predicates
+            # 4. Apply hard predicates
+            hard_columns: list[str] = []
             for index, hard_pred in enumerate(spec.signals.hard, start=1):
                 validate_expr_spec(
                     hard_pred.predicate,
@@ -1181,9 +1247,12 @@ class SemanticCompiler:
                     expr_label=f"{spec.name}.hard[{index}]",
                 )
                 pred_expr = hard_pred.predicate(expr_ctx)
-                joined = joined.filter(pred_expr)
+                hard_col = f"hard_{index}"
+                joined = joined.with_column(hard_col, pred_expr)
+                joined = joined.filter(col(hard_col))
+                hard_columns.append(hard_col)
 
-            # 7. Add feature columns and compute score
+            # 5. Add feature columns and compute score
             base_score = lit(spec.signals.base_score)
             for feature in spec.signals.features:
                 validate_expr_spec(
@@ -1192,14 +1261,15 @@ class SemanticCompiler:
                     expr_label=f"{spec.name}.feature[{feature.name}]",
                 )
                 feature_expr = feature.expr(expr_ctx)
-                joined = joined.with_column(f"_feat_{feature.name}", feature_expr)
-                base_score = base_score + col(f"_feat_{feature.name}") * lit(feature.weight)  # noqa: PLR6104
+                feature_col = f"feat_{feature.name}"
+                joined = joined.with_column(feature_col, feature_expr)
+                base_score = base_score + col(feature_col) * lit(feature.weight)  # noqa: PLR6104
 
             joined = joined.with_column("score", base_score)
 
-            # 8. Compute confidence with quality adjustment
+            # 6. Compute confidence with quality adjustment
             base_conf = lit(spec.signals.base_confidence)
-            quality_col = f"fq__{spec.signals.quality_score_column}"
+            quality_col = f"{_FILE_QUALITY_PREFIX}{spec.signals.quality_score_column}"
 
             # Check if quality column exists
             schema_names = self._schema_names(joined)
@@ -1215,13 +1285,13 @@ class SemanticCompiler:
             conf_expr = clamp(raw_conf, min_value=lit(0.0), max_value=lit(1.0))
             joined = joined.with_column("confidence", conf_expr)
 
-            # 9. Add metadata columns
+            # 7. Add metadata columns
             joined = joined.with_column("origin", lit(spec.origin))
             joined = joined.with_column("provider", lit(spec.provider))
             if spec.rule_name is not None:
                 joined = joined.with_column("rule_name", lit(spec.rule_name))
 
-            # 10. Apply ranking if specified
+            # 8. Apply ranking if specified
             if spec.rank is not None:
                 # Build ambiguity group key
                 validate_expr_spec(
@@ -1268,7 +1338,7 @@ class SemanticCompiler:
 
                     joined = joined.drop("_rn")
 
-            # 11. Project final output columns if specified
+            # 9. Project final output columns if specified
             if spec.select_exprs:
                 select_available = {
                     *rank_available,
@@ -1295,6 +1365,8 @@ class SemanticCompiler:
                     select_cols.append(col("ambiguity_group_id"))
                 if spec.rule_name is not None:
                     select_cols.append(col("rule_name"))
+                select_cols.extend(col(hard_col) for hard_col in hard_columns)
+                select_cols.extend(col(feature_name) for feature_name in sorted(feature_columns))
                 joined = joined.select(*select_cols)
 
             return joined

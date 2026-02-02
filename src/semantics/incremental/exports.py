@@ -11,6 +11,7 @@ from datafusion import functions as f
 
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.interop import TableLike, coerce_table_like
+from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.udf.shims import prefixed_hash_parts64 as prefixed_hash64
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
@@ -62,8 +63,8 @@ def _build_exported_defs_base(
     base_df = ctx.table(cst_table_name)
     if has_container_def_id:
         base_df = base_df.filter(col("container_def_id").is_null())
-    symbol_expr = f.arrow_cast(lit(None), lit("Utf8"))
-    symbol_roles_expr = f.arrow_cast(lit(None), lit("Int32"))
+    symbol_expr = safe_cast(lit(None), "Utf8")
+    symbol_roles_expr = safe_cast(lit(None), "Int32")
     if rel_table_name is not None:
         rel_df = ctx.table(rel_table_name).select(
             col("def_id").alias("rel_def_id"),

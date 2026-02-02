@@ -1,0 +1,11 @@
+id: py_call_attr
+language: python
+severity: hint
+rule:
+  kind: call
+  has:
+    kind: attribute
+    field: function
+metadata:
+  record: call
+  kind: attr_call

@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 
 from tools.cq.query.ir import Query, Scope
 
+QUERY_CACHE_VERSION = "3"
+
 
 @dataclass
 class ScanContext:
@@ -464,7 +466,7 @@ def _build_inline_rules_yaml(rules: tuple[AstGrepRule, ...]) -> str:
     """Build YAML string for ast-grep inline rules."""
     import yaml
 
-    rule_docs = []
+    rule_docs: list[dict] = []
     for idx, rule in enumerate(rules):
         rule_docs.append(
             {
@@ -474,7 +476,11 @@ def _build_inline_rules_yaml(rules: tuple[AstGrepRule, ...]) -> str:
                 "message": "Pattern match",
             }
         )
-    return yaml.dump({"rules": rule_docs}, default_flow_style=False)
+
+    return "\n---\n".join(
+        yaml.safe_dump(rule_doc, sort_keys=False, default_flow_style=False).strip()
+        for rule_doc in rule_docs
+    )
 
 
 def _run_ast_grep_inline_rules(
@@ -761,6 +767,7 @@ def _build_query_cache_key(
         "plan": plan_signature,
         "root": str(root),
         "toolchain": tc.to_dict(),
+        "cache_version": QUERY_CACHE_VERSION,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -1367,6 +1374,18 @@ def _build_callers_section(
 
     # Get names of target definitions
     target_names = {_extract_def_name(d) for d in target_defs if _extract_def_name(d)}
+    class_methods: dict[str, set[str]] = {}
+    for def_record in target_defs:
+        def_name = _extract_def_name(def_record)
+        if not def_name:
+            continue
+        enclosing_class = _find_enclosing_class(def_record, index)
+        if enclosing_class is None:
+            continue
+        class_name = _extract_def_name(enclosing_class)
+        if not class_name:
+            continue
+        class_methods.setdefault(class_name, set()).add(def_name)
 
     # Find calls to target names
     call_contexts: list[tuple[SgRecord, str, SgRecord | None]] = []
@@ -1374,7 +1393,16 @@ def _build_callers_section(
         call_target = _extract_call_target(call)
         if call_target not in target_names:
             continue
+        receiver = _extract_call_receiver(call)
         containing = index.find_containing(call)
+        if receiver in {"self", "cls"} and containing is not None:
+            caller_class = _find_enclosing_class(containing, index)
+            if caller_class is not None:
+                caller_class_name = _extract_def_name(caller_class)
+                if caller_class_name:
+                    methods = class_methods.get(caller_class_name, set())
+                    if call_target not in methods:
+                        continue
         call_contexts.append((call, call_target, containing))
 
     containing_defs = [
@@ -1720,6 +1748,43 @@ def _extract_call_target(call: SgRecord) -> str:
         return match.group(1)
 
     return ""
+
+
+def _extract_call_receiver(call: SgRecord) -> str | None:
+    """Extract the receiver name for attribute calls."""
+    if call.kind not in {"attr_call", "attr"}:
+        return None
+    match = re.match(r"\s*(\w+)\s*\.", call.text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _find_enclosing_class(
+    record: SgRecord,
+    index: FileIntervalIndex,
+) -> SgRecord | None:
+    """Find the innermost class containing a record."""
+    class_kinds = {
+        "class",
+        "class_bases",
+        "class_typeparams",
+        "class_typeparams_bases",
+    }
+    file_index = index.by_file.get(record.file)
+    if file_index is None:
+        return None
+    candidates: list[SgRecord] = []
+    for start, end, candidate in file_index.intervals:
+        if candidate.kind not in class_kinds:
+            continue
+        if _record_key(candidate) == _record_key(record):
+            continue
+        if start <= record.start_line <= end:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate.end_line - candidate.start_line)
 
 
 def _extract_call_name(call: SgRecord) -> str | None:

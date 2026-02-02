@@ -10,7 +10,7 @@ access.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from datafusion import SessionContext, col, lit
@@ -32,66 +32,9 @@ from datafusion_engine.udf.shims import (
     utf8_normalize,
     utf8_null_if_blank,
 )
-from obs.otel.scopes import SCOPE_SEMANTICS
-from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
-
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
-    from datafusion_engine.session.runtime import SessionRuntime
-
-# Type alias for DataFrame builder functions
-DataFrameBuilder = Callable[[SessionContext], DataFrame]
-
-# Type alias for bundle builder functions (uses string annotation for lazy evaluation)
-PlanBundleBuilder = Callable[["SessionRuntime"], "DataFusionPlanBundle"]
-
-
-def _plan_bundle_from_df(
-    df: DataFrame,
-    *,
-    session_runtime: SessionRuntime,
-) -> DataFusionPlanBundle:
-    """Build a plan bundle from a DataFrame using a session runtime.
-
-    Returns
-    -------
-    DataFusionPlanBundle
-        Plan bundle with Substrait-first artifacts.
-    """
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
-
-    return build_plan_bundle(
-        session_runtime.ctx,
-        df,
-        options=PlanBundleOptions(
-            validate_udfs=True,
-            session_runtime=session_runtime,
-        ),
-    )
-
-
-def _bundle_builder(builder: DataFrameBuilder) -> PlanBundleBuilder:
-    """Wrap a DataFrame builder into a plan bundle builder.
-
-    Returns
-    -------
-    PlanBundleBuilder
-        Builder that produces DataFusionPlanBundle artifacts.
-    """
-
-    def _build(session_runtime: SessionRuntime) -> DataFusionPlanBundle:
-        with stage_span(
-            "semantics.view_builder",
-            stage="semantics",
-            scope_name=SCOPE_SEMANTICS,
-            attributes={"codeanatomy.view_builder": builder.__name__},
-        ):
-            df = builder(session_runtime.ctx)
-            return _plan_bundle_from_df(df, session_runtime=session_runtime)
-
-    return _build
 
 
 # Def/Use operation detection constants
@@ -833,39 +776,7 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     return exported_defs_df_builder(ctx)
 
 
-# View builder registry mapping view names to builders
-VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
-    "type_exprs_norm_v1": type_exprs_df_builder,
-    "type_nodes_v1": type_nodes_df_builder,
-    "py_bc_blocks_norm_v1": cfg_blocks_df_builder,
-    "py_bc_cfg_edges_norm_v1": cfg_edges_df_builder,
-    "py_bc_def_use_events_v1": def_use_events_df_builder,
-    "py_bc_reaches_v1": reaching_defs_df_builder,
-    "diagnostics_norm_v1": diagnostics_df_builder,
-    "span_errors_v1": span_errors_df_builder,
-    "file_quality_v1": file_quality_df_builder,
-    "relationship_quality_metrics_v1": relationship_quality_metrics_df_builder,
-    "relationship_ambiguity_report_v1": relationship_ambiguity_report_df_builder,
-    "relationship_candidates_v1": relationship_candidates_df_builder,
-    "relationship_decisions_v1": relationship_decisions_df_builder,
-    "schema_anomalies_v1": schema_anomalies_df_builder,
-    "file_coverage_report_v1": file_coverage_report_df_builder,
-    "dim_exported_defs_v1": exported_defs_df_builder,
-}
-
-
-# Bundle builders eagerly initialized from VIEW_BUILDERS.
-# The _bundle_builder function defers imports to runtime to avoid circular imports.
-VIEW_BUNDLE_BUILDERS: dict[str, PlanBundleBuilder] = {
-    name: _bundle_builder(builder) for name, builder in VIEW_BUILDERS.items()
-}
-
-
 __all__ = [
-    "VIEW_BUILDERS",
-    "VIEW_BUNDLE_BUILDERS",
-    "DataFrameBuilder",
-    "PlanBundleBuilder",
     "cfg_blocks_df_builder",
     "cfg_edges_df_builder",
     "def_use_events_df_builder",

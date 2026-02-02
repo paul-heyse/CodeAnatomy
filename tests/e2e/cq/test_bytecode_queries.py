@@ -87,8 +87,8 @@ class TestBytecodeIndex:
     def test_filter_by_opname_regex(self) -> None:
         """Filter instructions by regex pattern."""
 
-        def with_load() -> int:
-            return 1
+        def with_load(value: int) -> int:
+            return value
 
         index = BytecodeIndex.from_code(with_load.__code__)
         loads = index.filter_by_opname("^LOAD", regex=True)

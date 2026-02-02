@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 
 LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +89,21 @@ def try_except_else_finally() -> str:
         return f"success: {value}"
     finally:
         LOGGER.info("cleanup")
+
+
+def try_eval_single() -> str:
+    """Return a value using eval within try/except.
+
+    Returns
+    -------
+    str
+        Success or error label.
+    """
+    try:
+        result = eval("1 + 1")
+        return str(result)
+    except ValueError:
+        return "error"
 
 
 def multiple_except_handlers() -> str:
@@ -184,6 +200,12 @@ async def async_control_flow(x: int) -> str:
         await some_async_call(x)
         return "positive async"
     return "non-positive async"
+
+
+async def async_blocking_sleep() -> None:
+    """Perform blocking thread wait inside async function for hazard detection."""
+    threading.Event().wait(0.01)
+    await asyncio.sleep(0)
 
 
 async def some_async_call(n: int) -> None:

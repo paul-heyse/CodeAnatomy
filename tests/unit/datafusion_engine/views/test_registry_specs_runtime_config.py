@@ -43,9 +43,6 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(registry_specs, "semantic_runtime_from_profile", _runtime_from_profile)
     monkeypatch.setattr(registry_specs, "validate_rust_udf_snapshot", _noop_snapshot)
-    monkeypatch.setattr(registry_specs, "_normalize_view_nodes", _empty_nodes)
-    monkeypatch.setattr(registry_specs, "_symtable_view_nodes", _empty_nodes)
-    monkeypatch.setattr(registry_specs, "_cpg_view_nodes", _empty_nodes)
     monkeypatch.setattr(registry_specs, "_alias_nodes", _empty_nodes)
     monkeypatch.setattr(registry_specs, "_semantics_view_nodes", _capture)
 
@@ -54,7 +51,6 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
         ctx,
         snapshot={},
         runtime_profile=profile,
-        stage="pre_cpg",
     )
 
     assert nodes == ()

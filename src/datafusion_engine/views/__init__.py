@@ -6,8 +6,8 @@ import warnings
 
 # Mapping of removed exports to their replacement modules
 _REMOVED_EXPORTS: dict[str, str] = {
-    "VIEW_SELECT_REGISTRY": "semantics.catalog.view_builders",
-    "ViewExprBuilder": "semantics.catalog.view_builders",
+    "VIEW_SELECT_REGISTRY": "semantics.ir_pipeline",
+    "ViewExprBuilder": "semantics.pipeline",
     "SpanExprs": "semantics.compiler (use normalize_from_spec)",
     "DslQueryBuilder": "semantics.compiler",
 }

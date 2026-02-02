@@ -1,27 +1,11 @@
-"""Semantic view catalog for programmatic view registration.
+"""Semantic catalog helpers for dataset metadata and tags.
 
-This module provides a registry of semantic views with metadata including
-evidence tier, upstream dependencies, and plan fingerprints. The catalog
-enables dependency-ordered view construction and incremental processing.
-
-Additionally provides SemanticDatasetRow for unified dataset metadata
-including CDF support, partition configuration, and merge keys.
+This module provides the semantic dataset rows, dataset specs, and tag helpers
+used across the semantic-compile pipeline. View registration is IR-driven and
+no longer uses a catalog registry.
 
 Example
 -------
->>> from semantics.catalog import SEMANTIC_CATALOG, CatalogEntry
->>> from semantics.builders import SemanticViewBuilder
->>>
->>> # Register a builder
->>> SEMANTIC_CATALOG.register(my_builder)
->>>
->>> # Get dependency order for building views
->>> build_order = SEMANTIC_CATALOG.topological_order()
->>> for name in build_order:
-...     entry = SEMANTIC_CATALOG.get(name)
-...     df = entry.builder.build(ctx)
-...     ctx.register_view(name, df)
-
 >>> # Access dataset rows with operational metadata
 >>> from semantics.catalog import dataset_row, get_semantic_dataset_rows
 >>> row = dataset_row("cpg_nodes_v1", strict=True)
@@ -37,11 +21,6 @@ True
 
 from __future__ import annotations
 
-from semantics.catalog.catalog import (
-    SEMANTIC_CATALOG,
-    CatalogEntry,
-    SemanticCatalog,
-)
 from semantics.catalog.dataset_rows import (
     SEMANTIC_SCHEMA_VERSION,
     DatasetCategory,
@@ -79,24 +58,10 @@ from semantics.catalog.tags import (
     tag_spec_for_column,
     tag_spec_for_dataset,
 )
-from semantics.catalog.view_builders import (
-    VIEW_BUILDERS,
-    VIEW_BUNDLE_BUILDERS,
-    DataFrameBuilder,
-    PlanBundleBuilder,
-    view_builder,
-)
 
 __all__ = [
-    "SEMANTIC_CATALOG",
     "SEMANTIC_SCHEMA_VERSION",
-    "VIEW_BUILDERS",
-    "VIEW_BUNDLE_BUILDERS",
-    "CatalogEntry",
-    "DataFrameBuilder",
     "DatasetCategory",
-    "PlanBundleBuilder",
-    "SemanticCatalog",
     "SemanticColumnTagSpec",
     "SemanticDatasetRow",
     "SemanticTagSpec",
@@ -124,5 +89,4 @@ __all__ = [
     "supports_incremental",
     "tag_spec_for_column",
     "tag_spec_for_dataset",
-    "view_builder",
 ]

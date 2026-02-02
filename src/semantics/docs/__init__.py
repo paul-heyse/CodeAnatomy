@@ -1,13 +1,13 @@
 """Documentation generation for semantic pipeline.
 
 This module provides auto-generation of Mermaid diagrams and Markdown
-documentation from the semantic catalog and relationship declarations.
+documentation from semantic explain-plan artifacts or the semantic IR.
 
 Example
 -------
 >>> from semantics.docs import export_graph_documentation
 >>>
->>> # Export to file
+>>> # Export to file from IR
 >>> export_graph_documentation("docs/semantic_graph.md")
 >>>
 >>> # Get as string

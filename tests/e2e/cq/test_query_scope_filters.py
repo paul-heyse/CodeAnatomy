@@ -22,9 +22,7 @@ def test_entity_relational_constraint_filters_definitions(
         "entity=function inside='class ClosureFactory' in=tests/e2e/cq/_fixtures/closures.py"
     )
     names = {
-        finding.details.get("name")
-        for finding in result.key_findings
-        if "name" in finding.details
+        finding.details.get("name") for finding in result.key_findings if "name" in finding.details
     }
     assert "create_multiplier" in names
     assert "outer_function" not in names

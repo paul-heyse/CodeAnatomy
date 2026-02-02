@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from tools.cq.core.schema import CqResult, Finding
 
+
 def _find_repo_root() -> Path:
     """Find the CodeAnatomy repository root.
 

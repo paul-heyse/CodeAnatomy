@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
@@ -25,7 +25,6 @@ def ensure_view_graph(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
     scan_units: Sequence[ScanUnit] = (),
-    stage: Literal["all", "pre_cpg", "cpg"] = "all",
 ) -> Mapping[str, object]:
     """Install UDF platform (if needed) and register the semantic view graph.
 
@@ -38,8 +37,6 @@ def ensure_view_graph(
     scan_units
         Optional scan units that pin Delta versions and candidate files
         before view registration.
-    stage
-        View graph stage to register ("all", "pre_cpg", "cpg").
 
     Returns
     -------
@@ -72,7 +69,6 @@ def ensure_view_graph(
         ctx,
         snapshot=snapshot,
         runtime_profile=runtime_profile,
-        stage=stage,
     )
     try:
         register_view_graph(

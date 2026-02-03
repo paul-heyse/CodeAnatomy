@@ -4963,6 +4963,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             names=extract_nested_dataset_names(),
             resolver=extract_nested_schema_for,
         )
+        from datafusion_engine.extract.registry import dataset_schema as extract_dataset_schema
+        from semantics.input_registry import SEMANTIC_INPUT_SPECS
+
+        semantic_input_names = tuple(
+            dict.fromkeys(spec.extraction_source for spec in SEMANTIC_INPUT_SPECS)
+        )
+        self._register_schema_tables(
+            ctx,
+            names=semantic_input_names,
+            resolver=extract_dataset_schema,
+        )
         self._register_schema_tables(
             ctx,
             names=relationship_schema_names(),

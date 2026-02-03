@@ -23,8 +23,10 @@ Usage
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
 from datafusion import Expr, col, lit
 from datafusion import functions as f
 
@@ -58,7 +60,7 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
     """
     try:
         ctx.table(name)
-    except Exception:  # noqa: BLE001
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
     return True
 
@@ -81,7 +83,7 @@ def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
     return ctx.table("cst_parse_errors").aggregate(
         [col("file_id")],
         [
-            (f.count(lit(1)) > lit(0)).cast("int32").alias("has_cst_parse_errors"),
+            (f.count(lit(1)) > lit(0)).cast(pa.int32()).alias("has_cst_parse_errors"),
             f.count(lit(1)).alias("cst_error_count"),
         ],
     )
@@ -110,7 +112,7 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
         col("file_id"),
         # Cast booleans to int for easier aggregation
         f.coalesce(
-            stats["parse_timed_out"].cast("int32"),
+            stats["parse_timed_out"].cast(pa.int32()),
             lit(0),
         ).alias("ts_timed_out"),
         f.coalesce(
@@ -122,7 +124,7 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
             lit(0),
         ).alias("ts_missing_count"),
         f.coalesce(
-            stats["match_limit_exceeded"].cast("int32"),
+            stats["match_limit_exceeded"].cast(pa.int32()),
             lit(0),
         ).alias("ts_match_limit_exceeded"),
     )
@@ -148,7 +150,7 @@ def _build_scip_diagnostics_signals(ctx: SessionContext) -> DataFrame | None:
         .aggregate(
             [col("document_id")],
             [
-                (f.count(lit(1)) > lit(0)).cast("int32").alias("has_scip_diagnostics"),
+                (f.count(lit(1)) > lit(0)).cast(pa.int32()).alias("has_scip_diagnostics"),
                 f.count(lit(1)).alias("scip_diagnostic_count"),
             ],
         )
@@ -198,7 +200,42 @@ def _join_if_present(base: DataFrame, signals: DataFrame | None) -> DataFrame:
     """
     if signals is None:
         return base
+    try:
+        signal_columns = list(signals.schema().names)
+    except AttributeError:
+        signal_columns: list[str] = []
+    if "file_id" in signal_columns:
+        try:
+            base_columns = set(base.schema().names)
+        except AttributeError:
+            base_columns = set()
+        alias = "signal_file_id"
+        if alias in base_columns:
+            suffix = 1
+            while f"{alias}_{suffix}" in base_columns:
+                suffix += 1
+            alias = f"{alias}_{suffix}"
+        other_columns = [name for name in signal_columns if name != "file_id"]
+        signals = signals.select(
+            col("file_id").alias(alias),
+            *[col(name) for name in other_columns],
+        )
+        return base.join(
+            signals,
+            left_on=["file_id"],
+            right_on=[alias],
+            how="left",
+        )
     return base.join(signals, left_on=["file_id"], right_on=["file_id"], how="left")
+
+
+def _with_default_columns(
+    base: DataFrame,
+    defaults: Mapping[str, Expr],
+) -> DataFrame:
+    for name, expr in defaults.items():
+        base = base.with_column(name, expr)
+    return base
 
 
 def _coalesce_col(name: str) -> Expr:
@@ -235,7 +272,7 @@ def _compute_quality_score(weights: dict[str, int]) -> Expr:
 def build_file_quality_view(
     ctx: SessionContext,
     *,
-    base_table: str = "file_index",
+    base_table: str = "repo_files_v1",
     weights: dict[str, int] | None = None,
 ) -> DataFrame:
     """Build aggregated file quality signals from all extraction sources.
@@ -249,7 +286,7 @@ def build_file_quality_view(
     ctx
         DataFusion session context with extraction tables registered.
     base_table
-        Name of the base file table (default: "file_index").
+        Name of the base file table (default: "repo_files_v1").
         Must have file_id column.
     weights
         Quality penalty weights. Keys are signal names, values are
@@ -289,8 +326,13 @@ def build_file_quality_view(
     Where base_score is 1000 by default.
     """
     if not _table_exists(ctx, base_table):
-        msg = f"Base table {base_table!r} not found in session context."
-        raise ValueError(msg)
+        for fallback in ("file_index", "repo_files"):
+            if _table_exists(ctx, fallback):
+                base_table = fallback
+                break
+        else:
+            msg = f"Base table {base_table!r} not found in session context."
+            raise ValueError(msg)
 
     resolved_weights = weights or DEFAULT_QUALITY_WEIGHTS
 
@@ -303,14 +345,58 @@ def build_file_quality_view(
     base = (
         base.select(col("file_id"), col("file_sha256"))
         if has_sha256
-        else base.select(col("file_id"), lit(None).cast("string").alias("file_sha256"))
+        else base.select(col("file_id"), lit(None).cast(str).alias("file_sha256"))
     )
 
-    # Join all signal sources
-    base = _join_if_present(base, _build_cst_parse_errors_signals(ctx))
-    base = _join_if_present(base, _build_tree_sitter_signals(ctx))
-    base = _join_if_present(base, _build_scip_diagnostics_signals(ctx))
-    base = _join_if_present(base, _build_scip_encoding_signals(ctx))
+    # Join all signal sources (or add defaults when missing)
+    cst_signals = _build_cst_parse_errors_signals(ctx)
+    if cst_signals is None:
+        base = _with_default_columns(
+            base,
+            {
+                "has_cst_parse_errors": lit(0),
+                "cst_error_count": lit(0),
+            },
+        )
+    else:
+        base = _join_if_present(base, cst_signals)
+
+    ts_signals = _build_tree_sitter_signals(ctx)
+    if ts_signals is None:
+        base = _with_default_columns(
+            base,
+            {
+                "ts_timed_out": lit(0),
+                "ts_error_count": lit(0),
+                "ts_missing_count": lit(0),
+                "ts_match_limit_exceeded": lit(0),
+            },
+        )
+    else:
+        base = _join_if_present(base, ts_signals)
+
+    scip_diag_signals = _build_scip_diagnostics_signals(ctx)
+    if scip_diag_signals is None:
+        base = _with_default_columns(
+            base,
+            {
+                "has_scip_diagnostics": lit(0),
+                "scip_diagnostic_count": lit(0),
+            },
+        )
+    else:
+        base = _join_if_present(base, scip_diag_signals)
+
+    scip_encoding_signals = _build_scip_encoding_signals(ctx)
+    if scip_encoding_signals is None:
+        base = _with_default_columns(
+            base,
+            {
+                "scip_encoding_unspecified": lit(0),
+            },
+        )
+    else:
+        base = _join_if_present(base, scip_encoding_signals)
 
     # Build final selection with coalesced defaults and computed score
     return base.select(

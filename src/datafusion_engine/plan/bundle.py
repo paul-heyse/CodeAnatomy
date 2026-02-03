@@ -1309,8 +1309,10 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
         return None
     try:
         return method()
-    except (RuntimeError, TypeError, ValueError):
-        return None
+    except Exception as exc:
+        if str(exc).startswith("DataFusion error:"):
+            return None
+        raise
 
 
 def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
@@ -1328,6 +1330,8 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     ------
     ValueError
         Raised when Substrait serialization is unavailable.
+    TypeError
+        Raised when Substrait callables return invalid types.
     """
     if SubstraitProducer is None:
         msg = "Substrait producer is unavailable."
@@ -1337,20 +1341,28 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
         raise ValueError(msg)
     normalized = normalize_substrait_plan(ctx, cast("DataFusionLogicalPlan", optimized))
     # Use Producer.to_substrait_plan(logical_plan, ctx) -> Plan, then Plan.encode() -> bytes
+    to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
+    if not callable(to_substrait):
+        msg = "Substrait producer missing to_substrait_plan."
+        raise TypeError(msg)
     try:
-        to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
-        if callable(to_substrait):
-            substrait_plan = to_substrait(normalized, ctx)
-            encode = getattr(substrait_plan, "encode", None)
-            if callable(encode):
-                encoded = encode()
-                if isinstance(encoded, (bytes, bytearray)):
-                    return bytes(encoded)
-    except (RuntimeError, TypeError, ValueError, AttributeError):
-        pass
-
-    msg = "Failed to encode Substrait plan bytes."
-    raise ValueError(msg)
+        substrait_plan = to_substrait(normalized, ctx)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Failed to encode Substrait plan bytes: {exc}"
+        raise ValueError(msg) from exc
+    encode = getattr(substrait_plan, "encode", None)
+    if not callable(encode):
+        msg = "Substrait plan missing encode method."
+        raise TypeError(msg)
+    try:
+        encoded = encode()
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Failed to encode Substrait plan bytes: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(encoded, (bytes, bytearray)):
+        msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
+        raise TypeError(msg)
+    return bytes(encoded)
 
 
 def _capture_explain_analyze(

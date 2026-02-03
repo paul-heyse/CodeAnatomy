@@ -107,27 +107,34 @@ def legacy_relationship_projection(
     """
     from datafusion import col, lit
 
+    schema_names = set(df.schema().names)
+
+    def _safe_col(name: str, *, alias: str, dtype: pa.DataType) -> Expr:
+        if name in schema_names:
+            return col(name).alias(alias)
+        return lit(None).cast(dtype).alias(alias)
+
     # Choose between computed (passthrough) or static (literal) values
     confidence_expr = (
         col("confidence").cast(pa.float64()).alias("confidence")
-        if options.use_computed_confidence
+        if options.use_computed_confidence and "confidence" in schema_names
         else lit(options.confidence).cast(pa.float64()).alias("confidence")
     )
     score_expr = (
         col("score").cast(pa.float64()).alias("score")
-        if options.use_computed_score
+        if options.use_computed_score and "score" in schema_names
         else lit(options.score).cast(pa.float64()).alias("score")
     )
 
     return df.select(
-        col("entity_id").alias(options.entity_id_alias),
-        col("symbol"),
+        _safe_col("entity_id", alias=options.entity_id_alias, dtype=pa.string()),
+        _safe_col("symbol", alias="symbol", dtype=pa.string()),
         lit(None).cast(pa.int32()).alias("symbol_roles"),
-        col("path"),
-        col("path").alias("edge_owner_file_id"),
-        col("bstart"),
-        col("bend"),
-        col("origin").alias("resolution_method"),
+        _safe_col("path", alias="path", dtype=pa.string()),
+        _safe_col("path", alias="edge_owner_file_id", dtype=pa.string()),
+        _safe_col("bstart", alias="bstart", dtype=pa.int64()),
+        _safe_col("bend", alias="bend", dtype=pa.int64()),
+        _safe_col("origin", alias="resolution_method", dtype=pa.string()),
         confidence_expr,
         score_expr,
         lit(options.task_name).alias("task_name"),
@@ -165,28 +172,35 @@ def legacy_relationship_projection_extended(
     """
     from datafusion import col, lit
 
+    schema_names = set(df.schema().names)
+
+    def _safe_col(name: str, *, alias: str, dtype: pa.DataType) -> Expr:
+        if name in schema_names:
+            return col(name).alias(alias)
+        return lit(None).cast(dtype).alias(alias)
+
     # Choose between computed (passthrough) or static (literal) values
     confidence_expr = (
         col("confidence").cast(pa.float64()).alias("confidence")
-        if options.use_computed_confidence
+        if options.use_computed_confidence and "confidence" in schema_names
         else lit(options.confidence).cast(pa.float64()).alias("confidence")
     )
     score_expr = (
         col("score").cast(pa.float64()).alias("score")
-        if options.use_computed_score
+        if options.use_computed_score and "score" in schema_names
         else lit(options.score).cast(pa.float64()).alias("score")
     )
 
     required_exprs = [
-        col("entity_id").alias(options.entity_id_alias),
-        col("symbol"),
+        _safe_col("entity_id", alias=options.entity_id_alias, dtype=pa.string()),
+        _safe_col("symbol", alias="symbol", dtype=pa.string()),
         lit(None).cast(pa.int32()).alias("symbol_roles"),
-        col("path"),
-        col("path").alias("edge_owner_file_id"),
-        col("path").alias("file_id"),
-        col("bstart"),
-        col("bend"),
-        col("origin").alias("resolution_method"),
+        _safe_col("path", alias="path", dtype=pa.string()),
+        _safe_col("path", alias="edge_owner_file_id", dtype=pa.string()),
+        _safe_col("path", alias="file_id", dtype=pa.string()),
+        _safe_col("bstart", alias="bstart", dtype=pa.int64()),
+        _safe_col("bend", alias="bend", dtype=pa.int64()),
+        _safe_col("origin", alias="resolution_method", dtype=pa.string()),
         confidence_expr,
         score_expr,
         lit(options.edge_kind).alias("edge_kind"),

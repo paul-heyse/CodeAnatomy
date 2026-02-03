@@ -73,6 +73,25 @@ class StreamingExecutionResult:
         """
         return self.df.schema()
 
+    def _execution_partition_count(self) -> int | None:
+        plan_fn = getattr(self.df, "execution_plan", None)
+        if not callable(plan_fn):
+            return None
+        try:
+            plan = plan_fn()
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        count_fn = getattr(plan, "partition_count", None)
+        if not callable(count_fn):
+            return None
+        try:
+            count = count_fn()
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        if isinstance(count, int):
+            return count
+        return None
+
     def to_arrow_stream(self) -> pa.RecordBatchReader:
         """
         Zero-copy streaming via Arrow C Stream protocol.
@@ -91,6 +110,9 @@ class StreamingExecutionResult:
         This method enables zero-copy data transfer from DataFusion
         to PyArrow using the Arrow C Stream interface.
         """
+        partition_count = self._execution_partition_count()
+        if partition_count == 0:
+            return pa.RecordBatchReader.from_batches(self.schema, [])
         return pa.RecordBatchReader.from_stream(self.df)
 
     def to_batches(self) -> Iterator[pa.RecordBatch]:

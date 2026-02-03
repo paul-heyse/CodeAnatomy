@@ -1046,6 +1046,32 @@ def write_normalize_outputs_delta(
     return result
 
 
+def _collect_extract_error_messages() -> list[str]:
+    from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
+
+    collector = get_hamilton_diagnostics_collector()
+    if collector is None:
+        return []
+    events_snapshot = collector.events_snapshot()
+    rows = events_snapshot.get("extract_quality_v1", [])
+    ok_statuses = {"ok", "written"}
+    errors: list[str] = []
+    for row in rows:
+        status = row.get("status")
+        if not isinstance(status, str) or status in ok_statuses:
+            continue
+        dataset = row.get("dataset")
+        stage = row.get("stage")
+        issue = row.get("issue")
+        dataset_label = dataset if isinstance(dataset, str) else "unknown"
+        stage_label = stage if isinstance(stage, str) else "unknown"
+        issue_label = issue if isinstance(issue, str) and issue else "unspecified"
+        errors.append(f"{dataset_label} [{stage_label}] {status}: {issue_label}")
+    if errors:
+        return sorted(set(errors))
+    return errors
+
+
 @datasaver_dict()
 @apply_tag(
     TagPolicy(
@@ -1065,13 +1091,13 @@ def write_extract_error_artifacts_delta(
     JsonDict
         Extract error artifact metadata payload.
     """
-    errors: list[str] = []
+    errors = _collect_extract_error_messages()
     artifact = ExtractErrorsArtifact(
         event_time_unix_ms=int(time.time() * 1000),
         run_id=output_plan_context.run_id,
         output_dir=str(_manifest_base_dir(output_runtime_context.output_config)),
         errors=tuple(errors),
-        error_count=0,
+        error_count=len(errors),
     )
     payload = to_builtins(artifact, str_keys=True)
     record_artifact(

@@ -40,6 +40,8 @@ from utils.value_coercion import coerce_mapping_list
 if TYPE_CHECKING:
     from storage.deltalake.delta import DeltaCdfOptions
 
+_DELTA_INTERNAL_CTX: dict[str, InternalSessionContext | None] = {"value": None}
+
 
 class InternalSessionContext(Protocol):
     """Protocol representing the internal DataFusion session context."""
@@ -358,10 +360,37 @@ def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
         msg = "Delta control-plane extension module is unavailable."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
     if not compatibility.compatible:
+        alt_ctx = _fallback_delta_internal_ctx()
+        if alt_ctx is not None:
+            return alt_ctx
         details = f" {compatibility.error}" if compatibility.error else ""
         msg = f"Delta control-plane extension is incompatible.{details}"
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
     return cast("InternalSessionContext", internal_ctx)
+
+
+def _fallback_delta_internal_ctx() -> InternalSessionContext | None:
+    cached = _DELTA_INTERNAL_CTX["value"]
+    if cached is not None:
+        return cached
+    try:
+        module = _resolve_extension_module(entrypoint="delta_session_context")
+    except DataFusionEngineError:
+        return None
+    builder = getattr(module, "delta_session_context", None)
+    if not callable(builder):
+        return None
+    try:
+        delta_ctx = builder()
+    except (TypeError, ValueError):
+        try:
+            delta_ctx = builder(None, None, None)
+        except (TypeError, ValueError):
+            return None
+    internal_ctx = getattr(delta_ctx, "ctx", None)
+    resolved = internal_ctx if internal_ctx is not None else delta_ctx
+    _DELTA_INTERNAL_CTX["value"] = cast("InternalSessionContext", resolved)
+    return _DELTA_INTERNAL_CTX["value"]
 
 
 def _require_internal_entrypoint(name: str) -> Callable[..., object]:

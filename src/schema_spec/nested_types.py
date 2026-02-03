@@ -44,6 +44,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class MapFieldOptions:
+    nullable: bool = True
+    keys_sorted: bool = False
+    metadata: dict[bytes, bytes] | None = None
+
+
 @dataclass
 class NestedTypeBuilder:
     """Fluent builder for constructing nested Arrow types.
@@ -180,15 +187,13 @@ class NestedTypeBuilder:
         self.fields.append(pa.field(name, list_type, nullable=nullable, metadata=metadata))
         return self
 
-    def add_map(  # noqa: PLR0913
+    def add_map(
         self,
         name: str,
         key_type: DataTypeLike,
         value_type: DataTypeLike,
         *,
-        nullable: bool = True,
-        keys_sorted: bool = False,
-        metadata: dict[bytes, bytes] | None = None,
+        options: MapFieldOptions | None = None,
     ) -> Self:
         """Add a map field with key and value types.
 
@@ -200,20 +205,19 @@ class NestedTypeBuilder:
             Arrow data type for map keys.
         value_type
             Arrow data type for map values.
-        nullable
-            Whether the map field accepts null values. Default True.
-        keys_sorted
-            Whether map keys are sorted. Default False.
-        metadata
-            Optional field metadata.
+        options
+            Optional map field options.
 
         Returns
         -------
         Self
             Builder instance for chaining.
         """
-        map_type = pa.map_(key_type, value_type, keys_sorted=keys_sorted)
-        self.fields.append(pa.field(name, map_type, nullable=nullable, metadata=metadata))
+        resolved = options or MapFieldOptions()
+        map_type = pa.map_(key_type, value_type, keys_sorted=resolved.keys_sorted)
+        self.fields.append(
+            pa.field(name, map_type, nullable=resolved.nullable, metadata=resolved.metadata)
+        )
         return self
 
     def add_list_of_structs(
@@ -579,6 +583,7 @@ def int64_list_type(*, large: bool = False) -> DataTypeLike:
 
 
 __all__ = [
+    "MapFieldOptions",
     "NestedTypeBuilder",
     "attrs_map_type",
     "byte_span_struct_builder",

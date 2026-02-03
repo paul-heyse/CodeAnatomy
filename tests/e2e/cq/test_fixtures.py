@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -19,7 +21,9 @@ def test_repo_root_fixture(repo_root: Path) -> None:
     assert (repo_root / "pyproject.toml").exists()
 
 
-def test_run_command_fixture(run_command) -> None:  # noqa: ANN001
+def test_run_command_fixture(
+    run_command: Callable[[list[str]], subprocess.CompletedProcess[str]],
+) -> None:
     """Verify run_command fixture executes commands correctly.
 
     Parameters

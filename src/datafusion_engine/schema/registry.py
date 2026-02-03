@@ -116,7 +116,7 @@ def _attrs_field(name: str = "attrs") -> pa.Field:
 
 
 def _bytecode_attrs_field(name: str = "attrs") -> pa.Field:
-    return pa.field(name, BYTECODE_ATTRS_T, metadata=_DEFAULT_ATTRS_META)
+    return pa.field(name, ATTRS_T, metadata=_DEFAULT_ATTRS_META)
 
 
 def default_attrs_value() -> dict[str, str]:
@@ -568,6 +568,18 @@ LIBCST_FILES_SCHEMA = pa.schema(
         ("decorators", pa.list_(CST_DECORATOR_T)),
         ("call_args", pa.list_(CST_CALL_ARG_T)),
         _attrs_field(),
+    ]
+)
+
+REPO_FILES_SCHEMA = pa.schema(
+    [
+        FILE_ID_FIELD,
+        PATH_FIELD,
+        FILE_SHA256_FIELD,
+        ("abs_path", pa.string()),
+        ("size_bytes", pa.int64()),
+        ("mtime_ns", pa.int64()),
+        ("encoding", pa.string()),
     ]
 )
 
@@ -1723,6 +1735,7 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
 
 _BASE_EXTRACT_SCHEMA_BY_NAME: ImmutableRegistry[str, pa.Schema] = ImmutableRegistry.from_dict(
     {
+        "repo_files_v1": REPO_FILES_SCHEMA,
         "libcst_files_v1": LIBCST_FILES_SCHEMA,
         "ast_files_v1": AST_FILES_SCHEMA,
         "symtable_files_v1": SYMTABLE_FILES_SCHEMA,

@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Literal, Protocol
 
+import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
@@ -340,6 +341,26 @@ def eq_value(column: str, value: object) -> ExprSpec:
 
     def _build(ctx: ExprContext) -> Expr:
         return ctx.col(column) == ctx.lit(value)
+
+    return _build
+
+
+def truthy_expr(column: str) -> ExprSpec:
+    """Predicate for truthy flag columns, tolerant of string/boolean values.
+
+    Parameters
+    ----------
+    column
+        Column name.
+
+    Returns
+    -------
+    ExprSpec
+        Callable that returns a truthy predicate expression.
+    """
+
+    def _build(ctx: ExprContext) -> Expr:
+        return f.lower(ctx.col(column).cast(pa.string())) == ctx.lit("true")
 
     return _build
 
@@ -1094,6 +1115,7 @@ __all__ = [
     "span_overlaps_expr",
     "span_start_expr",
     "stable_hash64",
+    "truthy_expr",
     "v",
     "validate_expr_spec",
 ]

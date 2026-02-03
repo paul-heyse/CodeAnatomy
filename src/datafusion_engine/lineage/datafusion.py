@@ -271,11 +271,11 @@ def _normalize_on_pairs(value: object | None) -> list[tuple[object, object]]:
     if value is None:
         return []
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        pairs: list[tuple[object, object]] = []
-        for entry in value:
-            if isinstance(entry, tuple) and len(entry) == _PAIR_LEN:
-                pairs.append((entry[0], entry[1]))
-        return pairs
+        return [
+            (entry[0], entry[1])
+            for entry in value
+            if isinstance(entry, tuple) and len(entry) == _PAIR_LEN
+        ]
     return []
 
 

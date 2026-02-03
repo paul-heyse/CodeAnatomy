@@ -27,7 +27,13 @@ def _register_semantic_registry(ctx: SessionContext) -> None:
 
 
 def semantic_registry_runtime() -> tuple[SessionContext, SessionRuntime]:
-    """Return a DataFusion runtime with semantic registry tables registered."""
+    """Return a DataFusion runtime with semantic registry tables registered.
+
+    Returns
+    -------
+    tuple[SessionContext, SessionRuntime]
+        DataFusion session context and runtime with registry tables registered.
+    """
     require_datafusion()
     profile = df_profile()
     ctx = profile.session_context()

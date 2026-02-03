@@ -176,8 +176,11 @@ def _require_semantic_types(
     view_name: str,
     expected: Mapping[str, str],
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    udf_snapshot: Mapping[str, object] | None = None,
 ) -> None:
     if not _semantic_validation_enabled():
+        return
+    if udf_snapshot is not None and not _semantic_validation_supported(udf_snapshot):
         return
     artifact = _semantic_validation_artifact(df, view_name=view_name, expected=expected)
     envelope = SemanticValidationArtifactEnvelope(payload=artifact)
@@ -196,6 +199,16 @@ def _require_semantic_types(
         return
     msg = "Semantic validation failed: " + "; ".join(artifact.errors)
     raise ValueError(msg)
+
+
+def _semantic_validation_supported(snapshot: Mapping[str, object]) -> bool:
+    scalar = snapshot.get("scalar", ())
+    if not isinstance(scalar, Sequence) or isinstance(scalar, (str, bytes)):
+        return False
+    for entry in scalar:
+        if isinstance(entry, Mapping) and entry.get("name") == "semantic_tag":
+            return True
+    return False
 
 
 def _coalesce_cols(df: DataFrame, columns: Sequence[str], dtype: pa.DataType) -> Expr:
@@ -302,12 +315,15 @@ def build_cpg_nodes_df(
         specs = node_plan_specs()
         task_name = task_identity.name if task_identity is not None else None
         task_priority = task_identity.priority if task_identity is not None else None
+        optional_prefixes = ("scip_", "type_")
 
         frames: list[DataFrame] = []
         for spec in specs:
             try:
                 source_df = ctx.table(spec.table_ref)
             except KeyError as exc:
+                if spec.table_ref.startswith(optional_prefixes):
+                    continue
                 msg = f"Missing required source table {spec.table_ref!r} for CPG nodes."
                 raise ValueError(msg) from exc
 
@@ -333,6 +349,7 @@ def build_cpg_nodes_df(
             view_name="cpg_nodes_v1",
             expected={"node_id": "NodeId"},
             runtime_profile=session_runtime.profile,
+            udf_snapshot=session_runtime.udf_snapshot,
         )
         return result
 
@@ -451,11 +468,54 @@ def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
                 "dst_node_id": "NodeId",
             },
             runtime_profile=session_runtime.profile,
+            udf_snapshot=session_runtime.udf_snapshot,
         )
         return result
 
 
-def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
+def _optional_edge_expr(names: set[str], name: str, default: Expr) -> Expr:
+    return col(name) if name in names else default
+
+
+def _edge_span_bounds(names: set[str]) -> tuple[Expr, Expr]:
+    if "bstart" in names and "bend" in names:
+        return col("bstart"), col("bend")
+    if "span" in names:
+        return span_start(col("span")), span_end(col("span"))
+    return _null_expr("Int64"), _null_expr("Int64")
+
+
+def _edge_id_expr(edge_kind: Expr, span_bstart: Expr, span_bend: Expr) -> Expr:
+    base_id = _stable_id_from_parts("edge", [edge_kind, col("src"), col("dst")])
+    valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
+    span_id_expr = span_id("edge", col("path"), span_bstart, span_bend, kind=edge_kind)
+    edge_id = (
+        f.case(valid_nodes)
+        .when(lit(value=True), f.coalesce(span_id_expr, base_id))
+        .otherwise(_null_expr("Utf8"))
+    )
+    return semantic_tag("EdgeId", edge_id)
+
+
+def _edge_attr_exprs(names: set[str]) -> dict[str, Expr]:
+    return {
+        "origin": _optional_edge_expr(names, "origin", _null_expr("Utf8")),
+        "resolution_method": _optional_edge_expr(names, "resolution_method", _null_expr("Utf8")),
+        "confidence": _optional_edge_expr(names, "confidence", lit(0.5)),
+        "score": _optional_edge_expr(names, "score", lit(0.5)),
+        "symbol_roles": _optional_edge_expr(names, "symbol_roles", _null_expr("Int32")),
+        "qname_source": _optional_edge_expr(names, "qname_source", _null_expr("Utf8")),
+        "ambiguity_group_id": _optional_edge_expr(
+            names,
+            "ambiguity_group_id",
+            _null_expr("Utf8"),
+        ),
+        "task_name": _optional_edge_expr(names, "task_name", _null_expr("Utf8")),
+        "task_priority": _optional_edge_expr(names, "task_priority", _null_expr("Int32")),
+    }
+
+
+def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:
     """Emit CPG edges from relation_output rows using DataFusion.
 
     Parameters
@@ -468,51 +528,11 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     DataFrame
         DataFrame with CPG edge rows.
     """
-    names = df.schema().names
-
-    edge_kind = col("kind") if "kind" in names else _null_expr("Utf8")
-
-    base_id_parts = [edge_kind, col("src"), col("dst")]
-    base_id = _stable_id_from_parts("edge", base_id_parts)
-
-    valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
-    span_bstart = (
-        col("bstart")
-        if "bstart" in names
-        else span_start(col("span"))
-        if "span" in names
-        else _null_expr("Int64")
-    )
-    span_bend = (
-        col("bend")
-        if "bend" in names
-        else span_end(col("span"))
-        if "span" in names
-        else _null_expr("Int64")
-    )
-    span_id_expr = span_id("edge", col("path"), span_bstart, span_bend, kind=edge_kind)
-
-    edge_id = (
-        f.case(valid_nodes)
-        .when(lit(value=True), f.coalesce(span_id_expr, base_id))
-        .otherwise(_null_expr("Utf8"))
-    )
-    edge_id = semantic_tag("EdgeId", edge_id)
-
-    origin = col("origin") if "origin" in names else _null_expr("Utf8")
-    resolution_method = (
-        col("resolution_method") if "resolution_method" in names else _null_expr("Utf8")
-    )
-    confidence = col("confidence") if "confidence" in names else lit(0.5)
-    score = col("score") if "score" in names else lit(0.5)
-    symbol_roles = col("symbol_roles") if "symbol_roles" in names else _null_expr("Int32")
-    qname_source = col("qname_source") if "qname_source" in names else _null_expr("Utf8")
-    ambiguity_group_id = (
-        col("ambiguity_group_id") if "ambiguity_group_id" in names else _null_expr("Utf8")
-    )
-    task_name = col("task_name") if "task_name" in names else _null_expr("Utf8")
-    task_priority = col("task_priority") if "task_priority" in names else _null_expr("Int32")
-
+    names = set(df.schema().names)
+    edge_kind = _optional_edge_expr(names, "kind", _null_expr("Utf8"))
+    span_bstart, span_bend = _edge_span_bounds(names)
+    edge_id = _edge_id_expr(edge_kind, span_bstart, span_bend)
+    attrs = _edge_attr_exprs(names)
     span_expr = span_make(span_bstart, span_bend)
 
     return df.select(
@@ -524,15 +544,15 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
         span_expr.alias("span"),
         span_bstart.alias("bstart"),
         span_bend.alias("bend"),
-        origin.alias("origin"),
-        resolution_method.alias("resolution_method"),
-        confidence.alias("confidence"),
-        score.alias("score"),
-        symbol_roles.alias("symbol_roles"),
-        qname_source.alias("qname_source"),
-        ambiguity_group_id.alias("ambiguity_group_id"),
-        task_name.alias("task_name"),
-        task_priority.alias("task_priority"),
+        attrs["origin"].alias("origin"),
+        attrs["resolution_method"].alias("resolution_method"),
+        attrs["confidence"].alias("confidence"),
+        attrs["score"].alias("score"),
+        attrs["symbol_roles"].alias("symbol_roles"),
+        attrs["qname_source"].alias("qname_source"),
+        attrs["ambiguity_group_id"].alias("ambiguity_group_id"),
+        attrs["task_name"].alias("task_name"),
+        attrs["task_priority"].alias("task_priority"),
     )
 
 
@@ -576,11 +596,18 @@ def build_cpg_props_df(
         prop_specs.append(scip_role_flag_prop_spec())
         prop_specs.append(edge_prop_spec())
 
+        optional_prefixes = ("scip_", "type_")
+        optional_tables = {"cpg_edges"}
+
         frames: list[DataFrame] = []
         for spec in prop_specs:
             try:
                 source_df = ctx.table(spec.table_ref)
             except KeyError as exc:
+                if spec.table_ref in optional_tables or spec.table_ref.startswith(
+                    optional_prefixes
+                ):
+                    continue
                 msg = f"Missing required source table {spec.table_ref!r} for CPG props."
                 raise ValueError(msg) from exc
 
@@ -657,14 +684,29 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
     ):
         ctx = session_runtime.ctx
         df = ctx.table("cpg_edges_v1")
+        names = df.schema().names
+        bstart = (
+            col("bstart")
+            if "bstart" in names
+            else span_start(col("span"))
+            if "span" in names
+            else _null_expr("Int64")
+        )
+        bend = (
+            col("bend")
+            if "bend" in names
+            else span_end(col("span"))
+            if "span" in names
+            else _null_expr("Int64")
+        )
         entry = f.named_struct(
             [
                 ("edge_id", col("edge_id")),
                 ("edge_kind", col("edge_kind")),
                 ("dst_node_id", col("dst_node_id")),
                 ("path", col("path")),
-                ("bstart", col("bstart")),
-                ("bend", col("bend")),
+                ("bstart", bstart),
+                ("bend", bend),
                 ("origin", col("origin")),
                 ("resolution_method", col("resolution_method")),
                 ("confidence", col("confidence")),
@@ -696,14 +738,29 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
     ):
         ctx = session_runtime.ctx
         df = ctx.table("cpg_edges_v1")
+        names = df.schema().names
+        bstart = (
+            col("bstart")
+            if "bstart" in names
+            else span_start(col("span"))
+            if "span" in names
+            else _null_expr("Int64")
+        )
+        bend = (
+            col("bend")
+            if "bend" in names
+            else span_end(col("span"))
+            if "span" in names
+            else _null_expr("Int64")
+        )
         entry = f.named_struct(
             [
                 ("edge_id", col("edge_id")),
                 ("edge_kind", col("edge_kind")),
                 ("src_node_id", col("src_node_id")),
                 ("path", col("path")),
-                ("bstart", col("bstart")),
-                ("bend", col("bend")),
+                ("bstart", bstart),
+                ("bend", bend),
                 ("origin", col("origin")),
                 ("resolution_method", col("resolution_method")),
                 ("confidence", col("confidence")),
@@ -991,18 +1048,17 @@ def _source_columns_lookup_df(
             if not isinstance(table_name, str) or not isinstance(column_name, str):
                 continue
             columns_by_table.setdefault(table_name, set()).add(column_name)
-    if not columns_by_table:
-        catalog = session_runtime.ctx.catalog()
-        for schema_name in catalog.names():
-            schema = catalog.schema(schema_name)
-            for table_name in schema.names():
-                try:
-                    table_provider = schema.table(table_name)
-                    arrow_schema = table_provider.schema()
-                    columns_by_table.setdefault(table_name, set()).update(arrow_schema.names)
-                except Exception:  # noqa: BLE001
-                    # Skip tables that can't be introspected
-                    continue
+    catalog = session_runtime.ctx.catalog()
+    for schema_name in catalog.names():
+        schema = catalog.schema(schema_name)
+        for table_name in schema.names():
+            try:
+                table_provider = schema.table(table_name)
+                arrow_schema = table_provider.schema()
+                columns_by_table.setdefault(table_name, set()).update(arrow_schema.names)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                # Skip tables that can't be introspected
+                continue
 
     def _lookup(table_name: str) -> Sequence[str] | None:
         columns = columns_by_table.get(table_name)

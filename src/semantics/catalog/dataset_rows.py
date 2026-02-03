@@ -102,8 +102,13 @@ class SemanticDatasetRow:
     role: DatasetRole = "output"
 
 
-_SEMANTIC_DATASET_ROWS_CACHE: tuple[SemanticDatasetRow, ...] | None = None
-_ROWS_BY_NAME_CACHE: Mapping[str, SemanticDatasetRow] | None = None
+@dataclass
+class _SemanticDatasetRowCache:
+    rows: tuple[SemanticDatasetRow, ...] | None = None
+    rows_by_name: Mapping[str, SemanticDatasetRow] | None = None
+
+
+_SEMANTIC_DATASET_ROWS_CACHE = _SemanticDatasetRowCache()
 
 
 def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
@@ -114,12 +119,13 @@ def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     tuple[SemanticDatasetRow, ...]
         All semantic dataset rows in dependency order.
     """
-    global _SEMANTIC_DATASET_ROWS_CACHE  # noqa: PLW0603
-    if _SEMANTIC_DATASET_ROWS_CACHE is None:
+    rows = _SEMANTIC_DATASET_ROWS_CACHE.rows
+    if rows is None:
         from semantics.ir_pipeline import build_semantic_ir
 
-        _SEMANTIC_DATASET_ROWS_CACHE = build_semantic_ir().dataset_rows
-    return _SEMANTIC_DATASET_ROWS_CACHE
+        rows = build_semantic_ir().dataset_rows
+        _SEMANTIC_DATASET_ROWS_CACHE.rows = rows
+    return rows
 
 
 def _get_rows_by_name() -> Mapping[str, SemanticDatasetRow]:
@@ -130,10 +136,11 @@ def _get_rows_by_name() -> Mapping[str, SemanticDatasetRow]:
     Mapping[str, SemanticDatasetRow]
         Mapping from dataset name to row.
     """
-    global _ROWS_BY_NAME_CACHE  # noqa: PLW0603
-    if _ROWS_BY_NAME_CACHE is None:
-        _ROWS_BY_NAME_CACHE = {row.name: row for row in _get_semantic_dataset_rows()}
-    return _ROWS_BY_NAME_CACHE
+    rows_by_name = _SEMANTIC_DATASET_ROWS_CACHE.rows_by_name
+    if rows_by_name is None:
+        rows_by_name = {row.name: row for row in _get_semantic_dataset_rows()}
+        _SEMANTIC_DATASET_ROWS_CACHE.rows_by_name = rows_by_name
+    return rows_by_name
 
 
 @overload

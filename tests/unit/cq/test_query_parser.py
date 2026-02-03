@@ -165,10 +165,10 @@ class TestQueryIR:
         """Expander should be immutable."""
         expander = Expander(kind="callers", depth=2)
         with pytest.raises(AttributeError):
-            expander.depth = 3  # type: ignore[misc]
+            expander.depth = 3
 
     def test_scope_frozen(self) -> None:
         """Scope should be immutable."""
         scope = Scope(in_dir="src/")
         with pytest.raises(AttributeError):
-            scope.in_dir = "other/"  # type: ignore[misc]
+            scope.in_dir = "other/"

@@ -15,7 +15,7 @@ from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 from datafusion_engine.session.runtime import AdapterExecutionPolicy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
-from engine.session_factory import build_engine_session
+from engine.session_factory import EngineSessionOptions, build_engine_session
 from extract.extractors.scip.extract import ScipExtractOptions, SCIPParseOptions
 from extract.scanning.repo_scan import default_repo_scan_options
 from hamilton_pipeline.io_contracts import OutputRuntimeContext
@@ -380,11 +380,13 @@ def engine_session(
     """
     return build_engine_session(
         runtime_spec=runtime_inputs.runtime_profile_spec,
-        diagnostics=observability_inputs.diagnostics_collector,
-        surface_policy=runtime_inputs.execution_surface_policy,
-        diagnostics_policy=observability_inputs.pipeline_policy.diagnostics,
-        semantic_config=runtime_inputs.semantic_runtime_config,
-        otel_options=observability_inputs.otel_options,
+        options=EngineSessionOptions(
+            diagnostics=observability_inputs.diagnostics_collector,
+            surface_policy=runtime_inputs.execution_surface_policy,
+            diagnostics_policy=observability_inputs.pipeline_policy.diagnostics,
+            semantic_config=runtime_inputs.semantic_runtime_config,
+            otel_options=observability_inputs.otel_options,
+        ),
     )
 
 

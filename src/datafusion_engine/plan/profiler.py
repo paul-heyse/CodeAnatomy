@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -59,23 +61,64 @@ def capture_explain(
     ExplainCapture | None
         Captured explain output and metrics, or ``None`` if unavailable.
     """
+    if os.environ.get("CODEANATOMY_DISABLE_DF_EXPLAIN", "1") == "1":
+        return None
     explain_method = getattr(df, "explain", None)
     if not callable(explain_method):
         return None
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        try:
-            explain_method(verbose=verbose, analyze=analyze)
-        except (RuntimeError, TypeError, ValueError):
-            return None
-    text = buffer.getvalue()
-    if not text:
+    plan_ok = _plan_has_partitions(df)
+    if plan_ok is not True:
+        return None
+    text = _run_explain_text(explain_method, verbose=verbose, analyze=analyze)
+    if text is None:
         return None
     return ExplainCapture(
         text=text,
         duration_ms=_parse_duration_ms(text),
         output_rows=_parse_output_rows(text),
     )
+
+
+def _plan_has_partitions(df: DataFrame) -> bool | None:
+    plan_fn = getattr(df, "execution_plan", None)
+    if not callable(plan_fn):
+        return True
+    try:
+        plan = plan_fn()
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+    if plan is None:
+        return True
+    count_fn = getattr(plan, "partition_count", None)
+    if not callable(count_fn):
+        return True
+    try:
+        partition_count = count_fn()
+    except (RuntimeError, TypeError, ValueError):
+        return True
+    return partition_count != 0
+
+
+def _run_explain_text(
+    explain_method: Callable[..., object],
+    *,
+    verbose: bool,
+    analyze: bool,
+) -> str | None:
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        try:
+            explain_method(verbose=verbose, analyze=analyze)
+        except BaseException as exc:
+            if exc.__class__.__name__ == "PanicException":
+                return None
+            if isinstance(exc, Exception) and str(exc).startswith("DataFusion error:"):
+                return None
+            raise
+    text = buffer.getvalue()
+    if not text:
+        return None
+    return text
 
 
 def _parse_duration_ms(text: str) -> float | None:

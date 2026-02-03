@@ -30,7 +30,7 @@ from datafusion_engine.session.runtime import (
 )
 from datafusion_engine.session.streaming import StreamingExecutionResult
 from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
-from engine.diagnostics import EngineEventRecorder
+from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent, ExtractWriteEvent
 from engine.plan_product import PlanProduct
 from engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from obs.otel import OtelBootstrapOptions, configure_otel
@@ -428,23 +428,57 @@ def write_extract_outputs(
 ) -> None:
     """Write extract outputs using DataFusion-native paths when configured.
 
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is missing, the output yields no
-        rows, or the location format is unsupported.
+    Emits diagnostics for extract output quality and write behavior.
     """
     record_schema_snapshots_for_profile(runtime_profile)
+    recorder = EngineEventRecorder(runtime_profile)
     location = runtime_profile.dataset_location(name)
     if location is None:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="write",
+                    status="missing_location",
+                    rows=None,
+                    location_path=None,
+                    location_format=None,
+                    issue="No extract dataset location configured.",
+                )
+            ]
+        )
         return
     reader, rows = _resolve_reader(data)
     if reader is None:
-        msg = f"Extract output {name!r} yielded no rows."
-        raise ValueError(msg)
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="write",
+                    status="empty_output",
+                    rows=rows,
+                    location_path=str(location.path),
+                    location_format=location.format,
+                    issue="Extract output yielded no rows.",
+                )
+            ]
+        )
+        return
     if location.format.lower() != "delta":
-        msg = f"Delta-only extract writes are enforced; got {location.format!r}."
-        raise ValueError(msg)
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="write",
+                    status="unsupported_format",
+                    rows=rows,
+                    location_path=str(location.path),
+                    location_format=location.format,
+                    issue="Delta-only extract writes are enforced.",
+                )
+            ]
+        )
+        return
     session_runtime = runtime_profile.session_runtime()
     df = datafusion_from_arrow(
         session_runtime.ctx,
@@ -462,25 +496,70 @@ def write_extract_outputs(
         recorder=recorder_for_profile(runtime_profile, operation_id=f"extract_write::{name}"),
         runtime_profile=runtime_profile,
     )
-    write_result = pipeline.write(
-        WriteRequest(
-            source=df,
-            destination=str(location.path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.APPEND,
-            format_options={"commit_metadata": commit_metadata},
+    try:
+        write_result = pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=str(location.path),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.APPEND,
+                format_options={"commit_metadata": commit_metadata},
+            )
+        )
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="write",
+                    status="write_failed",
+                    rows=rows,
+                    location_path=str(location.path),
+                    location_format=location.format,
+                    issue=str(exc),
+                )
+            ]
+        )
+        return
+    recorder.record_extract_write(
+        ExtractWriteEvent(
+            dataset=name,
+            mode="append",
+            path=str(location.path),
+            file_format="delta",
+            rows=rows,
+            copy_sql=None,
+            copy_options=None,
+            delta_version=write_result.delta_result.version
+            if write_result.delta_result is not None
+            else None,
         )
     )
-    recorder = EngineEventRecorder(runtime_profile)
-    recorder.record_extract_write(
-        dataset=name,
-        mode="append",
-        path=str(location.path),
-        file_format="delta",
-        rows=rows,
-        copy_sql=None,
-        copy_options=None,
-        delta_result=write_result.delta_result,
+    if rows == 0:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="write",
+                    status="zero_rows",
+                    rows=rows,
+                    location_path=str(location.path),
+                    location_format=location.format,
+                    issue="Extract output contained zero rows.",
+                )
+            ]
+        )
+    recorder.record_extract_quality_events(
+        [
+            ExtractQualityEvent(
+                dataset=name,
+                stage="write",
+                status="written",
+                rows=rows,
+                location_path=str(location.path),
+                location_format=location.format,
+            )
+        ]
     )
     recorder.record_diskcache_stats()
 

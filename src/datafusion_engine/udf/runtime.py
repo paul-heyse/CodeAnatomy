@@ -56,7 +56,9 @@ RustUdfSnapshot = Mapping[str, object]
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     try:
-        snapshot = _datafusion_internal().registry_snapshot(ctx)
+        internal = _datafusion_internal()
+        ctx_arg = _module_ctx_arg(internal, ctx)
+        snapshot = internal.registry_snapshot(ctx_arg)
     except (ImportError, AttributeError, TypeError, ValueError):
         return _fallback_registry_snapshot(ctx)
     if not isinstance(snapshot, Mapping):
@@ -118,8 +120,9 @@ def _install_rust_udfs(
     installer = getattr(internal, "register_codeanatomy_udfs", None)
     if not callable(installer):
         return
+    ctx_arg = _module_ctx_arg(internal, ctx)
     try:
-        installer(ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
+        installer(ctx_arg, enable_async, async_udf_timeout_ms, async_udf_batch_size)
     except TypeError:
         return
 
@@ -135,6 +138,14 @@ def _datafusion_internal() -> ModuleType:
         ):
             return module
     return importlib.import_module("datafusion._internal")
+
+
+def _module_ctx_arg(module: ModuleType, ctx: SessionContext) -> object:
+    if module.__name__ == "datafusion_ext":
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is not None:
+            return internal_ctx
+    return ctx
 
 
 def udf_backend_available() -> bool:
@@ -584,7 +595,9 @@ def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     try:
-        snapshot = _datafusion_internal().udf_docs_snapshot(ctx)
+        internal = _datafusion_internal()
+        ctx_arg = _module_ctx_arg(internal, ctx)
+        snapshot = internal.udf_docs_snapshot(ctx_arg)
     except (ImportError, AttributeError, TypeError, ValueError):
         return {}
     if not isinstance(snapshot, Mapping):
@@ -747,10 +760,11 @@ def _async_udf_policy(
 
 
 def _install_udf_config(ctx: SessionContext) -> None:
-    installer = getattr(_datafusion_internal(), "install_codeanatomy_udf_config", None)
+    internal = _datafusion_internal()
+    installer = getattr(internal, "install_codeanatomy_udf_config", None)
     if callable(installer):
         with contextlib.suppress(RuntimeError, TypeError, ValueError):
-            installer(ctx)
+            installer(_module_ctx_arg(internal, ctx))
 
 
 def _registered_snapshot(

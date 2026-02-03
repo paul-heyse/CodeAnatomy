@@ -863,8 +863,33 @@ def _ensure_extract_output(
         if table is not None:
             normalized[spec.task_output] = table
     if spec.task_output not in normalized:
-        msg = f"Extract task {spec.task_name!r} produced no output for {spec.task_output!r}."
-        raise ValueError(msg)
+        from datafusion_engine.extract.registry import dataset_schema
+        from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+
+        issue = f"Extract task {spec.task_name!r} produced no output for {spec.task_output!r}."
+        schema = None
+        try:
+            schema = dataset_schema(spec.task_output)
+        except (KeyError, TypeError, ValueError):
+            schema = pa.schema([])
+        normalized[spec.task_output] = empty_table(schema)
+        location = inputs.engine_session.datafusion_profile.dataset_location(spec.task_output)
+        recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=spec.task_output,
+                    stage="task",
+                    status="missing_output",
+                    rows=0,
+                    location_path=str(location.path) if location is not None else None,
+                    location_format=location.format if location is not None else None,
+                    issue=issue,
+                    plan_fingerprint=spec.plan_fingerprint,
+                    plan_signature=inputs.plan_signature,
+                )
+            ]
+        )
 
 
 def _execute_extract_task(
@@ -889,13 +914,43 @@ def _execute_extract_task(
         raise ValueError(msg)
     extract_session = ExtractSession(engine_session=inputs.engine_session)
     profile_name = inputs.engine_session.datafusion_profile.config_policy_name or "default"
-    outputs = _extract_outputs_for_template(
-        inputs,
-        template=task_spec.extractor,
-        extract_session=extract_session,
-        profile_name=profile_name,
-    )
-    normalized = _normalize_extract_outputs(outputs)
+    try:
+        outputs = _extract_outputs_for_template(
+            inputs,
+            template=task_spec.extractor,
+            extract_session=extract_session,
+            profile_name=profile_name,
+        )
+        normalized = _normalize_extract_outputs(outputs)
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        from datafusion_engine.extract.registry import dataset_schema
+        from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+
+        issue = f"{type(exc).__name__}: {exc}"
+        schema = None
+        try:
+            schema = dataset_schema(spec.task_output)
+        except (KeyError, TypeError, ValueError):
+            schema = pa.schema([])
+        normalized = {spec.task_output: empty_table(schema)}
+        location = inputs.engine_session.datafusion_profile.dataset_location(spec.task_output)
+        recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=spec.task_output,
+                    stage="extract",
+                    status="extract_failed",
+                    rows=None,
+                    location_path=str(location.path) if location is not None else None,
+                    location_format=location.format if location is not None else None,
+                    issue=issue,
+                    extractor=task_spec.extractor,
+                    plan_fingerprint=spec.plan_fingerprint,
+                    plan_signature=inputs.plan_signature,
+                )
+            ]
+        )
     _ensure_extract_output(inputs=inputs, spec=spec, normalized=normalized)
     return normalized
 
@@ -1030,6 +1085,10 @@ def _record_extract_outputs(
     from relspec.extract_plan import extract_output_task_map
 
     task_map = extract_output_task_map()
+    from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+
+    recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
+    quality_events: list[ExtractQualityEvent] = []
     for name, table in outputs.items():
         if name not in inputs.active_task_names:
             continue
@@ -1045,12 +1104,38 @@ def _record_extract_outputs(
             plan_task_signature=plan_task_signature,
             task_kind="extract",
         )
+        rows = None
+        if hasattr(table, "num_rows"):
+            rows = int(table.num_rows)
+        location = inputs.engine_session.datafusion_profile.dataset_location(name)
+        status = "ok"
+        issue = None
+        if location is None:
+            status = "missing_location"
+            issue = "No extract dataset location configured."
+        elif rows == 0:
+            status = "empty_output"
+        quality_events.append(
+            ExtractQualityEvent(
+                dataset=name,
+                stage="task",
+                status=status,
+                rows=rows,
+                location_path=str(location.path) if location is not None else None,
+                location_format=location.format if location is not None else None,
+                issue=issue,
+                extractor=mapped.extractor if mapped is not None else None,
+                plan_fingerprint=plan_fingerprint,
+                plan_signature=plan_signature,
+            )
+        )
         _record_output(
             inputs=inputs,
             spec=output_spec,
             plan_signature=plan_signature,
             table=table,
         )
+    recorder.record_extract_quality_events(quality_events)
 
 
 __all__ = [

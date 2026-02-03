@@ -1469,8 +1469,6 @@ class WritePipeline:
         ------
         ValueError
             Raised when ERROR mode encounters an existing destination.
-        RuntimeError
-            Raised when the Delta version cannot be resolved after writing.
         """
         local_path = Path(spec.table_uri)
         existing_version = delta_table_version(
@@ -1490,15 +1488,18 @@ class WritePipeline:
             log_storage_options=spec.log_storage_options,
             gate=spec.feature_gate,
         )
-        table_name = self._delta_insert_table_name(spec)
-        self._register_delta_insert_target(spec, table_name=table_name)
-        insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
-        write_options = DataFrameWriteOptions(
-            insert_operation=insert_op,
-            partition_by=spec.partition_by or None,
-        )
-        result.df.write_table(table_name, write_options=write_options)
-        delta_result = DeltaWriteResult(path=spec.table_uri, version=None, report=None)
+        if existing_version is None:
+            delta_result = self._write_delta_bootstrap(result, spec=spec)
+        else:
+            table_name = self._delta_insert_table_name(spec)
+            self._register_delta_insert_target(spec, table_name=table_name)
+            insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
+            write_options = DataFrameWriteOptions(
+                insert_operation=insert_op,
+                partition_by=spec.partition_by or None,
+            )
+            result.df.write_table(table_name, write_options=write_options)
+            delta_result = DeltaWriteResult(path=spec.table_uri, version=None, report=None)
         enabled_features = enable_delta_features(
             DeltaFeatureMutationOptions(
                 path=spec.table_uri,
@@ -1533,8 +1534,28 @@ class WritePipeline:
             log_storage_options=spec.log_storage_options,
         )
         if final_version is None:
-            msg = f"Failed to resolve Delta version after write: {spec.table_uri}"
-            raise RuntimeError(msg)
+            if self.runtime_profile is not None:
+                from datafusion_engine.lineage.diagnostics import record_artifact
+
+                record_artifact(
+                    self.runtime_profile,
+                    "delta_write_version_missing_v1",
+                    {
+                        "event_time_unix_ms": int(time.time() * 1000),
+                        "table_uri": spec.table_uri,
+                        "mode": spec.mode,
+                    },
+                )
+            return DeltaWriteOutcome(
+                delta_result=DeltaWriteResult(
+                    path=spec.table_uri,
+                    version=None,
+                    report=delta_result.report,
+                ),
+                enabled_features=enabled_features,
+                commit_app_id=spec.commit_app_id,
+                commit_version=spec.commit_version,
+            )
         if self.runtime_profile is not None:
             from datafusion_engine.delta.observability import (
                 DeltaFeatureStateArtifact,
@@ -1572,6 +1593,81 @@ class WritePipeline:
             commit_app_id=spec.commit_app_id,
             commit_version=spec.commit_version,
         )
+
+    def _write_delta_bootstrap(
+        self,
+        result: StreamingExecutionResult,
+        *,
+        spec: DeltaWriteSpec,
+    ) -> DeltaWriteResult:
+        from deltalake.writer import write_deltalake
+
+        from datafusion_engine.lineage.diagnostics import record_artifact
+        from utils.storage_options import merged_storage_options
+
+        table = result.to_table()
+        storage = merged_storage_options(spec.storage_options, spec.log_storage_options)
+        partition_by = list(spec.partition_by) if spec.partition_by else None
+        storage_options = dict(storage) if storage else None
+        if spec.mode == "overwrite":
+            if spec.writer_properties is None:
+                write_deltalake(
+                    spec.table_uri,
+                    table,
+                    partition_by=partition_by,
+                    mode="overwrite",
+                    schema_mode=spec.schema_mode,
+                    storage_options=storage_options,
+                    target_file_size=spec.target_file_size,
+                    commit_properties=spec.commit_properties,
+                )
+            else:
+                write_deltalake(
+                    spec.table_uri,
+                    table,
+                    partition_by=partition_by,
+                    mode="overwrite",
+                    schema_mode=spec.schema_mode,
+                    storage_options=storage_options,
+                    target_file_size=spec.target_file_size,
+                    writer_properties=spec.writer_properties,
+                    commit_properties=spec.commit_properties,
+                )
+        elif spec.writer_properties is None:
+            write_deltalake(
+                spec.table_uri,
+                table,
+                partition_by=partition_by,
+                mode="append",
+                schema_mode=spec.schema_mode,
+                storage_options=storage_options,
+                target_file_size=spec.target_file_size,
+                commit_properties=spec.commit_properties,
+            )
+        else:
+            write_deltalake(
+                spec.table_uri,
+                table,
+                partition_by=partition_by,
+                mode="append",
+                schema_mode=spec.schema_mode,
+                storage_options=storage_options,
+                target_file_size=spec.target_file_size,
+                writer_properties=spec.writer_properties,
+                commit_properties=spec.commit_properties,
+            )
+        if self.runtime_profile is not None:
+            record_artifact(
+                self.runtime_profile,
+                "delta_write_bootstrap_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "table_uri": spec.table_uri,
+                    "mode": spec.mode,
+                    "row_count": table.num_rows,
+                },
+            )
+        return DeltaWriteResult(path=spec.table_uri, version=None, report=None)
 
     @staticmethod
     def _delta_insert_table_name(spec: DeltaWriteSpec) -> str:

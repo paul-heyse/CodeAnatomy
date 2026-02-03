@@ -6,6 +6,8 @@ Provides reusable test infrastructure for end-to-end cq command testing.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,9 +15,66 @@ import msgspec
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from tools.cq.core.schema import CqResult, Finding
+
+
+@dataclass(frozen=True)
+class FindingCriteria:
+    category: str | None = None
+    message_contains: str | None = None
+    file: str | None = None
+    severity: str | None = None
+    detail_checks: dict[str, str | int | bool] = field(default_factory=dict)
+
+    def matches(self, finding: Finding) -> bool:
+        if self.category is not None and finding.category != self.category:
+            return False
+        if self.message_contains is not None and self.message_contains not in finding.message:
+            return False
+        if self.file is not None and (finding.anchor is None or self.file not in finding.anchor.file):
+            return False
+        if self.severity is not None and finding.severity != self.severity:
+            return False
+        if not self.detail_checks:
+            return True
+        return all(finding.details.get(k) == v for k, v in self.detail_checks.items())
+
+    def summary(self) -> str:
+        criteria = []
+        if self.category:
+            criteria.append(f"category={self.category}")
+        if self.message_contains:
+            criteria.append(f"message_contains={self.message_contains}")
+        if self.file:
+            criteria.append(f"file={self.file}")
+        if self.severity:
+            criteria.append(f"severity={self.severity}")
+        for key, value in self.detail_checks.items():
+            criteria.append(f"{key}={value}")
+        return ", ".join(criteria)
+
+
+def _iter_findings(result: CqResult) -> Iterable[Finding]:
+    yield from result.key_findings
+    yield from result.evidence
+    for section in result.sections:
+        yield from section.findings
+
+
+def _find_matching_finding(
+    result: CqResult,
+    criteria: FindingCriteria,
+) -> tuple[Finding | None, int]:
+    findings = list(_iter_findings(result))
+    for finding in findings:
+        if criteria.matches(finding):
+            return finding, len(findings)
+    return None, len(findings)
+
+
+def _build_error_message(criteria: FindingCriteria, total_findings: int) -> str:
+    criteria_str = criteria.summary()
+    return f"No finding matching criteria: {criteria_str}\nTotal findings: {total_findings}"
 
 
 def _find_repo_root() -> Path:
@@ -168,7 +227,7 @@ def run_query(
 
 
 @pytest.fixture
-def assert_finding_exists() -> Callable[..., Finding]:  # noqa: C901
+def assert_finding_exists() -> Callable[..., Finding]:
     """Provide a helper to assert a finding with specific criteria exists.
 
     Returns
@@ -181,65 +240,6 @@ def assert_finding_exists() -> Callable[..., Finding]:  # noqa: C901
     >>> finding = assert_finding_exists(result, category="call_site", file="graph.py")
     >>> assert finding.anchor.file == "graph.py"
     """
-
-    def _matches_criteria(  # noqa: PLR0913
-        finding: Finding,
-        *,
-        category: str | None,
-        message_contains: str | None,
-        file: str | None,
-        severity: str | None,
-        detail_checks: dict[str, str | int | bool],
-    ) -> bool:
-        """Check if finding matches all criteria.
-
-        Returns
-        -------
-        bool
-            True if all criteria match.
-        """
-        if category is not None and finding.category != category:
-            return False
-        if message_contains is not None and message_contains not in finding.message:
-            return False
-        if file is not None and (finding.anchor is None or file not in finding.anchor.file):
-            return False
-        if severity is not None and finding.severity != severity:
-            return False
-        return not (
-            detail_checks and not all(finding.details.get(k) == v for k, v in detail_checks.items())
-        )
-
-    def _build_error_message(  # noqa: PLR0913, PLR0917
-        category: str | None,
-        message_contains: str | None,
-        file: str | None,
-        severity: str | None,
-        detail_checks: dict[str, str | int | bool],
-        total_findings: int,
-    ) -> str:
-        """Build helpful error message for assertion failure.
-
-        Returns
-        -------
-        str
-            Formatted error message.
-        """
-        criteria = []
-        if category:
-            criteria.append(f"category={category}")
-        if message_contains:
-            criteria.append(f"message_contains={message_contains}")
-        if file:
-            criteria.append(f"file={file}")
-        if severity:
-            criteria.append(f"severity={severity}")
-        for k, v in detail_checks.items():
-            criteria.append(f"{k}={v}")
-
-        criteria_str = ", ".join(criteria)
-        return f"No finding matching criteria: {criteria_str}\nTotal findings: {total_findings}"
-
     def _assert(
         result: CqResult,
         *,
@@ -276,24 +276,17 @@ def assert_finding_exists() -> Callable[..., Finding]:  # noqa: C901
         AssertionError
             If no matching finding is found.
         """
-        all_findings = result.key_findings + result.evidence
-        for section in result.sections:
-            all_findings.extend(section.findings)
-
-        for finding in all_findings:
-            if _matches_criteria(
-                finding,
-                category=category,
-                message_contains=message_contains,
-                file=file,
-                severity=severity,
-                detail_checks=detail_checks,
-            ):
-                return finding
-
-        msg = _build_error_message(
-            category, message_contains, file, severity, detail_checks, len(all_findings)
+        criteria = FindingCriteria(
+            category=category,
+            message_contains=message_contains,
+            file=file,
+            severity=severity,
+            detail_checks=dict(detail_checks),
         )
+        finding, total_findings = _find_matching_finding(result, criteria)
+        if finding is not None:
+            return finding
+        msg = _build_error_message(criteria, total_findings)
         raise AssertionError(msg)
 
     return _assert

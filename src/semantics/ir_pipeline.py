@@ -495,7 +495,7 @@ def _input_dataset_names() -> tuple[str, ...]:
     from semantics.registry import SEMANTIC_TABLE_SPECS
 
     names = tuple(spec.table for spec in SEMANTIC_TABLE_SPECS.values())
-    extras = ("scip_occurrences", "file_line_index_v1")
+    extras = ("repo_files_v1", "scip_occurrences", "file_line_index_v1")
     return tuple(dict.fromkeys((*names, *extras)))
 
 

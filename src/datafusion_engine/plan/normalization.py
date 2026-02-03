@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
@@ -155,11 +156,12 @@ def _fallback_substrait_plan(
         normalized = _safe_optimized_logical_plan(df)
         if normalized is not None:
             return cast("DataFusionLogicalPlan", normalized)
-    values_df = ctx.sql("VALUES (1)")
-    normalized = _safe_optimized_logical_plan(values_df)
-    if normalized is None:
-        return plan
-    return cast("DataFusionLogicalPlan", normalized)
+    probe_name = _ensure_substrait_probe_table(ctx)
+    df = ctx.table(probe_name)
+    normalized = _safe_optimized_logical_plan(df)
+    if normalized is not None:
+        return cast("DataFusionLogicalPlan", normalized)
+    return plan
 
 
 def _available_substrait_tables(
@@ -174,6 +176,19 @@ def _available_substrait_tables(
             continue
         available.append(name)
     return available
+
+
+def _ensure_substrait_probe_table(ctx: SessionContext) -> str:
+    name = "__substrait_probe__"
+    try:
+        _ = ctx.table(name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        pass
+    else:
+        return name
+    batch = pa.record_batch([pa.array([1], type=pa.int8())], names=["_probe"])
+    ctx.register_record_batches(name, [[batch]])
+    return name
 
 
 def _safe_optimized_logical_plan(df: DataFrame) -> object | None:

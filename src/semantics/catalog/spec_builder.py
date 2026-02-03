@@ -248,6 +248,27 @@ def _relationship_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None
     return specs
 
 
+def _semantic_normalize_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
+    if row.template != "semantic_normalize":
+        return None
+    from datafusion_engine.extract.registry import dataset_schema
+
+    schema = dataset_schema(row.source_dataset or row.name)
+    field_types: dict[str, pa.DataType] = {field.name: field.type for field in schema}
+    derived_types = {
+        "bstart": pa.int64(),
+        "bend": pa.int64(),
+        "span": SPAN_STORAGE,
+    }
+    return [
+        FieldSpec(
+            name=field_name,
+            dtype=field_types.get(field_name, derived_types.get(field_name, pa.string())),
+        )
+        for field_name in row.fields
+    ]
+
+
 def _input_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
     if row.role != "input":
         return None
@@ -277,6 +298,7 @@ def _field_specs_for_row(row: SemanticDatasetRow) -> list[FieldSpec]:
         _props_map_field_specs,
         _scip_field_specs,
         _relationship_field_specs,
+        _semantic_normalize_field_specs,
         _input_field_specs,
     ):
         specs = builder(row)

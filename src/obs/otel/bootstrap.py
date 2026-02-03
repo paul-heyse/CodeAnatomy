@@ -37,6 +37,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from obs.otel.config import OtelConfigOverrides, resolve_otel_config
+from obs.otel.diagnostics_bundle import (
+    configure_diagnostics_exporters,
+    diagnostics_bundle_enabled,
+    register_log_exporter,
+    register_metric_reader,
+    register_span_exporter,
+)
+from obs.otel.logging import install_trace_context_filter
 from obs.otel.metrics import metric_views, reset_metrics_registry
 from obs.otel.resource_detectors import (
     build_detected_resource,
@@ -256,6 +264,11 @@ def _resolve_protocol(signal: str) -> str:
     return (protocol or "grpc").strip().lower()
 
 
+def _otlp_endpoint_available(signal: str) -> bool:
+    specific = env_text(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
+    return bool(specific or env_text("OTEL_EXPORTER_OTLP_ENDPOINT"))
+
+
 def _build_span_exporter() -> SpanExporter:
     protocol = _resolve_protocol("traces")
     if protocol.startswith("http"):
@@ -406,6 +419,10 @@ def _resolve_bootstrap_state(
         config.enable_metrics if overrides.enable_metrics is None else overrides.enable_metrics
     )
     logs_enabled = config.enable_logs if overrides.enable_logs is None else overrides.enable_logs
+    if diagnostics_bundle_enabled():
+        traces_enabled = True
+        metrics_enabled = True
+        logs_enabled = True
     log_correlation = (
         config.enable_log_correlation
         if overrides.enable_log_correlation is None
@@ -464,8 +481,13 @@ def _build_tracer_provider(
     from obs.otel.processors import RunIdSpanProcessor
 
     tracer_provider.add_span_processor(RunIdSpanProcessor())
-    if use_test_mode:
-        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+    use_in_memory = use_test_mode or (
+        diagnostics_bundle_enabled() and not _otlp_endpoint_available("traces")
+    )
+    if use_in_memory:
+        exporter = InMemorySpanExporter()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+        register_span_exporter(exporter)
     else:
         tracer_provider.add_span_processor(
             BatchSpanProcessor(
@@ -485,8 +507,12 @@ def _build_meter_provider(
     *,
     use_test_mode: bool,
 ) -> MeterProvider:
-    if use_test_mode:
+    use_in_memory = use_test_mode or (
+        diagnostics_bundle_enabled() and not _otlp_endpoint_available("metrics")
+    )
+    if use_in_memory:
         reader = InMemoryMetricReader()
+        register_metric_reader(reader)
     else:
         reader = PeriodicExportingMetricReader(
             _build_metric_exporter(config),
@@ -539,10 +565,13 @@ def _build_logger_provider(
     from obs.otel.processors import RunIdLogRecordProcessor
 
     logger_provider.add_log_record_processor(RunIdLogRecordProcessor())
-    if use_test_mode:
-        logger_provider.add_log_record_processor(
-            SimpleLogRecordProcessor(InMemoryLogRecordExporter())
-        )
+    use_in_memory = use_test_mode or (
+        diagnostics_bundle_enabled() and not _otlp_endpoint_available("logs")
+    )
+    if use_in_memory:
+        exporter = InMemoryLogRecordExporter()
+        logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+        register_log_exporter(exporter)
     else:
         logger_provider.add_log_record_processor(
             BatchLogRecordProcessor(
@@ -556,6 +585,7 @@ def _build_logger_provider(
     _install_logging_handler(logger_provider)
     if log_correlation:
         _enable_log_correlation()
+        install_trace_context_filter()
     return logger_provider
 
 
@@ -676,6 +706,11 @@ def configure_otel(
     )
     providers.activate_global()
     _STATE["providers"] = providers
+    configure_diagnostics_exporters(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
     if state.enable_system_metrics and providers.meter_provider is not None:
         _enable_system_metrics()
     _LOGGER.info("OpenTelemetry configured for service %s", state.resolved_service_name)
@@ -691,28 +726,30 @@ def reset_providers_for_tests() -> None:
     from opentelemetry._logs import _internal as logs_internal
     from opentelemetry.metrics import _internal as metrics_internal
 
-    def _reset_once(holder: object | None) -> None:
-        if holder is None:
+    def _set_private_attr(target: object | None, attr: str, value: object) -> None:
+        if target is None:
             return
         with contextlib.suppress(AttributeError):
-            holder._done = False
+            setattr(target, attr, value)
+
+    def _reset_once(holder: object | None) -> None:
+        _set_private_attr(holder, "_done", value=False)
 
     def _reset_proxy_meter(proxy: object | None) -> None:
         if proxy is None:
             return
-        with contextlib.suppress(AttributeError):
-            proxy._real_meter_provider = None
+        _set_private_attr(proxy, "_real_meter_provider", None)
         meters = getattr(proxy, "_meters", None)
-        if hasattr(meters, "clear"):
+        if meters is not None and hasattr(meters, "clear"):
             meters.clear()
 
     _reset_once(getattr(trace, "_TRACER_PROVIDER_SET_ONCE", None))
     _reset_once(getattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", None))
     _reset_proxy_meter(getattr(metrics_internal, "_PROXY_METER_PROVIDER", None))
     _reset_once(getattr(logs_internal, "_LOGGER_PROVIDER_SET_ONCE", None))
-    trace._TRACER_PROVIDER = None
-    metrics_internal._METER_PROVIDER = None
-    logs_internal._LOGGER_PROVIDER = None
+    _set_private_attr(trace, "_TRACER_PROVIDER", None)
+    _set_private_attr(metrics_internal, "_METER_PROVIDER", None)
+    _set_private_attr(logs_internal, "_LOGGER_PROVIDER", None)
     reset_metrics_registry()
 
 

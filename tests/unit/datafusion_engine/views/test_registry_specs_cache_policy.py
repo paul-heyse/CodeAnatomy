@@ -49,6 +49,19 @@ from semantics.runtime import SemanticRuntimeConfig
                 merge_keys=None,
             ),
             SemanticRuntimeConfig(),
+            "none",
+        ),
+        (
+            SemanticDatasetRow(
+                name="example_v1",
+                version=1,
+                bundles=(),
+                fields=("id",),
+                category="semantic",
+                supports_cdf=True,
+                merge_keys=("id",),
+            ),
+            SemanticRuntimeConfig(cdf_enabled=True),
             "delta_staging",
         ),
         (

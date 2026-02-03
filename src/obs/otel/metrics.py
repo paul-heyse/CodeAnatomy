@@ -77,6 +77,22 @@ class GaugeStore:
         with self._lock:
             self._values[key] = value
 
+    def snapshot_values(self) -> dict[str, float]:
+        """Return the latest gauge values as a mapping.
+
+        Returns
+        -------
+        dict[str, float]
+            Snapshot of gauge values keyed by attribute string.
+        """
+        with self._lock:
+            items = dict(self._values)
+        snapshot: dict[str, float] = {}
+        for attributes, value in items.items():
+            key = ",".join(f"{name}={attr}" for name, attr in attributes)
+            snapshot[key] = value
+        return snapshot
+
 
 @dataclass
 class MetricsRegistry:
@@ -544,8 +560,26 @@ def record_cache_event(
     )
 
 
+def metrics_snapshot() -> dict[str, object]:
+    """Return a snapshot of gauge metrics for diagnostics.
+
+    Returns
+    -------
+    dict[str, object]
+        Mapping of gauge names to their latest values.
+    """
+    registry = _registry()
+    return {
+        "dataset_rows": registry.dataset_rows.snapshot_values(),
+        "dataset_columns": registry.dataset_columns.snapshot_values(),
+        "scan_row_groups": registry.scan_row_groups.snapshot_values(),
+        "scan_fragments": registry.scan_fragments.snapshot_values(),
+    }
+
+
 __all__ = [
     "metric_views",
+    "metrics_snapshot",
     "record_artifact_count",
     "record_cache_event",
     "record_datafusion_duration",

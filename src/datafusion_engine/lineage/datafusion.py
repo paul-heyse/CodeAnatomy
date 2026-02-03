@@ -487,18 +487,30 @@ def _required_columns_by_dataset(
     scans: Sequence[ScanLineage],
     exprs: Sequence[ExprInfo],
 ) -> dict[str, tuple[str, ...]]:
+    def _is_internal_column(name: str) -> bool:
+        if not name:
+            return True
+        if name.isdigit():
+            return True
+        return name.startswith("__common_expr_")
+
     dataset_names = {scan.dataset_name for scan in scans}
     columns_by_dataset: dict[str, set[str]] = {}
     for scan in scans:
-        columns_by_dataset.setdefault(scan.dataset_name, set()).update(scan.projected_columns)
+        columns_by_dataset.setdefault(scan.dataset_name, set()).update(
+            column for column in scan.projected_columns if not _is_internal_column(column)
+        )
     for expr in exprs:
         for dataset, column in expr.referenced_columns:
-            if not column:
+            if _is_internal_column(column):
                 continue
             resolved_dataset = dataset
             if not resolved_dataset and len(dataset_names) == _SINGLE_DATASET_COUNT:
                 resolved_dataset = next(iter(dataset_names))
             if not resolved_dataset:
+                continue
+            available = columns_by_dataset.get(resolved_dataset)
+            if available is not None and column not in available:
                 continue
             columns_by_dataset.setdefault(resolved_dataset, set()).add(column)
     return {dataset: tuple(sorted(columns)) for dataset, columns in columns_by_dataset.items()}

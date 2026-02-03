@@ -12,6 +12,7 @@ from opentelemetry.trace import Link, Span, SpanContext, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
 from obs.otel.attributes import normalize_attributes
+from obs.otel.heartbeat import pop_stage, push_stage
 from obs.otel.metrics import record_stage_duration
 from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_PIPELINE
@@ -154,6 +155,7 @@ def stage_span(
     tracer = get_tracer(scope_name)
     start = time.monotonic()
     status = "ok"
+    token = push_stage(stage)
     with tracer.start_as_current_span(name, attributes=span_attributes(attrs=base_attrs)) as span:
         span.add_event(
             "stage.start",
@@ -168,13 +170,24 @@ def stage_span(
         finally:
             duration_s = time.monotonic() - start
             record_stage_duration(stage, duration_s, status=status)
-            set_span_attributes(span, {"duration_s": duration_s, "status": status})
+            slow_threshold_s = 5.0
+            slow_attrs: dict[str, object] = {}
+            if duration_s >= slow_threshold_s:
+                slow_attrs = {
+                    "codeanatomy.slow": True,
+                    "codeanatomy.slow_threshold_s": slow_threshold_s,
+                }
+            set_span_attributes(
+                span,
+                {"duration_s": duration_s, "status": status, **slow_attrs},
+            )
             span.add_event(
                 "stage.end",
                 attributes=normalize_attributes(
                     {"stage": stage, "status": status, "duration_s": duration_s}
                 ),
             )
+            pop_stage(token)
 
 
 @contextmanager

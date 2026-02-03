@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
@@ -647,7 +648,7 @@ def _prepare_plan_context(
         snapshot=request.snapshot,
     )
     _validate_plan_bundle_compatibility(
-        view_nodes=nodes_with_ast,
+        view_nodes=planned.view_nodes,
         inferred=planned.inferred,
         scan_units=planned.scan_units,
         scan_keys_by_task=planned.scan_keys_by_task,
@@ -667,7 +668,7 @@ def _prepare_plan_context(
     pruned = _pruned_plan_bundle(
         inputs=_PruneInputs(
             graph=graph,
-            nodes_with_ast=nodes_with_ast,
+            nodes_with_ast=planned.view_nodes,
             inferred=inferred_all,
             scan_units=planned.scan_units,
             scan_keys_by_task=planned.scan_keys_by_task,
@@ -1334,12 +1335,31 @@ def _validate_plan_bundle_compatibility(
 def _validate_bundle_udfs(
     task_name: str,
     *,
-    bundle: object,
+    bundle: DataFusionPlanBundle,
     inferred: InferredDeps,
 ) -> None:
-    bundle_udfs = tuple(sorted(getattr(bundle, "required_udfs", ())))
+    from datafusion_engine.udf.runtime import udf_names_from_snapshot
+    from datafusion_engine.views.bundle_extraction import (
+        extract_lineage_from_bundle,
+        resolve_required_udfs_from_bundle,
+    )
+
+    bundle_snapshot = getattr(getattr(bundle, "artifacts", None), "udf_snapshot", None)
+    snapshot = bundle_snapshot if isinstance(bundle_snapshot, Mapping) else {}
+    bundle_udfs = resolve_required_udfs_from_bundle(bundle, snapshot=snapshot)
+    snapshot_names = udf_names_from_snapshot(snapshot)
+    lookup = {name.lower(): name for name in snapshot_names}
+    inferred_udfs = tuple(
+        sorted(
+            lookup[name.lower()]
+            for name in inferred.required_udfs
+            if isinstance(name, str) and name.lower() in lookup
+        )
+    )
     bundle_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
-    inferred_udfs = tuple(sorted(inferred.required_udfs))
+    if not bundle_tags:
+        lineage = extract_lineage_from_bundle(bundle)
+        bundle_tags = tuple(sorted(lineage.required_rewrite_tags))
     inferred_tags = tuple(sorted(inferred.required_rewrite_tags))
     if bundle_udfs != inferred_udfs:
         msg = (

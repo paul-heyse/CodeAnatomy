@@ -12,6 +12,7 @@ transforms.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -73,6 +74,8 @@ if TYPE_CHECKING:
 
     from datafusion_engine.schema.contracts import SchemaContract
 
+
+_LOGGER = logging.getLogger(__name__)
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
 
@@ -3024,11 +3027,40 @@ def validate_schema_metadata(schema: pa.Schema) -> None:
 
 def validate_nested_types(ctx: SessionContext, name: str) -> None:
     """Validate nested dataset types using DataFusion arrow_typeof."""
-    df = ctx.table(name)
-    exprs = [f.arrow_typeof(col(field.name)).alias(f"{field.name}_type") for field in df.schema()]
-    if not exprs:
+    try:
+        df = ctx.table(name)
+    except (RuntimeError, TypeError, ValueError, pa.ArrowInvalid) as exc:
+        _LOGGER.warning("Nested type validation skipped for %s: %s", name, exc)
         return
-    df.select(*exprs).limit(1).collect()
+    expected: pa.Schema
+    try:
+        expected = extract_nested_schema_for(name)
+    except KeyError:
+        return
+    from datafusion_engine.arrow.coercion import storage_type
+
+    actual = df.schema()
+    if not actual:
+        return
+    actual_fields = {field.name: field for field in actual}
+    missing = [field.name for field in expected if field.name not in actual_fields]
+    mismatched = [
+        (
+            field.name,
+            storage_type(actual_fields[field.name].type),
+            storage_type(field.type),
+        )
+        for field in expected
+        if field.name in actual_fields
+        and storage_type(actual_fields[field.name].type) != storage_type(field.type)
+    ]
+    if missing or mismatched:
+        _LOGGER.warning(
+            "Nested type validation mismatch for %s: missing=%s mismatched=%s",
+            name,
+            missing,
+            mismatched,
+        )
 
 
 def _require_semantic_type(

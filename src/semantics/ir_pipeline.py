@@ -16,6 +16,7 @@ from utils.hashing import hash64_from_text, hash_msgpack_canonical
 if TYPE_CHECKING:
     from semantics.exprs import ExprSpec
     from semantics.quality import JoinHow, QualityRelationshipSpec
+    from semantics.registry import SemanticNormalizationSpec
 
 _KIND_ORDER: Mapping[str, int] = {
     "normalize": 0,
@@ -313,12 +314,29 @@ def _build_normalize_rows() -> tuple[SemanticDatasetRow, ...]:
 def _build_semantic_normalization_rows(
     model: SemanticModel,
 ) -> tuple[SemanticDatasetRow, ...]:
+    def _normalized_fields(spec: SemanticNormalizationSpec) -> tuple[str, ...]:
+        source_fields = _input_schema_fields(spec.source_table)
+        derived_fields: list[str] = [
+            spec.spec.primary_span.canonical_start,
+            spec.spec.primary_span.canonical_end,
+            spec.spec.primary_span.canonical_span,
+            spec.spec.entity_id.out_col,
+            "path",
+        ]
+        if spec.spec.entity_id.canonical_entity_id is not None:
+            derived_fields.append(spec.spec.entity_id.canonical_entity_id)
+        derived_fields.extend(foreign_key.out_col for foreign_key in spec.spec.foreign_keys)
+        combined = tuple(name for name in (*source_fields, *derived_fields) if name)
+        deduped = tuple(dict.fromkeys(combined))
+        bundle_fields = {"file_id", "path", "span"}
+        return tuple(name for name in deduped if name not in bundle_fields)
+
     return tuple(
         SemanticDatasetRow(
             name=spec.output_name,
             version=SEMANTIC_SCHEMA_VERSION,
             bundles=("file_identity", "span"),
-            fields=(spec.spec.entity_id.out_col,),
+            fields=_normalized_fields(spec),
             category="semantic",
             supports_cdf=True,
             partition_cols=(),

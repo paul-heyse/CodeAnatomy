@@ -53,6 +53,24 @@ _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
 
 RustUdfSnapshot = Mapping[str, object]
 
+_DDL_TYPE_ALIASES: dict[str, str] = {
+    "int8": "TINYINT",
+    "int16": "SMALLINT",
+    "int32": "INT",
+    "int64": "BIGINT",
+    "uint8": "TINYINT",
+    "uint16": "SMALLINT",
+    "uint32": "INT",
+    "uint64": "BIGINT",
+    "float32": "FLOAT",
+    "float64": "DOUBLE",
+    "utf8": "VARCHAR",
+    "large_utf8": "VARCHAR",
+    "string": "VARCHAR",
+    "bool": "BOOLEAN",
+    "boolean": "BOOLEAN",
+}
+
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     try:
@@ -913,6 +931,11 @@ def _alias_list(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _ddl_type_name(dtype: object) -> str:
+    dtype_name = str(dtype).strip().lower()
+    return _DDL_TYPE_ALIASES.get(dtype_name, dtype_name)
+
+
 def _ddl_config_for_spec(
     spec: DataFusionUdfSpec,
     *,
@@ -929,7 +952,7 @@ def _ddl_config_for_spec(
         return_type=_ddl_return_type(spec),
         returns_table=spec.kind == "table",
         body_sql=_ddl_body_sql(target_name, len(args), kind=spec.kind),
-        language=spec.kind,
+        language=None,
         volatility=spec.volatility,
         replace=replace,
     )
@@ -942,7 +965,7 @@ def _ddl_args(spec: DataFusionUdfSpec) -> tuple[FunctionArgSpec, ...]:
     if arg_names is None or len(arg_names) != len(spec.input_types):
         arg_names = tuple(f"arg{idx}" for idx in range(len(spec.input_types)))
     return tuple(
-        FunctionArgSpec(name=name, dtype=str(dtype))
+        FunctionArgSpec(name=name, dtype=_ddl_type_name(dtype))
         for name, dtype in zip(arg_names, spec.input_types, strict=False)
     )
 
@@ -950,7 +973,7 @@ def _ddl_args(spec: DataFusionUdfSpec) -> tuple[FunctionArgSpec, ...]:
 def _ddl_return_type(spec: DataFusionUdfSpec) -> str | None:
     if spec.kind == "table":
         return None
-    return str(spec.return_type)
+    return _ddl_type_name(spec.return_type)
 
 
 def _ddl_body_sql(target_name: str, arg_count: int, *, kind: str) -> str:

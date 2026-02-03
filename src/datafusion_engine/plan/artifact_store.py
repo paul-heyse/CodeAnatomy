@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import shutil
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -17,6 +18,7 @@ from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.views.graph import extract_lineage_from_bundle
+from schema_spec.system import dataset_spec_from_schema
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
     StructBaseCompat,
@@ -28,7 +30,7 @@ from serde_msgspec import (
     validation_error_payload,
 )
 from serde_msgspec_ext import SubstraitBytes
-from storage.deltalake import delta_table_version
+from storage.deltalake import DeltaSchemaRequest, delta_table_schema, delta_table_version
 from utils.hashing import hash_json_default, hash_sha256_hex
 
 if TYPE_CHECKING:
@@ -154,6 +156,21 @@ def ensure_plan_artifacts_table(
     table_path = Path(location.path)
     existing_version = delta_table_version(str(table_path))
     if existing_version is None:
+        if table_path.exists():
+            _reset_artifacts_table_path(
+                profile,
+                table_path,
+                table_name=PLAN_ARTIFACTS_TABLE_NAME,
+                reason="delta_table_version_unavailable",
+            )
+        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
+    elif not _delta_schema_available(location):
+        _reset_artifacts_table_path(
+            profile,
+            table_path,
+            table_name=PLAN_ARTIFACTS_TABLE_NAME,
+            reason="delta_schema_unavailable",
+        )
         _bootstrap_plan_artifacts_table(ctx, profile, table_path)
     _refresh_plan_artifacts_registration(ctx, profile, location)
     return location
@@ -176,6 +193,21 @@ def ensure_hamilton_events_table(
     table_path = Path(location.path)
     existing_version = delta_table_version(str(table_path))
     if existing_version is None:
+        if table_path.exists():
+            _reset_artifacts_table_path(
+                profile,
+                table_path,
+                table_name=HAMILTON_EVENTS_TABLE_NAME,
+                reason="delta_table_version_unavailable",
+            )
+        _bootstrap_hamilton_events_table(ctx, profile, table_path)
+    elif not _delta_schema_available(location):
+        _reset_artifacts_table_path(
+            profile,
+            table_path,
+            table_name=HAMILTON_EVENTS_TABLE_NAME,
+            reason="delta_schema_unavailable",
+        )
         _bootstrap_hamilton_events_table(ctx, profile, table_path)
     _refresh_hamilton_events_registration(ctx, profile, location)
     return location
@@ -867,11 +899,16 @@ def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocati
     root = _plan_artifacts_root(profile)
     if root is None:
         return None
+    dataset_spec = dataset_spec_from_schema(
+        PLAN_ARTIFACTS_TABLE_NAME,
+        _plan_artifacts_schema(),
+    )
     location = DatasetLocation(
         path=str(root / _ARTIFACTS_DIRNAME),
         format="delta",
         storage_options={},
         delta_log_storage_options={},
+        dataset_spec=dataset_spec,
     )
     return _with_delta_settings(location)
 
@@ -880,11 +917,16 @@ def _hamilton_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocat
     root = _plan_artifacts_root(profile)
     if root is None:
         return None
+    dataset_spec = dataset_spec_from_schema(
+        HAMILTON_EVENTS_TABLE_NAME,
+        _hamilton_events_schema(),
+    )
     location = DatasetLocation(
         path=str(root / _HAMILTON_EVENTS_DIRNAME),
         format="delta",
         storage_options={},
         delta_log_storage_options={},
+        dataset_spec=dataset_spec,
     )
     return _with_delta_settings(location)
 
@@ -896,6 +938,42 @@ def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
         location,
         delta_scan=resolved_scan,
         delta_log_storage_options=dict(resolved_log or {}),
+    )
+
+
+def _delta_schema_available(location: DatasetLocation) -> bool:
+    schema = delta_table_schema(
+        DeltaSchemaRequest(
+            path=str(location.path),
+            storage_options=location.storage_options or None,
+            log_storage_options=location.delta_log_storage_options or None,
+            version=location.delta_version,
+            timestamp=location.delta_timestamp,
+            gate=location.delta_feature_gate,
+        )
+    )
+    return schema is not None
+
+
+def _reset_artifacts_table_path(
+    profile: DataFusionRuntimeProfile,
+    table_path: Path,
+    *,
+    table_name: str,
+    reason: str,
+) -> None:
+    if table_path.exists():
+        shutil.rmtree(table_path)
+    table_path.mkdir(parents=True, exist_ok=True)
+    record_artifact(
+        profile,
+        "artifact_store_reset_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "table": table_name,
+            "path": str(table_path),
+            "reason": reason,
+        },
     )
 
 
@@ -945,9 +1023,9 @@ def _bootstrap_plan_artifacts_table(
     resolved_schema = schema or _plan_artifacts_schema()
     empty_table = pa.Table.from_pylist([], schema=resolved_schema)
     commit_metadata = {
-        "operation": "plan_artifacts_bootstrap",
-        "mode": "overwrite",
-        "table": table_name,
+        "codeanatomy_operation": "plan_artifacts_bootstrap",
+        "codeanatomy_mode": "overwrite",
+        "codeanatomy_table": table_name,
     }
     _write_artifact_table(
         ctx,
@@ -1025,9 +1103,9 @@ def _bootstrap_hamilton_events_table(
     schema = _hamilton_events_schema()
     empty_table = pa.Table.from_pylist([], schema=schema)
     commit_metadata = {
-        "operation": "hamilton_events_bootstrap",
-        "mode": "overwrite",
-        "table": HAMILTON_EVENTS_TABLE_NAME,
+        "codeanatomy_operation": "hamilton_events_bootstrap",
+        "codeanatomy_mode": "overwrite",
+        "codeanatomy_table": HAMILTON_EVENTS_TABLE_NAME,
     }
     _write_artifact_table(
         ctx,
@@ -1088,14 +1166,14 @@ def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]
     event_kinds = sorted({row.event_kind for row in rows})
     view_names = sorted({row.view_name for row in rows})
     metadata: dict[str, str] = {
-        "operation": "plan_artifacts_store",
-        "mode": "append",
-        "row_count": str(len(rows)),
-        "event_kinds": ",".join(event_kinds),
+        "codeanatomy_operation": "plan_artifacts_store",
+        "codeanatomy_mode": "append",
+        "codeanatomy_row_count": str(len(rows)),
+        "codeanatomy_event_kinds": ",".join(event_kinds),
     }
     if view_names:
-        metadata["first_view_name"] = view_names[0]
-        metadata["view_count"] = str(len(view_names))
+        metadata["codeanatomy_first_view_name"] = view_names[0]
+        metadata["codeanatomy_view_count"] = str(len(view_names))
     return metadata
 
 
@@ -1103,16 +1181,16 @@ def _commit_metadata_for_hamilton_events(rows: Sequence[HamiltonEventRow]) -> di
     event_names = sorted({row.event_name for row in rows})
     run_ids = sorted({row.run_id for row in rows})
     metadata: dict[str, str] = {
-        "operation": "hamilton_events_store",
-        "mode": "append",
-        "row_count": str(len(rows)),
-        "event_name_count": str(len(event_names)),
+        "codeanatomy_operation": "hamilton_events_store",
+        "codeanatomy_mode": "append",
+        "codeanatomy_row_count": str(len(rows)),
+        "codeanatomy_event_name_count": str(len(event_names)),
     }
     if event_names:
-        metadata["first_event_name"] = event_names[0]
+        metadata["codeanatomy_first_event_name"] = event_names[0]
     if run_ids:
-        metadata["first_run_id"] = run_ids[0]
-        metadata["run_id_count"] = str(len(run_ids))
+        metadata["codeanatomy_first_run_id"] = run_ids[0]
+        metadata["codeanatomy_run_id_count"] = str(len(run_ids))
     return metadata
 
 

@@ -222,12 +222,18 @@ def task_schedule_metadata(
 
 
 def _seed_nodes(graph: TaskGraph, seed_evidence: Iterable[str]) -> list[int]:
-    nodes: list[int] = []
+    nodes: set[int] = set()
     for name in seed_evidence:
         idx = graph.evidence_idx.get(name)
-        if idx is not None:
-            nodes.append(idx)
-    return nodes
+        if idx is not None and not tuple(graph.graph.predecessor_indices(idx)):
+            nodes.add(idx)
+    for evidence_idx in graph.evidence_idx.values():
+        if not tuple(graph.graph.predecessor_indices(evidence_idx)):
+            nodes.add(evidence_idx)
+    for task_idx in graph.task_idx.values():
+        if not tuple(graph.graph.predecessor_indices(task_idx)):
+            nodes.add(task_idx)
+    return sorted(nodes)
 
 
 def _make_sorter(graph: TaskGraph, *, seed_nodes: list[int]) -> rx.TopologicalSorter:

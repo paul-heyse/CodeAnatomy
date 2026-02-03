@@ -67,7 +67,6 @@ def _arrow_ext_serialize(self: _SemanticExtensionType) -> bytes:
     return self._info.name.encode("utf-8")
 
 
-@classmethod
 def _arrow_ext_deserialize(
     cls: type[_SemanticExtensionType],
     _storage_type: pa.DataType,
@@ -93,7 +92,7 @@ def _arrow_ext_deserialize(
 
 class _SemanticExtensionType(pa.ExtensionType):
     __arrow_ext_serialize__ = _arrow_ext_serialize
-    __arrow_ext_deserialize__ = _arrow_ext_deserialize
+    __arrow_ext_deserialize__ = classmethod(_arrow_ext_deserialize)
 
     def __init__(self, info: SemanticTypeInfo) -> None:
         self._info = info

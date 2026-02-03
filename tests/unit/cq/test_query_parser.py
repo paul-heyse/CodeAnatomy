@@ -8,6 +8,8 @@ Verifies that:
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from tools.cq.query.ir import Expander, Query, Scope
 from tools.cq.query.parser import QueryParseError, parse_query
@@ -165,10 +167,10 @@ class TestQueryIR:
         """Expander should be immutable."""
         expander = Expander(kind="callers", depth=2)
         with pytest.raises(AttributeError):
-            expander.depth = 3
+            cast("Any", expander).depth = 3
 
     def test_scope_frozen(self) -> None:
         """Scope should be immutable."""
         scope = Scope(in_dir="src/")
         with pytest.raises(AttributeError):
-            scope.in_dir = "other/"
+            cast("Any", scope).in_dir = "other/"

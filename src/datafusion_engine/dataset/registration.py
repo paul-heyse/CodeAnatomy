@@ -1980,6 +1980,27 @@ def _apply_projection_exprs(
         return ctx.table(table_name)
     _ = sql_options
     df = ctx.table(table_name)
+    resolved_exprs = _resolve_projection_exprs(df, projection_exprs)
+    if not resolved_exprs:
+        msg = "Projection expressions are required for dynamic projection."
+        raise ValueError(msg)
+    projected = df.select(*resolved_exprs)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    adapter.register_view(table_name, projected, overwrite=True, temporary=False)
+    if runtime_profile is not None:
+        _record_projection_view_artifact(
+            ctx,
+            table_name=table_name,
+            projected=projected,
+            runtime_profile=runtime_profile,
+        )
+    return ctx.table(table_name)
+
+
+def _resolve_projection_exprs(
+    df: DataFrame,
+    projection_exprs: Sequence[str],
+) -> list[Expr | str]:
     schema_fields = list(df.schema().names)
     schema_names = set(schema_fields)
     resolved_exprs: list[Expr | str] = []
@@ -1998,47 +2019,47 @@ def _apply_projection_exprs(
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Projection expression parse failed: {expr_text!r} ({exc})"
             raise ValueError(msg) from exc
-    if not resolved_exprs:
-        msg = "Projection expressions are required for dynamic projection."
-        raise ValueError(msg)
-    projected = df.select(*resolved_exprs)
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    adapter.register_view(table_name, projected, overwrite=True, temporary=False)
-    if runtime_profile is not None:
-        from datafusion_engine.session.runtime import record_view_definition, session_runtime_hash
-        from datafusion_engine.views.artifacts import (
-            ViewArtifactLineage,
-            ViewArtifactRequest,
-            build_view_artifact_from_bundle,
-        )
+    return resolved_exprs
 
-        schema = arrow_schema_from_df(projected)
-        session_runtime = runtime_profile.session_runtime()
-        bundle = build_plan_bundle(
-            ctx,
-            projected,
-            options=PlanBundleOptions(
-                session_runtime=session_runtime,
+
+def _record_projection_view_artifact(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    projected: DataFrame,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> None:
+    from datafusion_engine.session.runtime import record_view_definition, session_runtime_hash
+    from datafusion_engine.views.artifacts import (
+        ViewArtifactLineage,
+        ViewArtifactRequest,
+        build_view_artifact_from_bundle,
+    )
+
+    schema = arrow_schema_from_df(projected)
+    session_runtime = runtime_profile.session_runtime()
+    bundle = build_plan_bundle(
+        ctx,
+        projected,
+        options=PlanBundleOptions(
+            session_runtime=session_runtime,
+        ),
+    )
+    runtime_hash = session_runtime_hash(session_runtime)
+    artifact = build_view_artifact_from_bundle(
+        bundle,
+        request=ViewArtifactRequest(
+            name=table_name,
+            schema=schema,
+            lineage=ViewArtifactLineage(
+                required_udfs=bundle.required_udfs,
+                referenced_tables=referenced_tables_from_plan(bundle.optimized_logical_plan),
             ),
-        )
-        required_udfs = bundle.required_udfs
-        referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
-        runtime_hash = session_runtime_hash(session_runtime)
-        artifact = build_view_artifact_from_bundle(
-            bundle,
-            request=ViewArtifactRequest(
-                name=table_name,
-                schema=schema,
-                lineage=ViewArtifactLineage(
-                    required_udfs=required_udfs,
-                    referenced_tables=referenced_tables,
-                ),
-                runtime_hash=runtime_hash,
-            ),
-        )
-        record_view_definition(runtime_profile, artifact=artifact)
-        _invalidate_information_schema_cache(runtime_profile, ctx)
-    return ctx.table(table_name)
+            runtime_hash=runtime_hash,
+        ),
+    )
+    record_view_definition(runtime_profile, artifact=artifact)
+    _invalidate_information_schema_cache(runtime_profile, ctx)
 
 
 def _projection_exprs_for_schema(

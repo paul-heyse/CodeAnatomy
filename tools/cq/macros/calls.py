@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-from dataclasses import dataclass
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,8 +43,7 @@ _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
 
 
-@dataclass
-class CallSite:
+class CallSite(msgspec.Struct):
     """Information about a call site.
 
     Parameters

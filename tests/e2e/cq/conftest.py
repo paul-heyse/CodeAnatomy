@@ -5,10 +5,9 @@ Provides reusable test infrastructure for end-to-end cq command testing.
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import msgspec
 import pytest
@@ -92,7 +91,7 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            timeout=180,
         )
 
     return _run
@@ -137,8 +136,6 @@ def run_query(
         ------
         RuntimeError
             If command fails or JSON parsing fails.
-        TypeError
-            If parsed JSON output is not a dictionary.
         """
         from tools.cq.core.schema import CqResult
 

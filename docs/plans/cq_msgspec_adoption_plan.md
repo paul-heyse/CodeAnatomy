@@ -7,6 +7,8 @@ Adopt msgspec across `tools/cq` for faster serialization, stronger schema valida
 
 ## Scope 1 — Core CQ schema to msgspec.Struct
 
+**Status:** ✅ Complete (schema migrated; mk_runmeta/mk_result preserved)
+
 **Why**
 `tools/cq/core/schema.py` currently uses dataclasses with manual `to_dict`/`from_dict`. msgspec.Struct removes that boilerplate, adds validation, and enables JSON Schema export.
 
@@ -58,14 +60,16 @@ class CqResult(msgspec.Struct):
 - `to_dict()` / `from_dict()` implementations on CQ schema types.
 
 **Implementation checklist**
-- Convert all CQ schema dataclasses to `msgspec.Struct`.
-- Add `Meta` constraints for obvious invariants (line >= 1, severity Literal).
-- Replace `to_dict()`/`from_dict()` calls with msgspec encode/decode.
-- Keep `mk_runmeta()` / `mk_result()` API stable.
+- [x] Convert all CQ schema dataclasses to `msgspec.Struct`.
+- [x] Add `Meta` constraints for obvious invariants (line >= 1, severity Literal).
+- [x] Replace `to_dict()`/`from_dict()` calls with msgspec encode/decode.
+- [x] Keep `mk_runmeta()` / `mk_result()` API stable.
 
 ---
 
 ## Scope 2 — Unified msgspec codec utilities (JSON + Msgpack)
+
+**Status:** ✅ Complete (central serialization utilities in place)
 
 **Why**
 Multiple modules use `json.dumps` or manual dict conversions. Use a single codec layer to standardize output and allow msgpack in caches.
@@ -96,12 +100,14 @@ def loads_json(data: bytes | str) -> CqResult:
 - Direct `json.dumps(result.to_dict())` patterns in CQ output.
 
 **Implementation checklist**
-- Add serialization module and wire into result/artifacts.
-- Ensure deterministic JSON ordering for stable outputs.
+- [x] Add serialization module and wire into result/artifacts.
+- [x] Ensure deterministic JSON ordering for stable outputs.
 
 ---
 
 ## Scope 3 — Cache payloads in msgpack with typed decode
+
+**Status:** ✅ Complete (msgpack payloads, legacy JSON decode removed)
 
 **Why**
 Cache payloads in `diskcache_query_cache.py` and `diskcache_index_cache.py` currently store JSON strings and dicts. msgpack reduces size and parse costs; typed decoding improves correctness.
@@ -136,13 +142,15 @@ if isinstance(cached, (bytes, bytearray)):
 - JSON string payloads for cached records (`records_json`, `result.to_dict()` in cache).
 
 **Implementation checklist**
-- Add msgpack encoder/decoder for CqResult and record lists.
-- Ensure cached data backward compatibility (optional migration path).
-- Use `msgspec.Raw` where deferring decode is beneficial.
+- [x] Add msgpack encoder/decoder for CqResult and record lists.
+- [x] Remove legacy JSON cache payload handling (breaking change).
+- [x] Defer decode by storing msgpack bytes (no `msgspec.Raw` needed).
 
 ---
 
 ## Scope 4 — Query IR + Planner as msgspec.Struct (typed schema)
+
+**Status:** ✅ Complete (IR + planner are msgspec.Struct)
 
 **Why**
 Query IR uses dataclasses and manual dict conversions. msgspec enables validation and schema export for CLI/API use.
@@ -168,13 +176,15 @@ class Scope(msgspec.Struct, frozen=True):
 - Any manual `asdict()` serialization for IR and plan objects.
 
 **Implementation checklist**
-- Convert IR dataclasses to `msgspec.Struct`.
-- Add constraints for depth/limits.
-- Update any serializer usage in plan explain output.
+- [x] Convert IR dataclasses to `msgspec.Struct`.
+- [x] Add constraints for depth/limits.
+- [x] Update any serializer usage in plan explain output.
 
 ---
 
 ## Scope 5 — CLI config decoding via msgspec.toml / convert
+
+**Status:** ✅ Complete (typed TOML + typed env coercion)
 
 **Why**
 Cyclopts config chain loads TOML/environment generically. msgspec can decode to typed config structs with validation.
@@ -200,13 +210,15 @@ cfg = msgspec.toml.decode(open(path, "rb").read(), type=CqConfig)
 - Manual config shape assumptions; prefer typed config.
 
 **Implementation checklist**
-- Add config Structs.
-- Decode TOML with msgspec when config file is provided.
-- Use `msgspec.convert` for env value coercion where needed.
+- [x] Add config Structs.
+- [x] Decode TOML with msgspec when config file is provided.
+- [x] Use `msgspec.convert` for env value coercion where needed.
 
 ---
 
 ## Scope 6 — Schema export + inspection utilities
+
+**Status:** ✅ Complete (schema export helper + CLI command)
 
 **Why**
 Provide explicit schema docs for CQ output and query IR, enabling downstream tooling and API contracts.
@@ -226,12 +238,14 @@ components = msgspec.json.schema_components([CqResult, Query])
 - None.
 
 **Implementation checklist**
-- Implement schema export helper.
-- Optionally add `cq schema` CLI output.
+- [x] Implement schema export helper.
+- [x] Optionally add `cq schema` CLI output.
 
 ---
 
 ## Scope 7 — Macro outputs and report pipeline
+
+**Status:** ⚠️ Partial (macro structs migrated; detail payloads still dicts)
 
 **Why**
 Many macros use dataclasses and emit structured details. msgspec can reduce overhead and standardize outputs.
@@ -253,14 +267,26 @@ class ImpactNode(msgspec.Struct):
 - Manual dict assembly in macro detail payloads.
 
 **Implementation checklist**
-- Migrate macro dataclasses to msgspec.Struct where stable.
-- Ensure report rendering handles Struct instances via msgspec encoder.
+- [x] Migrate macro dataclasses to msgspec.Struct where stable.
+- [x] Ensure report rendering handles Struct instances via msgspec encoder.
+- [ ] Replace manual dict assembly in macro detail payloads with structured msgspec types (optional).
 
 ---
 
 ## Validation Notes
 - Update golden files and tests impacted by output changes.
-- Keep backward compatibility for existing JSON output unless explicitly breaking.
+- **Breaking change is intended:** outputs may omit default/null fields (e.g., Anchor `col`, `end_line`, `end_col`) and caches no longer need to load legacy JSON payloads once migration is complete.
+
+---
+
+## Remaining Scope Summary (as of 2026-02-03)
+
+1. **Validation updates (breaking change)**
+   - Refresh goldens for the new JSON shape (default/null fields omitted).
+   - Re-run CQ-specific tests once parallel work is stable and update snapshots as needed.
+
+2. **Scope 7 follow-up (optional)**
+   - Replace manual `details` dict assembly in macros with structured msgspec types if you want stricter schemas for downstream consumers.
 
 ---
 
@@ -269,4 +295,3 @@ class ImpactNode(msgspec.Struct):
 - Stronger type validation with schema constraints.
 - Deterministic output formatting for tests and consumers.
 - Exportable JSON Schema / OpenAPI for CQ results and query IR.
-

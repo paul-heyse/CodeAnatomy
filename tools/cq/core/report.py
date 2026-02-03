@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
+from tools.cq.core.serialization import to_builtins
 
 # Maximum evidence items to show before truncating
 MAX_EVIDENCE_DISPLAY = 20
@@ -98,10 +99,11 @@ def _render_summary(summary: dict[str, object]) -> list[str]:
     lines = ["## Summary"]
     formatted: list[str] = []
     for key, value in summary.items():
-        if isinstance(value, dict):
-            rendered = json.dumps(value, sort_keys=True)
+        rendered_value = to_builtins(value)
+        if isinstance(rendered_value, (dict, list)):
+            rendered = json.dumps(rendered_value, sort_keys=True)
         else:
-            rendered = str(value)
+            rendered = str(rendered_value)
         formatted.append(f"- **{key}**: {rendered}")
     lines.extend(formatted)
     lines.append("")
@@ -269,7 +271,7 @@ def render_summary(result: CqResult) -> str:
 
     if result.summary:
         # Extract key metrics from summary
-        for key in ("total_sites", "call_sites", "hazards_found", "total_raises", "total_catches"):
+        for key in ("total_sites", "call_sites", "total_raises", "total_catches"):
             if key in result.summary:
                 value = result.summary[key]
                 label = key.replace("_", " ")

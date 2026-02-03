@@ -7,6 +7,9 @@ import time
 from dataclasses import dataclass
 
 from cyclopts import App
+from cyclopts._result_action import handle_result_action
+from cyclopts._run import _run_maybe_async_command
+from cyclopts.bind import normalize_tokens
 from cyclopts.exceptions import CycloptsError
 from opentelemetry import trace
 
@@ -32,6 +35,77 @@ class CliInvokeEvent:
     error_message: str | None = None
 
 
+@dataclass
+class _InvokeState:
+    t0: float
+    command_name: str
+    parse_ms: float | None = None
+    exec_ms: float | None = None
+
+
+def _command_name_from_tokens(tokens: list[str] | None) -> str:
+    if not tokens:
+        return "<unknown>"
+    return tokens[0]
+
+
+def _finalize_parse_ms(state: _InvokeState) -> None:
+    if state.parse_ms is None:
+        state.parse_ms = (time.perf_counter() - state.t0) * 1000.0
+
+
+def _apply_result_action(app: App, result: object) -> int:
+    processed = handle_result_action(
+        result,
+        app.app_stack.resolve(
+            "result_action",
+            fallback="print_non_int_return_int_as_exit_code",
+        ),
+        app.console.print,
+    )
+    return processed if isinstance(processed, int) else 0
+
+
+def _run_with_app_stack(
+    app: App,
+    tokens: list[str] | None,
+    *,
+    run_context: RunContext | None,
+    state: _InvokeState,
+) -> int:
+    normalized = normalize_tokens(tokens)
+    overrides: dict[str, object] = {
+        "print_error": True,
+        "exit_on_error": False,
+    }
+    if app.result_action is None:
+        overrides["result_action"] = "print_non_int_return_int_as_exit_code"
+    with app.app_stack(normalized, overrides):
+        command, bound, ignored = app.parse_args(
+            normalized,
+            exit_on_error=False,
+            print_error=True,
+        )
+        state.parse_ms = (time.perf_counter() - state.t0) * 1000.0
+        state.command_name = getattr(command, "__qualname__", repr(command))
+
+        if run_context is not None and "run_context" in ignored:
+            bound.arguments["run_context"] = run_context
+
+        t1 = time.perf_counter()
+        with tracer.start_as_current_span("cli.command") as span:
+            span.set_attribute("cli.command", state.command_name)
+            if run_context is not None:
+                span.set_attribute("cli.run_id", run_context.run_id)
+            result = _run_maybe_async_command(
+                command,
+                bound,
+                app.app_stack.resolve("backend", fallback="asyncio"),
+            )
+        state.exec_ms = (time.perf_counter() - t1) * 1000.0
+        return _apply_result_action(app, result)
+
+
 def invoke_with_telemetry(
     app: App,
     tokens: list[str] | None,
@@ -54,51 +128,31 @@ def invoke_with_telemetry(
     tuple[int, CliInvokeEvent]
         Exit code and structured telemetry payload.
     """
-    t0 = time.perf_counter()
-    command_name = "<unknown>"
+    state = _InvokeState(time.perf_counter(), _command_name_from_tokens(tokens))
     run_token = None
     if run_context is not None:
         run_token = set_run_id(run_context.run_id)
     try:
-        command, bound, ignored = app.parse_args(
-            tokens,
-            exit_on_error=False,
-            print_error=True,
-        )
-        parse_ms = (time.perf_counter() - t0) * 1000.0
-        command_name = getattr(command, "__qualname__", repr(command))
-
-        if run_context is not None and "run_context" in ignored:
-            bound.arguments["run_context"] = run_context
-
-        t1 = time.perf_counter()
-        with tracer.start_as_current_span("cli.command") as span:
-            span.set_attribute("cli.command", command_name)
-            if run_context is not None:
-                span.set_attribute("cli.run_id", run_context.run_id)
-            result = command(*bound.args, **bound.kwargs)
-        exec_ms = (time.perf_counter() - t1) * 1000.0
-
-        exit_code = result if isinstance(result, int) else 0
+        exit_code = _run_with_app_stack(app, tokens, run_context=run_context, state=state)
         return (
             exit_code,
             CliInvokeEvent(
                 ok=True,
-                command=command_name,
-                parse_ms=parse_ms,
-                exec_ms=exec_ms,
+                command=state.command_name,
+                parse_ms=state.parse_ms or 0.0,
+                exec_ms=state.exec_ms or 0.0,
                 exit_code=exit_code,
             ),
         )
     except CycloptsError as exc:
-        parse_ms = (time.perf_counter() - t0) * 1000.0
+        _finalize_parse_ms(state)
         exit_code = ExitCode.from_exception(exc)
         return (
             exit_code,
             CliInvokeEvent(
                 ok=False,
-                command=command_name,
-                parse_ms=parse_ms,
+                command=state.command_name,
+                parse_ms=state.parse_ms or 0.0,
                 exec_ms=0.0,
                 exit_code=exit_code,
                 error_class=f"cyclopts.{exc.__class__.__name__}",
@@ -108,16 +162,18 @@ def invoke_with_telemetry(
         )
     except Exception as exc:
         # General exception handler for command execution errors
-        exec_ms = (time.perf_counter() - t0) * 1000.0
+        _finalize_parse_ms(state)
+        if state.exec_ms is None:
+            state.exec_ms = (time.perf_counter() - state.t0) * 1000.0
         exit_code = ExitCode.from_exception(exc)
         _LOGGER.exception("Command execution failed.")
         return (
             exit_code,
             CliInvokeEvent(
                 ok=False,
-                command=command_name,
-                parse_ms=0.0,
-                exec_ms=exec_ms,
+                command=state.command_name,
+                parse_ms=state.parse_ms or 0.0,
+                exec_ms=state.exec_ms or 0.0,
                 exit_code=exit_code,
                 error_class=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
                 error_stage="execution",

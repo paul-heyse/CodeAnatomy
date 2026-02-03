@@ -6,7 +6,7 @@ Detects function calls at module top-level, global state writes, and ambient rea
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -75,8 +75,7 @@ SAFE_TOP_LEVEL = {
 }
 
 
-@dataclass
-class SideEffect:
+class SideEffect(msgspec.Struct):
     """A detected side effect.
 
     Parameters
@@ -242,8 +241,7 @@ class SideEffectVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-@dataclass(frozen=True)
-class SideEffectsRequest:
+class SideEffectsRequest(msgspec.Struct, frozen=True):
     """Inputs required for side effect analysis."""
 
     tc: Toolchain

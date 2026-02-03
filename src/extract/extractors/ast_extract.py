@@ -757,7 +757,7 @@ def _ast_id_for_node(idx_map: dict[int, int], node: ast.AST) -> int:
     return ast_id
 
 
-def _node_row(
+def _node_row(  # noqa: PLR0913
     node: ast.AST,
     *,
     ast_id: int,
@@ -816,7 +816,7 @@ def _append_docstring(
         rows.docstrings.append(row)
 
 
-def _append_def(
+def _append_def(  # noqa: PLR0913
     rows: _AstWalkAccumulator,
     node: ast.AST,
     *,

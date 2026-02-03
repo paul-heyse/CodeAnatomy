@@ -91,7 +91,13 @@ def read_pyproject_toml(path: Path) -> Mapping[str, object]:
 
 
 def detect_encoding(data: bytes, *, default: str = "utf-8") -> str:
-    """Detect file encoding using tokenize rules."""
+    """Detect file encoding using tokenize rules.
+
+    Returns
+    -------
+    str
+        Detected encoding name.
+    """
     try:
         encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
     except (LookupError, SyntaxError):
@@ -99,14 +105,31 @@ def detect_encoding(data: bytes, *, default: str = "utf-8") -> str:
     return encoding
 
 
-def decode_bytes(data: bytes, *, default: str = "utf-8") -> tuple[str, str | None]:
-    """Detect encoding and decode bytes best-effort."""
-    encoding = detect_encoding(data, default=default)
+def decode_bytes(
+    data: bytes,
+    *,
+    encoding: str | None = None,
+    default: str = "utf-8",
+) -> tuple[str, str | None]:
+    """Detect encoding and decode bytes best-effort.
+
+    Returns
+    -------
+    tuple[str, str | None]
+        Tuple of resolved encoding and decoded text.
+    """
+    resolved = encoding or detect_encoding(data, default=default)
     try:
-        text = data.decode(encoding, errors="replace")
+        text = data.decode(resolved, errors="replace")
     except (LookupError, UnicodeError):
-        return encoding, None
-    return encoding, text
+        if encoding is None:
+            return resolved, None
+        resolved = detect_encoding(data, default=default)
+        try:
+            text = data.decode(resolved, errors="replace")
+        except (LookupError, UnicodeError):
+            return resolved, None
+    return resolved, text
 
 
 __all__ = [

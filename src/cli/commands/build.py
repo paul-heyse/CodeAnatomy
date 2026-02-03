@@ -93,8 +93,8 @@ DeterminismTierChoice = Literal[
 
 
 @dataclass(frozen=True)
-class BuildOptions:
-    """CLI options for build command."""
+class BuildRequestOptions:
+    """CLI options that map directly to GraphProductBuildRequest."""
 
     output_dir: Annotated[
         Path | None,
@@ -114,7 +114,7 @@ class BuildOptions:
             group=output_group,
         ),
     ] = None
-    include_errors: Annotated[
+    include_extract_errors: Annotated[
         bool,
         Parameter(
             name="--include-errors",
@@ -150,6 +150,41 @@ class BuildOptions:
             group=execution_group,
         ),
     ] = ExecutionMode.PLAN_PARALLEL
+    determinism_tier: Annotated[
+        DeterminismTierChoice | None,
+        Parameter(
+            name="--determinism-tier",
+            help=(
+                "Determinism level: canonical/tier2, stable_set/tier1/stable, "
+                "best_effort/tier0/fast."
+            ),
+            env_var="CODEANATOMY_DETERMINISM_TIER",
+            group=execution_group,
+        ),
+    ] = None
+    runtime_profile_name: Annotated[
+        str | None,
+        Parameter(
+            name="--runtime-profile",
+            help="Named runtime profile from configuration.",
+            env_var="CODEANATOMY_RUNTIME_PROFILE",
+            group=execution_group,
+        ),
+    ] = None
+    writer_strategy: Annotated[
+        Literal["arrow", "datafusion"] | None,
+        Parameter(
+            name="--writer-strategy",
+            help="Writer strategy for materialization.",
+            group=execution_group,
+        ),
+    ] = None
+
+
+@dataclass(frozen=True)
+class BuildOptions:
+    """CLI options for build command (non-request fields)."""
+
     executor_kind: Annotated[
         Literal["threadpool", "multiprocessing", "dask", "ray"] | None,
         Parameter(
@@ -190,35 +225,6 @@ class BuildOptions:
             name="--executor-cost-threshold",
             help="Cost threshold for routing tasks to remote executor.",
             validator=validators.Number(gt=0.0),
-            group=execution_group,
-        ),
-    ] = None
-    determinism_tier: Annotated[
-        DeterminismTierChoice | None,
-        Parameter(
-            name="--determinism-tier",
-            help=(
-                "Determinism level: canonical/tier2, stable_set/tier1/stable, "
-                "best_effort/tier0/fast."
-            ),
-            env_var="CODEANATOMY_DETERMINISM_TIER",
-            group=execution_group,
-        ),
-    ] = None
-    runtime_profile: Annotated[
-        str | None,
-        Parameter(
-            name="--runtime-profile",
-            help="Named runtime profile from configuration.",
-            env_var="CODEANATOMY_RUNTIME_PROFILE",
-            group=execution_group,
-        ),
-    ] = None
-    writer_strategy: Annotated[
-        Literal["arrow", "datafusion"] | None,
-        Parameter(
-            name="--writer-strategy",
-            help="Writer strategy for materialization.",
             group=execution_group,
         ),
     ] = None
@@ -546,12 +552,13 @@ class BuildOptions:
     ] = None
 
 
+_DEFAULT_BUILD_REQUEST = BuildRequestOptions()
 _DEFAULT_BUILD_OPTIONS = BuildOptions()
 
 
 @dataclass(frozen=True)
 class _CliConfigOverrides:
-    runtime_profile: str | None
+    runtime_profile_name: str | None
     determinism_override: DeterminismTier | None
     incremental: bool
     incremental_state_dir: Path | None
@@ -594,6 +601,7 @@ def build_command(
             validator=validators.Path(exists=True, dir_okay=True, file_okay=False),
         ),
     ],
+    request: Annotated[BuildRequestOptions, Parameter(name="*")] = _DEFAULT_BUILD_REQUEST,
     options: Annotated[BuildOptions, Parameter(name="*")] = _DEFAULT_BUILD_OPTIONS,
     *,
     run_context: Annotated[RunContext | None, Parameter(parse=False)] = None,
@@ -612,11 +620,16 @@ def build_command(
     logger = logging.getLogger("codeanatomy.pipeline")
     resolved_repo_root = repo_root.resolve()
 
-    config_contents = dict(run_context.config_contents) if run_context else {}
+    if run_context is None:
+        from cli.config_loader import load_effective_config
+
+        config_contents = load_effective_config(None)
+    else:
+        config_contents = dict(run_context.config_contents)
     config_contents["repo_root"] = str(resolved_repo_root)
     otel_options = run_context.otel_options if run_context else None
 
-    resolved_tier = resolve_determinism_alias(options.determinism_tier)
+    resolved_tier = resolve_determinism_alias(request.determinism_tier)
 
     plan_overrides = _PlanOverrides(
         plan_allow_partial=options.plan_allow_partial,
@@ -631,7 +644,7 @@ def build_command(
 
     config_contents = _apply_plan_overrides(config_contents, plan_overrides)
     cli_overrides = _CliConfigOverrides(
-        runtime_profile=options.runtime_profile,
+        runtime_profile_name=request.runtime_profile_name,
         determinism_override=resolved_tier,
         incremental=options.incremental,
         incremental_state_dir=options.incremental_state_dir,
@@ -701,13 +714,6 @@ def build_command(
     overrides: dict[str, object] = {}
     if run_context:
         overrides["run_id"] = run_context.run_id
-    if options.runtime_profile:
-        overrides["runtime_profile_name"] = options.runtime_profile
-    if resolved_tier:
-        overrides["determinism_override"] = resolved_tier
-    if options.writer_strategy:
-        overrides["writer_strategy"] = options.writer_strategy
-
     overrides.update(
         {
             "include_globs": list(options.include_globs),
@@ -721,26 +727,29 @@ def build_command(
         }
     )
 
-    request = GraphProductBuildRequest(
+    build_request = GraphProductBuildRequest(
         repo_root=resolved_repo_root,
-        output_dir=options.output_dir,
-        work_dir=options.work_dir,
-        execution_mode=options.execution_mode,
+        output_dir=request.output_dir,
+        work_dir=request.work_dir,
+        execution_mode=request.execution_mode,
         executor_config=executor_config,
         graph_adapter_config=graph_adapter_config,
         scip_index_config=scip_config,
         scip_identity_overrides=scip_identity,
+        runtime_profile_name=request.runtime_profile_name,
+        determinism_override=resolved_tier,
+        writer_strategy=request.writer_strategy,
         incremental_config=incremental_config,
         incremental_impact_strategy=options.incremental_impact_strategy,
-        include_extract_errors=options.include_errors,
-        include_manifest=options.include_manifest,
-        include_run_bundle=options.include_run_bundle,
+        include_extract_errors=request.include_extract_errors,
+        include_manifest=request.include_manifest,
+        include_run_bundle=request.include_run_bundle,
         config=config_contents,
         overrides=overrides or None,
         otel_options=otel_options,
     )
 
-    result = build_graph_product(request)
+    result = build_graph_product(build_request)
 
     logger.info(
         "Build complete. Output dir=%s bundle=%s",
@@ -783,8 +792,8 @@ def _apply_cli_config_overrides(
     overrides: _CliConfigOverrides,
 ) -> dict[str, JsonValue]:
     payload = dict(config_contents)
-    if overrides.runtime_profile:
-        payload["runtime_profile_name"] = overrides.runtime_profile
+    if overrides.runtime_profile_name:
+        payload["runtime_profile_name"] = overrides.runtime_profile_name
     if overrides.determinism_override is not None:
         payload["determinism_override"] = overrides.determinism_override.value
     payload["incremental_enabled"] = overrides.incremental

@@ -12,6 +12,93 @@ import msgspec
 from tools.cq import SCHEMA_VERSION
 
 
+_SCORE_FIELDS: tuple[str, ...] = (
+    "impact_score",
+    "impact_bucket",
+    "confidence_score",
+    "confidence_bucket",
+    "evidence_kind",
+)
+
+
+class ScoreDetails(msgspec.Struct, omit_defaults=True):
+    """Scoring metadata for a finding."""
+
+    impact_score: float | None = None
+    impact_bucket: str | None = None
+    confidence_score: float | None = None
+    confidence_bucket: str | None = None
+    evidence_kind: str | None = None
+
+
+class DetailPayload(msgspec.Struct, omit_defaults=True):
+    """Structured details payload for findings."""
+
+    kind: str | None = None
+    score: ScoreDetails | None = None
+    data: dict[str, object] = msgspec.field(default_factory=dict)
+
+    @classmethod
+    def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
+        """Convert legacy detail dicts into a structured payload."""
+        score_values: dict[str, object] = {}
+        data: dict[str, object] = {}
+        kind: str | None = None
+        for key, value in details.items():
+            key_name = str(key)
+            if key_name in _SCORE_FIELDS:
+                score_values[key_name] = value
+                continue
+            if key_name == "kind":
+                kind = None if value is None else str(value)
+                continue
+            data[key_name] = value
+        score = None
+        if score_values:
+            score = ScoreDetails(
+                impact_score=score_values.get("impact_score"),
+                impact_bucket=score_values.get("impact_bucket"),
+                confidence_score=score_values.get("confidence_score"),
+                confidence_bucket=score_values.get("confidence_bucket"),
+                evidence_kind=score_values.get("evidence_kind"),
+            )
+        return cls(kind=kind, score=score, data=data)
+
+    def get(self, key: str, default: object | None = None) -> object | None:
+        """Mapping-style get for detail payloads."""
+        if key == "kind":
+            return self.kind if self.kind is not None else default
+        if key in _SCORE_FIELDS and self.score is not None:
+            value = getattr(self.score, key, None)
+            return value if value is not None else default
+        return self.data.get(key, default)
+
+    def __getitem__(self, key: str) -> object:
+        value = self.get(key, None)
+        if value is None and key not in self:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: object) -> None:
+        if key == "kind":
+            self.kind = None if value is None else str(value)
+            return
+        if key in _SCORE_FIELDS:
+            base = self.score or ScoreDetails()
+            self.score = msgspec.structs.replace(base, **{key: value})
+            return
+        self.data[key] = value
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        if key == "kind":
+            return self.kind is not None
+        if key in _SCORE_FIELDS:
+            return self.score is not None and getattr(self.score, key) is not None
+        return key in self.data
+
+
 class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
     """Source code location anchor.
 
@@ -59,7 +146,7 @@ class Finding(msgspec.Struct):
         Source location, if applicable.
     severity : str
         One of "info", "warning", "error".
-    details : dict[str, Any]
+    details : DetailPayload
         Additional structured data.
     """
 
@@ -67,7 +154,11 @@ class Finding(msgspec.Struct):
     message: str
     anchor: Anchor | None = None
     severity: Literal["info", "warning", "error"] = "info"
-    details: dict[str, object] = msgspec.field(default_factory=dict)
+    details: DetailPayload = msgspec.field(default_factory=DetailPayload)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.details, dict):
+            self.details = DetailPayload.from_legacy(self.details)
 
 
 class Section(msgspec.Struct):
@@ -238,8 +329,10 @@ __all__ = [
     "Anchor",
     "Artifact",
     "CqResult",
+    "DetailPayload",
     "Finding",
     "RunMeta",
+    "ScoreDetails",
     "Section",
     "mk_result",
     "mk_runmeta",

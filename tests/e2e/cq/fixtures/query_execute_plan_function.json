@@ -6,20 +6,13 @@
       "anchor": {
         "col": 0,
         "end_col": 30,
-        "end_line": 215,
+        "end_line": 221,
         "file": "tools/cq/query/executor.py",
-        "line": 120
+        "line": 121
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
-        "kind": "function",
-        "name": "execute_plan"
+        "kind": "function"
       },
       "message": "function: execute_plan",
       "severity": "info"
@@ -28,20 +21,13 @@
       "anchor": {
         "col": 0,
         "end_col": 30,
-        "end_line": 215,
+        "end_line": 221,
         "file": "tools/cq/query/executor.py",
-        "line": 120
+        "line": 121
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
-        "kind": "function_typeparams",
-        "name": "execute_plan"
+        "kind": "function_typeparams"
       },
       "message": "function_typeparams: execute_plan",
       "severity": "info"

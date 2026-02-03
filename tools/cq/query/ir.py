@@ -29,7 +29,6 @@ FieldType = Literal[
     "callers",
     "callees",
     "evidence",
-    "hazards",
     "imports",
     "decorators",
     "decorated_functions",

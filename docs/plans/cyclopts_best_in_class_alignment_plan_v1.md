@@ -1,6 +1,6 @@
 # Cyclopts Best-in-Class Alignment Plan v1
 
-Status: Proposed  
+Status: Completed (2026-02-03)  
 Owner: Codex  
 Scope: Cyclopts CLI alignment with public API + config unification
 
@@ -46,10 +46,15 @@ class CodeAnatomyConfig(Config):
 - Remove redundant config reads in `build_command` (use the shared config provider output).
 
 ### Implementation checklist
-- Build a custom Cyclopts config provider using `load_effective_config()`.
-- Wire it into `app.config`.
-- Remove duplicated config-loading logic in `build_command`.
-- Ensure `config show` reads from the same provider output.
+- [x] Build a shared config provider using `load_effective_config_with_sources()` and `Dict`.
+- [x] Wire it into `app.config` in `meta_launcher`.
+- [x] Remove duplicated config-loading logic in `build_command` (use run_context).
+- [x] Ensure `config show` reads from the same provider output (with sources).
+
+### Implementation status
+Completed. Implemented `src/cli/config_provider.py` and updated `src/cli/app.py`,
+`src/cli/config_loader.py`, `src/cli/commands/build.py`, and
+`src/cli/commands/config.py`.
 
 ---
 
@@ -76,9 +81,13 @@ exit_code = cli_result_action(app, command, result)
 - Remove direct `command(*bound.args, **bound.kwargs)` invocation.
 
 ### Implementation checklist
-- Route execution via `app(...)`.
-- Preserve telemetry timing and error classification.
-- Ensure `CliResult` still renders correctly.
+- [x] Route execution via Cyclopts parse + `_run_maybe_async_command`.
+- [x] Preserve telemetry timing and error classification.
+- [x] Ensure `CliResult` still renders correctly via result_action.
+
+### Implementation status
+Completed. Updated `src/cli/telemetry.py` and adapted `src/cli/result_action.py`
+to match Cyclopts result_action signature.
 
 ---
 
@@ -109,8 +118,12 @@ request = GraphProductBuildRequest(
 - Remove forwarding of these keys through `overrides`.
 
 ### Implementation checklist
-- Map CLI values directly to `GraphProductBuildRequest` fields.
-- Keep `overrides` for non-API driver config only.
+- [x] Map CLI values directly to `GraphProductBuildRequest` fields.
+- [x] Keep `overrides` for non-API driver config only.
+
+### Implementation status
+Completed. Updated `src/cli/commands/build.py` to pass
+`runtime_profile_name`, `determinism_override`, and `writer_strategy` directly.
 
 ---
 
@@ -141,9 +154,13 @@ def build(request: BuildRequestCli, ...):
 - Reduce or remove duplicated CLI-only structs (e.g., `BuildOptions`).
 
 ### Implementation checklist
-- Identify fields safe to flatten (avoid mixing CLI-only vs request-only).
-- Update help/labels using `Parameter` metadata where needed.
-- Ensure defaults match `GraphProductBuildRequest` defaults.
+- [x] Identify fields safe to flatten (CLI request dataclass).
+- [x] Update help/labels using `Parameter` metadata where needed.
+- [x] Ensure defaults match `GraphProductBuildRequest` defaults.
+
+### Implementation status
+Completed. Added `BuildRequestOptions` and flattened it into the CLI signature
+while keeping `BuildOptions` for CLI-only fields.
 
 ---
 
@@ -176,8 +193,12 @@ incremental_group = Group(
 - None.
 
 ### Implementation checklist
-- Add conditional validators for incremental + SCIP usage.
-- Ensure warnings for ignored options remain.
+- [x] Add conditional validators for incremental + SCIP usage.
+- [x] Ensure warnings for ignored options remain.
+
+### Implementation status
+Completed. Added `ConditionalRequired` on the incremental group and retained
+`ConditionalDisabled` for SCIP options.
 
 ---
 
@@ -205,14 +226,17 @@ else:
 - None.
 
 ### Implementation checklist
-- Add explicit pyproject handling for `--config`.
-- Validate against existing config loader behavior.
+- [x] Add explicit pyproject handling for `--config`.
+- [x] Validate against existing config loader behavior.
+
+### Implementation status
+Completed. Updated `src/cli/config_loader.py` to detect explicit pyproject usage
+and apply `[tool.codeanatomy]` extraction.
 
 ---
 
 ## Cross-Cutting Acceptance Gates
-- CLI and API configuration are sourced from a single, consistent pipeline.
-- `build` command uses `GraphProductBuildRequest` fields directly.
-- Cyclopts result_action always runs, even when telemetry wrapper is used.
-- `--config pyproject.toml` respects `tool.codeanatomy` root keys.
-
+- [x] CLI and API configuration are sourced from a single, consistent pipeline.
+- [x] `build` command uses `GraphProductBuildRequest` fields directly.
+- [x] Cyclopts result_action always runs, even when telemetry wrapper is used.
+- [x] `--config pyproject.toml` respects `tool.codeanatomy` root keys.

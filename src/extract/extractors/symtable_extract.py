@@ -13,8 +13,8 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.coordination.line_offsets import LineOffsets
+from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -596,7 +596,7 @@ def _build_scope_blocks(
     return blocks
 
 
-def _scope_block_payload(
+def _scope_block_payload(  # noqa: PLR0913
     scope: Mapping[str, object],
     *,
     table_id: int,
@@ -658,7 +658,7 @@ def _span_hint_from_line(
             end_line0=None,
             end_col=None,
             end_exclusive=True,
-            col_unit="utf32",
+            col_unit="byte",
             byte_start=byte_start,
             byte_len=None,
         )

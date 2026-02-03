@@ -12,14 +12,18 @@
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
+        "data": {
+          "calls_within": 0,
+          "name": "Toolchain"
+        },
         "kind": "class",
-        "name": "Toolchain"
+        "score": {
+          "confidence_bucket": "high",
+          "confidence_score": 0.95,
+          "evidence_kind": "resolved_ast",
+          "impact_bucket": "low",
+          "impact_score": 0.0275
+        }
       },
       "message": "class: Toolchain",
       "severity": "info"
@@ -34,14 +38,18 @@
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
+        "data": {
+          "calls_within": 0,
+          "name": "Toolchain"
+        },
         "kind": "class_bases",
-        "name": "Toolchain"
+        "score": {
+          "confidence_bucket": "high",
+          "confidence_score": 0.95,
+          "evidence_kind": "resolved_ast",
+          "impact_bucket": "low",
+          "impact_score": 0.0275
+        }
       },
       "message": "class_bases: Toolchain",
       "severity": "info"
@@ -56,14 +64,18 @@
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
+        "data": {
+          "calls_within": 0,
+          "name": "Toolchain"
+        },
         "kind": "class_typeparams",
-        "name": "Toolchain"
+        "score": {
+          "confidence_bucket": "high",
+          "confidence_score": 0.95,
+          "evidence_kind": "resolved_ast",
+          "impact_bucket": "low",
+          "impact_score": 0.0275
+        }
       },
       "message": "class_typeparams: Toolchain",
       "severity": "info"
@@ -78,14 +90,18 @@
       },
       "category": "definition",
       "details": {
-        "calls_within": 0,
-        "confidence_bucket": "high",
-        "confidence_score": 0.95,
-        "evidence_kind": "resolved_ast",
-        "impact_bucket": "low",
-        "impact_score": 0.0275,
+        "data": {
+          "calls_within": 0,
+          "name": "Toolchain"
+        },
         "kind": "class_typeparams_bases",
-        "name": "Toolchain"
+        "score": {
+          "confidence_bucket": "high",
+          "confidence_score": 0.95,
+          "evidence_kind": "resolved_ast",
+          "impact_bucket": "low",
+          "impact_score": 0.0275
+        }
       },
       "message": "class_typeparams_bases: Toolchain",
       "severity": "info"

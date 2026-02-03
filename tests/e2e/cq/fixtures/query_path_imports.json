@@ -12,9 +12,11 @@
       },
       "category": "from_import",
       "details": {
-        "kind": "from_import",
-        "name": "Path",
-        "text": "from pathlib import Path"
+        "data": {
+          "name": "Path",
+          "text": "from pathlib import Path"
+        },
+        "kind": "from_import"
       },
       "message": "from_import: Path",
       "severity": "info"

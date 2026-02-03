@@ -48,6 +48,7 @@ from extract.scanning.scope_manifest import (
 from extract.scanning.scope_rules import ScopeRuleSet, build_scope_rules, explain_scope_paths
 from extract.session import ExtractSession
 from serde_msgspec import to_builtins
+from utils.file_io import detect_encoding
 from utils.hashing import hash_file_sha256
 
 if TYPE_CHECKING:
@@ -65,6 +66,8 @@ class RepoScanOptions(RepoOptions):
         default_factory=default_repo_scope_options
     )
     include_sha256: bool = True
+    include_encoding: bool = True
+    encoding_sample_bytes: int = 8192
     max_file_bytes: int | None = None
     max_files: int | None = 200_000
     diff_base_ref: str | None = None
@@ -116,6 +119,17 @@ def repo_files_query(repo_id: str | None) -> QuerySpec:
 
 def _sha256_path(path: Path) -> str:
     return hash_file_sha256(path)
+
+
+def _detect_file_encoding(path: Path, *, sample_bytes: int, default: str = "utf-8") -> str | None:
+    if sample_bytes <= 0:
+        return default
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(sample_bytes)
+    except OSError:
+        return None
+    return detect_encoding(data, default=default)
 
 
 def _diff_filter_paths(
@@ -327,6 +341,12 @@ def _build_repo_file_row(
             file_sha256 = _sha256_path(abs_path)
         except OSError:
             return None
+    encoding: str | None = None
+    if options.include_encoding:
+        encoding = _detect_file_encoding(
+            abs_path,
+            sample_bytes=options.encoding_sample_bytes,
+        )
     return {
         "file_id": None,
         "path": rel_posix,
@@ -334,6 +354,7 @@ def _build_repo_file_row(
         "size_bytes": size_bytes,
         "mtime_ns": mtime_ns,
         "file_sha256": file_sha256,
+        "encoding": encoding,
     }
 
 

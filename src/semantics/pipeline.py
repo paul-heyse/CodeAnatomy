@@ -505,6 +505,23 @@ def _scip_norm_builder(
     return _builder
 
 
+def _bytecode_line_table_builder(
+    line_table: str,
+    *,
+    line_index_table: str,
+) -> DataFrameBuilder:
+    def _builder(inner_ctx: SessionContext) -> DataFrame:
+        from semantics.bytecode_line_table import py_bc_line_table_with_bytes
+
+        return py_bc_line_table_with_bytes(
+            inner_ctx,
+            line_table=line_table,
+            line_index_table=line_index_table,
+        )
+
+    return _builder
+
+
 def _ordered_semantic_specs(
     specs: Sequence[SemanticSpecIndex],
 ) -> tuple[SemanticSpecIndex, ...]:
@@ -814,6 +831,43 @@ def _builder_for_scip_normalize_spec(
     )
 
 
+def _builder_for_bytecode_line_index_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    line_table = spec.inputs[0] if spec.inputs else "py_bc_line_table"
+    line_index = spec.inputs[1] if len(spec.inputs) > 1 else "file_line_index_v1"
+    return _bytecode_line_table_builder(
+        _input_table(context.input_mapping, line_table),
+        line_index_table=_input_table(context.input_mapping, line_index),
+    )
+
+
+def _builder_for_span_unnest_spec(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    _ = context
+    from semantics.span_unnest import (
+        ast_span_unnest_df_builder,
+        py_bc_instruction_span_unnest_df_builder,
+        symtable_span_unnest_df_builder,
+        ts_span_unnest_df_builder,
+    )
+
+    builders: dict[str, DataFrameBuilder] = {
+        "ast_span_unnest": ast_span_unnest_df_builder,
+        "ts_span_unnest": ts_span_unnest_df_builder,
+        "symtable_span_unnest": symtable_span_unnest_df_builder,
+        "py_bc_instruction_span_unnest": py_bc_instruction_span_unnest_df_builder,
+    }
+    builder = builders.get(spec.name)
+    if builder is None:
+        msg = f"Missing span-unnest builder for output {spec.name!r}."
+        raise KeyError(msg)
+    return builder
+
+
 def _builder_for_symtable_spec(
     spec: SemanticSpecIndex,
     context: _SemanticSpecContext,
@@ -949,6 +1003,8 @@ def _builder_for_semantic_spec(
     handlers: dict[str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]] = {
         "normalize": _builder_for_normalize_spec,
         "scip_normalize": _builder_for_scip_normalize_spec,
+        "bytecode_line_index": _builder_for_bytecode_line_index_spec,
+        "span_unnest": _builder_for_span_unnest_spec,
         "symtable": _builder_for_symtable_spec,
         "join_group": _builder_for_join_group_spec,
         "relate": _builder_for_relate_spec,

@@ -874,7 +874,7 @@ SYM_FUNCTION_PARTITIONS_T = pa.struct(
     ]
 )
 
-SYMTABLE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="utf32")
+SYMTABLE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="byte")
 
 SYM_BLOCK_T = pa.struct(
     [
@@ -908,7 +908,7 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
 )
 
 
-BYTECODE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="utf32")
+BYTECODE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="byte")
 
 BYTECODE_LINE_META: dict[bytes, bytes] = {b"line_base": b"1"}
 
@@ -2131,6 +2131,7 @@ AST_OPTIONAL_VIEW_NAMES: tuple[str, ...] = (
     "ast_call_attrs",
     "ast_edge_attrs",
     "ast_span_metadata",
+    "ast_span_unnest",
 )
 AST_ATTRS_VIEW_NAMES: tuple[str, ...] = (
     "ast_node_attrs",
@@ -2152,6 +2153,7 @@ TREE_SITTER_VIEW_NAMES: tuple[str, ...] = (
     "ts_docstrings",
     "ts_stats",
     "ts_span_metadata",
+    "ts_span_unnest",
     "ts_ast_defs_check",
     "ts_ast_calls_check",
     "ts_ast_imports_check",
@@ -2187,18 +2189,21 @@ SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
     "symtable_function_partitions",
     "symtable_class_methods",
     "symtable_symbol_attrs",
+    "symtable_span_unnest",
 )
 
 BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "py_bc_code_units",
     "py_bc_consts",
     "py_bc_line_table",
+    "py_bc_line_table_with_bytes",
     "py_bc_instructions",
     "py_bc_instruction_attrs",
     "py_bc_instruction_attr_keys",
     "py_bc_instruction_attr_values",
     "py_bc_instruction_spans",
     "py_bc_instruction_span_fields",
+    "py_bc_instruction_span_unnest",
     "py_bc_cache_entries",
     "py_bc_metadata",
     "bytecode_exception_table",

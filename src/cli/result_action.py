@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from cli.exit_codes import ExitCode
 
-if TYPE_CHECKING:
-    from cyclopts import App
 
-
-def cli_result_action(
-    app: App,
-    cmd: object,
-    result: Any,
-) -> int:
+def cli_result_action(result: Any) -> int:
     """Handle command results and convert to exit codes.
 
     This function is registered as the ``result_action`` for the CLI app.
@@ -22,10 +15,6 @@ def cli_result_action(
 
     Parameters
     ----------
-    app
-        The Cyclopts application instance.
-    cmd
-        The resolved command that was executed.
     result
         The return value from the command function.
 
@@ -34,8 +23,6 @@ def cli_result_action(
     int
         Exit code for the process.
     """
-    _ = app  # Reserved for future use
-    _ = cmd  # Reserved for future use
     from rich.console import Console
 
     console = Console()

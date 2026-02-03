@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-from dataclasses import dataclass, field
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -85,8 +85,7 @@ _CYCLE_LIMIT = 10
 _EXTERNAL_LIMIT = 30
 _REL_IMPORT_LIMIT = 20
 
-@dataclass
-class ImportInfo:
+class ImportInfo(msgspec.Struct):
     """Information about an import statement.
 
     Parameters
@@ -112,15 +111,14 @@ class ImportInfo:
     file: str
     line: int
     module: str
-    names: list[str] = field(default_factory=list)
+    names: list[str] = msgspec.field(default_factory=list)
     is_from: bool = False
     is_relative: bool = False
     level: int = 0
     alias: str | None = None
 
 
-@dataclass
-class ModuleDeps:
+class ModuleDeps(msgspec.Struct):
     """Dependencies for a single module.
 
     Parameters
@@ -134,12 +132,11 @@ class ModuleDeps:
     """
 
     file: str
-    imports: list[ImportInfo] = field(default_factory=list)
-    depends_on: set[str] = field(default_factory=set)
+    imports: list[ImportInfo] = msgspec.field(default_factory=list)
+    depends_on: set[str] = msgspec.field(default_factory=set)
 
 
-@dataclass(frozen=True)
-class ImportRequest:
+class ImportRequest(msgspec.Struct, frozen=True):
     """Inputs required for the imports macro."""
 
     tc: Toolchain

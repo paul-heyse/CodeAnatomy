@@ -75,21 +75,6 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
                         edges.append(edge)
                         lines.append(f'    {caller_id} -> {callee_id};')
 
-    # Process hazard sections
-    for section in result.sections:
-        if section.title.lower() == "hazards":
-            for finding in section.findings:
-                hazard_kind = finding.details.get("kind", "hazard")
-                hazard_id = _sanitize_dot_id(f"hazard_{hazard_kind}_{id(finding)}")
-
-                if hazard_id not in nodes:
-                    nodes.add(hazard_id)
-                    label = _escape_dot_string(finding.message[:30])
-                    lines.append(
-                        f'    {hazard_id} [label="{label}", shape=diamond, '
-                        f'color=red, style=filled, fillcolor=mistyrose];'
-                    )
-
     lines.append("}")
 
     return "\n".join(lines)

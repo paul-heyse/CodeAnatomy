@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, mk_runmeta, ms
-from tools.cq.macros.async_hazards import AsyncHazardsRequest, cmd_async_hazards
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.exceptions import cmd_exceptions
@@ -335,14 +334,6 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
 
 def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
-    results.append(
-        BundleStepResult(
-            result=cmd_async_hazards(
-                AsyncHazardsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv, profiles="")
-            )
-        )
-    )
-    results.append(BundleStepResult(result=_run_hazard_query(ctx)))
     function_filter = ctx.target.value if ctx.target.kind in {"function", "method"} else None
     results.append(
         BundleStepResult(
@@ -460,26 +451,6 @@ def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
         )
     )
     return results
-
-
-def _run_hazard_query(ctx: BundleContext) -> CqResult:
-    if ctx.target.kind in {"function", "method"}:
-        query = parse_query(f"entity=function name={ctx.target.value} fields=hazards")
-    else:
-        query = parse_query("entity=function fields=hazards")
-    if ctx.in_dir:
-        query = query.with_scope(Scope(in_dir=ctx.in_dir))
-    plan = compile_query(query)
-    return execute_plan(
-        plan,
-        query,
-        ctx.tc,
-        ctx.root,
-        argv=ctx.argv,
-        index_cache=ctx.index_cache,
-        query_cache=ctx.query_cache,
-        use_cache=ctx.use_cache,
-    )
 
 
 def _skip_result(ctx: BundleContext, macro: str, reason: str) -> CqResult:

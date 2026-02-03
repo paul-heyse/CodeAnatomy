@@ -32,8 +32,8 @@ def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
         path = Path(config_file)
         if not path.exists():
             return {}
-        raw = _read_toml(path)
-        root = _decode_root_config(raw, location=str(path))
+        raw, location = _resolve_explicit_payload(path)
+        root = _decode_root_config(raw, location=location)
         patched = _apply_root_patch(root, _env_patch())
         return normalize_config_contents(_config_to_mapping(patched))
 
@@ -183,9 +183,9 @@ def _load_config_values(values: dict[str, ConfigValue], config_file: str | None)
 def _load_explicit_config(values: dict[str, ConfigValue], path: Path) -> None:
     if not path.exists():
         return
-    raw = _read_toml(path)
-    root = _decode_root_config(raw, location=str(path))
-    _apply_config_values(values, root, location=str(path), skip_existing=False)
+    raw, location = _resolve_explicit_payload(path)
+    root = _decode_root_config(raw, location=location)
+    _apply_config_values(values, root, location=location, skip_existing=False)
 
 
 def _load_default_configs(values: dict[str, ConfigValue]) -> None:
@@ -364,6 +364,17 @@ def _config_to_mapping(config: RootConfig) -> dict[str, JsonValue]:
     return cast("dict[str, JsonValue]", payload)
 
 
+def _resolve_explicit_payload(path: Path) -> tuple[Mapping[str, JsonValue], str]:
+    raw = _read_toml(path)
+    if _is_pyproject_config(path):
+        nested = _extract_tool_config(raw)
+        if nested is None:
+            msg = f"Config validation failed for {path}: missing [tool.codeanatomy] section."
+            raise ValueError(msg)
+        return nested, f"{path}:tool.codeanatomy"
+    return raw, str(path)
+
+
 def _extract_tool_config(raw: Mapping[str, JsonValue]) -> dict[str, JsonValue] | None:
     tool_section = raw.get("tool")
     if not isinstance(tool_section, dict):
@@ -394,6 +405,10 @@ def _apply_root_patch(base: RootConfig, patch: RootConfigPatch) -> RootConfig:
             continue
         base_payload[field] = value
     return msgspec.convert(base_payload, type=RootConfig, strict=True)
+
+
+def _is_pyproject_config(path: Path) -> bool:
+    return path.name == "pyproject.toml"
 
 
 __all__ = [

@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import msgspec
-
 from tools.cq.cache.diskcache_profile import (
     DiskCacheProfile,
     cache_for_kind,
@@ -87,9 +85,7 @@ class QueryCache:
             if value_type == "cq_result":
                 return loads_msgpack_result(payload)
             return loads_msgpack(payload)
-        if isinstance(payload, dict) and value_type == "cq_result":
-            return msgspec.convert(payload, type=CqResult)
-        return payload
+        return None
 
     def set(self, key: str, value: Any, file_paths: Sequence[Path]) -> None:
         file_hash = _compute_paths_hash(file_paths, self._fingerprints)
@@ -184,6 +180,12 @@ class QueryCache:
         size_bytes = 0
         if isinstance(volume, dict):
             size_bytes = int(volume.get("size") or 0)
+        elif isinstance(volume, (int, float)):
+            size_bytes = int(volume)
+        if size_bytes == 0:
+            size = stats.get("size")
+            if isinstance(size, (int, float)):
+                size_bytes = int(size)
         return CacheStats(
             total_entries=total_entries,
             unique_files=len(unique_files),

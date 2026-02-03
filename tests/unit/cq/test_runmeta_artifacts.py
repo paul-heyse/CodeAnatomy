@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import msgspec
-
 from tools.cq.core.artifacts import save_artifact_json
 from tools.cq.core.schema import CqResult, RunMeta, mk_runmeta, ms
 

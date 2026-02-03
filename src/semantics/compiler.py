@@ -491,8 +491,12 @@ class SemanticCompiler:
             if spec.path_col != "path":
                 df = df.with_column("path", col(spec.path_col))
 
-            df = df.with_column(spec.primary_span.canonical_start, col(spec.primary_span.start_col))
-            df = df.with_column(spec.primary_span.canonical_end, col(spec.primary_span.end_col))
+            start_expr = col(spec.primary_span.start_col)
+            end_expr = col(spec.primary_span.end_col)
+            if spec.primary_span.end_col.endswith("byte_len"):
+                end_expr = start_expr + end_expr
+            df = df.with_column(spec.primary_span.canonical_start, start_expr)
+            df = df.with_column(spec.primary_span.canonical_end, end_expr)
             df = df.with_column(
                 spec.primary_span.canonical_span,
                 span_make(
@@ -544,7 +548,9 @@ class SemanticCompiler:
                 fk_expr = self._null_guard(fk_expr, columns=tuple(guard_cols))
                 df = df.with_column(foreign_key.out_col, fk_expr)
 
-            return df
+            from semantics.span_normalize import drop_line_columns
+
+            return drop_line_columns(df)
 
     def normalize(self, table_name: str, *, prefix: str) -> DataFrame:
         """Apply normalization rules to an evidence table.
@@ -614,7 +620,10 @@ class SemanticCompiler:
                 df = df.with_column("bstart", sem.span_start_col())
             if sem.span_end_name() != "bend":
                 df = df.with_column("bend", sem.span_end_col())
-            return df.with_column("span", sem.span_expr())
+            df = df.with_column("span", sem.span_expr())
+            from semantics.span_normalize import drop_line_columns
+
+            return drop_line_columns(df)
 
     # -------------------------------------------------------------------------
     # Rule 3: Text normalization

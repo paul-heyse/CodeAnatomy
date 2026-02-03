@@ -322,6 +322,8 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "repo_id": None,
             "scope_policy": {},
             "include_sha256": True,
+            "include_encoding": True,
+            "encoding_sample_bytes": 8192,
             "max_file_bytes": None,
             "max_files": 200_000,
             "diff_base_ref": None,
@@ -425,7 +427,7 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
         {
             **base,
             "name": "repo_files_v1",
-            "fields": ["abs_path", "size_bytes", "mtime_ns"],
+            "fields": ["abs_path", "size_bytes", "mtime_ns", "encoding"],
             "derived": _derived_specs(("file_id", "repo_file_id", "hash", None)),
             "row_fields": None,
             "row_extras": None,

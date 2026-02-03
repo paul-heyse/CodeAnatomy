@@ -22,8 +22,8 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.coordination.line_offsets import LineOffsets
+from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -343,7 +343,7 @@ def _instruction_entry(
                 end_line0=end_line0,
                 end_col=int(end_col) if isinstance(end_col, int) else None,
                 end_exclusive=None,
-                col_unit=None,
+                col_unit="byte",
                 byte_start=byte_start,
                 byte_len=byte_len,
             )
@@ -1438,8 +1438,7 @@ def _code_objects_from_buffers(
 ) -> list[dict[str, object]]:
     groups = _group_code_unit_buffers(buffers)
     return [
-        _code_object_entry(row, groups, line_offsets=line_offsets)
-        for row in buffers.code_unit_rows
+        _code_object_entry(row, groups, line_offsets=line_offsets) for row in buffers.code_unit_rows
     ]
 
 

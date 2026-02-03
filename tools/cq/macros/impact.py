@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import suppress
-from dataclasses import dataclass, field
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,8 +41,7 @@ _SECTION_SITE_LIMIT = 50
 _CALLER_LIMIT = 30
 
 
-@dataclass
-class TaintedSite:
+class TaintedSite(msgspec.Struct):
     """A location where tainted data flows.
 
     Parameters
@@ -69,8 +68,7 @@ class TaintedSite:
     depth: int = 0
 
 
-@dataclass
-class TaintState:
+class TaintState(msgspec.Struct):
     """Taint analysis state.
 
     Parameters
@@ -83,13 +81,12 @@ class TaintState:
         Visited function keys to prevent cycles.
     """
 
-    tainted_vars: set[str] = field(default_factory=set)
-    tainted_sites: list[TaintedSite] = field(default_factory=list)
-    visited: set[str] = field(default_factory=set)
+    tainted_vars: set[str] = msgspec.field(default_factory=set)
+    tainted_sites: list[TaintedSite] = msgspec.field(default_factory=list)
+    visited: set[str] = msgspec.field(default_factory=set)
 
 
-@dataclass(frozen=True)
-class ImpactRequest:
+class ImpactRequest(msgspec.Struct, frozen=True):
     """Inputs required for the impact macro."""
 
     tc: Toolchain
@@ -414,8 +411,7 @@ def _find_function_node(source: str, fn: FnDecl) -> ast.FunctionDef | ast.AsyncF
     return _find_class_method(tree, fn) or _find_top_level_function(tree, fn)
 
 
-@dataclass(frozen=True)
-class _AnalyzeContext:
+class _AnalyzeContext(msgspec.Struct, frozen=True):
     index: DefIndex
     root: Path
     state: TaintState

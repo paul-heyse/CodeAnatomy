@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dis
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+import msgspec
 from pathlib import Path
 from types import CodeType
 from typing import TYPE_CHECKING
@@ -49,8 +49,7 @@ _ATTR_OPS: set[str] = {"LOAD_ATTR", "STORE_ATTR", "DELETE_ATTR"}
 _IGNORED_NUMERIC_CONSTS: set[object] = {0, 1, -1, None}
 
 
-@dataclass
-class BytecodeSurface:
+class BytecodeSurface(msgspec.Struct):
     """Bytecode analysis for a code object.
 
     Parameters
@@ -74,14 +73,13 @@ class BytecodeSurface:
     qualname: str
     file: str
     line: int
-    globals: list[str] = field(default_factory=list)
-    attrs: list[str] = field(default_factory=list)
-    constants: list[str] = field(default_factory=list)
-    opcodes: dict[str, int] = field(default_factory=dict)
+    globals: list[str] = msgspec.field(default_factory=list)
+    attrs: list[str] = msgspec.field(default_factory=list)
+    constants: list[str] = msgspec.field(default_factory=list)
+    opcodes: dict[str, int] = msgspec.field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class BytecodeSurfaceRequest:
+class BytecodeSurfaceRequest(msgspec.Struct, frozen=True):
     """Inputs required for bytecode surface analysis."""
 
     tc: Toolchain

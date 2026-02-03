@@ -40,14 +40,14 @@ def q(
                        Use KIND(depth=N) to set depth (default: 1)
         in=DIR         Search only in directory
         exclude=DIRS   Exclude directories (comma-separated)
-        fields=FIELDS  Output fields (def,loc,callers,callees,evidence,hazards)
+        fields=FIELDS  Output fields (def,loc,callers,callees,evidence,imports)
         limit=N        Maximum results
         explain=true   Include query plan explanation
 
     Examples:
         cq q "entity=function name=build_graph_product"
         cq q "entity=function name=detect expand=callers(depth=2) in=tools/cq/"
-        cq q "entity=class in=src/relspec/ fields=def,hazards"
+        cq q "entity=class in=src/relspec/ fields=def,imports"
     """
     from tools.cq.cli_app.context import CliResult, FilterConfig
     from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile

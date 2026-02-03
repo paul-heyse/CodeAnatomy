@@ -11,7 +11,7 @@ from cyclopts import App, Parameter
 from cyclopts.config import Toml
 
 from cli.commands.version import get_version
-from cli.config_loader import load_effective_config, normalize_config_contents
+from cli.config_provider import build_cyclopts_config, resolve_config
 from cli.context import RunContext
 from cli.groups import admin_group, observability_group, session_group
 from cli.result_action import cli_result_action
@@ -179,11 +179,11 @@ def meta_launcher(
         if not config_path.exists():
             msg = f"Config file not found: {session.config_file!r}."
             raise ValueError(msg)
-        app.config = [Toml(session.config_file, must_exist=True)]
 
-    config_contents = load_effective_config(session.config_file)
-    config_contents = normalize_config_contents(config_contents)
+    config_resolution = resolve_config(session.config_file)
+    config_contents = dict(config_resolution.contents)
     validate_config_mutual_exclusion(config_contents)
+    app.config = build_cyclopts_config(config_contents)
 
     # Build OTel options from CLI parameters
     otel_options: OtelBootstrapOptions | None = None
@@ -208,6 +208,7 @@ def meta_launcher(
         run_id=effective_run_id,
         log_level=session.log_level,
         config_contents=config_contents,
+        config_sources=config_resolution.sources,
         otel_options=otel_options,
     )
 

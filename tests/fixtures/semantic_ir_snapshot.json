@@ -193,7 +193,7 @@
       "name": "cpg_edges_by_dst_v1"
     }
   ],
-  "ir_hash": "3316141b1010e781bf53160a84a68e77439b78021d26e6415f1e2ccf128dc40c",
+  "ir_hash": "9b82aee0131cf6657bab876588256d9bc34a2c9aac124873ccae3ee469d21dcb",
   "join_groups": [],
   "model_hash": "c7a0c84d96a38cf5e72dd138bb32a6a922f93456b33e66544c41bf4b5e2123ad",
   "views": [
@@ -276,6 +276,17 @@
       "name": "scip_occurrences_norm_v1",
       "outputs": [
         "scip_occurrences_norm_v1"
+      ]
+    },
+    {
+      "inputs": [
+        "py_bc_line_table",
+        "file_line_index_v1"
+      ],
+      "kind": "bytecode_line_index",
+      "name": "py_bc_line_table_with_bytes",
+      "outputs": [
+        "py_bc_line_table_with_bytes"
       ]
     },
     {

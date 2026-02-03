@@ -1,7 +1,7 @@
 """Analysis commands for cq CLI.
 
 This module contains analysis commands: impact, calls, imports, exceptions,
-sig_impact, side_effects, scopes, async_hazards, bytecode_surface.
+sig_impact, side_effects, scopes, bytecode_surface.
 """
 
 from __future__ import annotations
@@ -232,37 +232,6 @@ def scopes(
         target=target,
     )
     result = cmd_scopes(request)
-
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
-
-
-def async_hazards(
-    *,
-    profiles: Annotated[str, Parameter(help="Additional blocking patterns (comma-separated)")] = "",
-    ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
-) -> CliResult:
-    """Find blocking calls in async functions."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
-    from tools.cq.macros.async_hazards import AsyncHazardsRequest, cmd_async_hazards
-
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
-
-    request = AsyncHazardsRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        profiles=profiles,
-    )
-    result = cmd_async_hazards(request)
 
     filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
     return CliResult(result=result, context=ctx, filters=filters)

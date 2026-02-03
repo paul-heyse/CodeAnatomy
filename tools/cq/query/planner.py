@@ -427,9 +427,6 @@ def _determine_record_types(query: Query) -> set[str]:
         record_types.add("call")
     if "imports" in query.fields:
         record_types.add("import")
-    if "hazards" in query.fields:
-        record_types.add("call")
-        record_types.add("assign_ctor")
 
     return record_types
 

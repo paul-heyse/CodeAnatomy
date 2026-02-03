@@ -34,6 +34,14 @@ Build the Code Property Graph for a repository.
 │                                          plan_parallel_remote. [choices: deterministic-serial, plan-parallel,        │
 │                                          plan-parallel-remote] [env var: CODEANATOMY_EXECUTION_MODE] [default:       │
 │                                          plan-parallel]                                                              │
+│ DETERMINISM-TIER --determinism-tier      Determinism level: canonical/tier2, stable_set/tier1/stable,                │
+│                                          best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,          │
+│                                          stable_set, tier0, fast, best_effort] [env var:                             │
+│                                          CODEANATOMY_DETERMINISM_TIER] [default: None]                               │
+│ RUNTIME-PROFILE --runtime-profile        Named runtime profile from configuration. [env var:                         │
+│                                          CODEANATOMY_RUNTIME_PROFILE] [default: None]                                │
+│ WRITER-STRATEGY --writer-strategy        Writer strategy for materialization. [choices: arrow, datafusion] [default: │
+│                                          None]                                                                       │
 │ EXECUTOR-KIND --executor-kind            Primary executor backend for parallel execution. [choices: threadpool,      │
 │                                          multiprocessing, dask, ray] [default: None]                                 │
 │ EXECUTOR-MAX-TASKS --executor-max-tasks  Maximum concurrent tasks for primary executor. [default: None]              │
@@ -43,14 +51,6 @@ Build the Code Property Graph for a repository.
 │   --executor-remote-max-tasks                                                                                        │
 │ EXECUTOR-COST-THRESHOLD                  Cost threshold for routing tasks to remote executor. [default: None]        │
 │   --executor-cost-threshold                                                                                          │
-│ DETERMINISM-TIER --determinism-tier      Determinism level: canonical/tier2, stable_set/tier1/stable,                │
-│                                          best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,          │
-│                                          stable_set, tier0, fast, best_effort] [env var:                             │
-│                                          CODEANATOMY_DETERMINISM_TIER] [default: None]                               │
-│ RUNTIME-PROFILE --runtime-profile        Named runtime profile from configuration. [env var:                         │
-│                                          CODEANATOMY_RUNTIME_PROFILE] [default: None]                                │
-│ WRITER-STRATEGY --writer-strategy        Writer strategy for materialization. [choices: arrow, datafusion] [default: │
-│                                          None]                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ SCIP Configuration ─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure SCIP semantic index extraction.                                                                            │

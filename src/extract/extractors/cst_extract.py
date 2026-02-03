@@ -443,15 +443,15 @@ def _matcher_counts(module: cst.Module, options: CstExtractOptions) -> dict[str,
     if not options.matcher_templates:
         return {}
     source = module.code
+
     def _prefilter(template: str) -> bool:
         if not source:
             return True
         if template in source:
             return True
         match = re.search(r"[A-Za-z_][A-Za-z0-9_]*", template)
-        if match and match.group(0) not in source:
-            return False
-        return True
+        return not (match and match.group(0) not in source)
+
     config = module.config_for_parsing
     counts: dict[str, str] = {}
     for template in options.matcher_templates:

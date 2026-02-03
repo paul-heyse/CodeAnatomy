@@ -5,7 +5,7 @@ Parses key=value query strings into Query IR objects.
 Example query strings:
     entity=function name=foo
     entity=function name=build expand=callers(depth=2) in=src/
-    entity=class in=src/relspec/ fields=def,hazards
+    entity=class in=src/relspec/ fields=def,imports
     pattern='def $F($$$)' in=src/
     entity=function inside='class Config' scope=closure
 """
@@ -533,7 +533,6 @@ def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
         "callers",
         "callees",
         "evidence",
-        "hazards",
         "imports",
         "decorators",
         "decorated_functions",

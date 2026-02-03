@@ -77,7 +77,6 @@ save_artifact = true
 | `exceptions` | Analyze exception handling | `/cq exceptions` |
 | `side-effects` | Detect import-time side effects | `/cq side-effects` |
 | `scopes` | Analyze closure captures | `/cq scopes path/to/file.py` |
-| `async-hazards` | Find blocking in async | `/cq async-hazards` |
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
 | `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
 | `report` | Target-scoped report bundles | `/cq report refactor-impact --target function:foo` |

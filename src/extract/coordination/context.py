@@ -293,7 +293,7 @@ def text_from_file_ctx(file_ctx: FileContext) -> str | None:
     data = bytes_from_file_ctx(file_ctx)
     if data is None:
         return None
-    _encoding, text = decode_bytes(data)
+    _encoding, text = decode_bytes(data, encoding=file_ctx.encoding)
     return text
 
 

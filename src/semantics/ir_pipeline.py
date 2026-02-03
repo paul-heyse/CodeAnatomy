@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 _KIND_ORDER: Mapping[str, int] = {
     "normalize": 0,
     "scip_normalize": 1,
+    "bytecode_line_index": 2,
+    "span_unnest": 2,
     "symtable": 2,
     "join_group": 3,
     "relate": 4,
@@ -568,6 +570,42 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
             kind="scip_normalize",
             inputs=("scip_occurrences", "file_line_index_v1"),
             outputs=(scip_norm,),
+        )
+    )
+    views.append(
+        SemanticIRView(
+            name="py_bc_line_table_with_bytes",
+            kind="bytecode_line_index",
+            inputs=("py_bc_line_table", "file_line_index_v1"),
+            outputs=("py_bc_line_table_with_bytes",),
+        )
+    )
+    views.extend(
+        (
+            SemanticIRView(
+                name="ast_span_unnest",
+                kind="span_unnest",
+                inputs=("ast_nodes",),
+                outputs=("ast_span_unnest",),
+            ),
+            SemanticIRView(
+                name="ts_span_unnest",
+                kind="span_unnest",
+                inputs=("ts_nodes",),
+                outputs=("ts_span_unnest",),
+            ),
+            SemanticIRView(
+                name="symtable_span_unnest",
+                kind="span_unnest",
+                inputs=("symtable_scopes",),
+                outputs=("symtable_span_unnest",),
+            ),
+            SemanticIRView(
+                name="py_bc_instruction_span_unnest",
+                kind="span_unnest",
+                inputs=("py_bc_instructions",),
+                outputs=("py_bc_instruction_span_unnest",),
+            ),
         )
     )
     views.extend(

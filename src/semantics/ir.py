@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 SemanticIRKind = Literal[
     "normalize",
     "scip_normalize",
+    "bytecode_line_index",
+    "span_unnest",
     "symtable",
     "diagnostic",
     "export",

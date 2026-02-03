@@ -12,8 +12,6 @@ from tools.cq.cache.diskcache_profile import (
     default_cq_diskcache_profile,
     diskcache_stats_snapshot,
 )
-import msgspec
-
 from tools.cq.cache.tag_index import TagIndex
 from tools.cq.core.serialization import dumps_msgpack, loads_msgpack
 from tools.cq.index.file_hash import compute_file_hash, compute_file_mtime
@@ -164,14 +162,6 @@ class IndexCache:
         if isinstance(payload, (bytes, bytearray, memoryview)):
             decoded = loads_msgpack(payload)
             return decoded if isinstance(decoded, list) else None
-        records_json = entry.get("records_json")
-        if isinstance(records_json, str):
-            try:
-                decoded = msgspec.json.decode(records_json.encode("utf-8"), type=list)
-            except Exception:
-                decoded = None
-            if isinstance(decoded, list):
-                return decoded
         return None
 
     def get_stats(self) -> CacheStats:
@@ -190,14 +180,6 @@ class IndexCache:
                 if isinstance(decoded, list):
                     total_records += len(decoded)
                 continue
-            records_json = entry.get("records_json")
-            if isinstance(records_json, str):
-                try:
-                    decoded = msgspec.json.decode(records_json.encode("utf-8"), type=list)
-                except Exception:
-                    decoded = None
-                if isinstance(decoded, list):
-                    total_records += len(decoded)
         stats = diskcache_stats_snapshot(self._cache)
         volume = stats.get("volume")
         size_bytes = 0

@@ -37,7 +37,7 @@ TYPE_PATTERNS: tuple[tuple[re.Pattern[str], ColumnType], ...] = (
     (re.compile(r"^(path|file_path|document_path)$"), ColumnType.PATH),
     (re.compile(r"^file_id$"), ColumnType.FILE_ID),
     (re.compile(r"^bstart$|_bstart$|^byte_start$|_byte_start$"), ColumnType.SPAN_START),
-    (re.compile(r"^bend$|_bend$|^byte_end$|_byte_end$"), ColumnType.SPAN_END),
+    (re.compile(r"^bend$|_bend$|^byte_end$|_byte_end$|^byte_len$|_byte_len$"), ColumnType.SPAN_END),
     (re.compile(r"_id$"), ColumnType.ENTITY_ID),  # After file_id
     (re.compile(r"^(symbol|qname|qualified_name)$"), ColumnType.SYMBOL),
     (re.compile(r"^name$|_name$|_text$"), ColumnType.TEXT),

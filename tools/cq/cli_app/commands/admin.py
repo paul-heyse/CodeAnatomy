@@ -6,6 +6,7 @@ This module contains the index and cache management commands.
 from __future__ import annotations
 
 import datetime
+import json
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -234,3 +235,38 @@ def cache(
         sys.stdout.write(f"  Unique files: {cache_stats.unique_files}\n")
         sys.stdout.write(f"  Cache size: {cache_stats.database_size_bytes:,} bytes\n")
         return 0
+
+
+def schema(
+    *,
+    kind: Annotated[
+        str,
+        Parameter(
+            name="--kind",
+            help="Schema kind: result, query, or components",
+        ),
+    ] = "result",
+    ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
+) -> int:
+    """Emit msgspec JSON Schema for CQ types."""
+    from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
+
+    if ctx is None:
+        msg = "Context not injected"
+        raise RuntimeError(msg)
+
+    kind_value = kind.strip().lower()
+    if kind_value == "result":
+        payload = cq_result_schema()
+    elif kind_value == "query":
+        payload = query_schema()
+    elif kind_value == "components":
+        schema_doc, components = cq_schema_components()
+        payload = {"schema": schema_doc, "components": components}
+    else:
+        msg = f"Unknown schema kind: {kind}"
+        raise ValueError(msg)
+
+    sys.stdout.write(json.dumps(payload, indent=2))
+    sys.stdout.write("\n")
+    return 0

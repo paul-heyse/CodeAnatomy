@@ -69,7 +69,11 @@ def show_config(
         Exit status code.
     """
     if with_sources:
-        config_with_sources = load_effective_config_with_sources(None)
+        config_with_sources = (
+            run_context.config_sources
+            if run_context and run_context.config_sources is not None
+            else load_effective_config_with_sources(None)
+        )
         payload = json.dumps(config_with_sources.to_display_dict(), indent=2, sort_keys=True)
         sys.stdout.write(payload + "\n")
         return 0

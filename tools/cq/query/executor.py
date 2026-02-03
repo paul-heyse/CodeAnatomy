@@ -892,11 +892,6 @@ def _build_query_cache_key(
     tc: Toolchain,
 ) -> str:
     """Build a stable cache key for a query execution."""
-    hazard_rules_hash: str | None = None
-    if "hazards" in query.fields:
-        from tools.cq.query.hazards import hazard_rules_hash
-
-        hazard_rules_hash = hazard_rules_hash()
     plan_signature = {
         "scope": msgspec.to_builtins(plan.scope),
         "sg_record_types": sorted(plan.sg_record_types),
@@ -911,7 +906,6 @@ def _build_query_cache_key(
         "plan": plan_signature,
         "root": str(root),
         "toolchain": tc.to_dict(),
-        "hazard_rules_hash": hazard_rules_hash,
         "cache_version": QUERY_CACHE_VERSION,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
@@ -996,15 +990,6 @@ def _process_def_query(
         imports_section = _build_imports_section(matching_defs, ctx.all_records)
         if imports_section.findings:
             result.sections.append(imports_section)
-
-    if "hazards" in query.fields:
-        hazards_section = _build_hazards_section(
-            matching_defs,
-            root,
-            scope_to_globs(query.scope),
-        )
-        if hazards_section.findings:
-            result.sections.append(hazards_section)
 
     _append_expander_sections(result, matching_defs, ctx, root, query)
 
@@ -1772,121 +1757,6 @@ def _build_bytecode_surface_section(
 
     return Section(
         title="Bytecode Surface",
-        findings=findings,
-    )
-
-
-def _build_hazards_section(
-    target_defs: list[SgRecord],
-    root: Path,
-    globs: list[str] | None,
-) -> Section:
-    """Build section showing potential hazards in target definitions using ast-grep-py."""
-    from tools.cq.query.hazards import HazardDetector
-
-    findings: list[Finding] = []
-    if not target_defs:
-        return Section(title="Hazards", findings=findings)
-
-    detector = HazardDetector()
-    scan_paths = [root / record.file for record in target_defs]
-
-    # Execute hazard detection using ast-grep-py
-    hazard_matches: list[dict] = []
-    for file_path in scan_paths:
-        try:
-            src = file_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-
-        sg_root = SgRoot(src, "python")
-        node = sg_root.root()
-        rel_path = _normalize_match_file(str(file_path), root)
-
-        for spec in detector.specs:
-            pattern = spec.pattern
-            if not pattern:
-                continue
-
-            matches = node.find_all(pattern=pattern)
-            for match in matches:
-                range_obj = match.range()
-                hazard_matches.append(
-                    {
-                        "ruleId": f"hazard_{spec.id}",
-                        "file": rel_path,
-                        "text": match.text(),
-                        "range": {
-                            "start": {
-                                "line": range_obj.start.line,
-                                "column": range_obj.start.column,
-                            },
-                            "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-                        },
-                    }
-                )
-
-    target_index = FileIntervalIndex.from_records(target_defs)
-    target_def_keys = {_record_key(record) for record in target_defs}
-
-    for data in hazard_matches:
-        rule_id = data.get("ruleId", "")
-        if not rule_id.startswith("hazard_"):
-            continue
-        hazard_id = rule_id.removeprefix("hazard_")
-        spec = detector.get_spec(hazard_id)
-        if spec is None:
-            continue
-        range_data = data.get("range", {})
-        start = range_data.get("start", {})
-        end = range_data.get("end", {})
-        file_path = _normalize_match_file(str(data.get("file", "")), root)
-        record = SgRecord(
-            record="call",
-            kind="hazard",
-            file=file_path,
-            start_line=start.get("line", 0) + 1,
-            start_col=start.get("column", 0),
-            end_line=end.get("line", 0) + 1,
-            end_col=end.get("column", 0),
-            text=data.get("text", ""),
-            rule_id=rule_id,
-        )
-        if spec.id == "bare_except":
-            if not re.match(r"except\\s*:\\s", record.text.lstrip()):
-                continue
-        if spec.id == "broad_except":
-            if not re.match(r"except\\s+Exception\\b", record.text.lstrip()):
-                continue
-        if spec.id == "except_pass":
-            if not re.search(r"except[^\\n]*:\\n\\s+pass\\b", record.text):
-                continue
-        containing = target_index.find_containing(record)
-        if containing is None or _record_key(containing) not in target_def_keys:
-            continue
-        anchor = Anchor(
-            file=file_path,
-            line=record.start_line,
-            col=record.start_col,
-            end_line=record.end_line,
-            end_col=record.end_col,
-        )
-        findings.append(
-            Finding(
-                category="hazard",
-                message=f"hazard: {spec.id} - {spec.message}",
-                anchor=anchor,
-                severity=spec.severity.value,
-                details={
-                    "kind": spec.id,
-                    "category": spec.category.value,
-                    "confidence_penalty": spec.confidence_penalty,
-                },
-            )
-        )
-
-    return Section(
-        title="Hazards",
         findings=findings,
     )
 

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from cyclopts import App, Group, Parameter
 from rich.console import Console
 
-from tools.cq.cli_app.config import build_config_chain
+from tools.cq.cli_app.config import build_config_chain, load_typed_config, load_typed_env_config
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 from tools.cq.cli_app.result import handle_result
 from tools.cq.cli_app.types import OutputFormat
@@ -101,9 +101,71 @@ def launcher(
     ] = None,
 ) -> int:
     """Global option handler and command dispatcher."""
+    cli_root = root
+    cli_verbose = verbose
+    cli_output_format = output_format
+    cli_artifact_dir = artifact_dir
+    cli_no_save_artifact = no_save_artifact
+    cli_cache_dir = cache_dir
+    cli_cache_query_ttl = cache_query_ttl
+    cli_cache_query_size = cache_query_size
+    cli_cache_index_size = cache_index_size
+    cli_cache_query_shards = cache_query_shards
+
     # Rebuild config if --config or --no-config specified
     if config or no_config:
         app.config = build_config_chain(config_file=config, no_config=no_config)
+
+    typed_config = load_typed_config(config_file=config, no_config=no_config)
+    typed_env = None if no_config else load_typed_env_config()
+    if typed_config is not None:
+        if cli_root is None and typed_config.root:
+            root = Path(typed_config.root)
+        if cli_verbose == 0 and typed_config.verbose is not None:
+            verbose = typed_config.verbose
+        if typed_config.output_format and cli_output_format == OutputFormat.md:
+            try:
+                output_format = OutputFormat(typed_config.output_format)
+            except ValueError:
+                pass
+        if cli_artifact_dir is None and typed_config.artifact_dir:
+            artifact_dir = Path(typed_config.artifact_dir)
+        if typed_config.save_artifact is not None and not cli_no_save_artifact:
+            no_save_artifact = not typed_config.save_artifact
+        if cli_cache_dir is None and typed_config.cache_dir:
+            cache_dir = Path(typed_config.cache_dir)
+        if cli_cache_query_ttl is None and typed_config.cache_query_ttl is not None:
+            cache_query_ttl = typed_config.cache_query_ttl
+        if cli_cache_query_size is None and typed_config.cache_query_size is not None:
+            cache_query_size = typed_config.cache_query_size
+        if cli_cache_index_size is None and typed_config.cache_index_size is not None:
+            cache_index_size = typed_config.cache_index_size
+        if cli_cache_query_shards is None and typed_config.cache_query_shards is not None:
+            cache_query_shards = typed_config.cache_query_shards
+    if typed_env is not None:
+        if cli_root is None and typed_env.root:
+            root = Path(typed_env.root)
+        if cli_verbose == 0 and typed_env.verbose is not None:
+            verbose = typed_env.verbose
+        if typed_env.output_format and cli_output_format == OutputFormat.md:
+            try:
+                output_format = OutputFormat(typed_env.output_format)
+            except ValueError:
+                pass
+        if cli_artifact_dir is None and typed_env.artifact_dir:
+            artifact_dir = Path(typed_env.artifact_dir)
+        if typed_env.save_artifact is not None and not cli_no_save_artifact:
+            no_save_artifact = not typed_env.save_artifact
+        if cli_cache_dir is None and typed_env.cache_dir:
+            cache_dir = Path(typed_env.cache_dir)
+        if cli_cache_query_ttl is None and typed_env.cache_query_ttl is not None:
+            cache_query_ttl = typed_env.cache_query_ttl
+        if cli_cache_query_size is None and typed_env.cache_query_size is not None:
+            cache_query_size = typed_env.cache_query_size
+        if cli_cache_index_size is None and typed_env.cache_index_size is not None:
+            cache_index_size = typed_env.cache_index_size
+        if cli_cache_query_shards is None and typed_env.cache_query_shards is not None:
+            cache_query_shards = typed_env.cache_query_shards
 
     from tools.cq.cli_app.params import DiskCacheOptions
 
@@ -154,7 +216,6 @@ def launcher(
 # ============================================================================
 
 from tools.cq.cli_app.commands.analysis import (
-    async_hazards,
     bytecode_surface,
     calls,
     exceptions,
@@ -172,7 +233,6 @@ app.command(exceptions, group=analysis_group)
 app.command(sig_impact, name="sig-impact", group=analysis_group)
 app.command(side_effects, name="side-effects", group=analysis_group)
 app.command(scopes, group=analysis_group)
-app.command(async_hazards, name="async-hazards", group=analysis_group)
 app.command(bytecode_surface, name="bytecode-surface", group=analysis_group)
 
 
@@ -198,7 +258,8 @@ app.command(report, group=analysis_group)
 # Register Admin Commands
 # ============================================================================
 
-from tools.cq.cli_app.commands.admin import cache, index
+from tools.cq.cli_app.commands.admin import cache, index, schema
 
 app.command(index, group=admin_group)
 app.command(cache, group=admin_group)
+app.command(schema, group=admin_group)

@@ -33,6 +33,8 @@ spec_for_table = _registry.spec_for_table
 SpecKind = Literal[
     "normalize",
     "scip_normalize",
+    "bytecode_line_index",
+    "span_unnest",
     "symtable",
     "diagnostic",
     "export",

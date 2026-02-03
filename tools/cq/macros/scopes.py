@@ -6,7 +6,7 @@ Reports free vars, cell vars, globals, nonlocals for refactor hazard detection.
 from __future__ import annotations
 
 import symtable
-from dataclasses import dataclass, field
+import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -36,8 +36,7 @@ _MAX_FILES_ANALYZED = 50
 _MAX_SCOPES_DISPLAY = 30
 
 
-@dataclass
-class ScopeInfo:
+class ScopeInfo(msgspec.Struct):
     """Scope information for a symbol table entry.
 
     Parameters
@@ -66,15 +65,14 @@ class ScopeInfo:
     kind: str
     file: str
     line: int
-    free_vars: list[str] = field(default_factory=list)
-    cell_vars: list[str] = field(default_factory=list)
-    globals_used: list[str] = field(default_factory=list)
-    nonlocals: list[str] = field(default_factory=list)
-    locals: list[str] = field(default_factory=list)
+    free_vars: list[str] = msgspec.field(default_factory=list)
+    cell_vars: list[str] = msgspec.field(default_factory=list)
+    globals_used: list[str] = msgspec.field(default_factory=list)
+    nonlocals: list[str] = msgspec.field(default_factory=list)
+    locals: list[str] = msgspec.field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class ScopeRequest:
+class ScopeRequest(msgspec.Struct, frozen=True):
     """Inputs required for scope capture analysis."""
 
     tc: Toolchain

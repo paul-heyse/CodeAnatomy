@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
+
 from semantics.column_types import ColumnType, TableType, infer_column_type, infer_table_type
 from semantics.config import SemanticConfig
 
@@ -88,32 +90,12 @@ class SemanticSchema:
         SemanticSchema
             Schema with discovered columns.
         """
-        schema = df.schema()
         resolved_config = config or SemanticConfig()
         overrides = resolved_config.overrides_for(table_name)
-        column_types: dict[str, ColumnType] = {}
-        candidates: dict[ColumnType, list[str]] = {
-            ColumnType.PATH: [],
-            ColumnType.SPAN_START: [],
-            ColumnType.SPAN_END: [],
-            ColumnType.ENTITY_ID: [],
-            ColumnType.SYMBOL: [],
-            ColumnType.TEXT: [],
-        }
-
-        for fld in schema:
-            col_name = fld.name
-            col_type = infer_column_type(col_name, patterns=resolved_config.type_patterns)
-            if col_type == ColumnType.ENTITY_ID and _matches_any(
-                col_name,
-                resolved_config.disallow_entity_id_patterns,
-            ):
-                col_type = ColumnType.OTHER
-            column_types[col_name] = col_type
-
-            # Collect candidates for semantic type resolution
-            if col_type in candidates:
-                candidates[col_type].append(col_name)
+        column_types, candidates = _discover_columns(
+            df.schema(),
+            config=resolved_config,
+        )
 
         path = candidates[ColumnType.PATH][0] if candidates[ColumnType.PATH] else None
         span_start = _pick_primary(
@@ -172,6 +154,12 @@ class SemanticSchema:
             current=texts,
             table=table_name,
         )
+
+        if span_start is None and span_end is None:
+            span_struct = _span_struct_name(_arrow_schema_from_df(df))
+            if span_struct is not None:
+                span_start = f"{span_struct}.byte_span.byte_start"
+                span_end = f"{span_struct}.byte_span.byte_len"
 
         table_type = infer_table_type(set(column_types.values()))
         span_unit = _infer_span_unit(span_start)
@@ -537,9 +525,7 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        from datafusion import col
-
-        return col(self.span_start_name())
+        return _expr_for_path(self.span_start_name())
 
     def span_end_col(self) -> Expr:
         """Get span end column expression.
@@ -549,9 +535,10 @@ class SemanticSchema:
         Expr
             DataFusion column expression.
         """
-        from datafusion import col
-
-        return col(self.span_end_name())
+        end_name = self.span_end_name()
+        if end_name.endswith("byte_len"):
+            return _expr_for_path(self.span_start_name()) + _expr_for_path(end_name)
+        return _expr_for_path(end_name)
 
     def entity_id_col(self) -> Expr:
         """Get first entity ID column expression.
@@ -673,11 +660,83 @@ def _prefer_entity_id(entity_ids: list[str]) -> list[str]:
 def _infer_span_unit(span_start: str | None) -> str | None:
     if span_start is None:
         return None
-    if span_start == "bstart" or span_start.endswith("_bstart"):
+    if span_start.endswith("bstart"):
         return "byte"
-    if span_start == "byte_start" or span_start.endswith("_byte_start"):
+    if span_start.endswith("byte_start"):
         return "byte"
     return None
+
+
+def _expr_for_path(path: str) -> Expr:
+    from datafusion import col
+
+    parts = path.split(".")
+    expr = col(parts[0])
+    for part in parts[1:]:
+        expr = expr[part]
+    return expr
+
+
+def _arrow_schema_from_df(df: DataFrame) -> pa.Schema | None:
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        arrow_schema = to_arrow()
+        if isinstance(arrow_schema, pa.Schema):
+            return arrow_schema
+    return None
+
+
+def _span_struct_name(schema: pa.Schema | None) -> str | None:
+    if schema is None:
+        return None
+    for schema_field in schema:
+        if not pa.types.is_struct(schema_field.type):
+            continue
+        struct_type = schema_field.type
+        idx = struct_type.get_field_index("byte_span")
+        if idx < 0:
+            continue
+        byte_span_field = struct_type.field(idx)
+        if not pa.types.is_struct(byte_span_field.type):
+            continue
+        byte_span = byte_span_field.type
+        if byte_span.get_field_index("byte_start") < 0:
+            continue
+        if byte_span.get_field_index("byte_len") < 0:
+            continue
+        return schema_field.name
+    return None
+
+
+def _discover_columns(
+    schema: pa.Schema,
+    *,
+    config: SemanticConfig,
+) -> tuple[dict[str, ColumnType], dict[ColumnType, list[str]]]:
+    column_types: dict[str, ColumnType] = {}
+    candidates: dict[ColumnType, list[str]] = {
+        ColumnType.PATH: [],
+        ColumnType.SPAN_START: [],
+        ColumnType.SPAN_END: [],
+        ColumnType.ENTITY_ID: [],
+        ColumnType.SYMBOL: [],
+        ColumnType.TEXT: [],
+    }
+    for schema_field in schema:
+        col_name = schema_field.name
+        col_type = infer_column_type(col_name, patterns=config.type_patterns)
+        if col_type == ColumnType.ENTITY_ID and _matches_any(
+            col_name,
+            config.disallow_entity_id_patterns,
+        ):
+            col_type = ColumnType.OTHER
+        column_types[col_name] = col_type
+        if col_type in candidates:
+            candidates[col_type].append(col_name)
+    return column_types, candidates
 
 
 __all__ = ["SemanticSchema", "SemanticSchemaError"]

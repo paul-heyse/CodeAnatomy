@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from cyclopts import Group, Parameter, validators
 
-from cli.validators import ConditionalDisabled
+from cli.validators import ConditionalDisabled, ConditionalRequired
 
 session_group = Group(
     "Session",
@@ -28,6 +28,13 @@ incremental_group = Group(
     "Incremental Processing",
     help="Configure incremental/CDF-based processing.",
     sort_key=4,
+    validator=(
+        ConditionalRequired(
+            condition_param="git_changed_only",
+            condition_value=True,
+            required_params=("git_base_ref", "git_head_ref"),
+        ),
+    ),
 )
 
 repo_scope_group = Group(

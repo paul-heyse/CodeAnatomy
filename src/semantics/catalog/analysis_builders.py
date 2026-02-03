@@ -377,7 +377,30 @@ def cfg_edges_df_builder(ctx: SessionContext) -> DataFrame:
     return joined
 
 
-def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:  # noqa: PLR0914
+def _def_use_kind_expr(opname_col: Expr) -> Expr:
+    is_import = (opname_col == lit(_DEF_USE_OPS[0])) | (opname_col == lit(_DEF_USE_OPS[1]))
+    is_store_prefix = f.starts_with(opname_col, lit(_DEF_USE_PREFIXES[0]))
+    is_delete_prefix = f.starts_with(opname_col, lit(_DEF_USE_PREFIXES[1]))
+    is_load_prefix = f.starts_with(opname_col, lit(_USE_PREFIXES[0]))
+    is_def = is_import | is_store_prefix | is_delete_prefix
+    true_lit = _arrow_cast(lit(1), "Boolean")
+    return f.case(is_def).when(true_lit, lit("def")).when(is_load_prefix, lit("use")).end()
+
+
+def _def_use_event_id_expr() -> Expr:
+    return _stable_id_expr(
+        DEF_USE_EVENT_ID_SPEC.prefix,
+        (col("code_unit_id"), col("instr_id"), col("kind"), col("symbol")),
+        null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+    )
+
+
+def _def_use_span_expr() -> Expr:
+    bstart = _arrow_cast(col("offset"), "Int64")
+    return _span_expr(bstart=bstart, bend=bstart)
+
+
+def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame for bytecode def/use events.
 
     Parameters
@@ -391,44 +414,12 @@ def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:  # noqa: PLR091
         DataFrame for bytecode def/use events.
     """
     table = ctx.table("py_bc_instructions")
-
-    # Coalesce symbol from argval_str or argrepr
     symbol = _coalesce_cols(table, "argval_str", "argrepr")
-
-    # Determine def/use kind from opname
-    opname_col = _arrow_cast(col("opname"), "Utf8")
-
-    # Build kind expression using CASE statements
-    is_import = (opname_col == lit(_DEF_USE_OPS[0])) | (opname_col == lit(_DEF_USE_OPS[1]))
-    is_store_prefix = f.starts_with(opname_col, lit(_DEF_USE_PREFIXES[0]))
-    is_delete_prefix = f.starts_with(opname_col, lit(_DEF_USE_PREFIXES[1]))
-    is_load_prefix = f.starts_with(opname_col, lit(_USE_PREFIXES[0]))
-
-    is_def = is_import | is_store_prefix | is_delete_prefix
-    is_use = is_load_prefix
-
-    true_lit = _arrow_cast(lit(1), "Boolean")
-    kind = f.case(is_def).when(true_lit, lit("def")).when(is_use, lit("use")).end()
-
+    kind = _def_use_kind_expr(_arrow_cast(col("opname"), "Utf8"))
     df = table.with_column("symbol", symbol).with_column("kind", kind)
-
-    # Generate event_id
-    event_id = _stable_id_expr(
-        DEF_USE_EVENT_ID_SPEC.prefix,
-        (col("code_unit_id"), col("instr_id"), col("kind"), col("symbol")),
-        null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
-    )
-
-    # Build span struct using span_make UDF
-    bstart = _arrow_cast(col("offset"), "Int64")
-    span = _span_expr(bstart=bstart, bend=bstart)
-
-    df = df.with_column("event_id", event_id)
-    df = df.with_column("span", span)
-
-    # Filter to valid events
-    valid = col("symbol").is_not_null() & col("kind").is_not_null()
-    return df.filter(valid)
+    df = df.with_column("event_id", _def_use_event_id_expr())
+    df = df.with_column("span", _def_use_span_expr())
+    return df.filter(col("symbol").is_not_null() & col("kind").is_not_null())
 
 
 def reaching_defs_df_builder(ctx: SessionContext) -> DataFrame:
@@ -758,7 +749,7 @@ def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
 
     report = build_file_coverage_report(ctx)
     if report is None:
-        msg = "file_coverage_report_v1 requires file_index input."
+        msg = "file_coverage_report_v1 requires repo_files_v1 (or file_index) input."
         raise ValueError(msg)
     return report
 

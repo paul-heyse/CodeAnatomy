@@ -315,9 +315,14 @@ def _resolve_batch_sizes(
 
 def _exporter_enabled(env_name: str, *, default: bool = True) -> bool:
     value = env_value(env_name)
-    if value is None:
-        return default
-    return value.lower() != "none"
+    if value is not None:
+        return value.lower() != "none"
+    signal = env_name.removeprefix("OTEL_").removesuffix("_EXPORTER")
+    if env_value("OTEL_EXPORTER_OTLP_ENDPOINT") is not None:
+        return True
+    if env_value(f"OTEL_EXPORTER_OTLP_{signal}_ENDPOINT") is not None:
+        return True
+    return default
 
 
 def _resolve_sampler(overrides: OtelConfigOverrides | None) -> Sampler:
@@ -463,9 +468,9 @@ def _resolve_disabled_config() -> OtelConfig:
 
 
 def _resolve_enabled_config(overrides: OtelConfigOverrides | None) -> OtelConfig:
-    enable_traces = _exporter_enabled("OTEL_TRACES_EXPORTER", default=True)
-    enable_metrics = _exporter_enabled("OTEL_METRICS_EXPORTER", default=True)
-    enable_logs = _exporter_enabled("OTEL_LOGS_EXPORTER", default=True)
+    enable_traces = _exporter_enabled("OTEL_TRACES_EXPORTER", default=False)
+    enable_metrics = _exporter_enabled("OTEL_METRICS_EXPORTER", default=False)
+    enable_logs = _exporter_enabled("OTEL_LOGS_EXPORTER", default=False)
     enable_log_correlation = env_bool_strict("OTEL_PYTHON_LOG_CORRELATION", default=True)
     enable_system_metrics = env_bool(
         "CODEANATOMY_OTEL_SYSTEM_METRICS",

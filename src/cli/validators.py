@@ -4,12 +4,30 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from cyclopts import Group
+from cyclopts import ArgumentCollection
+from cyclopts.utils import UNSET
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _resolve_params(
+    args: tuple[object, ...],
+    resolved_params: dict[str, Any],
+) -> dict[str, Any]:
+    if resolved_params:
+        return resolved_params
+    if len(args) != 1:
+        return {}
+    collection = args[0]
+    if not isinstance(collection, ArgumentCollection):
+        return {}
+    values: dict[str, Any] = {}
+    for argument in collection:
+        value = argument.value
+        values[argument.field_info.name] = None if value is UNSET else value
+    return values
 
 
 @dataclass(frozen=True)
@@ -32,15 +50,15 @@ class ConditionalRequired:
 
     def __call__(
         self,
-        group: Group,
-        resolved_params: dict[str, Any],
+        *args: object,
+        **resolved_params: Any,
     ) -> None:
         """Validate that required parameters are present when condition is met.
 
         Parameters
         ----------
-        group
-            The parameter group being validated.
+        *args
+            Positional args forwarded by cyclopts for parameter resolution.
         resolved_params
             Dictionary of resolved parameter values.
 
@@ -49,12 +67,10 @@ class ConditionalRequired:
         ValueError
             When required parameters are missing.
         """
-        _ = group  # Unused but required by cyclopts validator protocol
-        condition = resolved_params.get(self.condition_param)
+        params = _resolve_params(args, resolved_params)
+        condition = params.get(self.condition_param)
         if condition == self.condition_value:
-            missing = [
-                param for param in self.required_params if resolved_params.get(param) is None
-            ]
+            missing = [param for param in self.required_params if params.get(param) is None]
             if missing:
                 msg = (
                     f"When {self.condition_param}={self.condition_value!r}, "
@@ -86,24 +102,22 @@ class ConditionalDisabled:
 
     def __call__(
         self,
-        group: Group,
-        resolved_params: dict[str, Any],
+        *args: object,
+        **resolved_params: Any,
     ) -> None:
         """Warn when disabled parameters are configured.
 
         Parameters
         ----------
-        group
-            The parameter group being validated.
+        *args
+            Positional args forwarded by cyclopts for parameter resolution.
         resolved_params
             Dictionary of resolved parameter values.
         """
-        _ = group  # Unused but required by cyclopts validator protocol
-        condition = resolved_params.get(self.condition_param)
+        params = _resolve_params(args, resolved_params)
+        condition = params.get(self.condition_param)
         if condition == self.condition_value:
-            configured = [
-                param for param in self.disabled_params if resolved_params.get(param) is not None
-            ]
+            configured = [param for param in self.disabled_params if params.get(param) is not None]
             if configured:
                 _LOGGER.warning(
                     "The following parameters are ignored when %s=%r: %s",

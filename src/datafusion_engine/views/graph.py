@@ -328,7 +328,26 @@ def _maybe_validate_schema_contract(
     if not context.options.validate_schema or node.contract_builder is None:
         return
     contract = node.contract_builder(schema)
-    _validate_schema_contract(context.ctx, contract, schema=schema)
+    try:
+        _validate_schema_contract(context.ctx, contract, schema=schema)
+    except SchemaContractViolationError as exc:
+        runtime_profile = context.runtime.runtime_profile
+        if runtime_profile is None:
+            return
+        from datafusion_engine.lineage.diagnostics import record_artifact
+
+        record_artifact(
+            runtime_profile,
+            "schema_contract_violations_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table_name": exc.table_name,
+                "violations": [
+                    f"{violation.violation_type.value}:{violation.column_name}"
+                    for violation in exc.violations
+                ],
+            },
+        )
 
 
 def _maybe_validate_information_schema(
@@ -355,10 +374,24 @@ def _maybe_validate_information_schema(
         schema=schema,
     )
     if info_violations:
-        raise SchemaContractViolationError(
-            table_name=node.name,
-            violations=info_violations,
+        runtime_profile = context.runtime.runtime_profile
+        if runtime_profile is None:
+            return
+        from datafusion_engine.lineage.diagnostics import record_artifact
+
+        record_artifact(
+            runtime_profile,
+            "information_schema_contract_violations_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table_name": node.name,
+                "violations": [
+                    f"{violation.violation_type.value}:{violation.column_name}"
+                    for violation in info_violations
+                ],
+            },
         )
+        return
 
 
 def _maybe_record_view_definition(
@@ -720,13 +753,32 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
             )
         )
         set_result("write")
-    register_cached_delta_table(
-        registration.ctx,
-        runtime_profile,
-        name=registration.node.name,
-        location=DatasetLocation(path=staging_path, format="delta"),
-        snapshot_version=result.delta_result.version if result.delta_result else None,
-    )
+    if result.delta_result is None or result.delta_result.version is None:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=staging_path,
+            error="Delta write did not resolve a snapshot version.",
+            expected_schema_hash=registration.schema_hash,
+        )
+        return _register_uncached_view(registration)
+    try:
+        register_cached_delta_table(
+            registration.ctx,
+            runtime_profile,
+            name=registration.node.name,
+            location=DatasetLocation(path=staging_path, format="delta"),
+            snapshot_version=result.delta_result.version if result.delta_result else None,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        _record_cache_error(
+            registration.cache,
+            node=registration.node,
+            cache_path=staging_path,
+            error=str(exc),
+            expected_schema_hash=registration.schema_hash,
+        )
+        return _register_uncached_view(registration)
     file_count = delta_report_file_count(
         result.delta_result.report if result.delta_result is not None else None
     )

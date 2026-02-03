@@ -63,35 +63,40 @@ SPAN_ID_TYPE_INFO = SemanticTypeInfo(
 )
 
 
+def _arrow_ext_serialize(self: _SemanticExtensionType) -> bytes:
+    return self._info.name.encode("utf-8")
+
+
+@classmethod
+def _arrow_ext_deserialize(
+    cls,
+    _storage_type: pa.DataType,
+    serialized: object,
+    *_args: object,
+) -> pa.ExtensionType:
+    payload = _coerce_extension_payload(serialized, _args)
+    name = payload.decode("utf-8")
+    if name == SPAN_TYPE_INFO.name:
+        return _SemanticExtensionType(SPAN_TYPE_INFO)
+    if name == BYTE_SPAN_TYPE_INFO.name:
+        return _SemanticExtensionType(BYTE_SPAN_TYPE_INFO)
+    if name == NODE_ID_TYPE_INFO.name:
+        return _SemanticExtensionType(NODE_ID_TYPE_INFO)
+    if name == EDGE_ID_TYPE_INFO.name:
+        return _SemanticExtensionType(EDGE_ID_TYPE_INFO)
+    if name == SPAN_ID_TYPE_INFO.name:
+        return _SemanticExtensionType(SPAN_ID_TYPE_INFO)
+    msg = f"Unsupported semantic extension type: {name!r}."
+    raise ValueError(msg)
+
+
 class _SemanticExtensionType(pa.ExtensionType):
+    __arrow_ext_serialize__ = _arrow_ext_serialize
+    __arrow_ext_deserialize__ = _arrow_ext_deserialize
+
     def __init__(self, info: SemanticTypeInfo) -> None:
         self._info = info
         super().__init__(info.storage_type, info.extension_name)
-
-    def __arrow_ext_serialize__(self) -> bytes:  # noqa: PLW3201
-        return self._info.name.encode("utf-8")
-
-    @classmethod
-    def __arrow_ext_deserialize__(  # noqa: PLW3201
-        cls,
-        _storage_type: pa.DataType,
-        serialized: object,
-        *_args: object,
-    ) -> pa.ExtensionType:
-        payload = _coerce_extension_payload(serialized, _args)
-        name = payload.decode("utf-8")
-        if name == SPAN_TYPE_INFO.name:
-            return _SemanticExtensionType(SPAN_TYPE_INFO)
-        if name == BYTE_SPAN_TYPE_INFO.name:
-            return _SemanticExtensionType(BYTE_SPAN_TYPE_INFO)
-        if name == NODE_ID_TYPE_INFO.name:
-            return _SemanticExtensionType(NODE_ID_TYPE_INFO)
-        if name == EDGE_ID_TYPE_INFO.name:
-            return _SemanticExtensionType(EDGE_ID_TYPE_INFO)
-        if name == SPAN_ID_TYPE_INFO.name:
-            return _SemanticExtensionType(SPAN_ID_TYPE_INFO)
-        msg = f"Unsupported semantic extension type: {name!r}."
-        raise ValueError(msg)
 
 
 def _coerce_extension_payload(

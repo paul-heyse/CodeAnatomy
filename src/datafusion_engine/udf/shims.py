@@ -556,18 +556,25 @@ def span_make(
             end_exclusive,
         )
     except (RuntimeError, TypeError):
-        line_base_expr = line_base if line_base is not None else Expr.literal(0)
         col_unit_expr = col_unit if col_unit is not None else Expr.string_literal("byte")
         end_exclusive_expr = (
             end_exclusive if end_exclusive is not None else Expr.literal(value=True)
         )
+        null_line = Expr.literal(value=None).cast(pa.int32())
+        start_struct = f.named_struct([("line0", null_line), ("col", null_line)])
+        end_struct = f.named_struct([("line0", null_line), ("col", null_line)])
+        byte_start_src = bstart.cast(pa.int64())
+        byte_end_src = bend.cast(pa.int64())
+        byte_start = byte_start_src.cast(pa.int32())
+        byte_len = (byte_end_src - byte_start_src).cast(pa.int32())
+        byte_span = f.named_struct([("byte_start", byte_start), ("byte_len", byte_len)])
         return f.named_struct(
             [
-                ("bstart", bstart),
-                ("bend", bend),
-                ("line_base", line_base_expr),
-                ("col_unit", col_unit_expr),
+                ("start", start_struct),
+                ("end", end_struct),
                 ("end_exclusive", end_exclusive_expr),
+                ("col_unit", col_unit_expr),
+                ("byte_span", byte_span),
             ]
         )
 
@@ -588,7 +595,7 @@ def span_len(span: Expr) -> Expr:
     try:
         return _call_expr("span_len", span)
     except (RuntimeError, TypeError):
-        return span["bend"] - span["bstart"]
+        return span["byte_span"]["byte_len"].cast(pa.int64())
 
 
 def span_start(span: Expr) -> Expr:
@@ -607,7 +614,7 @@ def span_start(span: Expr) -> Expr:
     try:
         return _call_expr("span_start", span)
     except (RuntimeError, TypeError):
-        return span["bstart"]
+        return span["byte_span"]["byte_start"].cast(pa.int64())
 
 
 def span_end(span: Expr) -> Expr:
@@ -626,7 +633,9 @@ def span_end(span: Expr) -> Expr:
     try:
         return _call_expr("span_end", span)
     except (RuntimeError, TypeError):
-        return span["bend"]
+        return span["byte_span"]["byte_start"].cast(pa.int64()) + span["byte_span"][
+            "byte_len"
+        ].cast(pa.int64())
 
 
 def span_overlaps(span_a: Expr, span_b: Expr) -> Expr:
@@ -647,7 +656,11 @@ def span_overlaps(span_a: Expr, span_b: Expr) -> Expr:
     try:
         return _call_expr("span_overlaps", span_a, span_b)
     except (RuntimeError, TypeError):
-        return (span_a["bstart"] < span_b["bend"]) & (span_b["bstart"] < span_a["bend"])
+        start_a = span_start(span_a)
+        end_a = span_end(span_a)
+        start_b = span_start(span_b)
+        end_b = span_end(span_b)
+        return (start_a < end_b) & (start_b < end_a)
 
 
 def span_contains(span_a: Expr, span_b: Expr) -> Expr:
@@ -668,7 +681,11 @@ def span_contains(span_a: Expr, span_b: Expr) -> Expr:
     try:
         return _call_expr("span_contains", span_a, span_b)
     except (RuntimeError, TypeError):
-        return (span_a["bstart"] <= span_b["bstart"]) & (span_a["bend"] >= span_b["bend"])
+        start_a = span_start(span_a)
+        end_a = span_end(span_a)
+        start_b = span_start(span_b)
+        end_b = span_end(span_b)
+        return (start_a <= start_b) & (end_a >= end_b)
 
 
 def interval_align_score(

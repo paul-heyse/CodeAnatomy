@@ -538,18 +538,66 @@ def _write_and_record_extract_output(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     write_extract_outputs(name, output, runtime_profile=runtime_profile)
-    _register_extract_view(name, runtime_profile=runtime_profile)
-    _record_extract_view_artifact(
-        name,
-        plan,
-        schema=_arrow_schema_from_output(output),
-        runtime_profile=runtime_profile,
-    )
-    _validate_extract_schema_contract(
-        name,
-        schema=_arrow_schema_from_output(output),
-        runtime_profile=runtime_profile,
-    )
+    from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+
+    recorder = EngineEventRecorder(runtime_profile)
+    try:
+        _register_extract_view(name, runtime_profile=runtime_profile)
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="postprocess",
+                    status="register_view_failed",
+                    rows=None,
+                    location_path=None,
+                    location_format=None,
+                    issue=str(exc),
+                )
+            ]
+        )
+    try:
+        _record_extract_view_artifact(
+            name,
+            plan,
+            schema=_arrow_schema_from_output(output),
+            runtime_profile=runtime_profile,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="postprocess",
+                    status="view_artifact_failed",
+                    rows=None,
+                    location_path=None,
+                    location_format=None,
+                    issue=str(exc),
+                )
+            ]
+        )
+    try:
+        _validate_extract_schema_contract(
+            name,
+            schema=_arrow_schema_from_output(output),
+            runtime_profile=runtime_profile,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+        recorder.record_extract_quality_events(
+            [
+                ExtractQualityEvent(
+                    dataset=name,
+                    stage="postprocess",
+                    status="schema_contract_failed",
+                    rows=None,
+                    location_path=None,
+                    location_format=None,
+                    issue=str(exc),
+                )
+            ]
+        )
 
 
 def _materialize_streaming_output(

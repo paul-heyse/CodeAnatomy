@@ -24,6 +24,7 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination import (
     ExtractMaterializeOptions,
@@ -64,6 +65,10 @@ SCIP_STREAMING_THRESHOLD_BYTES = 128 * 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
 SCIP_OUTPUT_DATASETS: tuple[tuple[str, str], ...] = (("scip_index", "scip_index_v1"),)
+_SCIP_HEALTH_ISSUE_MESSAGES: Mapping[str, str] = {
+    "no_documents": "SCIP index has no documents.",
+    "no_occurrences": "SCIP index has no occurrences.",
+}
 
 
 @dataclass(frozen=True)
@@ -801,6 +806,31 @@ def _record_scip_index_stats(
     record_artifact(runtime_profile, "scip_index_stats_v1", payload)
 
 
+def _record_scip_health_events(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    index_path: Path,
+    issues: Sequence[str],
+) -> None:
+    if runtime_profile is None or not issues:
+        return
+    recorder = EngineEventRecorder(runtime_profile)
+    events = [
+        ExtractQualityEvent(
+            dataset="scip_index_v1",
+            stage="health_check",
+            status=issue,
+            rows=None,
+            location_path=str(index_path),
+            location_format="scip",
+            issue=_SCIP_HEALTH_ISSUE_MESSAGES.get(issue, issue),
+            extractor="scip_tables",
+        )
+        for issue in issues
+    ]
+    recorder.record_extract_quality_events(events)
+
+
 def _log_scip_counts(counts: Mapping[str, int], parse_opts: SCIPParseOptions) -> None:
     if not (parse_opts.log_counts or parse_opts.health_check):
         return
@@ -818,15 +848,21 @@ def _log_scip_counts(counts: Mapping[str, int], parse_opts: SCIPParseOptions) ->
     )
 
 
-def _ensure_scip_health(counts: Mapping[str, int], parse_opts: SCIPParseOptions) -> None:
-    if not parse_opts.health_check:
-        return
-    if counts["documents"] == 0:
-        msg = "SCIP index has no documents."
-        raise ValueError(msg)
-    if counts["occurrences"] == 0:
-        msg = "SCIP index has no occurrences."
-        raise ValueError(msg)
+def _ensure_scip_health(
+    counts: Mapping[str, int],
+    parse_opts: SCIPParseOptions,
+) -> tuple[str, ...]:
+    issues: list[str] = []
+    if counts.get("documents", 0) == 0:
+        issues.append("no_documents")
+    if counts.get("occurrences", 0) == 0:
+        issues.append("no_occurrences")
+    if not issues:
+        return ()
+    if parse_opts.health_check or parse_opts.log_counts:
+        for issue in issues:
+            LOGGER.warning("%s", _SCIP_HEALTH_ISSUE_MESSAGES.get(issue, issue))
+    return tuple(issues)
 
 
 def _symbol_info_base(
@@ -1267,12 +1303,17 @@ def _extract_scip_tables_streaming(
 ) -> Mapping[str, RecordBatchReaderLike]:
     counts, has_index_symbols = _index_counts(resolved.index)
     _log_scip_counts(counts, resolved.parse_opts)
-    _ensure_scip_health(counts, resolved.parse_opts)
+    issues = _ensure_scip_health(counts, resolved.parse_opts)
     _record_scip_index_stats(
         resolved.runtime_profile,
         index_id=resolved.index_id,
         index_path=resolved.index_path,
         counts=counts,
+    )
+    _record_scip_health_events(
+        resolved.runtime_profile,
+        index_path=resolved.index_path,
+        issues=issues,
     )
     row = _scip_index_row(
         resolved,
@@ -1300,12 +1341,17 @@ def _extract_scip_tables_in_memory(
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     counts, has_index_symbols = _index_counts(resolved.index)
     _log_scip_counts(counts, resolved.parse_opts)
-    _ensure_scip_health(counts, resolved.parse_opts)
+    issues = _ensure_scip_health(counts, resolved.parse_opts)
     _record_scip_index_stats(
         resolved.runtime_profile,
         index_id=resolved.index_id,
         index_path=resolved.index_path,
         counts=counts,
+    )
+    _record_scip_health_events(
+        resolved.runtime_profile,
+        index_path=resolved.index_path,
+        issues=issues,
     )
     row = _scip_index_row(
         resolved,

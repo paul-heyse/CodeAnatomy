@@ -757,27 +757,28 @@ def _ast_id_for_node(idx_map: dict[int, int], node: ast.AST) -> int:
     return ast_id
 
 
-def _node_row(  # noqa: PLR0913
-    node: ast.AST,
-    *,
-    ast_id: int,
-    parent_ast_id: int | None,
-    field_name: str | None,
-    field_pos: int | None,
-    line_offsets: LineOffsets | None,
-) -> dict[str, object]:
+@dataclass(frozen=True)
+class AstNodeContext:
+    ast_id: int
+    parent_ast_id: int | None
+    field_name: str | None
+    field_pos: int | None
+    line_offsets: LineOffsets | None
+
+
+def _node_row(node: ast.AST, *, ctx: AstNodeContext) -> dict[str, object]:
     node_attr_values: dict[str, object] = {
-        "field_name": field_name,
-        "field_pos": field_pos,
+        "field_name": ctx.field_name,
+        "field_pos": ctx.field_pos,
     }
     node_attr_values.update(_node_scalar_attrs(node))
     return {
-        "ast_id": ast_id,
-        "parent_ast_id": parent_ast_id,
+        "ast_id": ctx.ast_id,
+        "parent_ast_id": ctx.parent_ast_id,
         "kind": type(node).__name__,
         "name": _node_name(node),
         "value": _node_value_repr(node),
-        "span": span_dict(_span_spec_from_node(node, line_offsets=line_offsets)),
+        "span": span_dict(_span_spec_from_node(node, line_offsets=ctx.line_offsets)),
         "attrs": attrs_map(node_attr_values),
     }
 
@@ -816,21 +817,19 @@ def _append_docstring(
         rows.docstrings.append(row)
 
 
-def _append_def(  # noqa: PLR0913
+def _append_def(
     rows: _AstWalkAccumulator,
     node: ast.AST,
     *,
-    ast_id: int,
-    parent_ast_id: int | None,
+    ctx: AstNodeContext,
     source: str,
-    line_offsets: LineOffsets | None,
 ) -> None:
     row = _def_row(
         node,
-        ast_id=ast_id,
-        parent_ast_id=parent_ast_id,
+        ast_id=ctx.ast_id,
+        parent_ast_id=ctx.parent_ast_id,
         source=source,
-        line_offsets=line_offsets,
+        line_offsets=ctx.line_offsets,
     )
     if row is not None:
         rows.defs.append(row)
@@ -893,21 +892,24 @@ def _walk_ast(
         node, parent_idx, field_name, field_pos = stack.pop()
         node_count += 1
         ast_id = _ast_id_for_node(idx_map, node)
+        ctx = AstNodeContext(
+            ast_id=ast_id,
+            parent_ast_id=parent_idx,
+            field_name=field_name,
+            field_pos=field_pos,
+            line_offsets=line_offsets,
+        )
         rows.nodes.append(
             _node_row(
                 node,
-                ast_id=ast_id,
-                parent_ast_id=parent_idx,
-                field_name=field_name,
-                field_pos=field_pos,
-                line_offsets=line_offsets,
+                ctx=ctx,
             )
         )
         edge = _edge_row(
-            parent_ast_id=parent_idx,
-            ast_id=ast_id,
-            field_name=field_name,
-            field_pos=field_pos,
+            parent_ast_id=ctx.parent_ast_id,
+            ast_id=ctx.ast_id,
+            field_name=ctx.field_name,
+            field_pos=ctx.field_pos,
         )
         if edge is not None:
             rows.edges.append(edge)
@@ -929,10 +931,8 @@ def _walk_ast(
         _append_def(
             rows,
             node,
-            ast_id=ast_id,
-            parent_ast_id=parent_idx,
+            ctx=ctx,
             source=source,
-            line_offsets=line_offsets,
         )
         _append_call(
             rows,

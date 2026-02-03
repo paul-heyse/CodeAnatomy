@@ -19,7 +19,6 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
@@ -395,22 +394,40 @@ def _ensure_observability_table(
     name: str,
     schema: pa.Schema,
 ) -> DatasetLocation | None:
+    _ = schema
     table_path = _observability_root(profile) / name
-    if not table_path.exists():
-        _bootstrap_observability_table(
-            ctx,
-            profile,
-            table_path=table_path,
-            schema=schema,
-            operation="delta_observability_bootstrap",
+    delta_log_path = table_path / "_delta_log"
+    has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
+    if not has_delta_log:
+        profile.record_artifact(
+            "delta_observability_missing_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": name,
+                "path": str(table_path),
+                "error": "Delta log missing; observability table bootstrap skipped.",
+            },
         )
+        return None
     location = DatasetLocation(path=str(table_path), format="delta")
-    register_dataset_df(
-        ctx,
-        name=name,
-        location=location,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
-    )
+    try:
+        register_dataset_df(
+            ctx,
+            name=name,
+            location=location,
+            options=DatasetRegistrationOptions(runtime_profile=profile),
+        )
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+        profile.record_artifact(
+            "delta_observability_register_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": name,
+                "path": str(table_path),
+                "error": str(exc),
+            },
+        )
+        return None
     return location
 
 
@@ -422,21 +439,45 @@ def _bootstrap_observability_table(
     schema: pa.Schema,
     operation: str,
 ) -> None:
+    _ = (ctx, profile)
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    empty = empty_table_for_schema(schema)
-    df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
-    pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
-    pipeline.write(
-        WriteRequest(
-            source=df,
-            destination=str(table_path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            format_options={
-                "commit_metadata": {"operation": operation, "table": table_path.name},
-            },
-        )
+    bootstrap_row = _bootstrap_observability_row(schema)
+    empty = pa.Table.from_pylist([bootstrap_row], schema=schema)
+    from deltalake import CommitProperties
+    from deltalake.writer import write_deltalake
+
+    commit_properties = CommitProperties(
+        custom_metadata={"operation": operation, "table": table_path.name},
     )
+    write_deltalake(
+        str(table_path),
+        empty,
+        mode="overwrite",
+        schema_mode="overwrite",
+        commit_properties=commit_properties,
+    )
+
+
+def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
+    row: dict[str, object] = {}
+    for field in schema:
+        if field.nullable:
+            row[field.name] = None
+            continue
+        dtype = field.type
+        if pa.types.is_string(dtype):
+            row[field.name] = "__bootstrap__"
+        elif pa.types.is_integer(dtype):
+            row[field.name] = 0
+        elif pa.types.is_binary(dtype):
+            row[field.name] = b""
+        elif pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+            row[field.name] = []
+        elif pa.types.is_map(dtype):
+            row[field.name] = {}
+        else:
+            row[field.name] = None
+    return row
 
 
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:

@@ -1985,11 +1985,14 @@ def _apply_projection_exprs(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     adapter.register_view(table_name, projected, overwrite=True, temporary=False)
     if runtime_profile is not None:
-        _record_projection_view_artifact(
-            ctx,
-            table_name=table_name,
-            projected=projected,
-            runtime_profile=runtime_profile,
+        runtime_profile.record_artifact(
+            "projection_view_artifact_skipped_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table_name": table_name,
+                "reason": "disabled_due_to_datafusion_panics",
+                "projection_expr_count": len(projection_exprs),
+            },
         )
     return ctx.table(table_name)
 
@@ -2068,18 +2071,36 @@ def _projection_exprs_for_schema(
     defaults = _expected_column_defaults(expected_schema)
     projection_exprs: list[str] = []
     for field in expected_schema:
-        dtype_name = _sql_type_name(field.type)
         if field.name in actual:
-            cast_expr = f"cast({field.name} as {dtype_name})"
-            default_value = defaults.get(field.name)
-            if default_value is not None:
-                literal = _sql_literal_for_field(default_value, dtype=field.type)
-                if literal is not None:
-                    cast_expr = f"coalesce({cast_expr}, {literal})"
-            projection_exprs.append(f"{cast_expr} as {field.name}")
-        else:
+            if _supports_projection_cast(field.type):
+                dtype_name = _sql_type_name(field.type)
+                cast_expr = f"cast({field.name} as {dtype_name})"
+                default_value = defaults.get(field.name)
+                if default_value is not None:
+                    literal = _sql_literal_for_field(default_value, dtype=field.type)
+                    if literal is not None:
+                        cast_expr = f"coalesce({cast_expr}, {literal})"
+                projection_exprs.append(f"{cast_expr} as {field.name}")
+            else:
+                projection_exprs.append(field.name)
+        elif _supports_projection_cast(field.type):
+            dtype_name = _sql_type_name(field.type)
             projection_exprs.append(f"cast(NULL as {dtype_name}) as {field.name}")
+        else:
+            projection_exprs.append(f"NULL as {field.name}")
     return tuple(projection_exprs)
+
+
+def _supports_projection_cast(dtype: pa.DataType) -> bool:
+    return not (
+        pa.types.is_list(dtype)
+        or pa.types.is_large_list(dtype)
+        or pa.types.is_fixed_size_list(dtype)
+        or pa.types.is_struct(dtype)
+        or pa.types.is_map(dtype)
+        or pa.types.is_union(dtype)
+        or pa.types.is_dictionary(dtype)
+    )
 
 
 def _sql_literal_for_field(value: str, *, dtype: pa.DataType) -> str | None:

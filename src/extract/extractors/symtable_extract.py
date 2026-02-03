@@ -602,37 +602,42 @@ def _build_scope_blocks(
         table_id = scope.get("table_id")
         if not isinstance(table_id, int):
             continue
-        block, _scope_type = _scope_block_payload(
-            scope,
+        context = ScopeBlockContext(
             table_id=table_id,
             parent_map=parent_map,
             symbols_by_scope=symbols_by_scope,
             options=options,
             line_offsets=line_offsets,
         )
+        block, _scope_type = _scope_block_payload(scope, context=context)
         blocks.append(block)
     return blocks
 
 
-def _scope_block_payload(  # noqa: PLR0913
+@dataclass(frozen=True)
+class ScopeBlockContext:
+    table_id: int
+    parent_map: Mapping[int, int]
+    symbols_by_scope: Mapping[int, list[dict[str, object]]]
+    options: SymtableExtractOptions
+    line_offsets: LineOffsets | None
+
+
+def _scope_block_payload(
     scope: Mapping[str, object],
     *,
-    table_id: int,
-    parent_map: Mapping[int, int],
-    symbols_by_scope: Mapping[int, list[dict[str, object]]],
-    options: SymtableExtractOptions,
-    line_offsets: LineOffsets | None,
+    context: ScopeBlockContext,
 ) -> tuple[dict[str, object], str | None]:
     lineno = scope.get("lineno")
     lineno_int = int(lineno) if isinstance(lineno, int) and lineno > 0 else None
     line0 = lineno_int - 1 if lineno_int is not None else None
-    span_hint = _span_hint_from_line(line0, line_offsets=line_offsets)
+    span_hint = _span_hint_from_line(line0, line_offsets=context.line_offsets)
     scope_type_value = scope.get("scope_type")
     scope_type = scope_type_value if isinstance(scope_type_value, str) else None
     return (
         {
-            "block_id": table_id,
-            "parent_block_id": parent_map.get(table_id),
+            "block_id": context.table_id,
+            "parent_block_id": context.parent_map.get(context.table_id),
             "block_type": scope_type,
             "is_meta_scope": _is_meta_scope(scope_type),
             "name": scope.get("scope_name"),
@@ -644,10 +649,10 @@ def _scope_block_payload(  # noqa: PLR0913
             "qualpath": scope.get("qualpath"),
             "function_partitions": scope.get("function_partitions"),
             "class_methods": scope.get("class_methods"),
-            "symbols": symbols_by_scope.get(table_id, []),
+            "symbols": context.symbols_by_scope.get(context.table_id, []),
             "attrs": attrs_map(
                 {
-                    "compile_type": options.compile_type,
+                    "compile_type": context.options.compile_type,
                     "scope_role": scope.get("scope_role"),
                     "is_nested": scope.get("is_nested"),
                     "is_optimized": scope.get("is_optimized"),

@@ -264,11 +264,13 @@ def test_plan_bundle_captures_udf_planner_snapshot() -> None:
 def test_plan_bundle_captures_async_udf_settings() -> None:
     """Ensure async UDF runtime settings are captured in plan artifacts."""
     try:
-        import datafusion.substrait  # noqa: F401
+        import importlib
+
+        importlib.import_module("datafusion.substrait")
     except ImportError:
         pytest.skip("datafusion.substrait is required for plan bundle construction.")
     try:
-        import datafusion_ext  # noqa: F401
+        importlib.import_module("datafusion_ext")
     except ImportError:
         pytest.skip("datafusion_ext is required for plan bundle construction.")
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile

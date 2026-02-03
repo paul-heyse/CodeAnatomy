@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from datafusion_engine.session.facade import ExecutionResult
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
-    from storage.deltalake import DeltaWriteResult
 
 
 @dataclass(frozen=True)
@@ -73,6 +72,49 @@ class ExtractWriteEvent:
             "copy_options": dict(self.copy_options) if self.copy_options is not None else None,
             "delta_version": self.delta_version,
         }
+
+
+@dataclass(frozen=True)
+class ExtractQualityEvent:
+    """Typed payload for extract quality diagnostics."""
+
+    dataset: str
+    stage: str
+    status: str
+    rows: int | None
+    location_path: str | None
+    location_format: str | None
+    issue: str | None = None
+    extractor: str | None = None
+    plan_fingerprint: str | None = None
+    plan_signature: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        """Return payload suitable for diagnostics recording.
+
+        Returns
+        -------
+        dict[str, object]
+            Diagnostics event payload.
+        """
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": self.dataset,
+            "stage": self.stage,
+            "status": self.status,
+            "rows": self.rows,
+            "location_path": self.location_path,
+            "location_format": self.location_format,
+        }
+        if self.issue is not None:
+            payload["issue"] = self.issue
+        if self.extractor is not None:
+            payload["extractor"] = self.extractor
+        if self.plan_fingerprint is not None:
+            payload["plan_fingerprint"] = self.plan_fingerprint
+        if self.plan_signature is not None:
+            payload["plan_signature"] = self.plan_signature
+        return payload
 
 
 @dataclass
@@ -151,50 +193,31 @@ class EngineEventRecorder:
         )
         self.record_artifact("plan_execute_v1", event.to_payload())
 
-    def record_extract_write(  # noqa: PLR0913
+    def record_extract_write(
         self,
-        *,
-        dataset: str,
-        mode: str,
-        path: str,
-        file_format: str,
-        rows: int | None,
-        copy_sql: str | None,
-        copy_options: Mapping[str, object] | None,
-        delta_result: DeltaWriteResult | None,
+        event: ExtractWriteEvent,
     ) -> None:
         """Record an extract output write event.
 
         Parameters
         ----------
-        dataset
-            Dataset name being written.
-        mode
-            Write mode (append, overwrite, etc.).
-        path
-            Output path.
-        file_format
-            File format (delta, parquet, etc.).
-        rows
-            Number of rows written.
-        copy_sql
-            Optional COPY SQL statement used for writes.
-        copy_options
-            Optional COPY options used for writes.
-        delta_result
-            Delta write result with version info.
+        event
+            Extract write event payload.
         """
-        event = ExtractWriteEvent(
-            dataset=dataset,
-            mode=mode,
-            path=path,
-            file_format=file_format,
-            rows=rows,
-            copy_sql=copy_sql,
-            copy_options=copy_options,
-            delta_version=delta_result.version if delta_result else None,
-        )
         self.record_artifact("datafusion_extract_output_writes_v1", event.to_payload())
+
+    def record_extract_quality_events(self, events: Sequence[ExtractQualityEvent]) -> None:
+        """Record extract quality event rows.
+
+        Parameters
+        ----------
+        events
+            Extract quality event payloads.
+        """
+        if not events:
+            return
+        rows: list[Mapping[str, object]] = [event.to_payload() for event in events]
+        self.record_events("extract_quality_v1", rows)
 
     def record_diskcache_stats(self) -> None:
         """Record diskcache stats for known cache kinds."""
@@ -292,4 +315,4 @@ class EngineEventRecorder:
         self.record_artifact("delta_query_v1", payload)
 
 
-__all__ = ["EngineEventRecorder", "PlanExecutionEvent"]
+__all__ = ["EngineEventRecorder", "ExtractQualityEvent", "PlanExecutionEvent"]

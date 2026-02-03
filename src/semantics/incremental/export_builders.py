@@ -62,11 +62,14 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     qname_expr = col("qnames")
     qname_name = qname_expr["name"]
     qname_source = qname_expr["source"]
+    def_kind_expr = col("kind")
+    if "def_kind_norm" in schema_names:
+        def_kind_expr = f.coalesce(col("def_kind_norm"), col("kind"))
     return df.select(
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("def_id").alias("def_id"),
-        f.coalesce(col("def_kind_norm"), col("kind")).alias("def_kind_norm"),
+        def_kind_expr.alias("def_kind_norm"),
         col("name").alias("name"),
         prefixed_hash64("qname", qname_name).alias("qname_id"),
         qname_name.alias("qname"),

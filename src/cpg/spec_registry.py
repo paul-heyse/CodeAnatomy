@@ -70,6 +70,11 @@ def build_prop_table_specs(
     -------
     tuple[PropTableSpec, ...]
         Prop table specs for configured entities.
+
+    Raises
+    ------
+    ValueError
+        Raised when a prop table spec fails to build.
     """
     specs: list[PropTableSpec] = []
     for spec in _entity_specs(model):
@@ -77,7 +82,11 @@ def build_prop_table_specs(
         source_columns = None
         if table_name is not None and source_columns_lookup is not None:
             source_columns = source_columns_lookup(table_name)
-        table = spec.to_prop_table(source_columns=source_columns)
+        try:
+            table = spec.to_prop_table(source_columns=source_columns)
+        except ValueError as exc:
+            msg = f"CPG prop spec {spec.name!r} failed for table {table_name!r}: {exc}"
+            raise ValueError(msg) from exc
         if table is not None:
             specs.append(table)
     return tuple(specs)

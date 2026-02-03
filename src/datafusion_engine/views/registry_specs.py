@@ -180,15 +180,19 @@ def _bundle_deps_and_udfs(
         msg = f"Runtime profile is required for view planning: {label!r}."
         raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
-    bundle = build_plan_bundle(
-        ctx,
-        df,
-        options=PlanBundleOptions(
-            compute_execution_plan=True,
-            validate_udfs=True,
-            session_runtime=session_runtime,
-        ),
-    )
+    try:
+        bundle = build_plan_bundle(
+            ctx,
+            df,
+            options=PlanBundleOptions(
+                compute_execution_plan=True,
+                validate_udfs=True,
+                session_runtime=session_runtime,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to build plan bundle for view {label!r}."
+        raise ValueError(msg) from exc
     try:
         lineage = extract_lineage_from_bundle(bundle)
     except (RuntimeError, TypeError, ValueError) as exc:

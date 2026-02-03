@@ -691,19 +691,28 @@ def reset_providers_for_tests() -> None:
     from opentelemetry._logs import _internal as logs_internal
     from opentelemetry.metrics import _internal as metrics_internal
 
-    with contextlib.suppress(AttributeError):
-        trace._TRACER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
-    with contextlib.suppress(AttributeError):
-        metrics_internal._METER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
-    with contextlib.suppress(AttributeError):
-        metrics_internal._PROXY_METER_PROVIDER._real_meter_provider = None  # noqa: SLF001
-    with contextlib.suppress(AttributeError):
-        metrics_internal._PROXY_METER_PROVIDER._meters.clear()  # noqa: SLF001
-    with contextlib.suppress(AttributeError):
-        logs_internal._LOGGER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
-    trace._TRACER_PROVIDER = None  # noqa: SLF001
-    metrics_internal._METER_PROVIDER = None  # noqa: SLF001
-    logs_internal._LOGGER_PROVIDER = None  # noqa: SLF001
+    def _reset_once(holder: object | None) -> None:
+        if holder is None:
+            return
+        with contextlib.suppress(AttributeError):
+            holder._done = False
+
+    def _reset_proxy_meter(proxy: object | None) -> None:
+        if proxy is None:
+            return
+        with contextlib.suppress(AttributeError):
+            proxy._real_meter_provider = None
+        meters = getattr(proxy, "_meters", None)
+        if hasattr(meters, "clear"):
+            meters.clear()
+
+    _reset_once(getattr(trace, "_TRACER_PROVIDER_SET_ONCE", None))
+    _reset_once(getattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", None))
+    _reset_proxy_meter(getattr(metrics_internal, "_PROXY_METER_PROVIDER", None))
+    _reset_once(getattr(logs_internal, "_LOGGER_PROVIDER_SET_ONCE", None))
+    trace._TRACER_PROVIDER = None
+    metrics_internal._METER_PROVIDER = None
+    logs_internal._LOGGER_PROVIDER = None
     reset_metrics_registry()
 
 

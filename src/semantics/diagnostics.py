@@ -43,7 +43,7 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
     """
     try:
         ctx.table(name)
-    except Exception:  # noqa: BLE001
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
     return True
 
@@ -211,10 +211,7 @@ def build_relationship_quality_metrics(
     has_dst = target_column in schema_names
 
     # Build aggregation expressions
-    agg_exprs = [
-        lit(relationship_name).alias("relationship_name"),
-        f.count(lit(1)).alias("total_edges"),
-    ]
+    agg_exprs = [f.count(lit(1)).alias("total_edges")]
 
     if has_src:
         agg_exprs.append(f.count(col(source_column), distinct=True).alias("distinct_sources"))
@@ -264,13 +261,16 @@ def build_relationship_quality_metrics(
             ]
         )
 
-    return rel_df.aggregate([], agg_exprs)
+    return rel_df.aggregate([], agg_exprs).with_column(
+        "relationship_name",
+        lit(relationship_name),
+    )
 
 
 def build_file_coverage_report(
     ctx: SessionContext,
     *,
-    base_table: str = "file_index",
+    base_table: str = "repo_files_v1",
 ) -> DataFrame | None:
     """Build extraction coverage report per file.
 
@@ -282,7 +282,7 @@ def build_file_coverage_report(
     ctx
         DataFusion session context with extraction tables registered.
     base_table
-        Name of the base file table (default: "file_index").
+        Name of the base file table (default: "repo_files_v1").
 
     Returns
     -------
@@ -297,7 +297,12 @@ def build_file_coverage_report(
         Returns None if base_table doesn't exist.
     """
     if not _table_exists(ctx, base_table):
-        return None
+        for fallback in ("file_index", "repo_files"):
+            if _table_exists(ctx, fallback):
+                base_table = fallback
+                break
+        else:
+            return None
 
     base = ctx.table(base_table).select(col("file_id"))
 
@@ -305,11 +310,16 @@ def build_file_coverage_report(
     if _table_exists(ctx, "cst_defs_norm_v1"):
         cst_files = (
             ctx.table("cst_defs_norm_v1")
-            .select(col("file_id"))
+            .select(col("file_id").alias("cst_file_id"))
             .distinct()
             .with_column("has_cst", lit(1))
         )
-        base = base.join(cst_files, left_on=["file_id"], right_on=["file_id"], how="left")
+        base = base.join(
+            cst_files,
+            left_on=["file_id"],
+            right_on=["cst_file_id"],
+            how="left",
+        )
     else:
         base = base.with_column("has_cst", lit(0))
 
@@ -317,11 +327,16 @@ def build_file_coverage_report(
     if _table_exists(ctx, "tree_sitter_files_v1"):
         ts_files = (
             ctx.table("tree_sitter_files_v1")
-            .select(col("file_id"))
+            .select(col("file_id").alias("ts_file_id"))
             .distinct()
             .with_column("has_tree_sitter", lit(1))
         )
-        base = base.join(ts_files, left_on=["file_id"], right_on=["file_id"], how="left")
+        base = base.join(
+            ts_files,
+            left_on=["file_id"],
+            right_on=["ts_file_id"],
+            how="left",
+        )
     else:
         base = base.with_column("has_tree_sitter", lit(0))
 
@@ -329,11 +344,16 @@ def build_file_coverage_report(
     if _table_exists(ctx, "scip_documents"):
         scip_files = (
             ctx.table("scip_documents")
-            .select(col("document_id").alias("file_id"))
+            .select(col("document_id").alias("scip_file_id"))
             .distinct()
             .with_column("has_scip", lit(1))
         )
-        base = base.join(scip_files, left_on=["file_id"], right_on=["file_id"], how="left")
+        base = base.join(
+            scip_files,
+            left_on=["file_id"],
+            right_on=["scip_file_id"],
+            how="left",
+        )
     else:
         base = base.with_column("has_scip", lit(0))
 
@@ -411,22 +431,25 @@ def build_ambiguity_analysis(
         )
 
         # Compute all metrics in a single aggregation to avoid cross join
-        return per_source.aggregate(
-            [],
-            [
-                lit(relationship_name).alias("relationship_name"),
-                f.count(lit(1)).alias("total_sources"),
-                f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
-                    "ambiguous_sources"
-                ),
-                f.max(col("match_count")).alias("max_candidates"),
-                f.avg(
-                    f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
-                ).alias("avg_candidates"),
-            ],
-        ).with_column(
-            "ambiguity_rate",
-            col("ambiguous_sources").cast("float64") / col("total_sources").cast("float64"),
+        return (
+            per_source.aggregate(
+                [],
+                [
+                    f.count(lit(1)).alias("total_sources"),
+                    f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
+                        "ambiguous_sources"
+                    ),
+                    f.max(col("match_count")).alias("max_candidates"),
+                    f.avg(
+                        f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
+                    ).alias("avg_candidates"),
+                ],
+            )
+            .with_column("relationship_name", lit(relationship_name))
+            .with_column(
+                "ambiguity_rate",
+                col("ambiguous_sources").cast(float) / col("total_sources").cast(float),
+            )
         )
 
     # With ambiguity column, use it for grouping
@@ -438,22 +461,25 @@ def build_ambiguity_analysis(
         ],
     )
 
-    return per_group.aggregate(
-        [],
-        [
-            lit(relationship_name).alias("relationship_name"),
-            f.count(lit(1)).alias("total_sources"),
-            f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
-                "ambiguous_sources"
-            ),
-            f.max(col("match_count")).alias("max_candidates"),
-            f.avg(
-                f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
-            ).alias("avg_candidates"),
-        ],
-    ).with_column(
-        "ambiguity_rate",
-        col("ambiguous_sources").cast("float64") / col("total_sources").cast("float64"),
+    return (
+        per_group.aggregate(
+            [],
+            [
+                f.count(lit(1)).alias("total_sources"),
+                f.sum(f.when(col("match_count") > lit(1), lit(1)).otherwise(lit(0))).alias(
+                    "ambiguous_sources"
+                ),
+                f.max(col("match_count")).alias("max_candidates"),
+                f.avg(
+                    f.when(col("match_count") > lit(1), col("match_count")).otherwise(lit(None))
+                ).alias("avg_candidates"),
+            ],
+        )
+        .with_column("relationship_name", lit(relationship_name))
+        .with_column(
+            "ambiguity_rate",
+            col("ambiguous_sources").cast(float) / col("total_sources").cast(float),
+        )
     )
 
 

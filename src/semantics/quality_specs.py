@@ -28,7 +28,6 @@ from semantics.exprs import (
     case_eq_expr,
     eq,
     eq_expr,
-    eq_value,
     is_not_null,
     is_not_null_expr,
     is_null,
@@ -37,6 +36,7 @@ from semantics.exprs import (
     span_overlaps_expr,
     span_start_expr,
     stable_hash64,
+    truthy_expr,
     v,
 )
 from semantics.quality import (
@@ -155,7 +155,7 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         base_confidence=0.95,
         hard=[
             HardPredicate(span_overlaps_expr("l__span", "r__span")),
-            HardPredicate(eq_value("r__is_read", value=True)),
+            HardPredicate(truthy_expr("r__is_read")),
         ],
         features=[
             Feature(
@@ -171,8 +171,8 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
-        ambiguity_group_id_expr=stable_hash64("l__entity_id"),
+        ambiguity_key_expr=c("l__ref_id"),
+        ambiguity_group_id_expr=stable_hash64("l__ref_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
             OrderSpec(span_start_expr("r__span"), direction="asc"),
@@ -181,7 +181,7 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "entity_id"),
+        SelectExpr(c("l__ref_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
         SelectExpr(span_start_expr("l__span"), "bstart"),
@@ -258,24 +258,24 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
         base_confidence=0.95,
         hard=[
             HardPredicate(span_contains_expr("l__span", "r__span")),
-            HardPredicate(eq_value("r__is_definition", value=True)),
+            HardPredicate(truthy_expr("r__is_definition")),
         ],
         features=[
             Feature(
-                "name_span_start",
-                case_eq_expr(c("l__name_bstart"), span_start_expr("r__span")),
+                "exact_span_start",
+                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
                 weight=15.0,
             ),
             Feature(
-                "name_span_end",
-                case_eq_expr(c("l__name_bend"), span_end_expr("r__span")),
+                "exact_span_end",
+                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
                 weight=10.0,
             ),
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
-        ambiguity_group_id_expr=stable_hash64("l__entity_id"),
+        ambiguity_key_expr=c("l__def_id"),
+        ambiguity_group_id_expr=stable_hash64("l__def_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
             OrderSpec(span_start_expr("r__span"), direction="asc"),
@@ -284,7 +284,7 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "entity_id"),
+        SelectExpr(c("l__def_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
         SelectExpr(span_start_expr("l__span"), "bstart"),
@@ -307,7 +307,7 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         base_confidence=0.95,
         hard=[
             HardPredicate(span_overlaps_expr("l__span", "r__span")),
-            HardPredicate(eq_value("r__is_import", value=True)),
+            HardPredicate(truthy_expr("r__is_import")),
         ],
         features=[
             Feature(
@@ -323,8 +323,8 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
-        ambiguity_group_id_expr=stable_hash64("l__entity_id"),
+        ambiguity_key_expr=c("l__import_id"),
+        ambiguity_group_id_expr=stable_hash64("l__import_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
             OrderSpec(span_start_expr("r__span"), direction="asc"),
@@ -333,7 +333,7 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "entity_id"),
+        SelectExpr(c("l__import_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
         SelectExpr(span_start_expr("l__span"), "bstart"),
@@ -371,8 +371,8 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
-        ambiguity_group_id_expr=stable_hash64("l__entity_id"),
+        ambiguity_key_expr=c("l__call_id"),
+        ambiguity_group_id_expr=stable_hash64("l__call_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
             OrderSpec(span_start_expr("r__span"), direction="asc"),
@@ -381,7 +381,7 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "entity_id"),
+        SelectExpr(c("l__call_id"), "entity_id"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
         SelectExpr(span_start_expr("l__span"), "bstart"),
@@ -415,7 +415,7 @@ REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
+        ambiguity_key_expr=c("l__call_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
         ],
@@ -423,7 +423,7 @@ REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "src"),
+        SelectExpr(c("l__call_id"), "src"),
         SelectExpr(c("r__symbol"), "symbol"),
         SelectExpr(c("l__path"), "path"),
     ],
@@ -454,7 +454,7 @@ REL_CALL_TO_DEF_NAME: Final = QualityRelationshipSpec(
         ],
     ),
     rank=RankSpec(
-        ambiguity_key_expr=c("l__entity_id"),
+        ambiguity_key_expr=c("l__call_id"),
         order_by=[
             OrderSpec(c("score"), direction="desc"),
             OrderSpec(span_start_expr("r__span"), direction="asc"),
@@ -463,7 +463,7 @@ REL_CALL_TO_DEF_NAME: Final = QualityRelationshipSpec(
         top_k=1,
     ),
     select_exprs=[
-        SelectExpr(c("l__entity_id"), "src"),
+        SelectExpr(c("l__call_id"), "src"),
         SelectExpr(c("r__entity_id"), "dst"),
         SelectExpr(v("calls"), "kind"),
     ],

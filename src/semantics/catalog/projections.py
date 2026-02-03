@@ -96,6 +96,15 @@ def relation_output_projection(
     from datafusion import functions as f
 
     null_str = lit(None).cast(pa.string())
+    names = set(df.schema().names)
+    if "edge_owner_file_id" in names and "file_id" in names:
+        edge_owner = f.coalesce(col("edge_owner_file_id"), col("file_id"))
+    elif "edge_owner_file_id" in names:
+        edge_owner = col("edge_owner_file_id")
+    elif "file_id" in names:
+        edge_owner = col("file_id")
+    else:
+        edge_owner = null_str
     qname_source = col(spec.qname_source_col) if spec.qname_source_col else null_str
     ambiguity_group = col(spec.ambiguity_group_col) if spec.ambiguity_group_col else null_str
 
@@ -103,7 +112,7 @@ def relation_output_projection(
         col(spec.src_col).alias("src"),
         col(spec.dst_col).alias("dst"),
         col("path").alias("path"),
-        f.coalesce(col("edge_owner_file_id"), col("file_id")).alias("edge_owner_file_id"),
+        edge_owner.alias("edge_owner_file_id"),
         col("bstart").alias("bstart"),
         col("bend").alias("bend"),
         lit(spec.origin).alias("origin"),

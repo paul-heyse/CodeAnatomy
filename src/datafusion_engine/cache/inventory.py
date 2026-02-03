@@ -15,19 +15,13 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.io.write import (
-    WriteFormat,
-    WriteMode,
-    WritePipeline,
-    WriteRequest,
-)
+from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from obs.otel.run_context import get_run_id
 
 if TYPE_CHECKING:
@@ -102,20 +96,38 @@ def ensure_cache_inventory_table(
         Dataset location for the cache inventory table when available.
     """
     table_path = _cache_inventory_root(profile) / CACHE_INVENTORY_TABLE_NAME
-    if not table_path.exists():
-        _bootstrap_cache_inventory_table(
-            ctx,
-            profile,
-            table_path=table_path,
-            schema=_cache_inventory_schema(),
+    delta_log_path = table_path / "_delta_log"
+    has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
+    if not has_delta_log:
+        profile.record_artifact(
+            "cache_inventory_missing_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": CACHE_INVENTORY_TABLE_NAME,
+                "path": str(table_path),
+                "error": "Delta log missing; cache inventory bootstrap skipped.",
+            },
         )
+        return None
     location = DatasetLocation(path=str(table_path), format="delta")
-    register_dataset_df(
-        ctx,
-        name=CACHE_INVENTORY_TABLE_NAME,
-        location=location,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
-    )
+    try:
+        register_dataset_df(
+            ctx,
+            name=CACHE_INVENTORY_TABLE_NAME,
+            location=location,
+            options=DatasetRegistrationOptions(runtime_profile=profile),
+        )
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+        profile.record_artifact(
+            "cache_inventory_register_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": CACHE_INVENTORY_TABLE_NAME,
+                "path": str(table_path),
+                "error": str(exc),
+            },
+        )
+        return None
     return location
 
 
@@ -190,32 +202,22 @@ def _bootstrap_cache_inventory_table(
     table_path: Path,
     schema: pa.Schema,
 ) -> None:
+    _ = (ctx, profile)
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    empty = empty_table_for_schema(schema)
-    df = datafusion_from_arrow(ctx, name=f"{table_path.name}_bootstrap", value=empty)
-    pipeline = WritePipeline(ctx=ctx, runtime_profile=profile)
-    from datafusion_engine.cache.commit_metadata import (
-        CacheCommitMetadataRequest,
-        cache_commit_metadata,
-    )
+    bootstrap_row = {
+        "event_time_unix_ms": 0,
+        "view_name": "__bootstrap__",
+        "cache_policy": "bootstrap",
+        "cache_path": "",
+    }
+    table = pa.Table.from_pylist([bootstrap_row], schema=schema)
+    from deltalake.writer import write_deltalake
 
-    commit_metadata = cache_commit_metadata(
-        CacheCommitMetadataRequest(
-            operation="cache_inventory_bootstrap",
-            cache_policy="cache_inventory",
-            cache_scope="ledger",
-            cache_key=table_path.name,
-            result="write",
-        )
-    )
-    pipeline.write(
-        WriteRequest(
-            source=df,
-            destination=str(table_path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.OVERWRITE,
-            format_options={"commit_metadata": commit_metadata},
-        )
+    write_deltalake(
+        str(table_path),
+        table,
+        mode="overwrite",
+        schema_mode="overwrite",
     )
 
 

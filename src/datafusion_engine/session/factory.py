@@ -136,6 +136,7 @@ def _build_delta_session_context(
     error: str | None = None
     cause: Exception | None = None
     builder: object | None = None
+    builder_module: str | None = None
     for module_name in ("datafusion._internal", "datafusion_ext"):
         try:
             module = importlib.import_module(module_name)
@@ -146,6 +147,7 @@ def _build_delta_session_context(
             continue
         builder = getattr(module, "delta_session_context", None)
         if callable(builder):
+            builder_module = module_name
             break
         error = f"{module_name}.delta_session_context is unavailable."
         cause = TypeError(error)
@@ -159,18 +161,27 @@ def _build_delta_session_context(
             cause=cause,
         )
     builder_fn = cast(
-        "Callable[[list[tuple[str, str]], RuntimeEnvBuilder, object | None], SessionContext]",
+        "Callable[[list[tuple[str, str]], RuntimeEnvBuilder | None, object | None], SessionContext]",
         builder,
     )
     try:
         settings = profile.settings_payload()
+        if builder_module == "datafusion_ext":
+            settings = {
+                key: value
+                for key, value in settings.items()
+                if not key.startswith("datafusion.runtime.")
+            }
         settings["datafusion.catalog.information_schema"] = str(
             profile.enable_information_schema
         ).lower()
         delta_runtime = delta_runtime_env_options(profile)
+        runtime_arg: RuntimeEnvBuilder | None = runtime_env
+        if builder_module == "datafusion_ext":
+            runtime_arg = None
         ctx = builder_fn(
             list(settings.items()),
-            runtime_env,
+            runtime_arg,
             delta_runtime,
         )
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -181,6 +192,10 @@ def _build_delta_session_context(
             error=str(exc),
             cause=exc,
         )
+    if not isinstance(ctx, SessionContext) and hasattr(ctx, "table") and not hasattr(ctx, "ctx"):
+        wrapper = SessionContext.__new__(SessionContext)
+        wrapper.ctx = ctx
+        ctx = wrapper
     if not isinstance(ctx, SessionContext):
         message = "Delta session context must return a SessionContext."
         return _DeltaSessionBuildResult(

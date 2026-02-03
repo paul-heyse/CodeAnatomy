@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from datafusion_engine.dataset.registration import dataset_input_plugin, input_plugin_prefixes
@@ -28,15 +28,20 @@ if TYPE_CHECKING:
     from semantics.runtime import SemanticBuildOptions, SemanticRuntimeConfig
 
 
-def build_engine_session(  # noqa: PLR0913
+@dataclass(frozen=True)
+class EngineSessionOptions:
+    diagnostics: DiagnosticsCollector | None = None
+    surface_policy: MaterializationPolicy | None = None
+    diagnostics_policy: DiagnosticsPolicy | None = None
+    semantic_config: SemanticRuntimeConfig | None = None
+    build_options: SemanticBuildOptions | None = None
+    otel_options: OtelBootstrapOptions | None = None
+
+
+def build_engine_session(
     *,
     runtime_spec: RuntimeProfileSpec,
-    diagnostics: DiagnosticsCollector | None = None,
-    surface_policy: MaterializationPolicy | None = None,
-    diagnostics_policy: DiagnosticsPolicy | None = None,
-    semantic_config: SemanticRuntimeConfig | None = None,
-    build_options: SemanticBuildOptions | None = None,
-    otel_options: OtelBootstrapOptions | None = None,
+    options: EngineSessionOptions | None = None,
 ) -> EngineSession:
     """Build an EngineSession bound to the provided runtime spec.
 
@@ -44,27 +49,17 @@ def build_engine_session(  # noqa: PLR0913
     ----------
     runtime_spec
         Resolved runtime profile specification.
-    diagnostics
-        Optional diagnostics collector for recording events.
-    surface_policy
-        Optional materialization policy override.
-    diagnostics_policy
-        Optional diagnostics policy configuration.
-    semantic_config
-        Optional semantic runtime configuration. When provided, takes precedence
-        over values inferred from the runtime profile.
-    build_options
-        Optional semantic build options (reserved for future use).
-    otel_options
-        Optional OpenTelemetry bootstrap overrides.
+    options
+        Optional engine session options for diagnostics, semantic config, and tracing.
 
     Returns
     -------
     EngineSession
         Engine session wired to the runtime surfaces.
     """
-    _ = build_options  # Reserved for future use
-    effective_otel = otel_options or OtelBootstrapOptions()
+    resolved = options or EngineSessionOptions()
+    _ = resolved.build_options  # Reserved for future use
+    effective_otel = resolved.otel_options or OtelBootstrapOptions()
     resource_overrides = dict(effective_otel.resource_overrides or {})
     resource_overrides["codeanatomy.runtime_profile"] = runtime_spec.name
     configure_otel(
@@ -73,23 +68,23 @@ def build_engine_session(  # noqa: PLR0913
     )
     engine_runtime = build_engine_runtime(
         runtime_profile=runtime_spec.datafusion,
-        diagnostics=diagnostics,
-        diagnostics_policy=diagnostics_policy,
+        diagnostics=resolved.diagnostics,
+        diagnostics_policy=resolved.diagnostics_policy,
     )
     df_profile = engine_runtime.datafusion_profile
     profile_name = runtime_spec.name
 
     # Resolve and apply semantic config via the datafusion_engine bridge
-    resolved_semantic = semantic_config or semantic_runtime_from_profile(df_profile)
+    resolved_semantic = resolved.semantic_config or semantic_runtime_from_profile(df_profile)
     df_profile = apply_semantic_runtime_config(df_profile, resolved_semantic)
     engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
-    if diagnostics is not None:
+    if resolved.diagnostics is not None:
         snapshot = feature_state_snapshot(
             profile_name=profile_name,
             determinism_tier=runtime_spec.determinism_tier,
             runtime_profile=df_profile,
         )
-        diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
+        resolved.diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
     datasets = DatasetCatalog()
     input_plugin_names: list[str] = []
     if df_profile is not None:
@@ -109,9 +104,9 @@ def build_engine_session(  # noqa: PLR0913
         name=profile_name,
         determinism_tier=runtime_spec.determinism_tier,
     )
-    if diagnostics is not None:
-        if not diagnostics.artifacts_snapshot().get("engine_runtime_v2"):
-            diagnostics.record_artifact(
+    if resolved.diagnostics is not None:
+        if not resolved.diagnostics.artifacts_snapshot().get("engine_runtime_v2"):
+            resolved.diagnostics.record_artifact(
                 "engine_runtime_v2",
                 engine_runtime_artifact(
                     df_profile,
@@ -119,7 +114,7 @@ def build_engine_session(  # noqa: PLR0913
                     determinism_tier=runtime_spec.determinism_tier,
                 ),
             )
-        diagnostics.record_artifact(
+        resolved.diagnostics.record_artifact(
             "datafusion_input_plugins_v1",
             {
                 "plugins": input_plugin_names,
@@ -130,11 +125,11 @@ def build_engine_session(  # noqa: PLR0913
     return EngineSession(
         engine_runtime=engine_runtime,
         datasets=datasets,
-        diagnostics=diagnostics,
-        surface_policy=surface_policy or MaterializationPolicy(),
+        diagnostics=resolved.diagnostics,
+        surface_policy=resolved.surface_policy or MaterializationPolicy(),
         settings_hash=settings_hash,
         runtime_profile_hash=runtime_snapshot.profile_hash,
     )
 
 
-__all__ = ["build_engine_session"]
+__all__ = ["EngineSessionOptions", "build_engine_session"]

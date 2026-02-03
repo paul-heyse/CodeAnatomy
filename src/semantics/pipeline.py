@@ -308,7 +308,7 @@ def _relationship_builder(
 
                 try:
                     file_quality_df = inner_ctx.table(spec.file_quality_view)
-                except Exception:  # noqa: BLE001
+                except (KeyError, OSError, RuntimeError, TypeError, ValueError):
                     file_quality_df = build_file_quality_view(inner_ctx)
             if join_group is None:
                 return compiler.compile_relationship_with_quality(

@@ -8,6 +8,7 @@ for runtime context integration.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -57,12 +58,16 @@ def _parse_version(name: str) -> tuple[str, int | None]:
     return name, None
 
 
-# Lazily-initialized caches
-_DATASET_ROWS_CACHE: dict[str, SemanticDatasetRow] | None = None
-_INPUT_SCHEMAS_CACHE: dict[str, SchemaLike] | None = None
-_DATASET_SPECS_CACHE: dict[str, DatasetSpec] | None = None
-_DATASET_ALIASES_CACHE: dict[str, str] | None = None
-_ALIASES_TO_NAME_CACHE: dict[str, str] | None = None
+@dataclass
+class _DatasetSpecCache:
+    dataset_rows: dict[str, SemanticDatasetRow] | None = None
+    input_schemas: dict[str, SchemaLike] | None = None
+    dataset_specs: dict[str, DatasetSpec] | None = None
+    dataset_aliases: dict[str, str] | None = None
+    aliases_to_name: dict[str, str] | None = None
+
+
+_CACHE = _DatasetSpecCache()
 
 
 def _get_all_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
@@ -122,10 +127,11 @@ def _get_dataset_rows_map() -> dict[str, SemanticDatasetRow]:
     dict[str, SemanticDatasetRow]
         Mapping from dataset name to row.
     """
-    global _DATASET_ROWS_CACHE  # noqa: PLW0603
-    if _DATASET_ROWS_CACHE is None:
-        _DATASET_ROWS_CACHE = {row.name: row for row in _get_all_dataset_rows()}
-    return _DATASET_ROWS_CACHE
+    dataset_rows = _CACHE.dataset_rows
+    if dataset_rows is None:
+        dataset_rows = {row.name: row for row in _get_all_dataset_rows()}
+        _CACHE.dataset_rows = dataset_rows
+    return dataset_rows
 
 
 def _get_input_schemas() -> dict[str, SchemaLike]:
@@ -136,10 +142,11 @@ def _get_input_schemas() -> dict[str, SchemaLike]:
     dict[str, SchemaLike]
         Mapping from dataset name to input schema.
     """
-    global _INPUT_SCHEMAS_CACHE  # noqa: PLW0603
-    if _INPUT_SCHEMAS_CACHE is None:
-        _INPUT_SCHEMAS_CACHE = {row.name: _build_input(row) for row in _get_all_dataset_rows()}
-    return _INPUT_SCHEMAS_CACHE
+    input_schemas = _CACHE.input_schemas
+    if input_schemas is None:
+        input_schemas = {row.name: _build_input(row) for row in _get_all_dataset_rows()}
+        _CACHE.input_schemas = input_schemas
+    return input_schemas
 
 
 def _get_dataset_specs() -> dict[str, DatasetSpec]:
@@ -150,10 +157,11 @@ def _get_dataset_specs() -> dict[str, DatasetSpec]:
     dict[str, DatasetSpec]
         Mapping from dataset name to DatasetSpec.
     """
-    global _DATASET_SPECS_CACHE  # noqa: PLW0603
-    if _DATASET_SPECS_CACHE is None:
-        _DATASET_SPECS_CACHE = {row.name: _build_spec(row) for row in _get_all_dataset_rows()}
-    return _DATASET_SPECS_CACHE
+    dataset_specs = _CACHE.dataset_specs
+    if dataset_specs is None:
+        dataset_specs = {row.name: _build_spec(row) for row in _get_all_dataset_rows()}
+        _CACHE.dataset_specs = dataset_specs
+    return dataset_specs
 
 
 def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
@@ -169,8 +177,9 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
     ValueError
         Raised when duplicate aliases are detected in the registry.
     """
-    global _DATASET_ALIASES_CACHE, _ALIASES_TO_NAME_CACHE  # noqa: PLW0603
-    if _DATASET_ALIASES_CACHE is None or _ALIASES_TO_NAME_CACHE is None:
+    dataset_aliases = _CACHE.dataset_aliases
+    aliases_to_name = _CACHE.aliases_to_name
+    if dataset_aliases is None or aliases_to_name is None:
         from semantics.migrations import migration_for, migration_skeleton
         from semantics.schema_diff import diff_contract_specs
 
@@ -219,9 +228,11 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
                 raise ValueError(msg)
             reverse[alias] = latest_name
 
-        _DATASET_ALIASES_CACHE = aliases
-        _ALIASES_TO_NAME_CACHE = reverse
-    return _DATASET_ALIASES_CACHE, _ALIASES_TO_NAME_CACHE
+        dataset_aliases = aliases
+        aliases_to_name = reverse
+        _CACHE.dataset_aliases = dataset_aliases
+        _CACHE.aliases_to_name = aliases_to_name
+    return dataset_aliases, aliases_to_name
 
 
 def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:

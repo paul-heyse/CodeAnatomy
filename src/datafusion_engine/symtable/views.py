@@ -22,6 +22,90 @@ def _scope_type_filter(scope_type: Expr) -> Expr:
     return (scope_type == lit("TYPE_PARAMETERS")) | (scope_type == lit("TYPE_VARIABLE"))
 
 
+def _scope_type_expr(scope_df: DataFrame) -> Expr:
+    schema_names: list[str] = (
+        list(scope_df.schema().names) if hasattr(scope_df.schema(), "names") else []
+    )
+    if "scope_type" in schema_names:
+        return col("scope_type")
+    if "block_type" in schema_names:
+        return col("block_type")
+    return col("scope_type_value")
+
+
+def _schema_names(df: DataFrame) -> list[str]:
+    if hasattr(df.schema(), "names"):
+        return list(df.schema().names)
+    return []
+
+
+def _scope_column_spec(scope_df: DataFrame) -> tuple[Expr, str, str]:
+    schema_names = _schema_names(scope_df)
+    scope_type_expr = _scope_type_expr(scope_df)
+    scope_name_col = "scope_name" if "scope_name" in schema_names else "name"
+    scope_lineno_col = "lineno" if "lineno" in schema_names else "lineno1"
+    return scope_type_expr, scope_name_col, scope_lineno_col
+
+
+def _symbol_flag_exprs(symbols_df: DataFrame) -> tuple[str, dict[str, Expr]]:
+    schema_names = _schema_names(symbols_df)
+    symbol_name_col = "symbol_name" if "symbol_name" in schema_names else "name"
+    flags_expr = col("flags") if "flags" in schema_names else None
+
+    def _flag(name: str) -> Expr:
+        if flags_expr is None:
+            return col(name)
+        return flags_expr[name]
+
+    return symbol_name_col, {
+        "is_referenced": _flag("is_referenced"),
+        "is_assigned": _flag("is_assigned"),
+        "is_nonlocal": _flag("is_nonlocal"),
+        "is_global": _flag("is_global"),
+        "is_declared_global": _flag("is_declared_global"),
+        "is_free": _flag("is_free"),
+        "is_parameter": _flag("is_parameter"),
+        "is_imported": _flag("is_imported"),
+        "is_namespace": _flag("is_namespace"),
+        "is_annotated": _flag("is_annotated"),
+    }
+
+
+def _scope_edges_df(ctx: SessionContext) -> DataFrame:
+    edges_df = ctx.table("symtable_scope_edges")
+    edge_schema_names: list[str] = (
+        list(edges_df.schema().names) if hasattr(edges_df.schema(), "names") else []
+    )
+    if "child_scope_id" in edge_schema_names and "parent_scope_id" in edge_schema_names:
+        return edges_df.select(
+            col("path"),
+            col("child_scope_id"),
+            col("parent_scope_id"),
+        )
+    scopes = ctx.table("symtable_scopes")
+    children = scopes.select(
+        col("path"),
+        col("block_id").alias("child_block_id"),
+        col("parent_block_id").alias("child_parent_block_id"),
+        col("scope_id").alias("child_scope_id"),
+    )
+    parents = scopes.select(
+        col("path").alias("parent_path"),
+        col("block_id").alias("parent_block_id"),
+        col("scope_id").alias("parent_scope_id"),
+    )
+    return children.join(
+        parents,
+        join_keys=(["path", "child_parent_block_id"], ["parent_path", "parent_block_id"]),
+        how="left",
+        coalesce_duplicate_keys=True,
+    ).select(
+        col("path"),
+        col("child_scope_id"),
+        col("parent_scope_id"),
+    )
+
+
 def symtable_bindings_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable binding rows.
 
@@ -30,28 +114,32 @@ def symtable_bindings_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of binding records.
     """
-    scopes = ctx.table("symtable_scopes").select(
+    scope_df = ctx.table("symtable_scopes")
+    scope_type_expr, scope_name_col, scope_lineno_col = _scope_column_spec(scope_df)
+    scopes = scope_df.select(
         col("scope_id"),
         col("path"),
-        col("scope_type"),
-        col("scope_name"),
-        col("lineno").alias("scope_lineno"),
+        scope_type_expr.alias("scope_type"),
+        col(scope_name_col).alias("scope_name"),
+        col(scope_lineno_col).alias("scope_lineno"),
     )
-    symbols = ctx.table("symtable_symbols").select(
+    symbols_df = ctx.table("symtable_symbols")
+    symbol_name_col, flag_exprs = _symbol_flag_exprs(symbols_df)
+    symbols = symbols_df.select(
         col("file_id"),
         col("path"),
         col("scope_id"),
-        col("symbol_name"),
-        col("is_referenced"),
-        col("is_assigned"),
-        col("is_nonlocal"),
-        col("is_global"),
-        col("is_declared_global"),
-        col("is_free"),
-        col("is_parameter"),
-        col("is_imported"),
-        col("is_namespace"),
-        col("is_annotated"),
+        col(symbol_name_col).alias("symbol_name"),
+        flag_exprs["is_referenced"].alias("is_referenced"),
+        flag_exprs["is_assigned"].alias("is_assigned"),
+        flag_exprs["is_nonlocal"].alias("is_nonlocal"),
+        flag_exprs["is_global"].alias("is_global"),
+        flag_exprs["is_declared_global"].alias("is_declared_global"),
+        flag_exprs["is_free"].alias("is_free"),
+        flag_exprs["is_parameter"].alias("is_parameter"),
+        flag_exprs["is_imported"].alias("is_imported"),
+        flag_exprs["is_namespace"].alias("is_namespace"),
+        flag_exprs["is_annotated"].alias("is_annotated"),
     )
     joined = symbols.join(
         scopes,
@@ -218,14 +306,19 @@ def symtable_type_params_df(ctx: SessionContext) -> DataFrame:
         DataFusion DataFrame of type parameter records.
     """
     scopes = ctx.table("symtable_scopes")
-    filtered = scopes.filter(_scope_type_filter(col("scope_type")))
+    scope_schema_names: list[str] = (
+        list(scopes.schema().names) if hasattr(scopes.schema(), "names") else []
+    )
+    scope_name_col = "scope_name" if "scope_name" in scope_schema_names else "name"
+    scope_type_expr = _scope_type_expr(scopes)
+    filtered = scopes.filter(_scope_type_filter(scope_type_expr))
     variance = lit(None).cast(pa.string())
     return filtered.select(
         col("file_id"),
         col("path"),
         col("scope_id").alias("type_param_id"),
         col("scope_id"),
-        col("scope_name").alias("name"),
+        col(scope_name_col).alias("name"),
         variance.alias("variance"),
     )
 
@@ -238,19 +331,17 @@ def symtable_type_param_edges_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of type-parameter edge records.
     """
-    edges = ctx.table("symtable_scope_edges").select(
-        col("path"),
-        col("child_scope_id"),
-        col("parent_scope_id"),
-    )
-    scopes = ctx.table("symtable_scopes").select(
+    edges = _scope_edges_df(ctx)
+    scope_df = ctx.table("symtable_scopes")
+    scope_type_expr = _scope_type_expr(scope_df)
+    scopes = scope_df.select(
         col("scope_id"),
-        col("path"),
-        col("scope_type"),
+        col("path").alias("scope_path"),
+        scope_type_expr.alias("scope_type"),
     )
     joined = edges.join(
         scopes,
-        join_keys=(["child_scope_id", "path"], ["scope_id", "path"]),
+        join_keys=(["child_scope_id", "path"], ["scope_id", "scope_path"]),
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -367,26 +458,26 @@ def _declared_bindings(ctx: SessionContext) -> DataFrame:
 
 
 def _module_scopes(ctx: SessionContext) -> DataFrame:
-    return (
-        ctx.table("symtable_scopes")
-        .filter(col("scope_type") == lit("MODULE"))
-        .select(
-            col("path").cast(pa.string()),
-            col("scope_id").cast(pa.string()).alias("module_scope_id"),
-        )
+    scopes = ctx.table("symtable_scopes")
+    scope_type_expr = _scope_type_expr(scopes)
+    return scopes.filter(scope_type_expr == lit("MODULE")).select(
+        col("path").cast(pa.string()),
+        col("scope_id").cast(pa.string()).alias("module_scope_id"),
     )
 
 
 def _scope_types(ctx: SessionContext) -> DataFrame:
-    return ctx.table("symtable_scopes").select(
+    scopes = ctx.table("symtable_scopes")
+    scope_type_expr = _scope_type_expr(scopes)
+    return scopes.select(
         col("path").cast(pa.string()),
         col("scope_id").cast(pa.string()),
-        col("scope_type").cast(pa.string()),
+        scope_type_expr.cast(pa.string()).alias("scope_type"),
     )
 
 
 def _scope_ancestor_edges(ctx: SessionContext, *, max_depth: int) -> DataFrame:
-    edges = ctx.table("symtable_scope_edges").select(
+    edges = _scope_edges_df(ctx).select(
         col("path").cast(pa.string()),
         col("child_scope_id").cast(pa.string()),
         col("parent_scope_id").cast(pa.string()),

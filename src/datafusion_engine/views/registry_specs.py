@@ -160,9 +160,7 @@ def _semantic_cache_policy_for_row(
         return override
     if runtime_config.output_path(row.name) is not None:
         return "delta_output"
-    if row.supports_cdf and row.merge_keys:
-        return "delta_staging"
-    if row.category in {"semantic", "analysis"}:
+    if runtime_config.cdf_enabled and row.supports_cdf and row.merge_keys:
         return "delta_staging"
     return "none"
 
@@ -266,16 +264,19 @@ def view_graph_nodes(
         msg = "Runtime profile is required for semantic view planning."
         raise ValueError(msg)
     runtime_config = semantic_runtime_from_profile(runtime_profile)
-    nodes = list(
-        _semantics_view_nodes(
-            ctx,
-            snapshot=snapshot,
-            runtime_profile=runtime_profile,
-            runtime_config=runtime_config,
-            semantic_ir=semantic_ir,
-        )
+    nested_nodes = _nested_view_nodes(
+        ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
     )
-    return tuple(nodes)
+    semantic_nodes = _semantics_view_nodes(
+        ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
+        runtime_config=runtime_config,
+        semantic_ir=semantic_ir,
+    )
+    return tuple([*nested_nodes, *semantic_nodes])
 
 
 def _semantic_dataset_specs() -> dict[str, DatasetSpec]:
@@ -293,6 +294,59 @@ def _dataset_contract_for(
     if dataset_spec is None:
         return None, False
     return _arrow_schema_from_contract(dataset_spec.schema()), True
+
+
+def _nested_view_nodes(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> list[ViewNode]:
+    from datafusion_engine.io.adapter import DataFusionIOAdapter
+    from datafusion_engine.schema.registry import extract_nested_schema_for, nested_view_specs
+
+    if runtime_profile is None:
+        msg = "Runtime profile is required for nested view planning."
+        raise ValueError(msg)
+
+    view_specs = nested_view_specs(ctx)
+    if not view_specs:
+        return []
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    nodes: list[ViewNode] = []
+    for spec in view_specs:
+        if spec.builder is None:
+            continue
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            spec.builder,
+            snapshot,
+            label=spec.name,
+            runtime_profile=runtime_profile,
+        )
+        expected_schema = extract_nested_schema_for(spec.name)
+        metadata = _metadata_with_required_udfs(None, required)
+        adapter.register_view(spec.name, bundle.df, overwrite=True, temporary=True)
+        nodes.append(
+            ViewNode(
+                name=spec.name,
+                deps=deps,
+                builder=spec.builder,
+                contract_builder=_contract_builder(
+                    spec.name,
+                    options=ContractBuilderOptions(
+                        metadata_spec=metadata,
+                        expected_schema=expected_schema,
+                        enforce_columns=True,
+                    ),
+                ),
+                required_udfs=required,
+                plan_bundle=bundle,
+                cache_policy="none",
+            )
+        )
+    return nodes
 
 
 def _validated_semantic_inputs(

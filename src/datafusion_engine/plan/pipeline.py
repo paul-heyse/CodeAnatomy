@@ -14,6 +14,7 @@ from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.diagnostics import record_plan_bundle_diagnostics
 from datafusion_engine.session.runtime import (
     extract_output_locations_for_profile,
     normalize_dataset_locations_for_profile,
@@ -91,7 +92,11 @@ def plan_with_delta_pins(
         scan_units=(),
     )
     snapshot = snapshot or (session_runtime.udf_snapshot if session_runtime is not None else None)
-    baseline_inferred = infer_deps_from_view_nodes(baseline_nodes, snapshot=snapshot)
+    baseline_inferred = infer_deps_from_view_nodes(
+        baseline_nodes,
+        ctx=ctx,
+        snapshot=snapshot,
+    )
     scan_planning = _scan_planning(
         ctx,
         runtime_profile=runtime_profile,
@@ -115,7 +120,11 @@ def plan_with_delta_pins(
         session_runtime=session_runtime,
         scan_units=scan_planning.scan_units,
     )
-    pinned_inferred = infer_deps_from_view_nodes(pinned_nodes, snapshot=snapshot)
+    pinned_inferred = infer_deps_from_view_nodes(
+        pinned_nodes,
+        ctx=ctx,
+        snapshot=snapshot,
+    )
     lineage_by_view = _lineage_by_view(pinned_nodes)
     scan_inferred = _scan_inferred_deps(scan_planning.scan_task_units_by_name)
     inferred_all = (*pinned_inferred, *scan_inferred)
@@ -187,6 +196,14 @@ def _plan_view_nodes(
                 session_runtime=session_runtime,
                 scan_units=scan_units,
             ),
+        )
+        runtime_profile = session_runtime.profile if session_runtime is not None else None
+        record_plan_bundle_diagnostics(
+            bundle=bundle,
+            runtime_profile=runtime_profile,
+            plan_kind="view",
+            stage="planning",
+            view_name=node.name,
         )
         planned.append(
             replace(

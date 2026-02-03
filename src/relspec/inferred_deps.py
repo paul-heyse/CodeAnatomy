@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from datafusion_engine.lineage.datafusion import ScanLineage
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import DatasetSpec
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,8 @@ class InferredDepsInputs:
         Output dataset name produced by the task.
     plan_bundle : DataFusionPlanBundle
         DataFusion plan bundle for native lineage extraction.
+    ctx : SessionContext | None
+        Optional DataFusion context for resolving dataset specs.
     snapshot : Mapping[str, object] | None
         Optional Rust UDF snapshot for validation.
     required_udfs : Sequence[str] | None
@@ -80,6 +88,7 @@ class InferredDepsInputs:
     task_name: str
     output: str
     plan_bundle: DataFusionPlanBundle
+    ctx: SessionContext | None = None
     snapshot: Mapping[str, object] | None = None
     required_udfs: Sequence[str] | None = None
 
@@ -119,22 +128,34 @@ def infer_deps_from_plan_bundle(
     columns_by_table = dict(lineage.required_columns_by_dataset)
 
     # Compute required types and metadata from registry
-    required_types = _required_types_from_registry(columns_by_table)
-    required_metadata = _required_metadata_for_tables(columns_by_table)
+    required_types = _required_types_from_registry(columns_by_table, ctx=inputs.ctx)
+    required_metadata = _required_metadata_for_tables(columns_by_table, ctx=inputs.ctx)
 
-    # Handle UDF resolution
-    resolved_udfs: tuple[str, ...] = ()
+    from datafusion_engine.views.bundle_extraction import resolve_required_udfs_from_bundle
+
+    snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
+    resolved_snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    resolved_udfs = resolve_required_udfs_from_bundle(
+        plan_bundle,
+        snapshot=resolved_snapshot,
+    )
     if inputs.required_udfs is not None:
-        resolved_udfs = tuple(inputs.required_udfs)
-    elif plan_bundle.required_udfs:
-        resolved_udfs = plan_bundle.required_udfs
-    else:
-        resolved_udfs = lineage.required_udfs
+        allowed = {name.lower() for name in resolved_udfs}
+        extra = [
+            name
+            for name in inputs.required_udfs
+            if isinstance(name, str) and name.lower() not in allowed
+        ]
+        if extra:
+            _LOGGER.warning(
+                "Ignoring explicit required_udfs not present in plan bundle: %s",
+                sorted(set(extra)),
+            )
 
-    if inputs.snapshot is not None and resolved_udfs:
+    if resolved_udfs:
         from datafusion_engine.udf.runtime import validate_required_udfs
 
-        validate_required_udfs(inputs.snapshot, required=resolved_udfs)
+        validate_required_udfs(resolved_snapshot, required=resolved_udfs)
 
     # Use plan fingerprint from bundle
     fingerprint = plan_bundle.plan_fingerprint
@@ -156,6 +177,7 @@ def infer_deps_from_plan_bundle(
 def infer_deps_from_view_nodes(
     nodes: Sequence[ViewNode],
     *,
+    ctx: SessionContext | None = None,
     snapshot: Mapping[str, object] | None = None,
 ) -> tuple[InferredDeps, ...]:
     """Infer dependencies for view nodes using DataFusion plan bundles.
@@ -166,6 +188,8 @@ def infer_deps_from_view_nodes(
     ----------
     nodes : Sequence[ViewNode]
         View nodes with plan bundles attached (plan_bundle preferred).
+    ctx : SessionContext | None
+        Optional session context used for registry lookups.
     snapshot : Mapping[str, object] | None
         Optional Rust UDF snapshot used for required UDF validation.
 
@@ -192,6 +216,7 @@ def infer_deps_from_view_nodes(
                 InferredDepsInputs(
                     task_name=node.name,
                     output=node.name,
+                    ctx=ctx,
                     snapshot=snapshot,
                     required_udfs=tuple(node.required_udfs) if node.required_udfs else None,
                     plan_bundle=node.plan_bundle,
@@ -203,10 +228,12 @@ def infer_deps_from_view_nodes(
 
 def _required_metadata_for_tables(
     columns_by_table: Mapping[str, tuple[str, ...]],
+    *,
+    ctx: SessionContext | None = None,
 ) -> dict[str, tuple[tuple[bytes, bytes], ...]]:
     required: dict[str, tuple[tuple[bytes, bytes], ...]] = {}
     for table_name in columns_by_table:
-        spec = _dataset_spec_for_table(table_name)
+        spec = _dataset_spec_for_table(table_name, ctx=ctx)
         if spec is None:
             continue
         metadata = spec.schema().metadata
@@ -217,10 +244,12 @@ def _required_metadata_for_tables(
 
 def _required_types_from_registry(
     columns_by_table: Mapping[str, tuple[str, ...]],
+    *,
+    ctx: SessionContext | None = None,
 ) -> dict[str, tuple[tuple[str, str], ...]]:
     required: dict[str, tuple[tuple[str, str], ...]] = {}
     for table_name, columns in columns_by_table.items():
-        contract = _schema_contract_for_table(table_name)
+        contract = _schema_contract_for_table(table_name, ctx=ctx)
         if contract is None:
             continue
         pairs = _types_from_contract(contract, columns)
@@ -251,7 +280,7 @@ def _extract_dataset_spec(name: str) -> DatasetSpec | None:
         return None
 
 
-def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
+def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
     normalize_dataset_spec = _optional_module_attr(
         "semantics.catalog.dataset_specs",
         "dataset_spec",
@@ -260,7 +289,7 @@ def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
         return None
     normalize_dataset_spec = cast("Callable[..., DatasetSpec]", normalize_dataset_spec)
     try:
-        return normalize_dataset_spec(name, ctx=None)
+        return normalize_dataset_spec(name, ctx=ctx)
     except KeyError:
         return None
 
@@ -279,7 +308,11 @@ def _incremental_dataset_spec(name: str) -> DatasetSpec | None:
         return None
 
 
-def _relationship_dataset_spec(name: str) -> DatasetSpec | None:
+def _relationship_dataset_spec(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> DatasetSpec | None:
     relationship_dataset_specs = _optional_module_attr(
         "schema_spec.relationship_specs",
         "relationship_dataset_specs",
@@ -287,22 +320,22 @@ def _relationship_dataset_spec(name: str) -> DatasetSpec | None:
     if not callable(relationship_dataset_specs):
         return None
     relationship_dataset_specs = cast(
-        "Callable[[], Sequence[DatasetSpec]]",
+        "Callable[..., Sequence[DatasetSpec]]",
         relationship_dataset_specs,
     )
-    with contextlib.suppress(RuntimeError, TypeError, ValueError):
-        for spec in relationship_dataset_specs():
+    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+        for spec in relationship_dataset_specs(ctx=ctx):
             if spec.name == name:
                 return spec
     return None
 
 
-def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
+def _dataset_spec_for_table(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
     resolvers = (
         _extract_dataset_spec,
-        _normalize_dataset_spec,
+        lambda table_name: _normalize_dataset_spec(table_name, ctx=ctx),
         _incremental_dataset_spec,
-        _relationship_dataset_spec,
+        lambda table_name: _relationship_dataset_spec(table_name, ctx=ctx),
     )
     for resolver in resolvers:
         spec = resolver(name)
@@ -311,8 +344,10 @@ def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
     return None
 
 
-def _schema_contract_for_table(name: str) -> SchemaContract | None:
-    spec = _dataset_spec_for_table(name)
+def _schema_contract_for_table(
+    name: str, *, ctx: SessionContext | None = None
+) -> SchemaContract | None:
+    spec = _dataset_spec_for_table(name, ctx=ctx)
     if spec is None:
         return None
     try:

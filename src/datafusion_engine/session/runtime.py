@@ -2982,6 +2982,36 @@ def build_session_runtime(
     return runtime
 
 
+def refresh_session_runtime(
+    profile: DataFusionRuntimeProfile,
+    *,
+    ctx: SessionContext | None = None,
+) -> SessionRuntime:
+    """Rebuild and cache a SessionRuntime for the current SessionContext.
+
+    Returns
+    -------
+    SessionRuntime
+        Refreshed session runtime cached for the profile context.
+
+    Raises
+    ------
+    TypeError
+        Raised when the runtime builder is unavailable on the profile.
+    """
+    resolved_ctx = ctx or profile.session_context()
+    runtime_builder = cast(
+        "Callable[[SessionContext], SessionRuntime] | None",
+        getattr(profile, "_session_runtime_from_context", None),
+    )
+    if not callable(runtime_builder):
+        msg = "DataFusionRuntimeProfile does not expose a session runtime builder."
+        raise TypeError(msg)
+    runtime = runtime_builder(resolved_ctx)
+    _SESSION_RUNTIME_CACHE[profile.context_cache_key()] = runtime
+    return runtime
+
+
 def _session_runtime_entries(mapping: Mapping[str, str]) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
     for key, value in sorted(mapping.items(), key=lambda item: item[0]):
@@ -3754,9 +3784,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             and platform.function_factory is not None
             and platform.function_factory.installed
         ):
-            from datafusion_engine.udf.runtime import fallback_udfs_active, register_udfs_via_ddl
+            from datafusion_engine.udf.factory import function_factory_fallback_active
+            from datafusion_engine.udf.runtime import register_udfs_via_ddl
 
-            if not fallback_udfs_active(ctx):
+            if function_factory_fallback_active(ctx):
+                logger.warning(
+                    "FunctionFactory fallback active; skipping CREATE FUNCTION registration."
+                )
+            else:
                 register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
         self._refresh_udf_catalog(ctx)
 
@@ -6582,6 +6617,7 @@ __all__ = [
     "read_delta_as_reader",
     "record_runtime_setting_override",
     "record_schema_snapshots_for_profile",
+    "refresh_session_runtime",
     "register_cdf_inputs_for_profile",
     "run_diskcache_maintenance",
     "runtime_setting_overrides",

@@ -6,6 +6,7 @@ import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
+from weakref import WeakSet
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 
 POLICY_PAYLOAD_VERSION: int = 1
+
+_FUNCTION_FACTORY_FALLBACK_CTXS: WeakSet[SessionContext] = WeakSet()
 
 _PARAMETER_SCHEMA = pa.struct(
     [
@@ -260,7 +263,19 @@ def _fallback_install_function_factory(ctx: SessionContext, *, payload: bytes) -
         stub_install(ctx, payload)
     except (RuntimeError, TypeError, ValueError):
         return False
+    _FUNCTION_FACTORY_FALLBACK_CTXS.add(ctx)
     return True
+
+
+def function_factory_fallback_active(ctx: SessionContext) -> bool:
+    """Return True when the fallback function factory is active for ctx.
+
+    Returns
+    -------
+    bool
+        True when a fallback function factory was installed.
+    """
+    return ctx in _FUNCTION_FACTORY_FALLBACK_CTXS
 
 
 def install_function_factory(
@@ -510,11 +525,16 @@ def build_create_function_sql(*, config: CreateFunctionConfig) -> str:
             msg = "CREATE FUNCTION requires a return type when returns_table is False."
             raise ValueError(msg)
         returns_sql = f"RETURNS {config.return_type}"
-    language_sql = f" LANGUAGE {config.language}" if config.language else ""
+    if config.language:
+        language_sql = f" LANGUAGE {config.language}"
+        body_keyword = "AS"
+    else:
+        language_sql = ""
+        body_keyword = "RETURN"
     volatility_sql = f" {config.volatility.upper()}" if config.volatility else ""
     return (
         f"CREATE{replace_sql} FUNCTION {config.name}({args_sql}) "
-        f"{returns_sql}{language_sql}{volatility_sql} AS {config.body_sql}"
+        f"{returns_sql}{language_sql}{volatility_sql} {body_keyword} {config.body_sql}"
     )
 
 
@@ -530,6 +550,7 @@ __all__ = [
     "build_create_function_sql",
     "create_udaf_spec",
     "create_udwf_spec",
+    "function_factory_fallback_active",
     "function_factory_payloads",
     "function_factory_policy_from_snapshot",
     "install_function_factory",

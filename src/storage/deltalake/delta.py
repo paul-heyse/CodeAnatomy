@@ -2391,8 +2391,8 @@ def idempotent_commit_properties(
         Raised when commit metadata is empty after normalization.
     """
     metadata: dict[str, str] = {
-        "operation": str(operation),
-        "mode": str(mode),
+        "codeanatomy_operation": str(operation),
+        "codeanatomy_mode": str(mode),
     }
     if extra_metadata:
         metadata.update({str(key): str(value) for key, value in extra_metadata.items()})

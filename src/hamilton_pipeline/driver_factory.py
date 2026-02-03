@@ -223,6 +223,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     )
     profile = runtime_profile_spec.datafusion
     from cpg.kind_catalog import validate_edge_kind_requirements
+    from datafusion_engine.session.runtime import refresh_session_runtime
     from datafusion_engine.views.registration import ensure_view_graph
     from datafusion_engine.views.registry_specs import view_graph_nodes
     from semantics.ir_pipeline import build_semantic_ir
@@ -236,6 +237,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
         runtime_profile=profile,
         semantic_ir=semantic_ir,
     )
+    session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
         session_runtime.ctx,

@@ -6,7 +6,8 @@ names and returns a typed result with stable fields.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import signal
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -24,7 +25,14 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from obs.otel import OtelBootstrapOptions, configure_otel
+from obs.diagnostics_report import write_run_diagnostics_report
+from obs.otel import (
+    OtelBootstrapOptions,
+    configure_otel,
+    snapshot_diagnostics,
+    start_build_heartbeat,
+    write_run_diagnostics_bundle,
+)
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
 from semantics.incremental import IncrementalConfig
@@ -128,24 +136,56 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         Typed outputs for the requested graph product.
     """
     repo_root_path = ensure_path(request.repo_root).resolve()
-    _resolve_output_dir(repo_root_path, request.output_dir)
+    resolved_output_dir = _resolve_output_dir(repo_root_path, request.output_dir)
+    overrides, run_id = _build_overrides(request)
+    outputs = _outputs_for_request(request)
+    options = _pipeline_options(request, outputs, overrides)
+    _configure_otel(request, repo_root_path)
 
+    run_token = set_run_id(run_id)
+    heartbeat = start_build_heartbeat(run_id=run_id, interval_s=5.0)
+    result: GraphProductBuildResult | None = None
+    fallback_bundle_dir = resolved_output_dir / "run_bundle" / run_id
+    signal_triggered = {"value": False}
+    handler = _signal_handler_for_build(run_id, fallback_bundle_dir, signal_triggered)
+    previous_sigterm, previous_sigint = _install_signal_handlers(handler)
+    try:
+        result = _execute_build(request, repo_root_path, outputs, options)
+        _record_build_output_locations(result)
+        return result
+    finally:
+        _restore_signal_handlers(previous_sigterm, previous_sigint)
+        _finalize_build_bundle(result, request, fallback_bundle_dir, run_id)
+        heartbeat.stop(timeout_s=2.0)
+        reset_run_id(run_token)
+
+
+def _apply_override(overrides: dict[str, object], key: str, value: object | None) -> None:
+    if value is not None:
+        overrides[key] = value
+
+
+def _build_overrides(
+    request: GraphProductBuildRequest,
+) -> tuple[dict[str, object], str]:
     overrides: dict[str, object] = dict(request.overrides or {})
-    if request.otel_options is not None:
-        overrides["otel_options"] = request.otel_options
-    if request.runtime_profile_name is not None:
-        overrides["runtime_profile_name"] = request.runtime_profile_name
-    if request.determinism_override is not None:
-        overrides["determinism_override"] = request.determinism_override
-    if request.writer_strategy is not None:
-        overrides["writer_strategy"] = request.writer_strategy
+    _apply_override(overrides, "otel_options", request.otel_options)
+    _apply_override(overrides, "runtime_profile_name", request.runtime_profile_name)
+    _apply_override(overrides, "determinism_override", request.determinism_override)
+    _apply_override(overrides, "writer_strategy", request.writer_strategy)
     run_id = overrides.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         run_id = uuid7_str()
         overrides["run_id"] = run_id
+    return overrides, run_id
 
-    outputs = _outputs_for_request(request)
-    options = PipelineExecutionOptions(
+
+def _pipeline_options(
+    request: GraphProductBuildRequest,
+    outputs: Sequence[str],
+    overrides: Mapping[str, object],
+) -> PipelineExecutionOptions:
+    return PipelineExecutionOptions(
         output_dir=request.output_dir,
         work_dir=request.work_dir,
         scip_index_config=request.scip_index_config,
@@ -157,48 +197,116 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         graph_adapter_config=request.graph_adapter_config,
         outputs=outputs,
         config=request.config,
-        overrides=overrides or None,
+        overrides=dict(overrides) or None,
         use_materialize=request.use_materialize,
     )
 
+
+def _configure_otel(request: GraphProductBuildRequest, repo_root: Path) -> None:
     effective_otel = request.otel_options or OtelBootstrapOptions()
     resource_overrides = dict(effective_otel.resource_overrides or {})
-    resource_overrides.update(_otel_resource_overrides(repo_root_path))
+    resource_overrides.update(_otel_resource_overrides(repo_root))
     configure_otel(
         service_name="codeanatomy",
         options=replace(effective_otel, resource_overrides=resource_overrides),
     )
-    run_token = set_run_id(run_id)
-    try:
-        with root_span(
-            "graph_product.build",
-            attributes={
-                "codeanatomy.product": request.product,
-                "codeanatomy.execution_mode": request.execution_mode.value,
-                "codeanatomy.outputs": list(outputs),
+
+
+def _signal_handler_for_build(
+    run_id: str,
+    run_bundle_dir: Path,
+    signal_state: dict[str, bool],
+) -> Callable[[int, object | None], None]:
+    def _handler(signum: int, _frame: object | None) -> None:
+        _ = signum
+        if signal_state["value"]:
+            raise SystemExit(1)
+        signal_state["value"] = True
+        _write_diagnostics_outputs(run_bundle_dir, run_id=run_id)
+        raise SystemExit(1)
+
+    return _handler
+
+
+def _install_signal_handlers(
+    handler: Callable[[int, object | None], None],
+) -> tuple[signal.Handlers, signal.Handlers]:
+    return (
+        cast("signal.Handlers", signal.signal(signal.SIGTERM, handler)),
+        cast("signal.Handlers", signal.signal(signal.SIGINT, handler)),
+    )
+
+
+def _restore_signal_handlers(
+    previous_sigterm: signal.Handlers,
+    previous_sigint: signal.Handlers,
+) -> None:
+    signal.signal(signal.SIGTERM, previous_sigterm)
+    signal.signal(signal.SIGINT, previous_sigint)
+
+
+def _execute_build(
+    request: GraphProductBuildRequest,
+    repo_root: Path,
+    outputs: Sequence[str],
+    options: PipelineExecutionOptions,
+) -> GraphProductBuildResult:
+    with root_span(
+        "graph_product.build",
+        attributes={
+            "codeanatomy.product": request.product,
+            "codeanatomy.execution_mode": request.execution_mode.value,
+            "codeanatomy.outputs": list(outputs),
+        },
+    ) as span:
+        try:
+            raw = execute_pipeline(repo_root=repo_root, options=options)
+        except Exception as exc:
+            record_exception(span, exc)
+            raise
+        result = _parse_result(
+            request=request,
+            repo_root=repo_root,
+            pipeline_outputs=raw,
+        )
+        set_span_attributes(
+            span,
+            {
+                "codeanatomy.product_version": result.product_version,
+                "codeanatomy.output_dir": str(result.output_dir),
             },
-        ) as span:
-            try:
-                raw = execute_pipeline(repo_root=repo_root_path, options=options)
-            except Exception as exc:
-                record_exception(span, exc)
-                raise
-            result = _parse_result(
-                request=request,
-                repo_root=repo_root_path,
-                pipeline_outputs=raw,
-            )
-            _record_build_output_locations(result)
-            set_span_attributes(
-                span,
-                {
-                    "codeanatomy.product_version": result.product_version,
-                    "codeanatomy.output_dir": str(result.output_dir),
-                },
-            )
-            return result
-    finally:
-        reset_run_id(run_token)
+        )
+        return result
+
+
+def _resolve_bundle_dir(
+    result: GraphProductBuildResult | None,
+    request: GraphProductBuildRequest,
+    fallback_bundle_dir: Path,
+) -> Path | None:
+    if result is not None and result.run_bundle_dir is not None:
+        return result.run_bundle_dir
+    if request.include_run_bundle:
+        return fallback_bundle_dir
+    return None
+
+
+def _write_diagnostics_outputs(run_bundle_dir: Path, *, run_id: str | None) -> None:
+    snapshot = snapshot_diagnostics()
+    write_run_diagnostics_bundle(run_bundle_dir=run_bundle_dir, run_id=run_id)
+    write_run_diagnostics_report(snapshot=snapshot, run_bundle_dir=run_bundle_dir)
+
+
+def _finalize_build_bundle(
+    result: GraphProductBuildResult | None,
+    request: GraphProductBuildRequest,
+    fallback_bundle_dir: Path,
+    run_id: str,
+) -> None:
+    bundle_dir = _resolve_bundle_dir(result, request, fallback_bundle_dir)
+    if bundle_dir is None:
+        return
+    _write_diagnostics_outputs(bundle_dir, run_id=run_id)
 
 
 def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:

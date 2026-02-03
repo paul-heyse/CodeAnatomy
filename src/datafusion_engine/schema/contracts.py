@@ -796,6 +796,79 @@ class SchemaContract:
         return type_map.get(arrow_type, str(arrow_type))
 
     @staticmethod
+    def _normalize_type_string(value: str) -> str:
+        normalized = value.lower().replace(" ", "")
+        normalized = normalized.replace("largeutf8", "string")
+        normalized = normalized.replace("utf8", "string")
+        normalized = normalized.replace("non-null", "")
+        normalized = normalized.replace("nonnull", "")
+        normalized = normalized.replace("'", "").replace('"', "")
+
+        def _extract_inner(text: str, open_char: str, close_char: str) -> str:
+            start = text.find(open_char)
+            if start < 0:
+                return ""
+            depth = 0
+            for idx in range(start, len(text)):
+                ch = text[idx]
+                if ch == open_char:
+                    depth += 1
+                elif ch == close_char:
+                    depth -= 1
+                    if depth == 0:
+                        return text[start + 1 : idx]
+            return text[start + 1 :]
+
+        def _split_top_level(text: str) -> list[str]:
+            parts: list[str] = []
+            depth = 0
+            start = 0
+            for idx, ch in enumerate(text):
+                if ch in "<(":
+                    depth += 1
+                elif ch in ">)":
+                    depth = max(depth - 1, 0)
+                elif ch == "," and depth == 0:
+                    parts.append(text[start:idx])
+                    start = idx + 1
+            tail = text[start:]
+            if tail:
+                parts.append(tail)
+            return parts
+
+        def _strip_prefix(text: str) -> str:
+            if ":" in text:
+                prefix, rest = text.split(":", 1)
+                if prefix in {"item", "field", "key", "value"}:
+                    return rest
+            return text
+
+        def _normalize(text: str) -> str:
+            if text.startswith("list("):
+                inner = _extract_inner(text, "(", ")")
+                parts = _split_top_level(inner)
+                if parts:
+                    inner = parts[0]
+                inner = _strip_prefix(inner)
+                return f"list<{_normalize(inner)}>"
+            if text.startswith("list<"):
+                inner = _extract_inner(text, "<", ">")
+                parts = _split_top_level(inner)
+                if parts:
+                    inner = parts[0]
+                inner = _strip_prefix(inner)
+                return f"list<{_normalize(inner)}>"
+            if text.startswith("map("):
+                return "map"
+            if text.startswith("map<"):
+                return "map"
+            if text.startswith("struct(") or text.startswith("struct<"):
+                return "struct"
+            return text
+
+        return _normalize(normalized)
+
+    @staticmethod
     def _types_compatible(expected: str, actual: str) -> bool:
         """
         Check if types are compatible.
@@ -812,9 +885,8 @@ class SchemaContract:
         bool
             True if types are compatible
         """
-        # Normalize for comparison
-        expected_norm = expected.lower().replace(" ", "")
-        actual_norm = actual.lower().replace(" ", "")
+        expected_norm = SchemaContract._normalize_type_string(expected)
+        actual_norm = SchemaContract._normalize_type_string(actual)
         return expected_norm == actual_norm
 
 

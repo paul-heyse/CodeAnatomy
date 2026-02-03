@@ -29,6 +29,7 @@ Pattern
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -44,6 +45,7 @@ from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions, col
 from datafusion.dataframe import DataFrame
 from datafusion.expr import SortExpr
 
+from core_types import IDENTIFIER_PATTERN
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_delta_feature_gate,
@@ -200,6 +202,26 @@ class _DeltaWriteSpecInputs:
     lineage_columns: tuple[str, ...] | None = None
 
 
+_IDENTIFIER_RE = re.compile(IDENTIFIER_PATTERN)
+_MAX_STATS_DATASET_NAME_LEN = 128
+
+
+def _normalize_stats_dataset_name(name: str) -> str:
+    if _IDENTIFIER_RE.fullmatch(name):
+        return name
+    candidate = Path(name).name if name else ""
+    if candidate and _IDENTIFIER_RE.fullmatch(candidate):
+        return candidate
+    normalized = re.sub(r"[^A-Za-z0-9_.:-]+", "_", candidate).strip("_")
+    if not normalized or not normalized[0].isalnum():
+        normalized = f"dataset_{hash_sha256_hex(name.encode('utf-8'))[:12]}"
+    if len(normalized) > _MAX_STATS_DATASET_NAME_LEN:
+        normalized = normalized[:_MAX_STATS_DATASET_NAME_LEN]
+    if not _IDENTIFIER_RE.fullmatch(normalized):
+        normalized = f"dataset_{hash_sha256_hex(name.encode('utf-8'))[:12]}"
+    return normalized
+
+
 def _delta_policy_context(
     *,
     options: Mapping[str, object],
@@ -266,6 +288,7 @@ def _stats_decision_from_policy(
     policy_ctx: _DeltaPolicyContext,
     lineage_columns: tuple[str, ...] | None,
 ) -> DeltaStatsDecision:
+    normalized_dataset_name = _normalize_stats_dataset_name(dataset_name)
     write_policy = policy_ctx.write_policy
     stats_policy = write_policy.stats_policy if write_policy is not None else "off"
     stats_cols_raw = policy_ctx.table_properties.get("delta.dataSkippingStatsColumns")
@@ -275,7 +298,7 @@ def _stats_decision_from_policy(
         else None
     )
     return DeltaStatsDecision(
-        dataset_name=dataset_name,
+        dataset_name=normalized_dataset_name,
         stats_policy=stats_policy,
         stats_columns=stats_columns,
         lineage_columns=lineage_columns or (),
@@ -1488,18 +1511,8 @@ class WritePipeline:
             log_storage_options=spec.log_storage_options,
             gate=spec.feature_gate,
         )
-        if existing_version is None:
-            delta_result = self._write_delta_bootstrap(result, spec=spec)
-        else:
-            table_name = self._delta_insert_table_name(spec)
-            self._register_delta_insert_target(spec, table_name=table_name)
-            insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
-            write_options = DataFrameWriteOptions(
-                insert_operation=insert_op,
-                partition_by=spec.partition_by or None,
-            )
-            result.df.write_table(table_name, write_options=write_options)
-            delta_result = DeltaWriteResult(path=spec.table_uri, version=None, report=None)
+        _ = existing_version
+        delta_result = self._write_delta_bootstrap(result, spec=spec)
         enabled_features = enable_delta_features(
             DeltaFeatureMutationOptions(
                 path=spec.table_uri,
@@ -2174,12 +2187,12 @@ def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext
         Base metadata entries for the commit.
     """
     return {
-        "engine": "datafusion",
-        "operation": "write_pipeline",
-        "method": context.method_label,
-        "mode": context.mode,
-        "format": request.format.name.lower(),
-        "destination": request.destination,
+        "codeanatomy_engine": "datafusion",
+        "codeanatomy_operation": "write_pipeline",
+        "codeanatomy_method": context.method_label,
+        "codeanatomy_mode": context.mode,
+        "codeanatomy_format": request.format.name.lower(),
+        "codeanatomy_destination": request.destination,
     }
 
 

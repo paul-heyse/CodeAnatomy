@@ -19,7 +19,14 @@ if TYPE_CHECKING:
 
 
 class _GraphSnapshotDriver(Protocol):
-    def visualize_execution_graph(self, *, output_file_path: str) -> None:
+    def visualize_execution(
+        self,
+        final_vars: list[str],
+        *,
+        output_file_path: str | None = None,
+        inputs: Mapping[str, object] | None = None,
+        overrides: Mapping[str, object] | None = None,
+    ) -> object | None:
         """Write a graph snapshot to the requested path."""
 
 
@@ -39,11 +46,16 @@ class GraphSnapshotHook(lifecycle_api.GraphExecutionHook):
     def run_before_graph_execution(
         self,
         *,
+        final_vars: list[str],
+        inputs: Mapping[str, object],
+        overrides: Mapping[str, object],
         run_id: str,
+        graph: object,
+        execution_path: object,
         **kwargs: object,
     ) -> None:
         """Emit a graph snapshot before graph execution."""
-        _ = kwargs
+        _ = graph, execution_path, kwargs
         if not bool(self.config.get("enable_graph_snapshot", True)):
             return
         driver = self._driver
@@ -54,7 +66,12 @@ class GraphSnapshotHook(lifecycle_api.GraphExecutionHook):
         error: str | None = None
         success = False
         try:
-            driver.visualize_execution_graph(output_file_path=str(path))
+            driver.visualize_execution(
+                final_vars=final_vars,
+                output_file_path=str(path),
+                inputs=dict(inputs),
+                overrides=dict(overrides),
+            )
             success = True
         except (ImportError, OSError, RuntimeError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"

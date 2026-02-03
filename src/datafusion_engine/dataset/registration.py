@@ -2100,6 +2100,9 @@ def _supports_projection_cast(dtype: pa.DataType) -> bool:
         or pa.types.is_map(dtype)
         or pa.types.is_union(dtype)
         or pa.types.is_dictionary(dtype)
+        or pa.types.is_binary(dtype)
+        or pa.types.is_large_binary(dtype)
+        or pa.types.is_fixed_size_binary(dtype)
     )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from datafusion_engine.catalog.introspection import IntrospectionSnapshot
     from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import ContractSpec, DatasetSpec
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -238,11 +242,16 @@ def initial_evidence_from_views(
     for source in sorted(seed_sources):
         spec = spec_map.get(source)
         if spec is not None:
+            snapshot = registration_ctx.snapshot
+            ctx = registration_ctx.ctx
+            if ctx is not None and not ctx.table_exist(source):
+                snapshot = None
+                ctx = None
             evidence.register_from_dataset_spec(
                 source,
                 spec,
-                snapshot=registration_ctx.snapshot,
-                ctx=registration_ctx.ctx,
+                snapshot=snapshot,
+                ctx=ctx,
             )
             _merge_provider_metadata(evidence, source, ctx_id=registration_ctx.ctx_id)
             continue
@@ -331,8 +340,14 @@ def _snapshot_from_ctx(ctx: SessionContext | None) -> IntrospectionSnapshot | No
 
 
 def _validate_udf_info_schema_parity(ctx: SessionContext) -> None:
+    from datafusion_engine.udf.factory import function_factory_fallback_active
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
+    if function_factory_fallback_active(ctx):
+        _LOGGER.warning(
+            "Skipping UDF information_schema parity check (FunctionFactory fallback active)."
+        )
+        return
     report = udf_info_schema_parity_report(ctx)
     if report.error is not None:
         msg = f"UDF information_schema parity failed: {report.error}"
@@ -401,7 +416,7 @@ def _incremental_dataset_spec(name: str, _ctx: SessionContext | None) -> Dataset
         return None
 
 
-def _relationship_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
+def _relationship_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
     relationship_dataset_specs = _optional_module_attr(
         "schema_spec.relationship_specs",
         "relationship_dataset_specs",
@@ -409,11 +424,11 @@ def _relationship_dataset_spec(name: str, _ctx: SessionContext | None) -> Datase
     if not callable(relationship_dataset_specs):
         return None
     relationship_dataset_specs = cast(
-        "Callable[[], Sequence[DatasetSpec]]",
+        "Callable[[SessionContext | None], Sequence[DatasetSpec]]",
         relationship_dataset_specs,
     )
     with contextlib.suppress(RuntimeError, TypeError, ValueError):
-        for spec in relationship_dataset_specs():
+        for spec in relationship_dataset_specs(ctx):
             if spec.name == name:
                 return spec
     return None
@@ -471,7 +486,7 @@ def known_dataset_specs(
         _collect_extract_specs(),
         _collect_normalize_specs(ctx),
         _collect_incremental_specs(),
-        _collect_relationship_specs(),
+        _collect_relationship_specs(ctx),
     )
     for collection in collections:
         _append_unique_specs(specs, collection, seen)
@@ -545,7 +560,7 @@ def _collect_incremental_specs() -> list[DatasetSpec]:
         return []
 
 
-def _collect_relationship_specs() -> list[DatasetSpec]:
+def _collect_relationship_specs(ctx: SessionContext | None) -> list[DatasetSpec]:
     relationship_dataset_specs = _optional_module_attr(
         "schema_spec.relationship_specs",
         "relationship_dataset_specs",
@@ -553,11 +568,11 @@ def _collect_relationship_specs() -> list[DatasetSpec]:
     if not callable(relationship_dataset_specs):
         return []
     relationship_dataset_specs = cast(
-        "Callable[[], Sequence[DatasetSpec]]",
+        "Callable[..., Sequence[DatasetSpec]]",
         relationship_dataset_specs,
     )
     try:
-        return list(relationship_dataset_specs())
+        return list(relationship_dataset_specs(ctx=ctx))
     except (RuntimeError, TypeError, ValueError):
         return []
 

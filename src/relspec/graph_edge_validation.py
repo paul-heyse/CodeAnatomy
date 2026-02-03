@@ -143,6 +143,8 @@ def validate_edge_requirements(
         edge_data = graph.graph.get_edge_data(pred_idx, task_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
+        if _is_internal_evidence(graph, edge_data.name):
+            continue
         available_cols = catalog.columns_by_dataset.get(edge_data.name)
         if _missing_required_columns(edge_data.required_columns, available_cols):
             return False
@@ -164,6 +166,17 @@ def validate_edge_requirements(
         if violations:
             return False
     return True
+
+
+def _is_internal_evidence(graph: TaskGraph, evidence_name: str) -> bool:
+    node_idx = graph.evidence_idx.get(evidence_name)
+    if node_idx is None:
+        return False
+    for pred_idx in graph.graph.predecessor_indices(node_idx):
+        pred = graph.graph[pred_idx]
+        if pred.kind == "task":
+            return True
+    return False
 
 
 def validate_edge_requirements_detailed(

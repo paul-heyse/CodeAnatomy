@@ -18,8 +18,8 @@ from relspec.execution_plan import ExecutionPlan
 from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
 from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
 from tests.test_helpers.arrow_seed import register_arrow_table
-from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
+from tests.test_helpers.semantic_registry_runtime import semantic_registry_runtime
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -32,9 +32,7 @@ _SHA256_HEX_LENGTH = 64
 
 
 def _session_context() -> tuple[SessionContext, SessionRuntime]:
-    profile = df_profile()
-    ctx = profile.session_context()
-    return ctx, profile.session_runtime()
+    return semantic_registry_runtime()
 
 
 def test_datafusion_unparser_payload_is_deterministic() -> None:

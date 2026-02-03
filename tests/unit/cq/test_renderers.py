@@ -13,7 +13,7 @@ from tools.cq.core.renderers.mermaid import (
     render_mermaid_class_diagram,
     render_mermaid_flowchart,
 )
-from tools.cq.core.schema import Anchor, CqResult, Finding, RunMeta, Section
+from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
 
 
 def _make_result(
@@ -59,7 +59,7 @@ class TestMermaidFlowchart:
             category="definition",
             message="function: foo",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "foo", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_mermaid_flowchart(result)
@@ -72,13 +72,13 @@ class TestMermaidFlowchart:
             category="definition",
             message="function: foo",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "foo", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
         )
         caller = Finding(
             category="caller",
             message="caller: bar calls foo",
             anchor=Anchor(file="test.py", line=10),
-            details={"caller": "bar", "callee": "foo"},
+            details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
         )
         section = Section(title="Callers", findings=[caller])
         result = _make_result(key_findings=[definition], sections=[section])
@@ -92,7 +92,7 @@ class TestMermaidFlowchart:
             category="definition",
             message="function: my-func.name",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "my-func.name", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "my-func.name", "kind": "function"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_mermaid_flowchart(result)
@@ -119,7 +119,7 @@ class TestMermaidClassDiagram:
             category="definition",
             message="class: MyClass",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "MyClass", "kind": "class"},
+            details=DetailPayload.from_legacy({"name": "MyClass", "kind": "class"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_mermaid_class_diagram(result)
@@ -132,7 +132,7 @@ class TestMermaidClassDiagram:
             category="definition",
             message="function: my_func",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "my_func", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "my_func", "kind": "function"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_mermaid_class_diagram(result)
@@ -166,7 +166,7 @@ class TestDotRenderer:
             category="definition",
             message="function: foo",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "foo", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_dot(result)
@@ -180,7 +180,7 @@ class TestDotRenderer:
             category="definition",
             message="class: MyClass",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "MyClass", "kind": "class"},
+            details=DetailPayload.from_legacy({"name": "MyClass", "kind": "class"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_dot(result)
@@ -193,13 +193,13 @@ class TestDotRenderer:
             category="definition",
             message="function: foo",
             anchor=Anchor(file="test.py", line=1),
-            details={"name": "foo", "kind": "function"},
+            details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
         )
         caller = Finding(
             category="caller",
             message="caller: bar calls foo",
             anchor=Anchor(file="test.py", line=10),
-            details={"caller": "bar", "callee": "foo"},
+            details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
         )
         section = Section(title="Callers", findings=[caller])
         result = _make_result(key_findings=[definition], sections=[section])
@@ -213,25 +213,10 @@ class TestDotRenderer:
             category="definition",
             message='function: "quoted"',
             anchor=Anchor(file="test.py", line=1),
-            details={"name": '"quoted"', "kind": "function"},
+            details=DetailPayload.from_legacy({"name": '"quoted"', "kind": "function"}),
         )
         result = _make_result(key_findings=[finding])
         output = render_dot(result)
 
         # Should escape quotes
         assert '\\"' in output or "quoted" in output
-
-    def test_hazard_rendering(self) -> None:
-        """Render hazard as diamond node."""
-        hazard = Finding(
-            category="hazard",
-            message="hazard: eval usage",
-            anchor=Anchor(file="test.py", line=1),
-            details={"kind": "eval_exec"},
-        )
-        section = Section(title="Hazards", findings=[hazard])
-        result = _make_result(sections=[section])
-        output = render_dot(result)
-
-        assert "shape=diamond" in output
-        assert "color=red" in output

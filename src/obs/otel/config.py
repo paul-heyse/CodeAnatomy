@@ -153,6 +153,24 @@ class OtelConfig:
 
 
 @dataclass(frozen=True)
+class OtelConfigOverrides:
+    """Optional overrides for OpenTelemetry configuration resolution."""
+
+    sampler: str | None = None
+    sampler_arg: float | None = None
+    metric_export_interval_ms: int | None = None
+    metric_export_timeout_ms: int | None = None
+    bsp_schedule_delay_ms: int | None = None
+    bsp_export_timeout_ms: int | None = None
+    bsp_max_queue_size: int | None = None
+    bsp_max_export_batch_size: int | None = None
+    blrp_schedule_delay_ms: int | None = None
+    blrp_export_timeout_ms: int | None = None
+    blrp_max_queue_size: int | None = None
+    blrp_max_export_batch_size: int | None = None
+
+
+@dataclass(frozen=True)
 class _BatchProcessorSettings:
     schedule_delay_ms: int
     export_timeout_ms: int
@@ -302,17 +320,27 @@ def _exporter_enabled(env_name: str, *, default: bool = True) -> bool:
     return value.lower() != "none"
 
 
-def _resolve_sampler() -> Sampler:
-    sampler_name = env_text(
+def _resolve_sampler(overrides: OtelConfigOverrides | None) -> Sampler:
+    sampler_override = overrides.sampler if overrides is not None else None
+    sampler_name = sampler_override or env_text(
         "OTEL_TRACES_SAMPLER",
         default="parentbased_traceidratio",
         allow_empty=True,
     )
     name = sampler_name.strip().lower() if sampler_name is not None else ""
-    ratio = env_float("OTEL_TRACES_SAMPLER_ARG", default=0.1)
+    ratio = (
+        float(overrides.sampler_arg)
+        if overrides is not None and overrides.sampler_arg is not None
+        else env_float("OTEL_TRACES_SAMPLER_ARG", default=0.1)
+    )
+    sampler_arg_raw = (
+        str(overrides.sampler_arg)
+        if overrides is not None and overrides.sampler_arg is not None
+        else env_value("OTEL_TRACES_SAMPLER_ARG")
+    )
     sampler = _resolve_builtin_sampler(name, ratio)
     if sampler is None:
-        sampler = _resolve_entrypoint_sampler(name, env_value("OTEL_TRACES_SAMPLER_ARG"))
+        sampler = _resolve_entrypoint_sampler(name, sampler_arg_raw)
     if sampler is None:
         _LOGGER.warning(
             "Unsupported sampler %s; defaulting to parentbased_traceidratio.",
@@ -434,7 +462,7 @@ def _resolve_disabled_config() -> OtelConfig:
     )
 
 
-def _resolve_enabled_config() -> OtelConfig:
+def _resolve_enabled_config(overrides: OtelConfigOverrides | None) -> OtelConfig:
     enable_traces = _exporter_enabled("OTEL_TRACES_EXPORTER", default=True)
     enable_metrics = _exporter_enabled("OTEL_METRICS_EXPORTER", default=True)
     enable_logs = _exporter_enabled("OTEL_LOGS_EXPORTER", default=True)
@@ -444,23 +472,63 @@ def _resolve_enabled_config() -> OtelConfig:
         default=False,
         on_invalid="false",
     )
-    metric_export_interval_ms = env_int("OTEL_METRIC_EXPORT_INTERVAL", default=60000)
-    metric_export_timeout_ms = env_int("OTEL_METRIC_EXPORT_TIMEOUT", default=30000)
+    metric_export_interval_ms = (
+        overrides.metric_export_interval_ms
+        if overrides is not None and overrides.metric_export_interval_ms is not None
+        else env_int("OTEL_METRIC_EXPORT_INTERVAL", default=60000)
+    )
+    metric_export_timeout_ms = (
+        overrides.metric_export_timeout_ms
+        if overrides is not None and overrides.metric_export_timeout_ms is not None
+        else env_int("OTEL_METRIC_EXPORT_TIMEOUT", default=30000)
+    )
     bsp_settings = _resolve_batch_settings(
-        schedule_delay_ms=env_int("OTEL_BSP_SCHEDULE_DELAY", default=5000),
-        export_timeout_ms=env_int("OTEL_BSP_EXPORT_TIMEOUT", default=30000),
-        max_queue_size=env_int("OTEL_BSP_MAX_QUEUE_SIZE", default=2048),
-        max_export_batch_size=env_int("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", default=512),
+        schedule_delay_ms=(
+            overrides.bsp_schedule_delay_ms
+            if overrides is not None and overrides.bsp_schedule_delay_ms is not None
+            else env_int("OTEL_BSP_SCHEDULE_DELAY", default=5000)
+        ),
+        export_timeout_ms=(
+            overrides.bsp_export_timeout_ms
+            if overrides is not None and overrides.bsp_export_timeout_ms is not None
+            else env_int("OTEL_BSP_EXPORT_TIMEOUT", default=30000)
+        ),
+        max_queue_size=(
+            overrides.bsp_max_queue_size
+            if overrides is not None and overrides.bsp_max_queue_size is not None
+            else env_int("OTEL_BSP_MAX_QUEUE_SIZE", default=2048)
+        ),
+        max_export_batch_size=(
+            overrides.bsp_max_export_batch_size
+            if overrides is not None and overrides.bsp_max_export_batch_size is not None
+            else env_int("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", default=512)
+        ),
         label="BatchSpanProcessor",
     )
     blrp_settings = _resolve_batch_settings(
-        schedule_delay_ms=env_int("OTEL_BLRP_SCHEDULE_DELAY", default=5000),
-        export_timeout_ms=env_int("OTEL_BLRP_EXPORT_TIMEOUT", default=30000),
-        max_queue_size=env_int("OTEL_BLRP_MAX_QUEUE_SIZE", default=2048),
-        max_export_batch_size=env_int("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", default=512),
+        schedule_delay_ms=(
+            overrides.blrp_schedule_delay_ms
+            if overrides is not None and overrides.blrp_schedule_delay_ms is not None
+            else env_int("OTEL_BLRP_SCHEDULE_DELAY", default=5000)
+        ),
+        export_timeout_ms=(
+            overrides.blrp_export_timeout_ms
+            if overrides is not None and overrides.blrp_export_timeout_ms is not None
+            else env_int("OTEL_BLRP_EXPORT_TIMEOUT", default=30000)
+        ),
+        max_queue_size=(
+            overrides.blrp_max_queue_size
+            if overrides is not None and overrides.blrp_max_queue_size is not None
+            else env_int("OTEL_BLRP_MAX_QUEUE_SIZE", default=2048)
+        ),
+        max_export_batch_size=(
+            overrides.blrp_max_export_batch_size
+            if overrides is not None and overrides.blrp_max_export_batch_size is not None
+            else env_int("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", default=512)
+        ),
         label="BatchLogRecordProcessor",
     )
-    sampler = _resolve_sampler()
+    sampler = _resolve_sampler(overrides)
     return OtelConfig(
         enable_traces=enable_traces,
         enable_metrics=enable_metrics,
@@ -510,7 +578,7 @@ def _resolve_enabled_config() -> OtelConfig:
     )
 
 
-def resolve_otel_config() -> OtelConfig:
+def resolve_otel_config(overrides: OtelConfigOverrides | None = None) -> OtelConfig:
     """Resolve configuration from environment variables.
 
     Returns
@@ -520,7 +588,7 @@ def resolve_otel_config() -> OtelConfig:
     """
     if env_bool_strict("OTEL_SDK_DISABLED", default=False):
         return _resolve_disabled_config()
-    return _resolve_enabled_config()
+    return _resolve_enabled_config(overrides)
 
 
-__all__ = ["OtelConfig", "resolve_otel_config"]
+__all__ = ["OtelConfig", "OtelConfigOverrides", "resolve_otel_config"]

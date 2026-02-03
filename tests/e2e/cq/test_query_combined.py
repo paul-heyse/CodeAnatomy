@@ -1,7 +1,7 @@
 """E2E tests for combined cq query features.
 
 Tests complex queries that combine multiple query features:
-- Multiple fields (callers, hazards, etc.)
+- Multiple fields (callers, imports, etc.)
 - Scope filtering
 - Name matching
 - Expanders with parameters
@@ -21,18 +21,18 @@ if TYPE_CHECKING:
 
 @pytest.mark.e2e
 @pytest.mark.requires_ast_grep
-def test_combined_callers_with_hazards(
+def test_combined_callers_with_fields(
     run_query: Callable[[str], CqResult],
     assert_finding_exists: Callable[..., Finding],
 ) -> None:
-    """Test query combining caller expansion with hazard detection.
+    """Test query combining caller expansion with additional fields.
 
     Verifies that multiple fields can be requested simultaneously:
     - fields=callers finds call sites
-    - fields=hazards analyzes the function for hazards
+    - fields=imports collects import references for the function
     """
-    # Query for a function with both callers and hazards fields
-    result = run_query("entity=function name=build_graph_product fields=def,callers,hazards")
+    # Query for a function with both callers and imports fields
+    result = run_query("entity=function name=build_graph_product fields=def,callers,imports")
 
     # Should find the function definition
     definition = assert_finding_exists(
@@ -64,7 +64,7 @@ def test_full_query_syntax(
     """
     # Full-featured query using regex pattern to find functions containing 'execute'
     result = run_query(
-        "entity=function name=~execute expand=callers(depth=1) fields=def,hazards in=tools/cq/"
+        "entity=function name=~execute expand=callers(depth=1) fields=def,callers in=tools/cq/"
     )
 
     # Collect all findings

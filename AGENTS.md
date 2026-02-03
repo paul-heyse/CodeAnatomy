@@ -37,7 +37,7 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq q "all=..."` | Combined patterns (AND) | `/cq q "entity=function all='await \$X,return \$Y'"` |
 | `/cq q "any=..."` | Alternative patterns (OR) | `/cq q "any='logger.\$M(\$$$),print(\$$$)'"` |
 | `/cq q "not=..."` | Pattern exclusion | `/cq q "entity=function not.has='pass'"` |
-| `/cq q "fields=hazards"` | Security hazard scan | `/cq q "entity=function in=src/api/ fields=hazards"` |
+| `/cq q "pattern='eval(\$X)'"` | Security pattern scan | `/cq q "pattern='eval(\$X)'"` |
 | `/cq q --format mermaid` | Visualize code structure | `/cq q "entity=function expand=callers" --format mermaid` |
 | `/cq q --format mermaid-cfg` | Control flow graphs | `/cq q "entity=function name=fn" --format mermaid-cfg` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
@@ -55,7 +55,7 @@ to a queryable graph using Hamilton DAG + DataFusion.
 **Before analyzing code patterns:**
 - Dynamic dispatch patterns → `/cq q "pattern='getattr(\$X, \$Y)'"`
 - Eval/exec usage → `/cq q "pattern='eval(\$X)'"` or `pattern='exec(\$X)'`
-- Security hazards → `/cq q "entity=function fields=hazards"`
+- Security patterns → `/cq q "pattern='eval(\$X)'"` or `/cq q "pattern='pickle.load(\$X)'"`
 
 **Before refactoring closures:**
 - Find all closures → `/cq q "entity=function scope=closure in=<dir>"`
@@ -88,10 +88,10 @@ Pattern queries find structural code patterns without false positives from strin
 # Find all getattr usage (dynamic attribute access)
 /cq q "pattern='getattr(\$X, \$Y)'"
 
-# Find eval/exec hazards
+# Find eval/exec patterns
 /cq q "pattern='eval(\$X)'"
 
-# Find pickle.load (security hazard)
+# Find pickle.load (unsafe deserialization pattern)
 /cq q "pattern='pickle.load(\$X)'"
 
 # Find functions that take **kwargs
@@ -135,13 +135,10 @@ Pattern queries find structural code patterns without false positives from strin
 
 **Security-Focused Queries:**
 ```bash
-# Full security audit
-/cq q "entity=function in=src/ fields=hazards" --severity error
-
-# Find code execution hazards
+# Find code execution patterns
 /cq q "any='eval(\$X),exec(\$X),compile(\$X, \$Y, \"exec\")'"
 
-# Find deserialization hazards
+# Find deserialization patterns
 /cq q "any='pickle.load(\$X),yaml.load(\$X),marshal.load(\$X)'"
 
 # Shell injection risks
@@ -167,7 +164,7 @@ Pattern queries find structural code patterns without false positives from strin
 | Alternative patterns | `any=` | `/cq q "any='log.\$M,print'"` |
 | Exclude matches | `not=` | `/cq q "entity=function not.has='pass'"` |
 | Context-aware | `inside=` / `has=` | `/cq q "pattern='\$X' inside='class Config'"` |
-| Security scan | `fields=hazards` | `/cq q "entity=function fields=hazards"` |
+| Security scan | `pattern=...` | `/cq q "pattern='eval(\$X)'"` |
 | Closures | `scope=closure` | `/cq q "entity=function scope=closure"` |
 | Visualization | `--format mermaid*` | `/cq q "expand=callers" --format mermaid` |
 
@@ -175,7 +172,7 @@ Pattern queries find structural code patterns without false positives from strin
 - Finding code in strings/comments → Pattern query (no false positives)
 - Dynamic dispatch patterns → Pattern query (AST-aware)
 - Combining multiple conditions → Composite queries
-- Security hazard detection → Hazard detection (30+ patterns)
+- Security pattern detection → Pattern queries (AST-based)
 
 ### Global Options (All cq Commands)
 
@@ -204,7 +201,7 @@ Config file: `.cq.toml` in repo root. See `/cq --help` for full options.
 - **Scope filtering** - Identify closures before extraction
 - **Visualization** - Call graphs, class diagrams, and CFGs via `--format mermaid*`
 - **Bytecode analysis** - Query opcodes, build CFGs, analyze stack effects
-- **30+ builtin hazards** - Security and correctness hazard patterns
+- **Pattern queries** - Structural search without string/comment false positives
 
 ---
 

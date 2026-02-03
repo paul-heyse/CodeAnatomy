@@ -68,8 +68,8 @@ class TestParseQuery:
 
     def test_entity_with_fields(self) -> None:
         """Parse entity query with output fields."""
-        query = parse_query("entity=function fields=def,callers,hazards")
-        assert query.fields == ("def", "callers", "hazards")
+        query = parse_query("entity=function fields=def,callers,imports")
+        assert query.fields == ("def", "callers", "imports")
 
     def test_entity_with_limit(self) -> None:
         """Parse entity query with result limit."""
@@ -85,7 +85,7 @@ class TestParseQuery:
         """Parse full query with all options."""
         query = parse_query(
             "entity=function name=build expand=callers(depth=2) "
-            "in=src/ exclude=tests fields=def,hazards limit=20"
+            "in=src/ exclude=tests fields=def,imports limit=20"
         )
         assert query.entity == "function"
         assert query.name == "build"
@@ -93,7 +93,7 @@ class TestParseQuery:
         assert query.expand[0].depth == 2
         assert query.scope.in_dir == "src/"
         assert query.scope.exclude == ("tests",)
-        assert query.fields == ("def", "hazards")
+        assert query.fields == ("def", "imports")
         assert query.limit == 20
 
     def test_class_entity(self) -> None:
@@ -156,9 +156,9 @@ class TestQueryIR:
     def test_query_with_fields(self) -> None:
         """Test Query.with_fields() method."""
         query = Query(entity="function")
-        new_query = query.with_fields("def", "hazards", "callers")
+        new_query = query.with_fields("def", "imports", "callers")
 
-        assert new_query.fields == ("def", "hazards", "callers")
+        assert new_query.fields == ("def", "imports", "callers")
         assert query.fields == ("def",)  # Original unchanged
 
     def test_expander_frozen(self) -> None:

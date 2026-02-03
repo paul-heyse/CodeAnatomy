@@ -203,7 +203,7 @@ async def async_control_flow(x: int) -> str:
 
 
 async def async_blocking_sleep() -> None:
-    """Perform blocking thread wait inside async function for hazard detection."""
+    """Perform blocking thread wait inside async function for testing purposes."""
     threading.Event().wait(0.01)
     await asyncio.sleep(0)
 

@@ -15,6 +15,7 @@ from cli.groups import (
     execution_group,
     graph_adapter_group,
     incremental_group,
+    observability_group,
     output_group,
     repo_scope_group,
     scip_group,
@@ -550,6 +551,81 @@ class BuildOptions:
             group=advanced_group,
         ),
     ] = None
+    enable_hamilton_tracker: Annotated[
+        bool | None,
+        Parameter(
+            name="--enable-hamilton-tracker",
+            help="Enable Hamilton UI tracker integration.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_project_id: Annotated[
+        int | None,
+        Parameter(
+            name="--hamilton-project-id",
+            help="Hamilton tracker project id.",
+            validator=validators.Number(gte=1),
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_username: Annotated[
+        str | None,
+        Parameter(
+            name="--hamilton-username",
+            help="Hamilton tracker username.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_dag_name: Annotated[
+        str | None,
+        Parameter(
+            name="--hamilton-dag-name",
+            help="Hamilton DAG name override.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_api_url: Annotated[
+        str | None,
+        Parameter(
+            name="--hamilton-api-url",
+            help="Hamilton tracker API URL override.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_ui_url: Annotated[
+        str | None,
+        Parameter(
+            name="--hamilton-ui-url",
+            help="Hamilton tracker UI URL override.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_capture_data_statistics: Annotated[
+        bool | None,
+        Parameter(
+            name="--hamilton-capture-data-statistics",
+            help="Enable Hamilton data statistics capture.",
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_max_list_length_capture: Annotated[
+        int | None,
+        Parameter(
+            name="--hamilton-max-list-length-capture",
+            help="Maximum list length to capture in Hamilton telemetry.",
+            validator=validators.Number(gte=0),
+            group=observability_group,
+        ),
+    ] = None
+    hamilton_max_dict_length_capture: Annotated[
+        int | None,
+        Parameter(
+            name="--hamilton-max-dict-length-capture",
+            help="Maximum dict length to capture in Hamilton telemetry.",
+            validator=validators.Number(gte=0),
+            group=observability_group,
+        ),
+    ] = None
 
 
 _DEFAULT_BUILD_REQUEST = BuildRequestOptions()
@@ -567,6 +643,15 @@ class _CliConfigOverrides:
     git_base_ref: str | None
     git_head_ref: str | None
     git_changed_only: bool
+    enable_hamilton_tracker: bool | None
+    hamilton_project_id: int | None
+    hamilton_username: str | None
+    hamilton_dag_name: str | None
+    hamilton_api_url: str | None
+    hamilton_ui_url: str | None
+    hamilton_capture_data_statistics: bool | None
+    hamilton_max_list_length_capture: int | None
+    hamilton_max_dict_length_capture: int | None
 
 
 @dataclass(frozen=True)
@@ -653,6 +738,15 @@ def build_command(
         git_base_ref=options.git_base_ref,
         git_head_ref=options.git_head_ref,
         git_changed_only=options.git_changed_only,
+        enable_hamilton_tracker=options.enable_hamilton_tracker,
+        hamilton_project_id=options.hamilton_project_id,
+        hamilton_username=options.hamilton_username,
+        hamilton_dag_name=options.hamilton_dag_name,
+        hamilton_api_url=options.hamilton_api_url,
+        hamilton_ui_url=options.hamilton_ui_url,
+        hamilton_capture_data_statistics=options.hamilton_capture_data_statistics,
+        hamilton_max_list_length_capture=options.hamilton_max_list_length_capture,
+        hamilton_max_dict_length_capture=options.hamilton_max_dict_length_capture,
     )
     config_contents = _apply_cli_config_overrides(
         config_contents,
@@ -785,6 +879,27 @@ def _apply_plan_overrides(
     return payload
 
 
+def _apply_optional_value(
+    payload: dict[str, JsonValue],
+    *,
+    key: str,
+    value: JsonValue | None,
+) -> None:
+    if value is None:
+        return
+    payload[key] = value
+
+
+def _apply_optional_str(
+    payload: dict[str, JsonValue],
+    *,
+    key: str,
+    value: str | None,
+) -> None:
+    if value:
+        payload[key] = value
+
+
 def _apply_cli_config_overrides(
     config_contents: Mapping[str, JsonValue],
     *,
@@ -792,23 +907,93 @@ def _apply_cli_config_overrides(
     overrides: _CliConfigOverrides,
 ) -> dict[str, JsonValue]:
     payload = dict(config_contents)
-    if overrides.runtime_profile_name:
-        payload["runtime_profile_name"] = overrides.runtime_profile_name
-    if overrides.determinism_override is not None:
-        payload["determinism_override"] = overrides.determinism_override.value
+    _apply_optional_str(
+        payload,
+        key="runtime_profile_name",
+        value=overrides.runtime_profile_name,
+    )
+    determinism_value = (
+        overrides.determinism_override.value if overrides.determinism_override is not None else None
+    )
+    _apply_optional_value(
+        payload,
+        key="determinism_override",
+        value=determinism_value,
+    )
     payload["incremental_enabled"] = overrides.incremental
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
-    if resolved_state_dir is not None:
-        payload["incremental_state_dir"] = str(resolved_state_dir)
-    if overrides.incremental_repo_id:
-        payload["incremental_repo_id"] = overrides.incremental_repo_id
-    if overrides.incremental_impact_strategy:
-        payload["incremental_impact_strategy"] = overrides.incremental_impact_strategy
-    if overrides.git_base_ref:
-        payload["incremental_git_base_ref"] = overrides.git_base_ref
-    if overrides.git_head_ref:
-        payload["incremental_git_head_ref"] = overrides.git_head_ref
+    state_dir_value = str(resolved_state_dir) if resolved_state_dir is not None else None
+    _apply_optional_value(
+        payload,
+        key="incremental_state_dir",
+        value=state_dir_value,
+    )
+    _apply_optional_str(
+        payload,
+        key="incremental_repo_id",
+        value=overrides.incremental_repo_id,
+    )
+    _apply_optional_value(
+        payload,
+        key="incremental_impact_strategy",
+        value=overrides.incremental_impact_strategy,
+    )
+    _apply_optional_str(
+        payload,
+        key="incremental_git_base_ref",
+        value=overrides.git_base_ref,
+    )
+    _apply_optional_str(
+        payload,
+        key="incremental_git_head_ref",
+        value=overrides.git_head_ref,
+    )
     payload["incremental_git_changed_only"] = overrides.git_changed_only
+    _apply_optional_value(
+        payload,
+        key="enable_hamilton_tracker",
+        value=overrides.enable_hamilton_tracker,
+    )
+    _apply_optional_value(
+        payload,
+        key="hamilton_project_id",
+        value=overrides.hamilton_project_id,
+    )
+    _apply_optional_str(
+        payload,
+        key="hamilton_username",
+        value=overrides.hamilton_username,
+    )
+    _apply_optional_str(
+        payload,
+        key="hamilton_dag_name",
+        value=overrides.hamilton_dag_name,
+    )
+    _apply_optional_str(
+        payload,
+        key="hamilton_api_url",
+        value=overrides.hamilton_api_url,
+    )
+    _apply_optional_str(
+        payload,
+        key="hamilton_ui_url",
+        value=overrides.hamilton_ui_url,
+    )
+    _apply_optional_value(
+        payload,
+        key="hamilton_capture_data_statistics",
+        value=overrides.hamilton_capture_data_statistics,
+    )
+    _apply_optional_value(
+        payload,
+        key="hamilton_max_list_length_capture",
+        value=overrides.hamilton_max_list_length_capture,
+    )
+    _apply_optional_value(
+        payload,
+        key="hamilton_max_dict_length_capture",
+        value=overrides.hamilton_max_dict_length_capture,
+    )
     return payload
 
 

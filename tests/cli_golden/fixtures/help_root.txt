@@ -25,6 +25,23 @@ CodeAnatomy CPG Builder - Inference-driven Code Property Graph generation.
 │                                                                                                                      │
 │ --enable-traces --no-enable-traces    Enable OpenTelemetry traces. [env var: CODEANATOMY_ENABLE_TRACES] [default:    │
 │                                       None]                                                                          │
+│ --otel-endpoint                       Override OTLP endpoint for traces/metrics/logs. [default: None]                │
+│ --otel-protocol                       Override OTLP protocol for traces/metrics/logs. [choices: grpc, http/protobuf] │
+│                                       [default: None]                                                                │
+│ --otel-sampler                        Override OTEL_TRACES_SAMPLER. [default: None]                                  │
+│ --otel-sampler-arg                    Override OTEL_TRACES_SAMPLER_ARG. [default: None]                              │
+│ --otel-log-correlation                Enable OpenTelemetry log correlation. [default: None]                          │
+│   --no-otel-log-correlation                                                                                          │
+│ --otel-metric-export-interval-ms      Override OTEL_METRIC_EXPORT_INTERVAL (ms). [default: None]                     │
+│ --otel-metric-export-timeout-ms       Override OTEL_METRIC_EXPORT_TIMEOUT (ms). [default: None]                      │
+│ --otel-bsp-schedule-delay-ms          Override OTEL_BSP_SCHEDULE_DELAY (ms). [default: None]                         │
+│ --otel-bsp-export-timeout-ms          Override OTEL_BSP_EXPORT_TIMEOUT (ms). [default: None]                         │
+│ --otel-bsp-max-queue-size             Override OTEL_BSP_MAX_QUEUE_SIZE. [default: None]                              │
+│ --otel-bsp-max-export-batch-size      Override OTEL_BSP_MAX_EXPORT_BATCH_SIZE. [default: None]                       │
+│ --otel-blrp-schedule-delay-ms         Override OTEL_BLRP_SCHEDULE_DELAY (ms). [default: None]                        │
+│ --otel-blrp-export-timeout-ms         Override OTEL_BLRP_EXPORT_TIMEOUT (ms). [default: None]                        │
+│ --otel-blrp-max-queue-size            Override OTEL_BLRP_MAX_QUEUE_SIZE. [default: None]                             │
+│ --otel-blrp-max-export-batch-size     Override OTEL_BLRP_MAX_EXPORT_BATCH_SIZE. [default: None]                      │
 │ --enable-metrics --no-enable-metrics  Enable OpenTelemetry metrics. [env var: CODEANATOMY_ENABLE_METRICS] [default:  │
 │                                       None]                                                                          │
 │ --enable-logs --no-enable-logs        Enable OpenTelemetry logs. [env var: CODEANATOMY_ENABLE_LOGS] [default: None]  │

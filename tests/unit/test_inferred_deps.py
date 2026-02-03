@@ -7,7 +7,7 @@ from relspec.inferred_deps import (
     InferredDepsInputs,
     infer_deps_from_plan_bundle,
 )
-from tests.test_helpers.datafusion_runtime import df_profile
+from tests.test_helpers.semantic_registry_runtime import semantic_registry_runtime
 
 
 def test_inferred_deps_creation() -> None:
@@ -32,9 +32,7 @@ def test_infer_deps_from_plan_bundle() -> None:
     from tests.test_helpers.arrow_seed import register_arrow_table
 
     # Create a test DataFusion plan
-    profile = df_profile()
-    ctx = profile.session_context()
-    session_runtime = profile.session_runtime()
+    ctx, session_runtime = semantic_registry_runtime()
     table_a = pa.table({"id": [1, 2], "x": ["a", "b"]})
     table_b = pa.table({"id": [1, 2], "y": ["c", "d"]})
     register_arrow_table(ctx, name="table_a", value=table_a)

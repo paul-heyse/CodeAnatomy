@@ -36,7 +36,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from obs.otel.config import resolve_otel_config
+from obs.otel.config import OtelConfigOverrides, resolve_otel_config
 from obs.otel.metrics import metric_views, reset_metrics_registry
 from obs.otel.resource_detectors import (
     build_detected_resource,
@@ -112,6 +112,64 @@ def _resolve_sampling_rule() -> str:
     return env_value("CODEANATOMY_OTEL_SAMPLING_RULE") or "codeanatomy.default"
 
 
+def _apply_otlp_env_overrides(options: OtelBootstrapOptions | None) -> None:
+    if options is None:
+        return
+    endpoint = options.otlp_endpoint
+    if isinstance(endpoint, str) and endpoint.strip():
+        value = endpoint.strip()
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = value
+        os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = value
+        os.environ["OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"] = value
+        os.environ["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"] = value
+    protocol = options.otlp_protocol
+    if isinstance(protocol, str) and protocol.strip():
+        value = protocol.strip()
+        os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = value
+        os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] = value
+        os.environ["OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"] = value
+        os.environ["OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"] = value
+
+
+def _config_overrides_from_options(
+    options: OtelBootstrapOptions | None,
+) -> OtelConfigOverrides | None:
+    if options is None:
+        return None
+    if not any(
+        value is not None
+        for value in (
+            options.sampler,
+            options.sampler_arg,
+            options.metric_export_interval_ms,
+            options.metric_export_timeout_ms,
+            options.bsp_schedule_delay_ms,
+            options.bsp_export_timeout_ms,
+            options.bsp_max_queue_size,
+            options.bsp_max_export_batch_size,
+            options.blrp_schedule_delay_ms,
+            options.blrp_export_timeout_ms,
+            options.blrp_max_queue_size,
+            options.blrp_max_export_batch_size,
+        )
+    ):
+        return None
+    return OtelConfigOverrides(
+        sampler=options.sampler,
+        sampler_arg=options.sampler_arg,
+        metric_export_interval_ms=options.metric_export_interval_ms,
+        metric_export_timeout_ms=options.metric_export_timeout_ms,
+        bsp_schedule_delay_ms=options.bsp_schedule_delay_ms,
+        bsp_export_timeout_ms=options.bsp_export_timeout_ms,
+        bsp_max_queue_size=options.bsp_max_queue_size,
+        bsp_max_export_batch_size=options.bsp_max_export_batch_size,
+        blrp_schedule_delay_ms=options.blrp_schedule_delay_ms,
+        blrp_export_timeout_ms=options.blrp_export_timeout_ms,
+        blrp_max_queue_size=options.blrp_max_queue_size,
+        blrp_max_export_batch_size=options.blrp_max_export_batch_size,
+    )
+
+
 @dataclass(frozen=True)
 class OtelProviders:
     """Container for configured OpenTelemetry providers."""
@@ -148,6 +206,20 @@ class OtelBootstrapOptions:
     service_namespace: str | None = None
     environment: str | None = None
     resource_overrides: Mapping[str, str] | None = None
+    otlp_endpoint: str | None = None
+    otlp_protocol: str | None = None
+    sampler: str | None = None
+    sampler_arg: float | None = None
+    metric_export_interval_ms: int | None = None
+    metric_export_timeout_ms: int | None = None
+    bsp_schedule_delay_ms: int | None = None
+    bsp_export_timeout_ms: int | None = None
+    bsp_max_queue_size: int | None = None
+    bsp_max_export_batch_size: int | None = None
+    blrp_schedule_delay_ms: int | None = None
+    blrp_export_timeout_ms: int | None = None
+    blrp_max_queue_size: int | None = None
+    blrp_max_export_batch_size: int | None = None
     enable_traces: bool | None = None
     enable_metrics: bool | None = None
     enable_logs: bool | None = None
@@ -310,9 +382,9 @@ def _resolve_bootstrap_state(
     service_name: str | None,
     options: OtelBootstrapOptions | None,
 ) -> _ResolvedBootstrapState:
-    config = resolve_otel_config()
     resolved_service_name = service_name or resolve_service_name()
     overrides = options or OtelBootstrapOptions()
+    config = resolve_otel_config(_config_overrides_from_options(overrides))
     base_resource = build_resource(
         resolved_service_name,
         ResourceOptions(
@@ -547,6 +619,7 @@ def configure_otel(
         _STATE["providers"] = None
     if _STATE["providers"] is not None:
         return _STATE["providers"]
+    _apply_otlp_env_overrides(options)
     _set_propagators()
     state = _resolve_bootstrap_state(service_name, options)
     _configure_otel_log_level(state.config.otel_log_level)

@@ -188,6 +188,7 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
                 repo_root=repo_root_path,
                 pipeline_outputs=raw,
             )
+            _record_build_output_locations(result)
             set_span_attributes(
                 span,
                 {
@@ -464,6 +465,24 @@ def _parse_result(
         manifest_path=manifest_path,
         run_bundle_dir=run_bundle_dir,
         pipeline_outputs=pipeline_outputs,
+    )
+
+
+def _record_build_output_locations(result: GraphProductBuildResult) -> None:
+    from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
+
+    collector = get_hamilton_diagnostics_collector()
+    if collector is None:
+        return
+    collector.record_artifact(
+        "build_output_locations_v1",
+        {
+            "run_id": result.run_id,
+            "output_dir": str(result.output_dir),
+            "run_bundle_dir": (
+                str(result.run_bundle_dir) if result.run_bundle_dir is not None else None
+            ),
+        },
     )
 
 

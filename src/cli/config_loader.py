@@ -14,6 +14,26 @@ from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from core_types import JsonValue
 from serde_msgspec import validation_error_payload
 
+_DIAGNOSTICS_PROFILE_PRESETS: dict[str, dict[str, JsonValue]] = {
+    "debug": {
+        "enable_plan_diagnostics": True,
+        "enable_hamilton_node_diagnostics": True,
+        "enable_structured_run_logs": True,
+        "enable_otel_node_tracing": True,
+    },
+    "dev": {
+        "enable_plan_diagnostics": True,
+        "enable_hamilton_node_diagnostics": True,
+        "enable_structured_run_logs": True,
+    },
+    "prod": {
+        "enable_plan_diagnostics": False,
+        "enable_hamilton_node_diagnostics": False,
+        "enable_structured_run_logs": False,
+        "enable_otel_node_tracing": False,
+    },
+}
+
 
 def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
     """Load config contents from codeanatomy.toml / pyproject.toml or explicit --config.
@@ -68,10 +88,11 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
     dict[str, object]
         Normalized configuration payload with flat keys.
     """
+    expanded = _apply_diagnostics_profile(config)
     flat: dict[str, JsonValue] = {}
-    flat.update(config)
+    flat.update(expanded)
 
-    plan = config.get("plan")
+    plan = expanded.get("plan")
     if isinstance(plan, dict):
         _copy_key(flat, plan, "allow_partial", "plan_allow_partial")
         _copy_key(flat, plan, "requested_tasks", "plan_requested_tasks")
@@ -92,19 +113,19 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
         )
         _copy_key(flat, plan, "enforce_plan_task_submission", "enforce_plan_task_submission")
 
-    cache = config.get("cache")
+    cache = expanded.get("cache")
     if isinstance(cache, dict):
         _copy_key(flat, cache, "policy_profile", "cache_policy_profile")
         _copy_key(flat, cache, "path", "cache_path")
         _copy_key(flat, cache, "log_to_file", "cache_log_to_file")
         _copy_key(flat, cache, "opt_in", "cache_opt_in")
 
-    graph_adapter = config.get("graph_adapter")
+    graph_adapter = expanded.get("graph_adapter")
     if isinstance(graph_adapter, dict):
         _copy_key(flat, graph_adapter, "kind", "graph_adapter_kind")
         _copy_key(flat, graph_adapter, "options", "graph_adapter_options")
 
-    incremental = config.get("incremental")
+    incremental = expanded.get("incremental")
     if isinstance(incremental, dict):
         _copy_key(flat, incremental, "enabled", "incremental_enabled")
         _copy_key(flat, incremental, "state_dir", "incremental_state_dir")
@@ -115,6 +136,23 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
         _copy_key(flat, incremental, "git_changed_only", "incremental_git_changed_only")
 
     return flat
+
+
+def _apply_diagnostics_profile(
+    config: Mapping[str, JsonValue],
+) -> dict[str, JsonValue]:
+    value = config.get("diagnostics_profile")
+    if not isinstance(value, str) or not value.strip():
+        return dict(config)
+    profile = value.strip().lower()
+    preset = _DIAGNOSTICS_PROFILE_PRESETS.get(profile)
+    if preset is None:
+        choices = ", ".join(sorted(_DIAGNOSTICS_PROFILE_PRESETS))
+        msg = f"Unsupported diagnostics_profile {value!r}. Available: {choices}."
+        raise ValueError(msg)
+    merged = dict(config)
+    merged.update(preset)
+    return merged
 
 
 def _copy_key(

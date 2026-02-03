@@ -1,6 +1,6 @@
 """Sample Python code with dynamic dispatch patterns for testing.
 
-Used for testing hazard detection and dynamic call analysis.
+Used for testing dynamic dispatch and call analysis.
 """
 
 from __future__ import annotations

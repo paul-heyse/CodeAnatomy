@@ -26,7 +26,6 @@ _UNSUPPORTED_SUBSTRAIT_VARIANTS: tuple[str, ...] = (
 _SUBSTRAIT_WRAPPER_VARIANTS: dict[str, tuple[str, ...]] = {
     "Analyze": ("input",),
     "Explain": ("plan", "input"),
-    "Limit": ("input",),
     "RecursiveQuery": ("static_term", "recursive_term"),
     "Unnest": ("input",),
 }
@@ -73,12 +72,28 @@ def _unwrap_substrait_wrapper(plan: DataFusionLogicalPlan) -> DataFusionLogicalP
     attrs = _SUBSTRAIT_WRAPPER_VARIANTS.get(variant_name)
     if attrs is None:
         return None
+    candidate = _coerce_plan(_safe_plan_inputs(plan))
+    if candidate is not None:
+        return candidate
     for attr in attrs:
         value = _safe_variant_attr(variant, attr)
         candidate = _coerce_plan(value)
         if candidate is not None:
             return candidate
     return None
+
+
+def _safe_plan_inputs(plan: DataFusionLogicalPlan) -> list[object]:
+    inputs = getattr(plan, "inputs", None)
+    if not callable(inputs):
+        return []
+    try:
+        children = inputs()
+    except (RuntimeError, TypeError, ValueError):
+        return []
+    if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
+        return [child for child in children if child is not None]
+    return []
 
 
 def _safe_plan_variant(plan: DataFusionLogicalPlan) -> object | None:

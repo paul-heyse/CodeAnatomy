@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pyarrow.dataset as ds
@@ -112,6 +113,44 @@ def _dataset_from_location(
     )
 
 
+def _delta_log_missing(location: DatasetLocation) -> bool:
+    if location.format != "delta":
+        return False
+    path_text = str(location.path)
+    if "://" in path_text:
+        return False
+    delta_log = Path(path_text) / "_delta_log"
+    if not delta_log.exists():
+        return True
+    try:
+        return not any(delta_log.iterdir())
+    except OSError:
+        return True
+
+
+def _record_missing_dataset(
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    name: str,
+    location: DatasetLocation,
+    reason: str,
+) -> None:
+    if runtime_profile is None:
+        return
+    from datafusion_engine.lineage.diagnostics import record_artifact
+
+    record_artifact(
+        runtime_profile,
+        "missing_dataset_location_v1",
+        {
+            "name": name,
+            "path": str(location.path),
+            "format": location.format,
+            "reason": reason,
+        },
+    )
+
+
 @dataclass
 class RegistrySchemaProvider(SchemaProvider):
     """Resolve tables from a dataset registry snapshot."""
@@ -195,6 +234,14 @@ class RegistrySchemaProvider(SchemaProvider):
         if not self.catalog.has(key):
             return None
         location = self.catalog.get(key)
+        if _delta_log_missing(location):
+            _record_missing_dataset(
+                runtime_profile=self.runtime_profile,
+                name=key,
+                location=location,
+                reason="delta_log_missing",
+            )
+            return None
         ctx = self.ctx
         if ctx is None:
             msg = "RegistrySchemaProvider requires a SessionContext to resolve tables."

@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 from hamilton import driver
 from hamilton.execution import executors
-from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 from opentelemetry import trace as otel_trace
 
@@ -34,6 +33,7 @@ from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
 )
+from hamilton_pipeline.type_checking import CodeAnatomyTypeChecker
 from hamilton_pipeline.types import (
     ExecutionMode,
     ExecutorConfig,
@@ -1372,7 +1372,7 @@ def _apply_adapters(
     if tracker is not None:
         builder = builder.with_adapters(tracker)
     if bool(config.get("enable_hamilton_type_checker", True)):
-        builder = builder.with_adapters(FunctionInputOutputTypeChecker())
+        builder = builder.with_adapters(CodeAnatomyTypeChecker())
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
         builder = builder.with_adapters(DiagnosticsNodeHook(context.diagnostics))
     if bool(config.get("enable_otel_node_tracing", True)):

@@ -23,7 +23,7 @@ from hamilton_pipeline.types import (
 )
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_PIPELINE
-from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, span_attributes
+from obs.otel.tracing import record_exception, set_span_attributes, stage_span
 from semantics.incremental import IncrementalConfig
 from utils.uuid_factory import uuid7_str
 
@@ -268,30 +268,32 @@ def execute_pipeline(
         materialized_outputs,
     ) = _resolve_execution_outputs(options)
     execute_overrides.setdefault("materialized_outputs", materialized_outputs)
-    tracer = get_tracer(SCOPE_PIPELINE)
+    execution_inputs: dict[str, object] = {}
+    if "repo_root" not in options.config:
+        execution_inputs["repo_root"] = str(repo_root_path)
     run_token = set_run_id(run_id)
     try:
-        with tracer.start_as_current_span(
+        with stage_span(
             "pipeline.execute",
-            attributes=span_attributes(
-                attrs={
-                    "codeanatomy.execution_mode": options.execution_mode.value,
-                    "codeanatomy.output_count": len(output_names),
-                    "codeanatomy.outputs": list(output_names),
-                }
-            ),
+            stage="execution",
+            scope_name=SCOPE_PIPELINE,
+            attributes={
+                "codeanatomy.execution_mode": options.execution_mode.value,
+                "codeanatomy.output_count": len(output_names),
+                "codeanatomy.outputs": list(output_names),
+            },
         ) as span:
             try:
                 if options.use_materialize:
                     _materialized, results = driver_instance.materialize(
                         additional_vars=execution_outputs,
-                        inputs={"repo_root": str(repo_root_path)},
+                        inputs=execution_inputs,
                         overrides=execute_overrides,
                     )
                 else:
                     results = driver_instance.execute(
                         execution_outputs,
-                        inputs={"repo_root": str(repo_root_path)},
+                        inputs=execution_inputs,
                         overrides=execute_overrides,
                     )
             except Exception as exc:

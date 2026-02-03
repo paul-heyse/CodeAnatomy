@@ -355,7 +355,7 @@ def task_execution_inputs(
     evidence_catalog: EvidenceCatalog,
     plan_context: PlanExecutionContext,
     scan_unit_results_by_key: Mapping[str, TableLike],
-    runtime_config: TaskExecutionRuntimeConfig,
+    task_execution_runtime_config: TaskExecutionRuntimeConfig,
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
 
@@ -369,7 +369,7 @@ def task_execution_inputs(
         Execution-plan context for signatures, tasks, and scan inputs.
     scan_unit_results_by_key
         Mapping of scan unit keys to their executed tables.
-    runtime_config
+    task_execution_runtime_config
         Runtime configuration inputs for task execution.
 
     Returns
@@ -379,7 +379,7 @@ def task_execution_inputs(
     """
     return TaskExecutionInputs(
         runtime=runtime_artifacts,
-        engine_session=runtime_config.engine_session,
+        engine_session=task_execution_runtime_config.engine_session,
         evidence=evidence_catalog,
         plan_signature=plan_context.plan_signature,
         active_task_names=plan_context.active_task_names,
@@ -390,11 +390,11 @@ def task_execution_inputs(
         scan_task_name_by_key=plan_context.plan_scan_inputs.scan_task_name_by_key,
         scan_unit_results_by_key=scan_unit_results_by_key,
         scan_units_hash=plan_context.plan_scan_inputs.scan_units_hash,
-        repo_scan_config=runtime_config.repo_scan_config,
-        incremental_config=runtime_config.incremental_config,
-        cache_salt=runtime_config.cache_salt,
-        scip_index_path=runtime_config.scip_config.scip_index_path,
-        scip_extract_options=runtime_config.scip_config.scip_extract_options,
+        repo_scan_config=task_execution_runtime_config.repo_scan_config,
+        incremental_config=task_execution_runtime_config.incremental_config,
+        cache_salt=task_execution_runtime_config.cache_salt,
+        scip_index_path=task_execution_runtime_config.scip_config.scip_index_path,
+        scip_extract_options=task_execution_runtime_config.scip_config.scip_extract_options,
     )
 
 
@@ -410,7 +410,7 @@ def task_execution_runtime_config(
     repo_scan_config: RepoScanConfig,
     incremental_config: IncrementalConfig | None,
     cache_salt: str,
-    scip_config: ScipExecutionConfig,
+    scip_execution_config: ScipExecutionConfig,
 ) -> TaskExecutionRuntimeConfig:
     """Bundle runtime configuration inputs for task execution.
 
@@ -424,7 +424,7 @@ def task_execution_runtime_config(
         Incremental configuration (when enabled).
     cache_salt
         Cache salt for deterministic repo identifiers.
-    scip_config
+    scip_execution_config
         SCIP execution inputs (index path + extract options).
 
     Returns
@@ -437,7 +437,7 @@ def task_execution_runtime_config(
         repo_scan_config=repo_scan_config,
         incremental_config=incremental_config,
         cache_salt=cache_salt,
-        scip_config=scip_config,
+        scip_config=scip_execution_config,
     )
 
 

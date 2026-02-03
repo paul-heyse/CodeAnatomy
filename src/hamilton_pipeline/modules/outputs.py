@@ -69,7 +69,7 @@ def output_runtime_context(
 
 def output_plan_context(
     plan_signature: str,
-    plan_artifacts_context: OutputPlanArtifactsContext,
+    output_plan_artifacts_context: OutputPlanArtifactsContext,
     run_id: str,
     materialized_outputs: tuple[str, ...] | None = None,
 ) -> OutputPlanContext:
@@ -79,7 +79,7 @@ def output_plan_context(
     ----------
     plan_signature
         Plan signature string for the run.
-    plan_artifacts_context
+    output_plan_artifacts_context
         Plan artifact metadata for the execution run.
     run_id
         Run identifier for the pipeline execution.
@@ -91,15 +91,15 @@ def output_plan_context(
     OutputPlanContext
         Plan metadata context.
     """
-    artifact_ids = dict(plan_artifacts_context.plan_artifact_ids)
+    artifact_ids = dict(output_plan_artifacts_context.plan_artifact_ids)
     artifact_ids.update(
-        _plan_identity_hashes_for_outputs(plan_artifacts_context.plan_bundles_by_task)
+        _plan_identity_hashes_for_outputs(output_plan_artifacts_context.plan_bundles_by_task)
     )
     outputs = tuple(str(name) for name in materialized_outputs or ())
     return OutputPlanContext(
         plan_signature=plan_signature,
-        plan_fingerprints=plan_artifacts_context.plan_fingerprints,
-        plan_bundles_by_task=plan_artifacts_context.plan_bundles_by_task,
+        plan_fingerprints=output_plan_artifacts_context.plan_fingerprints,
+        plan_bundles_by_task=output_plan_artifacts_context.plan_bundles_by_task,
         run_id=run_id,
         artifact_ids=artifact_ids,
         materialized_outputs=outputs or None,

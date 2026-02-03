@@ -2573,9 +2573,11 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
 
 pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pyfunctions!(module, [
+        udf_custom_py::install_function_factory,
         crate::codeanatomy_ext::install_codeanatomy_udf_config,
         crate::codeanatomy_ext::install_codeanatomy_policy_config,
         crate::codeanatomy_ext::install_codeanatomy_physical_config,
+        crate::codeanatomy_ext::install_expr_planners,
         crate::codeanatomy_ext::create_df_plugin_table_provider,
         crate::codeanatomy_ext::plugin_library_path,
         crate::codeanatomy_ext::plugin_manifest,

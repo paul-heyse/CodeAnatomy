@@ -30,6 +30,7 @@ All DataFusion execution facades automatically install the platform in
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -54,6 +55,7 @@ from datafusion_engine.udf.runtime import (
     rust_udf_docs,
     rust_udf_snapshot_hash,
 )
+from utils.env_utils import env_bool
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,8 @@ class RustUdfPlatformOptions:
 
 _FUNCTION_FACTORY_CTXS: WeakSet[SessionContext] = WeakSet()
 _EXPR_PLANNER_CTXS: WeakSet[SessionContext] = WeakSet()
+_LOGGER = logging.getLogger(__name__)
+_SOFT_FAIL_LOGGED: dict[str, bool] = {"expr_planners": False, "function_factory": False}
 
 
 def _install_function_factory(
@@ -167,6 +171,71 @@ def _install_expr_planners(
     ), expr_planner_payloads(planner_names)
 
 
+def _resolve_udf_snapshot(
+    ctx: SessionContext,
+    resolved: RustUdfPlatformOptions,
+) -> tuple[
+    Mapping[str, object] | None,
+    str | None,
+    tuple[str, ...],
+    Mapping[str, object] | None,
+]:
+    snapshot: Mapping[str, object] | None = None
+    docs: Mapping[str, object] | None = None
+    snapshot_hash: str | None = None
+    rewrite_tags: tuple[str, ...] = ()
+    if not resolved.enable_udfs:
+        return snapshot, snapshot_hash, rewrite_tags, docs
+    snapshot = register_rust_udfs(
+        ctx,
+        enable_async=resolved.enable_async_udfs,
+        async_udf_timeout_ms=resolved.async_udf_timeout_ms,
+        async_udf_batch_size=resolved.async_udf_batch_size,
+    )
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    tag_index = rewrite_tag_index(snapshot)
+    rewrite_tags = tuple(sorted(tag_index))
+    docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
+    docs = cast("Mapping[str, object] | None", docs_value)
+    if docs is None:
+        docs = rust_udf_docs(ctx)
+    return snapshot, snapshot_hash, rewrite_tags, docs
+
+
+def _resolve_expr_planner_names(
+    resolved: RustUdfPlatformOptions,
+    snapshot: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    planner_names = tuple(resolved.expr_planner_names)
+    if resolved.enable_expr_planners and resolved.expr_planner_hook is None:
+        derived_planners = domain_planner_names_from_snapshot(snapshot)
+        if planner_names:
+            return tuple(dict.fromkeys((*planner_names, *derived_planners)))
+        return derived_planners
+    return planner_names
+
+
+def _resolve_function_factory_policy(
+    resolved: RustUdfPlatformOptions,
+    snapshot: Mapping[str, object] | None,
+) -> FunctionFactoryPolicy | None:
+    if resolved.function_factory_policy is not None or snapshot is None:
+        return resolved.function_factory_policy
+    return function_factory_policy_from_snapshot(
+        snapshot,
+        allow_async=resolved.enable_async_udfs,
+    )
+
+
+def _strict_failure_message(
+    status_label: str,
+    status: ExtensionInstallStatus | None,
+) -> str | None:
+    if status is None or status.error is None:
+        return None
+    return f"{status_label} installation failed; native extension is required. {status.error}"
+
+
 def install_rust_udf_platform(
     ctx: SessionContext,
     *,
@@ -204,37 +273,9 @@ def install_rust_udf_platform(
         Raised when strict installation is enabled and extensions fail to install.
     """
     resolved = options or RustUdfPlatformOptions()
-    snapshot: Mapping[str, object] | None = None
-    docs: Mapping[str, object] | None = None
-    snapshot_hash: str | None = None
-    rewrite_tags: tuple[str, ...] = ()
-    if resolved.enable_udfs:
-        snapshot = register_rust_udfs(
-            ctx,
-            enable_async=resolved.enable_async_udfs,
-            async_udf_timeout_ms=resolved.async_udf_timeout_ms,
-            async_udf_batch_size=resolved.async_udf_batch_size,
-        )
-        snapshot_hash = rust_udf_snapshot_hash(snapshot)
-        tag_index = rewrite_tag_index(snapshot)
-        rewrite_tags = tuple(sorted(tag_index))
-        docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
-        docs = cast("Mapping[str, object] | None", docs_value)
-        if docs is None:
-            docs = rust_udf_docs(ctx)
-    planner_names = tuple(resolved.expr_planner_names)
-    derived_planners = domain_planner_names_from_snapshot(snapshot)
-    if resolved.enable_expr_planners and resolved.expr_planner_hook is None:
-        if planner_names:
-            planner_names = tuple(dict.fromkeys((*planner_names, *derived_planners)))
-        else:
-            planner_names = derived_planners
-    function_factory_policy = resolved.function_factory_policy
-    if function_factory_policy is None and snapshot is not None:
-        function_factory_policy = function_factory_policy_from_snapshot(
-            snapshot,
-            allow_async=resolved.enable_async_udfs,
-        )
+    snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
+    planner_names = _resolve_expr_planner_names(resolved, snapshot)
+    function_factory_policy = _resolve_function_factory_policy(resolved, snapshot)
     function_factory, function_factory_payload = _install_function_factory(
         ctx,
         enabled=resolved.enable_function_factory,
@@ -248,12 +289,21 @@ def install_rust_udf_platform(
         planner_names=planner_names,
     )
     if resolved.strict:
-        if function_factory is not None and function_factory.error is not None:
-            msg = "FunctionFactory installation failed; native extension is required."
-            raise RuntimeError(msg)
-        if expr_planners is not None and expr_planners.error is not None:
-            msg = "ExprPlanner installation failed; native extension is required."
-            raise RuntimeError(msg)
+        allow_soft_fail = env_bool("CODEANATOMY_DIAGNOSTICS_BUNDLE", default=False)
+        strict_checks = (
+            ("FunctionFactory", function_factory, "function_factory"),
+            ("ExprPlanner", expr_planners, "expr_planners"),
+        )
+        for label, status, log_key in strict_checks:
+            msg = _strict_failure_message(label, status)
+            if msg is None:
+                continue
+            if allow_soft_fail:
+                if not _SOFT_FAIL_LOGGED[log_key]:
+                    _LOGGER.error(msg)
+                    _SOFT_FAIL_LOGGED[log_key] = True
+            else:
+                raise RuntimeError(msg)
     return RustUdfPlatform(
         snapshot=snapshot,
         snapshot_hash=snapshot_hash,

@@ -36,6 +36,18 @@ use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionError, PyD
 use crate::table::PyTable;
 use crate::utils::{validate_pycapsule, wait_for_future};
 
+fn extract_string_vec(names: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    if let Ok(values) = names.extract::<Vec<String>>() {
+        return Ok(values);
+    }
+    let iter = names.try_iter()?;
+    let mut values = Vec::new();
+    for item in iter {
+        values.push(item?.extract::<String>()?);
+    }
+    Ok(values)
+}
+
 #[pyclass(frozen, name = "RawCatalog", module = "datafusion.catalog", subclass)]
 #[derive(Clone)]
 pub struct PyCatalog {
@@ -252,10 +264,16 @@ impl SchemaProvider for RustWrappedPySchemaProvider {
     fn table_names(&self) -> Vec<String> {
         Python::attach(|py| {
             let provider = self.schema_provider.bind(py);
-
             provider
                 .getattr("table_names")
-                .and_then(|names| names.extract::<Vec<String>>())
+                .and_then(|names| {
+                    let resolved = if names.is_callable() {
+                        names.call0()?
+                    } else {
+                        names
+                    };
+                    extract_string_vec(resolved)
+                })
                 .unwrap_or_else(|err| {
                     log::error!("Unable to get table_names: {err}");
                     Vec::default()
@@ -383,7 +401,14 @@ impl CatalogProvider for RustWrappedPyCatalogProvider {
             let provider = self.catalog_provider.bind(py);
             provider
                 .getattr("schema_names")
-                .and_then(|names| names.extract::<Vec<String>>())
+                .and_then(|names| {
+                    let resolved = if names.is_callable() {
+                        names.call0()?
+                    } else {
+                        names
+                    };
+                    extract_string_vec(resolved)
+                })
                 .unwrap_or_else(|err| {
                     log::error!("Unable to get schema_names: {err}");
                     Vec::default()

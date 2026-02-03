@@ -34,6 +34,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from obs.otel.config import OtelConfigOverrides, resolve_otel_config
@@ -44,7 +45,7 @@ from obs.otel.diagnostics_bundle import (
     register_metric_reader,
     register_span_exporter,
 )
-from obs.otel.logging import install_trace_context_filter
+from obs.otel.logging import apply_trace_context_formatter, install_trace_context_filter
 from obs.otel.metrics import metric_views, reset_metrics_registry
 from obs.otel.resource_detectors import (
     build_detected_resource,
@@ -471,7 +472,8 @@ def _build_tracer_provider(
     )
     from obs.otel.sampling import wrap_sampler
 
-    sampler = wrap_sampler(config.sampler, rule=_resolve_sampling_rule())
+    base_sampler = ALWAYS_ON if diagnostics_bundle_enabled() else config.sampler
+    sampler = wrap_sampler(base_sampler, rule=_resolve_sampling_rule())
     tracer_provider = TracerProvider(
         resource=resource,
         sampler=sampler,
@@ -586,6 +588,7 @@ def _build_logger_provider(
     if log_correlation:
         _enable_log_correlation()
         install_trace_context_filter()
+        apply_trace_context_formatter(force=True)
     return logger_provider
 
 
@@ -602,11 +605,11 @@ def _enable_log_correlation() -> None:
     try:
         module = importlib.import_module("opentelemetry.instrumentation.logging")
     except ImportError:
-        _LOGGER.warning("OpenTelemetry logging instrumentation is unavailable.")
+        _LOGGER.info("OpenTelemetry logging instrumentation is unavailable.")
         return
     instrumentor = getattr(module, "LoggingInstrumentor", None)
     if instrumentor is None:
-        _LOGGER.warning("OpenTelemetry logging instrumentation is unavailable.")
+        _LOGGER.info("OpenTelemetry logging instrumentation is unavailable.")
         return
     instrumentor_type = cast("type[_Instrumentor]", instrumentor)
     instrumentor_type().instrument(set_logging_format=False)

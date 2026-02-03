@@ -79,7 +79,7 @@ def test_symtable_schema_metadata() -> None:
     span_field = block_struct.field("span_hint")
     span_meta = span_field.metadata or {}
     assert span_meta.get(b"line_base") == b"0"
-    assert span_meta.get(b"col_unit") == b"utf32"
+    assert span_meta.get(b"col_unit") == b"byte"
     assert span_meta.get(b"end_exclusive") == b"true"
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
@@ -12,11 +13,14 @@ from cyclopts.config import Toml
 
 from cli.commands.version import get_version
 from cli.config_provider import build_cyclopts_config, resolve_config
+from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from cli.context import RunContext
 from cli.groups import admin_group, observability_group, session_group
 from cli.result_action import cli_result_action
 from cli.telemetry import invoke_with_telemetry
 from cli.validation import validate_config_mutual_exclusion
+from core_types import JsonValue
+from obs.otel import OtelBootstrapOptions
 from utils.uuid_factory import uuid7_str
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -114,6 +118,126 @@ class ObservabilityOptions:
             group=observability_group,
         ),
     ] = None
+    otel_endpoint: Annotated[
+        str | None,
+        Parameter(
+            name="--otel-endpoint",
+            help="Override OTLP endpoint for traces/metrics/logs.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_protocol: Annotated[
+        Literal["grpc", "http/protobuf"] | None,
+        Parameter(
+            name="--otel-protocol",
+            help="Override OTLP protocol for traces/metrics/logs.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_sampler: Annotated[
+        str | None,
+        Parameter(
+            name="--otel-sampler",
+            help="Override OTEL_TRACES_SAMPLER.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_sampler_arg: Annotated[
+        float | None,
+        Parameter(
+            name="--otel-sampler-arg",
+            help="Override OTEL_TRACES_SAMPLER_ARG.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_log_correlation: Annotated[
+        bool | None,
+        Parameter(
+            name="--otel-log-correlation",
+            help="Enable OpenTelemetry log correlation.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_metric_export_interval_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-metric-export-interval-ms",
+            help="Override OTEL_METRIC_EXPORT_INTERVAL (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_metric_export_timeout_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-metric-export-timeout-ms",
+            help="Override OTEL_METRIC_EXPORT_TIMEOUT (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_bsp_schedule_delay_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-bsp-schedule-delay-ms",
+            help="Override OTEL_BSP_SCHEDULE_DELAY (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_bsp_export_timeout_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-bsp-export-timeout-ms",
+            help="Override OTEL_BSP_EXPORT_TIMEOUT (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_bsp_max_queue_size: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-bsp-max-queue-size",
+            help="Override OTEL_BSP_MAX_QUEUE_SIZE.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_bsp_max_export_batch_size: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-bsp-max-export-batch-size",
+            help="Override OTEL_BSP_MAX_EXPORT_BATCH_SIZE.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_blrp_schedule_delay_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-blrp-schedule-delay-ms",
+            help="Override OTEL_BLRP_SCHEDULE_DELAY (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_blrp_export_timeout_ms: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-blrp-export-timeout-ms",
+            help="Override OTEL_BLRP_EXPORT_TIMEOUT (ms).",
+            group=observability_group,
+        ),
+    ] = None
+    otel_blrp_max_queue_size: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-blrp-max-queue-size",
+            help="Override OTEL_BLRP_MAX_QUEUE_SIZE.",
+            group=observability_group,
+        ),
+    ] = None
+    otel_blrp_max_export_batch_size: Annotated[
+        int | None,
+        Parameter(
+            name="--otel-blrp-max-export-batch-size",
+            help="Override OTEL_BLRP_MAX_EXPORT_BATCH_SIZE.",
+            group=observability_group,
+        ),
+    ] = None
     enable_metrics: Annotated[
         bool | None,
         Parameter(
@@ -147,6 +271,253 @@ _DEFAULT_SESSION_OPTIONS = SessionOptions()
 _DEFAULT_OBSERVABILITY_OPTIONS = ObservabilityOptions()
 
 
+def _config_str(config: Mapping[str, JsonValue], key: str) -> str | None:
+    value = config.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _config_bool(config: Mapping[str, JsonValue], key: str) -> bool | None:
+    value = config.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _config_int(config: Mapping[str, JsonValue], key: str) -> int | None:
+    value = config.get(key)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _config_float(config: Mapping[str, JsonValue], key: str) -> float | None:
+    value = config.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _apply_cli_overrides(
+    config_contents: dict[str, JsonValue],
+    sources: ConfigWithSources | None,
+    overrides: Mapping[str, tuple[JsonValue, str]],
+) -> ConfigWithSources | None:
+    if not overrides:
+        return sources
+    for key, (value, _location) in overrides.items():
+        config_contents[key] = value
+    if sources is None:
+        return None
+    values = dict(sources.values)
+    for key, (value, location) in overrides.items():
+        values[key] = ConfigValue(
+            key=key,
+            value=value,
+            source=ConfigSource.CLI,
+            location=location,
+        )
+    return ConfigWithSources(values=values)
+
+
+def _validate_session_options(session: SessionOptions) -> None:
+    if session.log_level not in LOG_LEVELS:
+        msg = f"Unsupported log level {session.log_level!r}."
+        raise ValueError(msg)
+    if session.config_file is None:
+        return
+    config_path = Path(session.config_file)
+    if not config_path.exists():
+        msg = f"Config file not found: {session.config_file!r}."
+        raise ValueError(msg)
+
+
+def _append_cli_override(
+    overrides: dict[str, tuple[JsonValue, str]],
+    *,
+    key: str,
+    value: JsonValue | None,
+    flag: str,
+    require_non_empty: bool = False,
+) -> None:
+    if value is None:
+        return
+    if require_non_empty and isinstance(value, str) and not value.strip():
+        return
+    overrides[key] = (value, flag)
+
+
+def _build_otel_cli_overrides(
+    observability: ObservabilityOptions,
+) -> dict[str, tuple[JsonValue, str]]:
+    overrides: dict[str, tuple[JsonValue, str]] = {}
+    specs: tuple[tuple[str, JsonValue | None, str, bool], ...] = (
+        ("otel_endpoint", observability.otel_endpoint, "--otel-endpoint", True),
+        ("otel_protocol", observability.otel_protocol, "--otel-protocol", False),
+        ("otel_sampler", observability.otel_sampler, "--otel-sampler", True),
+        ("otel_sampler_arg", observability.otel_sampler_arg, "--otel-sampler-arg", False),
+        (
+            "otel_log_correlation",
+            observability.otel_log_correlation,
+            "--otel-log-correlation",
+            False,
+        ),
+        (
+            "otel_metric_export_interval_ms",
+            observability.otel_metric_export_interval_ms,
+            "--otel-metric-export-interval-ms",
+            False,
+        ),
+        (
+            "otel_metric_export_timeout_ms",
+            observability.otel_metric_export_timeout_ms,
+            "--otel-metric-export-timeout-ms",
+            False,
+        ),
+        (
+            "otel_bsp_schedule_delay_ms",
+            observability.otel_bsp_schedule_delay_ms,
+            "--otel-bsp-schedule-delay-ms",
+            False,
+        ),
+        (
+            "otel_bsp_export_timeout_ms",
+            observability.otel_bsp_export_timeout_ms,
+            "--otel-bsp-export-timeout-ms",
+            False,
+        ),
+        (
+            "otel_bsp_max_queue_size",
+            observability.otel_bsp_max_queue_size,
+            "--otel-bsp-max-queue-size",
+            False,
+        ),
+        (
+            "otel_bsp_max_export_batch_size",
+            observability.otel_bsp_max_export_batch_size,
+            "--otel-bsp-max-export-batch-size",
+            False,
+        ),
+        (
+            "otel_blrp_schedule_delay_ms",
+            observability.otel_blrp_schedule_delay_ms,
+            "--otel-blrp-schedule-delay-ms",
+            False,
+        ),
+        (
+            "otel_blrp_export_timeout_ms",
+            observability.otel_blrp_export_timeout_ms,
+            "--otel-blrp-export-timeout-ms",
+            False,
+        ),
+        (
+            "otel_blrp_max_queue_size",
+            observability.otel_blrp_max_queue_size,
+            "--otel-blrp-max-queue-size",
+            False,
+        ),
+        (
+            "otel_blrp_max_export_batch_size",
+            observability.otel_blrp_max_export_batch_size,
+            "--otel-blrp-max-export-batch-size",
+            False,
+        ),
+    )
+    for key, value, flag, require_non_empty in specs:
+        _append_cli_override(
+            overrides,
+            key=key,
+            value=value,
+            flag=flag,
+            require_non_empty=require_non_empty,
+        )
+    return overrides
+
+
+def _build_otel_options(
+    config_contents: Mapping[str, JsonValue],
+    observability: ObservabilityOptions,
+) -> OtelBootstrapOptions | None:
+    otlp_endpoint = _config_str(config_contents, "otel_endpoint")
+    otlp_protocol = _config_str(config_contents, "otel_protocol")
+    sampler = _config_str(config_contents, "otel_sampler")
+    sampler_arg = _config_float(config_contents, "otel_sampler_arg")
+    log_correlation = _config_bool(config_contents, "otel_log_correlation")
+    metric_export_interval_ms = _config_int(
+        config_contents,
+        "otel_metric_export_interval_ms",
+    )
+    metric_export_timeout_ms = _config_int(
+        config_contents,
+        "otel_metric_export_timeout_ms",
+    )
+    bsp_schedule_delay_ms = _config_int(config_contents, "otel_bsp_schedule_delay_ms")
+    bsp_export_timeout_ms = _config_int(config_contents, "otel_bsp_export_timeout_ms")
+    bsp_max_queue_size = _config_int(config_contents, "otel_bsp_max_queue_size")
+    bsp_max_export_batch_size = _config_int(
+        config_contents,
+        "otel_bsp_max_export_batch_size",
+    )
+    blrp_schedule_delay_ms = _config_int(config_contents, "otel_blrp_schedule_delay_ms")
+    blrp_export_timeout_ms = _config_int(config_contents, "otel_blrp_export_timeout_ms")
+    blrp_max_queue_size = _config_int(config_contents, "otel_blrp_max_queue_size")
+    blrp_max_export_batch_size = _config_int(
+        config_contents,
+        "otel_blrp_max_export_batch_size",
+    )
+
+    if not any(
+        value is not None
+        for value in (
+            observability.enable_traces,
+            observability.enable_metrics,
+            observability.enable_logs,
+            observability.otel_test_mode,
+            observability.otel_log_correlation,
+            otlp_endpoint,
+            otlp_protocol,
+            sampler,
+            sampler_arg,
+            log_correlation,
+            metric_export_interval_ms,
+            metric_export_timeout_ms,
+            bsp_schedule_delay_ms,
+            bsp_export_timeout_ms,
+            bsp_max_queue_size,
+            bsp_max_export_batch_size,
+            blrp_schedule_delay_ms,
+            blrp_export_timeout_ms,
+            blrp_max_queue_size,
+            blrp_max_export_batch_size,
+        )
+    ):
+        return None
+    return OtelBootstrapOptions(
+        enable_traces=observability.enable_traces,
+        enable_metrics=observability.enable_metrics,
+        enable_logs=observability.enable_logs,
+        enable_log_correlation=observability.otel_log_correlation
+        if observability.otel_log_correlation is not None
+        else log_correlation,
+        test_mode=observability.otel_test_mode,
+        otlp_endpoint=otlp_endpoint,
+        otlp_protocol=otlp_protocol,
+        sampler=sampler,
+        sampler_arg=sampler_arg,
+        metric_export_interval_ms=metric_export_interval_ms,
+        metric_export_timeout_ms=metric_export_timeout_ms,
+        bsp_schedule_delay_ms=bsp_schedule_delay_ms,
+        bsp_export_timeout_ms=bsp_export_timeout_ms,
+        bsp_max_queue_size=bsp_max_queue_size,
+        bsp_max_export_batch_size=bsp_max_export_batch_size,
+        blrp_schedule_delay_ms=blrp_schedule_delay_ms,
+        blrp_export_timeout_ms=blrp_export_timeout_ms,
+        blrp_max_queue_size=blrp_max_queue_size,
+        blrp_max_export_batch_size=blrp_max_export_batch_size,
+    )
+
+
 @app.meta.default
 def meta_launcher(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
@@ -161,54 +532,32 @@ def meta_launcher(
     -------
     int
         Exit status code from command execution.
-
-    Raises
-    ------
-    ValueError
-        Raised when the log level or config path is invalid.
     """
-    from obs.otel import OtelBootstrapOptions
-
     logging.basicConfig(level=session.log_level.upper())
-    if session.log_level not in LOG_LEVELS:
-        msg = f"Unsupported log level {session.log_level!r}."
-        raise ValueError(msg)
-
-    if session.config_file is not None:
-        config_path = Path(session.config_file)
-        if not config_path.exists():
-            msg = f"Config file not found: {session.config_file!r}."
-            raise ValueError(msg)
+    _validate_session_options(session)
 
     config_resolution = resolve_config(session.config_file)
     config_contents = dict(config_resolution.contents)
     validate_config_mutual_exclusion(config_contents)
     app.config = build_cyclopts_config(config_contents)
 
-    # Build OTel options from CLI parameters
-    otel_options: OtelBootstrapOptions | None = None
-    if any(
-        opt is not None
-        for opt in (
-            observability.enable_traces,
-            observability.enable_metrics,
-            observability.enable_logs,
-            observability.otel_test_mode,
-        )
-    ):
-        otel_options = OtelBootstrapOptions(
-            enable_traces=observability.enable_traces,
-            enable_metrics=observability.enable_metrics,
-            enable_logs=observability.enable_logs,
-            test_mode=observability.otel_test_mode,
-        )
+    effective_config_contents = dict(config_contents)
+    otel_cli_overrides = _build_otel_cli_overrides(observability)
+
+    config_sources = _apply_cli_overrides(
+        effective_config_contents,
+        config_resolution.sources,
+        otel_cli_overrides,
+    )
+
+    otel_options = _build_otel_options(effective_config_contents, observability)
 
     effective_run_id = session.run_id or uuid7_str()
     run_context = RunContext(
         run_id=effective_run_id,
         log_level=session.log_level,
-        config_contents=config_contents,
-        config_sources=config_resolution.sources,
+        config_contents=effective_config_contents,
+        config_sources=config_sources or config_resolution.sources,
         otel_options=otel_options,
     )
 

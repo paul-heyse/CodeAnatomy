@@ -7,7 +7,7 @@ from extract.extractors.symtable_extract import SymtableExtractOptions, _symtabl
 
 
 def test_symtable_span_hint_byte_start() -> None:
-    code = "x = 1\n"
+    code = "def foo():\n    x = 1\n"
     file_ctx = FileContext(
         file_id="file-1",
         path="foo.py",
@@ -25,17 +25,17 @@ def test_symtable_span_hint_byte_start() -> None:
     blocks = row["blocks"]
     assert isinstance(blocks, list)
 
-    module_block = next(
+    function_block = next(
         (
             block
             for block in blocks
-            if isinstance(block, dict) and block.get("block_type") == "MODULE"
+            if isinstance(block, dict) and block.get("block_type") == "FUNCTION"
         ),
         None,
     )
-    assert module_block is not None
+    assert function_block is not None
 
-    span_hint = module_block.get("span_hint")
+    span_hint = function_block.get("span_hint")
     assert isinstance(span_hint, dict)
     assert span_hint["col_unit"] == "byte"
     byte_span = span_hint.get("byte_span")

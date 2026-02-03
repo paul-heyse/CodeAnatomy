@@ -110,4 +110,7 @@ JSON artifacts are saved by default to `.cq/artifacts`. Use `--no-save-artifact`
 
 # Skip config file (use defaults only)
 /cq calls foo --no-config
+
+# Security-sensitive pattern query
+/cq q "pattern='eval(\$X)'"
 ```

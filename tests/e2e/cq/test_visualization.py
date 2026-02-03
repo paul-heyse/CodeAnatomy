@@ -11,7 +11,7 @@ from tools.cq.core.renderers.mermaid import (
     render_mermaid_class_diagram,
     render_mermaid_flowchart,
 )
-from tools.cq.core.schema import Anchor, CqResult, Finding, RunMeta, Section
+from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
 
 
 def _make_run_meta() -> RunMeta:
@@ -51,7 +51,7 @@ class TestMermaidFlowchart:
                 category="definition",
                 message="Function foo",
                 anchor=Anchor(file="test.py", line=1, col=0),
-                details={"name": "foo", "kind": "function"},
+                details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
             )
         ]
         result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
@@ -65,7 +65,7 @@ class TestMermaidFlowchart:
                 category="caller",
                 message="bar calls foo",
                 anchor=Anchor(file="test.py", line=10, col=0),
-                details={"caller": "bar", "callee": "foo"},
+                details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
             )
         ]
         result = CqResult(
@@ -95,7 +95,7 @@ class TestMermaidClassDiagram:
                 category="definition",
                 message="Class MyClass",
                 anchor=Anchor(file="test.py", line=1, col=0),
-                details={"name": "MyClass", "kind": "class"},
+                details=DetailPayload.from_legacy({"name": "MyClass", "kind": "class"}),
             )
         ]
         result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
@@ -109,7 +109,7 @@ class TestMermaidClassDiagram:
                 category="definition",
                 message="Function standalone",
                 anchor=Anchor(file="test.py", line=1, col=0),
-                details={"name": "standalone", "kind": "function"},
+                details=DetailPayload.from_legacy({"name": "standalone", "kind": "function"}),
             )
         ]
         result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
@@ -157,7 +157,7 @@ class TestDotRenderer:
                 category="definition",
                 message="Function foo",
                 anchor=Anchor(file="test.py", line=1, col=0),
-                details={"name": "foo", "kind": "function"},
+                details=DetailPayload.from_legacy({"name": "foo", "kind": "function"}),
             )
         ]
         result = CqResult(run=_make_run_meta(), key_findings=findings, sections=[])
@@ -172,7 +172,7 @@ class TestDotRenderer:
                 category="caller",
                 message="bar calls foo",
                 anchor=Anchor(file="test.py", line=10, col=0),
-                details={"caller": "bar", "callee": "foo"},
+                details=DetailPayload.from_legacy({"caller": "bar", "callee": "foo"}),
             )
         ]
         result = CqResult(
@@ -182,24 +182,6 @@ class TestDotRenderer:
         )
         output = render_dot(result)
         assert "->" in output
-
-    def test_render_with_hazards(self) -> None:
-        """Result with hazards shows hazard nodes."""
-        hazards = [
-            Finding(
-                category="hazard",
-                message="eval() usage detected",
-                anchor=Anchor(file="test.py", line=5, col=0),
-                details={"kind": "eval_exec"},
-            )
-        ]
-        result = CqResult(
-            run=_make_run_meta(),
-            key_findings=[],
-            sections=[Section(title="Hazards", findings=hazards)],
-        )
-        output = render_dot(result)
-        assert "hazard" in output.lower() or "diamond" in output
 
 
 class TestDotSanitization:

@@ -116,6 +116,9 @@ class SymtableContext:
 
 
 _SYMTABLE_CACHE_PARTS = 3
+_SYMTABLE_SCOPE_TYPE_VALUES: dict[str, int] = {
+    enum.name: index for index, enum in enumerate(symtable.SymbolTableType)
+}
 
 
 def _symtable_cache_key(
@@ -144,6 +147,21 @@ def _effective_max_workers(
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
     return tbl.get_type().name
+
+
+def _scope_type_value(tbl: symtable.SymbolTable) -> int | None:
+    value = tbl.get_type().value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        mapped = _SYMTABLE_SCOPE_TYPE_VALUES.get(tbl.get_type().name)
+        if mapped is not None:
+            return mapped
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _scope_role(scope_type_str: str) -> str:
@@ -225,7 +243,7 @@ class _ScopeContext:
     scope_id: str
     qualpath: str
     scope_type: str
-    scope_type_value: int
+    scope_type_value: int | None
     function_partitions: Mapping[str, list[str]] | None
     class_methods: list[str] | None
     parent_table_id: int | None
@@ -445,7 +463,7 @@ def _build_scope_context(
     ctx: SymtableContext,
 ) -> _ScopeContext:
     scope_type = _scope_type_str(tbl)
-    scope_type_value = int(tbl.get_type().value)
+    scope_type_value = _scope_type_value(tbl)
     lineno = int(tbl.get_lineno() or 0)
     table_id = int(tbl.get_id())
     parent_local_id = int(parent_tbl.get_id()) if parent_tbl is not None else None

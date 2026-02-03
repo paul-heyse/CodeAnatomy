@@ -55,4 +55,14 @@ def test_tree_sitter_async_def_query() -> None:
         def_rows: list[dict[str, object]] = []
     else:
         def_rows = [item for item in defs if isinstance(item, dict)]
-    assert any(def_row.get("kind") == "async_function_definition" for def_row in def_rows)
+    matching = [row for row in def_rows if row.get("name") == "foo"]
+    assert matching
+    def_row = matching[0]
+    assert def_row.get("kind") == "function_definition"
+    span = def_row.get("span")
+    assert isinstance(span, dict)
+    byte_span = span.get("byte_span")
+    assert isinstance(byte_span, dict)
+    byte_start = byte_span.get("byte_start")
+    assert isinstance(byte_start, int)
+    assert code.encode("utf-8")[byte_start:].startswith(b"async def")

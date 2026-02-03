@@ -69,6 +69,33 @@ class DeltaConfig(StructBaseStrict, frozen=True):
     export: DeltaExportConfig | None = None
 
 
+class DocstringsPolicyConfig(StructBaseStrict, frozen=True):
+    """Docstring policy configuration values."""
+
+    coverage_threshold: float | None = msgspec.field(
+        default=None,
+        name="coverage-threshold",
+    )
+    coverage_action: str | None = msgspec.field(
+        default=None,
+        name="coverage-action",
+    )
+    missing_params_action: str | None = msgspec.field(
+        default=None,
+        name="missing-params-action",
+    )
+    missing_returns_action: str | None = msgspec.field(
+        default=None,
+        name="missing-returns-action",
+    )
+
+
+class DocstringsConfig(StructBaseStrict, frozen=True):
+    """Docstring-related configuration values."""
+
+    policy: DocstringsPolicyConfig | None = None
+
+
 class RootConfig(StructBaseStrict, frozen=True):
     """Root configuration payload for CodeAnatomy."""
 
@@ -77,6 +104,7 @@ class RootConfig(StructBaseStrict, frozen=True):
     graph_adapter: GraphAdapterConfig | None = None
     incremental: IncrementalConfig | None = None
     delta: DeltaConfig | None = None
+    docstrings: DocstringsConfig | None = None
 
     plan_allow_partial: bool | None = None
     plan_requested_tasks: tuple[str, ...] | None = None
@@ -106,6 +134,7 @@ class RootConfig(StructBaseStrict, frozen=True):
     incremental_git_changed_only: bool | None = None
 
     runtime_profile_name: str | None = None
+    diagnostics_profile: str | None = None
     log_level: str | None = None
     determinism_override: str | None = None
     repo_root: str | None = None
@@ -118,6 +147,21 @@ class RootConfig(StructBaseStrict, frozen=True):
     enable_hamilton_node_diagnostics: bool | None = None
     enable_otel_node_tracing: bool | None = None
     enable_otel_plan_tracing: bool | None = None
+    otel_endpoint: str | None = None
+    otel_protocol: str | None = None
+    otel_sampler: str | None = None
+    otel_sampler_arg: float | int | None = None
+    otel_log_correlation: bool | None = None
+    otel_metric_export_interval_ms: int | None = None
+    otel_metric_export_timeout_ms: int | None = None
+    otel_bsp_schedule_delay_ms: int | None = None
+    otel_bsp_export_timeout_ms: int | None = None
+    otel_bsp_max_queue_size: int | None = None
+    otel_bsp_max_export_batch_size: int | None = None
+    otel_blrp_schedule_delay_ms: int | None = None
+    otel_blrp_export_timeout_ms: int | None = None
+    otel_blrp_max_queue_size: int | None = None
+    otel_blrp_max_export_batch_size: int | None = None
     enable_structured_run_logs: bool | None = None
     structured_log_path: str | None = None
     hamilton_run_log_path: str | None = None
@@ -172,6 +216,8 @@ __all__ = [
     "DeltaConfig",
     "DeltaExportConfig",
     "DeltaRestoreConfig",
+    "DocstringsConfig",
+    "DocstringsPolicyConfig",
     "GraphAdapterConfig",
     "IncrementalConfig",
     "PlanConfig",

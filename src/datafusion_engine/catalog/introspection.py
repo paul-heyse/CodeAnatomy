@@ -423,6 +423,8 @@ class CacheConfigSnapshot:
     list_files_cache_limit: str | None
     metadata_cache_limit: str | None
     predicate_cache_size: str | None
+    collect_statistics: str | None = None
+    meta_fetch_concurrency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -479,6 +481,14 @@ def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnaps
         predicate_cache_size=(
             settings_map.get("datafusion.execution.parquet.max_predicate_cache_size")
             or defaults.get("datafusion.execution.parquet.max_predicate_cache_size")
+        ),
+        collect_statistics=(
+            settings_map.get("datafusion.execution.collect_statistics")
+            or defaults.get("datafusion.execution.collect_statistics")
+        ),
+        meta_fetch_concurrency=(
+            settings_map.get("datafusion.execution.meta_fetch_concurrency")
+            or defaults.get("datafusion.execution.meta_fetch_concurrency")
         ),
     )
 
@@ -645,6 +655,8 @@ def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
             "list_files_cache_limit": config.list_files_cache_limit,
             "metadata_cache_limit": config.metadata_cache_limit,
             "predicate_cache_size": config.predicate_cache_size,
+            "collect_statistics": config.collect_statistics,
+            "meta_fetch_concurrency": config.meta_fetch_concurrency,
         },
         "cache_snapshots": snapshots,
     }

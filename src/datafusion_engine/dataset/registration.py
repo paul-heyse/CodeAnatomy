@@ -1198,19 +1198,16 @@ def register_dataset_spec(
 
     Examples
     --------
-    Register a streaming Delta source:
+    Register a Delta dataset spec:
 
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    >>> from schema_spec.system import DatasetSpec, DataFusionScanOptions
+    >>> from schema_spec.system import DatasetSpec
     >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
-    >>> spec = DatasetSpec(
-    ...     table_spec=table_spec,
-    ...     datafusion_scan=DataFusionScanOptions(unbounded=True),
-    ... )
+    >>> spec = DatasetSpec(table_spec=table_spec)
     >>> register_dataset_spec(
     ...     ctx,
     ...     DatasetRegistration(
-    ...         name="streaming_events",
+    ...         name="events",
     ...         spec=spec,
     ...         location="s3://bucket/events/",
     ...     ),

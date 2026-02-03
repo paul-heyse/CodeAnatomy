@@ -47,12 +47,9 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
         name="defs",
         source="""
         (function_definition name: (identifier) @def.name) @def.node
-        (async_function_definition name: (identifier) @def.name) @def.node
         (class_definition name: (identifier) @def.name) @def.node
         (decorated_definition
           definition: (function_definition name: (identifier) @def.name) @def.node)
-        (decorated_definition
-          definition: (async_function_definition name: (identifier) @def.name) @def.node)
         (decorated_definition
           definition: (class_definition name: (identifier) @def.name) @def.node)
         """,
@@ -98,8 +95,6 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
           body: (block . (expression_statement (string) @doc.string))) @doc.owner
         (function_definition
           body: (block . (expression_statement (string) @doc.string))) @doc.owner
-        (async_function_definition
-          body: (block . (expression_statement (string) @doc.string))) @doc.owner
         """,
     ),
 )
@@ -133,7 +128,9 @@ def _pack_version(sources: Mapping[str, str]) -> str:
 
 
 def _lint_query(spec: QuerySpec, query: Query) -> None:
-    for idx in range(query.pattern_count()):
+    pattern_count = query.pattern_count
+    count = pattern_count() if callable(pattern_count) else int(pattern_count)
+    for idx in range(count):
         if not query.is_pattern_rooted(idx):
             msg = f"Query {spec.name!r} pattern[{idx}] is not rooted."
             raise ValueError(msg)

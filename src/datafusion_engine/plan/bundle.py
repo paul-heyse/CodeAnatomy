@@ -507,6 +507,8 @@ def _capture_explain_artifacts(
     _ExplainArtifacts
         Explain outputs captured for the bundle.
     """
+    if _is_explain_plan(_safe_logical_plan(df)):
+        return _ExplainArtifacts(tree=None, verbose=None, analyze=None)
     verbose = None
     if session_runtime is not None and session_runtime.profile.explain_verbose:
         verbose = capture_explain(df, verbose=True, analyze=False)
@@ -515,6 +517,19 @@ def _capture_explain_artifacts(
         verbose=verbose,
         analyze=_capture_explain_analyze(df, session_runtime=session_runtime),
     )
+
+
+def _is_explain_plan(plan: object | None) -> bool:
+    if plan is None:
+        return False
+    to_variant = getattr(plan, "to_variant", None)
+    if not callable(to_variant):
+        return False
+    try:
+        variant = to_variant()
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    return type(variant).__name__ in {"Analyze", "Explain"}
 
 
 def _environment_artifacts(

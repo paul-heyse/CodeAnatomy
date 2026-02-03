@@ -1,6 +1,6 @@
 ---
 name: cq
-description: High-signal code queries (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, async-hazards, bytecode-surface, pattern queries, scope filtering, visualization)
+description: High-signal code queries (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, bytecode-surface, pattern queries, scope filtering, visualization)
 allowed-tools: Bash
 ---
 
@@ -21,8 +21,7 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Context search | `/cq q "entity=function inside='class <C>'"` |
 | Find closures | `/cq q "entity=function scope=closure"` |
 | Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
-| Hazard scan | `/cq q "entity=function fields=hazards"` |
-| Security hazards | `/cq q "pattern='eval(\$X)'"` |
+| Security patterns | `/cq q "pattern='eval(\$X)'"` |
 | Cache status | `/cq cache --stats` |
 
 ## Global Options
@@ -117,7 +116,6 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 | `exceptions` | Analyze exception handling | `/cq exceptions` |
 | `side-effects` | Detect import-time side effects | `/cq side-effects` |
 | `scopes` | Analyze closure captures | `/cq scopes path/to/file.py` |
-| `async-hazards` | Find blocking in async | `/cq async-hazards` |
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
 | `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
 
@@ -185,15 +183,6 @@ Results: !`./scripts/cq scopes "$1" --root .`
 Usage: /cq scopes <FILE_OR_SYMBOL>
 
 Example: /cq scopes tools/cq/macros/impact.py
-
-### async-hazards - Blocking in Async Detection
-
-Finds blocking calls (time.sleep, requests.*, subprocess.*) inside async functions.
-
-Results: !`./scripts/cq async-hazards --root .`
-Usage: /cq async-hazards [--profiles "<blocking_patterns>"]
-
-Example: /cq async-hazards --profiles "redis.get,mysql.execute"
 
 ### bytecode-surface - Bytecode Dependency Analysis
 
@@ -270,7 +259,7 @@ Usage: /cq q "<query_string>"
 - `expand=callers(depth=2)` - Transitive callers
 
 **Fields:**
-- `fields=def,hazards` - Include hazard detection
+- `fields=def` - Include definition metadata
 - `fields=callers` - Include caller section
 
 **Examples:**
@@ -281,8 +270,8 @@ Usage: /cq q "<query_string>"
 # Find functions matching pattern with callers
 /cq q "entity=function name=~^build expand=callers in=src/"
 
-# Find class definitions with hazard analysis
-/cq q "entity=class in=src/semantics/ fields=def,hazards"
+# Find class definitions with definition metadata
+/cq q "entity=class in=src/semantics/ fields=def"
 
 # Show query plan explanation
 /cq q "entity=function name=compile explain=true"
@@ -310,10 +299,10 @@ Pattern queries use ast-grep syntax for structural code matching without false p
 # Find specific decorator usage
 /cq q "pattern='@dataclass'"
 
-# Find eval/exec (security hazard)
+# Find eval/exec (security-sensitive pattern)
 /cq q "pattern='eval(\$X)'"
 
-# Find pickle.load (security hazard)
+# Find pickle.load (unsafe deserialization pattern)
 /cq q "pattern='pickle.load(\$X)'"
 ```
 
@@ -608,71 +597,22 @@ Generate visual representations of code structure.
 /cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
-### Security Hazard Catalog
+### Security Pattern Queries
 
-cq includes 30+ builtin hazard patterns for security, correctness, and design issues.
-
-**Hazard Categories:**
-
-| Category | Description | Severity |
-|----------|-------------|----------|
-| `SECURITY` | Code execution, injection, deserialization | ERROR |
-| `CORRECTNESS` | Dynamic dispatch, type confusion | WARNING/INFO |
-| `DESIGN` | Complexity, coupling issues | INFO |
-| `PERFORMANCE` | Anti-patterns affecting speed | INFO |
-
-**Builtin Security Hazards:**
-
-| Pattern | Category | Severity | Description |
-|---------|----------|----------|-------------|
-| `eval($X)` | SECURITY | ERROR | Dynamic code execution |
-| `exec($X)` | SECURITY | ERROR | Dynamic code execution |
-| `compile($X, $Y, 'exec')` | SECURITY | ERROR | Dynamic compilation |
-| `pickle.load($X)` | SECURITY | ERROR | Unsafe deserialization |
-| `pickle.loads($X)` | SECURITY | ERROR | Unsafe deserialization |
-| `yaml.load($X)` | SECURITY | WARNING | Potentially unsafe YAML |
-| `yaml.unsafe_load($X)` | SECURITY | ERROR | Explicitly unsafe YAML |
-| `subprocess.*(shell=True)` | SECURITY | WARNING | Shell injection risk |
-| `os.system($X)` | SECURITY | WARNING | Shell command execution |
-| `os.popen($X)` | SECURITY | WARNING | Shell command execution |
-| `__import__($X)` | SECURITY | WARNING | Dynamic import |
-| `importlib.import_module($X)` | SECURITY | WARNING | Dynamic import |
-
-**Builtin Correctness Hazards:**
-
-| Pattern | Category | Severity | Description |
-|---------|----------|----------|-------------|
-| `getattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute access |
-| `setattr($X, $Y, $Z)` | CORRECTNESS | INFO | Dynamic attribute modification |
-| `delattr($X, $Y)` | CORRECTNESS | INFO | Dynamic attribute deletion |
-| `globals()` | CORRECTNESS | INFO | Global namespace access |
-| `locals()` | CORRECTNESS | INFO | Local namespace access |
-| `vars($X)` | CORRECTNESS | INFO | Object dict access |
-| `*args, **kwargs` forwarding | CORRECTNESS | INFO | Obscures call signatures |
-
-**Using Hazard Detection:**
+Use pattern queries to find security-sensitive constructs without a dedicated scanner.
 
 ```bash
-# Scan for all hazards in functions
-/cq q "entity=function fields=hazards"
-
-# Find specific hazard patterns
+# Dynamic code execution
 /cq q "pattern='eval(\$X)'"
+/cq q "pattern='exec(\$X)'"
+
+# Unsafe deserialization
 /cq q "pattern='pickle.load(\$X)'"
+/cq q "pattern='yaml.load(\$X)'"
 
-# Security audit of a directory
-/cq q "entity=function in=src/api/ fields=hazards" --severity error
-
-# Find dynamic dispatch patterns
-/cq q "pattern='getattr(\$X, \$Y)' in=src/"
+# Shell injection risks
+/cq q "pattern='subprocess.\$M(\$$$, shell=True)'"
 ```
-
-**Confidence Penalty:**
-Hazards apply confidence penalties to findings:
-- `SECURITY/ERROR`: -0.30 confidence penalty
-- `SECURITY/WARNING`: -0.15 confidence penalty
-- `CORRECTNESS/WARNING`: -0.10 confidence penalty
-- `CORRECTNESS/INFO`: -0.05 confidence penalty
 
 ### Cache Management
 
@@ -772,7 +712,6 @@ Based on evidence quality:
 | Improving error handling | `/cq exceptions` |
 | Test isolation issues | `/cq side-effects` |
 | Extracting nested functions | `/cq scopes <file>` |
-| Async performance issues | `/cq async-hazards` |
 | Finding hidden deps | `/cq bytecode-surface <file>` |
 | Finding specific imports | `/cq q "entity=import name=pandas"` |
 | Finding functions by pattern | `/cq q "entity=function name=~^test_"` |
@@ -782,7 +721,7 @@ Based on evidence quality:
 | Closure investigation | `/cq q "entity=function scope=closure"` |
 | Understanding code flow | `/cq q "entity=function expand=callers" --format mermaid` |
 | Decorator analysis | `/cq q "entity=function decorated_by=fixture"` |
-| Security hazard scan | `/cq q "pattern='eval(\$X)'"` or `/cq q "fields=hazards"` |
+| Security pattern queries | `/cq q "pattern='eval(\$X)'"` |
 | Cache management | `/cq cache --stats` |
 
 ## Artifacts

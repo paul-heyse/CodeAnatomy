@@ -1,6 +1,6 @@
 """Scopes analysis - symtable-driven closure/scope inspection.
 
-Reports free vars, cell vars, globals, nonlocals for refactor hazard detection.
+Reports free vars, cell vars, globals, nonlocals for refactor analysis.
 """
 
 from __future__ import annotations

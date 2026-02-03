@@ -20,7 +20,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/cq q "...inside=..."` | Context-aware search | Find code in specific structural contexts |
 | `/cq q "...scope=closure"` | Before extracting nested functions | Identifies variable capture issues |
 | `/cq q "all=..." / "any=..."` | Combined/alternative patterns | Logical composition of queries |
-| `/cq q "fields=hazards"` | Security review | 30+ builtin security/correctness hazards |
+| `/cq q "pattern='eval(\$X)'"` | Security pattern review | Identify security-sensitive constructs |
 | `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
 | `/cq q --format mermaid-cfg` | Control flow analysis | Visualize function CFGs |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
@@ -38,7 +38,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 **Before extracting closures:** Run `/cq q "entity=function scope=closure in=<dir>"` to find variable captures.
 
-**Before security review:** Run `/cq q "entity=function fields=hazards"` or pattern queries like `/cq q "pattern='eval(\$X)'"`.
+**Before security review:** Use pattern queries like `/cq q "pattern='eval(\$X)'"` or `/cq q "pattern='pickle.load(\$X)'"`.
 
 **Before combining conditions:** Use composite queries: `/cq q "all='pattern1,pattern2'"` (AND) or `/cq q "any='p1,p2'"` (OR).
 

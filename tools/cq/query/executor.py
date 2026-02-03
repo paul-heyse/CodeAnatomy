@@ -41,7 +41,7 @@ from tools.cq.index.repo import resolve_repo_context
 from tools.cq.index.diskcache_index_cache import IndexCache
 from tools.cq.query.ir import Query, Scope
 
-QUERY_CACHE_VERSION = "9"
+QUERY_CACHE_VERSION = "10"
 
 
 @dataclass
@@ -724,14 +724,21 @@ def _collect_match_spans(
         rel_path = _normalize_match_file(str(file_path), root)
 
         for rule in rules:
-            pattern = rule.pattern
-            if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
-                if rule.kind:
-                    matches = node.find_all(kind=rule.kind)
+            rule_dict = rule.to_yaml_dict()
+            if rule.requires_inline_rule():
+                matches = node.find_all({"rule": rule_dict})  # type: ignore[arg-type]
+            elif "pattern" in rule_dict and rule_dict.get("pattern") in {"$FUNC", "$METHOD", "$CLASS"}:
+                kind = rule_dict.get("kind")
+                if kind:
+                    matches = node.find_all(kind=kind)
                 else:
-                    continue
+                    matches = node.find_all(pattern=rule_dict["pattern"])
+            elif "pattern" in rule_dict:
+                matches = node.find_all(pattern=rule_dict["pattern"])
+            elif "kind" in rule_dict:
+                matches = node.find_all(kind=rule_dict["kind"])
             else:
-                matches = node.find_all(pattern=pattern)
+                continue
 
             for match in matches:
                 range_obj = match.range()
@@ -1283,8 +1290,8 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
     if entity is None:
         return False
 
-    function_kinds = {"function", "async_function", "function_typeparams"}
-    class_kinds = {"class", "class_bases", "class_typeparams", "class_typeparams_bases"}
+    function_kinds = {"function", "async_function"}
+    class_kinds = {"class", "class_bases"}
     import_kinds = {
         "import",
         "import_as",

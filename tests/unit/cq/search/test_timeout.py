@@ -190,8 +190,12 @@ class TestTimeoutEdgeCases:
             await asyncio.sleep(0)
             return "result"
 
-        with pytest.raises(ValueError, match="Timeout must be positive"):
-            await search_async_with_timeout(any_coroutine(), timeout=-1.0)
+        coro = any_coroutine()
+        try:
+            with pytest.raises(ValueError, match="Timeout must be positive"):
+                await search_async_with_timeout(coro, timeout=-1.0)
+        finally:
+            coro.close()
 
     @pytest.mark.parametrize("timeout", [0.1, 0.5, 1.0, 5.0])
     def test_various_timeouts_sync(self, timeout: float) -> None:

@@ -53,58 +53,6 @@
       },
       "message": "class_bases: Toolchain",
       "severity": "info"
-    },
-    {
-      "anchor": {
-        "col": 0,
-        "end_col": 37,
-        "end_line": 157,
-        "file": "tools/cq/core/toolchain.py",
-        "line": 12
-      },
-      "category": "definition",
-      "details": {
-        "data": {
-          "calls_within": 0,
-          "name": "Toolchain"
-        },
-        "kind": "class_typeparams",
-        "score": {
-          "confidence_bucket": "high",
-          "confidence_score": 0.95,
-          "evidence_kind": "resolved_ast",
-          "impact_bucket": "low",
-          "impact_score": 0.0275
-        }
-      },
-      "message": "class_typeparams: Toolchain",
-      "severity": "info"
-    },
-    {
-      "anchor": {
-        "col": 0,
-        "end_col": 37,
-        "end_line": 157,
-        "file": "tools/cq/core/toolchain.py",
-        "line": 12
-      },
-      "category": "definition",
-      "details": {
-        "data": {
-          "calls_within": 0,
-          "name": "Toolchain"
-        },
-        "kind": "class_typeparams_bases",
-        "score": {
-          "confidence_bucket": "high",
-          "confidence_score": 0.95,
-          "evidence_kind": "resolved_ast",
-          "impact_bucket": "low",
-          "impact_score": 0.0275
-        }
-      },
-      "message": "class_typeparams_bases: Toolchain",
-      "severity": "info"
     }
   ],
   "run": {
@@ -121,7 +69,7 @@
   "sections": [],
   "summary": {
     "files_scanned": 1,
-    "matches": 4,
+    "matches": 2,
     "total_calls": 0,
     "total_defs": 16
   }

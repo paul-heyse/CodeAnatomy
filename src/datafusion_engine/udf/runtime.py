@@ -9,6 +9,8 @@ from types import ModuleType
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary, WeakSet
 
+import pyarrow as pa
+import pyarrow.types as patypes
 from datafusion import SessionContext
 
 if TYPE_CHECKING:
@@ -66,10 +68,24 @@ _DDL_TYPE_ALIASES: dict[str, str] = {
     "float64": "DOUBLE",
     "utf8": "VARCHAR",
     "large_utf8": "VARCHAR",
+    "large_string": "VARCHAR",
     "string": "VARCHAR",
     "bool": "BOOLEAN",
     "boolean": "BOOLEAN",
 }
+
+_DDL_COMPLEX_TYPE_TOKENS: tuple[str, ...] = (
+    "struct<",
+    "list<",
+    "large_list<",
+    "fixed_size_list<",
+    "map<",
+    "dictionary<",
+    "binary",
+    "large_binary",
+    "fixed_size_binary",
+    "union<",
+)
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -931,9 +947,58 @@ def _alias_list(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _ddl_type_name_from_arrow(dtype: pa.DataType) -> str | None:
+    if patypes.is_dictionary(dtype):
+        return _ddl_type_name(dtype.value_type)
+    result: str | None = None
+    if patypes.is_decimal(dtype):
+        result = f"DECIMAL({dtype.precision},{dtype.scale})"
+    elif patypes.is_timestamp(dtype):
+        result = "TIMESTAMP"
+    elif patypes.is_date(dtype):
+        result = "DATE"
+    elif patypes.is_time(dtype):
+        result = "TIME"
+    varchar_checks = (
+        patypes.is_struct,
+        patypes.is_list,
+        patypes.is_large_list,
+        patypes.is_fixed_size_list,
+        patypes.is_map,
+        patypes.is_union,
+        patypes.is_binary,
+        patypes.is_large_binary,
+        patypes.is_fixed_size_binary,
+    )
+    if result is None and any(check(dtype) for check in varchar_checks):
+        result = "VARCHAR"
+    return result
+
+
+def _ddl_type_name_from_string(dtype_name: str) -> str:
+    if dtype_name.startswith("timestamp"):
+        return "TIMESTAMP"
+    if dtype_name.startswith("date"):
+        return "DATE"
+    if dtype_name.startswith("time"):
+        return "TIME"
+    if any(token in dtype_name for token in _DDL_COMPLEX_TYPE_TOKENS) or dtype_name in {
+        "any",
+        "variant",
+        "json",
+    }:
+        return "VARCHAR"
+    alias = _DDL_TYPE_ALIASES.get(dtype_name)
+    return alias or dtype_name.upper()
+
+
 def _ddl_type_name(dtype: object) -> str:
+    if isinstance(dtype, pa.DataType):
+        arrow_name = _ddl_type_name_from_arrow(dtype)
+        if arrow_name is not None:
+            return arrow_name
     dtype_name = str(dtype).strip().lower()
-    return _DDL_TYPE_ALIASES.get(dtype_name, dtype_name)
+    return _ddl_type_name_from_string(dtype_name)
 
 
 def _ddl_config_for_spec(

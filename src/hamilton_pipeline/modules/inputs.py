@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
+from typing import TYPE_CHECKING, Literal
 
 from hamilton.function_modifiers import cache
 
@@ -368,8 +368,8 @@ class EngineSessionObservabilityInputs:
 @cache(behavior="ignore")
 @apply_tag(TagPolicy(layer="inputs", kind="runtime"))
 def engine_session(
-    runtime_inputs: EngineSessionRuntimeInputs,
-    observability_inputs: EngineSessionObservabilityInputs,
+    engine_session_runtime_inputs: EngineSessionRuntimeInputs,
+    engine_session_observability_inputs: EngineSessionObservabilityInputs,
 ) -> EngineSession:
     """Build an engine session for downstream execution surfaces.
 
@@ -379,13 +379,13 @@ def engine_session(
         Session containing runtime surfaces and diagnostics wiring.
     """
     return build_engine_session(
-        runtime_spec=runtime_inputs.runtime_profile_spec,
+        runtime_spec=engine_session_runtime_inputs.runtime_profile_spec,
         options=EngineSessionOptions(
-            diagnostics=observability_inputs.diagnostics_collector,
-            surface_policy=runtime_inputs.execution_surface_policy,
-            diagnostics_policy=observability_inputs.pipeline_policy.diagnostics,
-            semantic_config=runtime_inputs.semantic_runtime_config,
-            otel_options=observability_inputs.otel_options,
+            diagnostics=engine_session_observability_inputs.diagnostics_collector,
+            surface_policy=engine_session_runtime_inputs.execution_surface_policy,
+            diagnostics_policy=engine_session_observability_inputs.pipeline_policy.diagnostics,
+            semantic_config=engine_session_runtime_inputs.semantic_runtime_config,
+            otel_options=engine_session_observability_inputs.otel_options,
         ),
     )
 
@@ -907,7 +907,7 @@ class OutputConfigOverrides:
 def output_config(
     work_dir: str | None,
     output_dir: str | None,
-    overrides: OutputConfigOverrides,
+    output_config_overrides: OutputConfigOverrides,
 ) -> OutputConfig:
     """Bundle output configuration values.
 
@@ -921,25 +921,41 @@ def output_config(
     ValueError
         Raised when the output storage policy is not Delta.
     """
-    storage_policy = overrides.output_storage_policy or OutputStoragePolicy()
+    storage_policy = output_config_overrides.output_storage_policy or OutputStoragePolicy()
     if storage_policy.format != "delta":
         msg = f"Output storage policy requires Delta, got {storage_policy.format!r}."
         raise ValueError(msg)
     return OutputConfig(
         work_dir=work_dir,
         output_dir=output_dir,
-        semantic_output_catalog_name=overrides.semantic_output_catalog_name,
-        extract_output_catalog_name=overrides.extract_output_catalog_name,
-        overwrite_intermediate_datasets=overrides.overwrite_intermediate_datasets,
-        materialize_param_tables=overrides.materialize_param_tables,
-        writer_strategy=overrides.writer_strategy,
-        ipc_dump_enabled=overrides.ipc.dump_enabled if overrides.ipc is not None else False,
-        ipc_write_config=overrides.ipc.write_config if overrides.ipc is not None else None,
+        semantic_output_catalog_name=output_config_overrides.semantic_output_catalog_name,
+        extract_output_catalog_name=output_config_overrides.extract_output_catalog_name,
+        overwrite_intermediate_datasets=output_config_overrides.overwrite_intermediate_datasets,
+        materialize_param_tables=output_config_overrides.materialize_param_tables,
+        writer_strategy=output_config_overrides.writer_strategy,
+        ipc_dump_enabled=(
+            output_config_overrides.ipc.dump_enabled
+            if output_config_overrides.ipc is not None
+            else False
+        ),
+        ipc_write_config=(
+            output_config_overrides.ipc.write_config
+            if output_config_overrides.ipc is not None
+            else None
+        ),
         output_storage_policy=storage_policy,
-        delta_write_policy=overrides.delta.write_policy if overrides.delta is not None else None,
-        delta_schema_policy=overrides.delta.schema_policy if overrides.delta is not None else None,
-        delta_storage_options=overrides.delta.storage_options
-        if overrides.delta is not None
+        delta_write_policy=(
+            output_config_overrides.delta.write_policy
+            if output_config_overrides.delta is not None
+            else None
+        ),
+        delta_schema_policy=(
+            output_config_overrides.delta.schema_policy
+            if output_config_overrides.delta is not None
+            else None
+        ),
+        delta_storage_options=output_config_overrides.delta.storage_options
+        if output_config_overrides.delta is not None
         else None,
     )
 
@@ -1005,22 +1021,74 @@ def execution_surface_policy(
     )
 
 
-class IncrementalConfigKwargs(TypedDict, total=False):
-    """Keyword arguments supported by incremental_config."""
+@dataclass(frozen=True)
+class IncrementalOverrides:
+    """Overrides for incremental configuration."""
 
-    incremental_enabled: bool
-    incremental_state_dir: str | None
-    incremental_repo_id: str | None
-    incremental_impact_strategy: str | None
-    incremental_git_base_ref: str | None
-    incremental_git_head_ref: str | None
-    incremental_git_changed_only: bool
+    enabled: bool | None = None
+    state_dir: str | None = None
+    repo_id: str | None = None
+    impact_strategy: str | None = None
+
+
+@dataclass(frozen=True)
+class IncrementalGitOverrides:
+    """Overrides for incremental git configuration."""
+
+    base_ref: str | None = None
+    head_ref: str | None = None
+    changed_only: bool | None = None
+
+
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
+def incremental_overrides(
+    *,
+    incremental_enabled: bool | None = None,
+    incremental_state_dir: str | None = None,
+    incremental_repo_id: str | None = None,
+    incremental_impact_strategy: str | None = None,
+) -> IncrementalOverrides:
+    """Bundle incremental override values.
+
+    Returns
+    -------
+    IncrementalOverrides
+        Overrides bundle for incremental configuration.
+    """
+    return IncrementalOverrides(
+        enabled=incremental_enabled,
+        state_dir=incremental_state_dir,
+        repo_id=incremental_repo_id,
+        impact_strategy=incremental_impact_strategy,
+    )
+
+
+@apply_tag(TagPolicy(layer="inputs", kind="object"))
+def incremental_git_overrides(
+    *,
+    incremental_git_base_ref: str | None = None,
+    incremental_git_head_ref: str | None = None,
+    incremental_git_changed_only: bool | None = None,
+) -> IncrementalGitOverrides:
+    """Bundle incremental git override values.
+
+    Returns
+    -------
+    IncrementalGitOverrides
+        Overrides bundle for incremental git configuration.
+    """
+    return IncrementalGitOverrides(
+        base_ref=incremental_git_base_ref,
+        head_ref=incremental_git_head_ref,
+        changed_only=incremental_git_changed_only,
+    )
 
 
 @apply_tag(TagPolicy(layer="inputs", kind="object"))
 def incremental_config(
     repo_root: str,
-    **kwargs: Unpack[IncrementalConfigKwargs],
+    incremental_overrides: IncrementalOverrides,
+    incremental_git_overrides: IncrementalGitOverrides,
 ) -> IncrementalConfig:
     """Bundle incremental configuration values.
 
@@ -1034,21 +1102,21 @@ def incremental_config(
     ValueError
         Raised when the impact strategy is unsupported.
     """
-    enabled = bool(kwargs.get("incremental_enabled")) or _incremental_pipeline_enabled()
-    state_dir = kwargs.get("incremental_state_dir") or env_value("CODEANATOMY_STATE_DIR")
-    repo_id = kwargs.get("incremental_repo_id") or env_value("CODEANATOMY_REPO_ID")
+    enabled = bool(incremental_overrides.enabled) or _incremental_pipeline_enabled()
+    state_dir = incremental_overrides.state_dir or env_value("CODEANATOMY_STATE_DIR")
+    repo_id = incremental_overrides.repo_id or env_value("CODEANATOMY_REPO_ID")
     impact_strategy = (
-        kwargs.get("incremental_impact_strategy")
+        incremental_overrides.impact_strategy
         or env_value("CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY")
         or "hybrid"
     )
-    git_base_ref = kwargs.get("incremental_git_base_ref") or env_value("CODEANATOMY_GIT_BASE_REF")
-    git_head_ref = kwargs.get("incremental_git_head_ref") or env_value("CODEANATOMY_GIT_HEAD_REF")
+    git_base_ref = incremental_git_overrides.base_ref or env_value("CODEANATOMY_GIT_BASE_REF")
+    git_head_ref = incremental_git_overrides.head_ref or env_value("CODEANATOMY_GIT_HEAD_REF")
     git_changed_only_env = env_bool("CODEANATOMY_GIT_CHANGED_ONLY")
     git_changed_only = (
         git_changed_only_env
         if git_changed_only_env is not None
-        else bool(kwargs.get("incremental_git_changed_only"))
+        else bool(incremental_git_overrides.changed_only)
     )
     impact_strategy = impact_strategy.lower()
     if impact_strategy not in {"hybrid", "symbol_closure", "import_closure"}:

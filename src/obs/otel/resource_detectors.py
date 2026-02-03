@@ -17,6 +17,10 @@ _LOGGER = logging.getLogger(__name__)
 _DEFAULT_DETECTORS = ("process", "os", "host", "container", "k8s")
 
 
+def _resource_detectors_explicit() -> bool:
+    return bool(env_text("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS"))
+
+
 @functools.lru_cache(maxsize=1)
 def resolve_service_instance_id() -> str:
     """Return a stable service.instance.id for the current process.
@@ -41,6 +45,7 @@ def resolve_detector_names() -> tuple[str, ...]:
         Detector names to enable.
     """
     raw = env_text("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS")
+    explicit = _resource_detectors_explicit()
     if raw:
         requested = [part.strip() for part in raw.split(",") if part.strip()]
     else:
@@ -49,7 +54,11 @@ def resolve_detector_names() -> tuple[str, ...]:
     resolved = [name for name in requested if name in available]
     missing = sorted(set(requested) - available)
     if missing:
-        _LOGGER.warning("Resource detectors unavailable: %s", ", ".join(missing))
+        message = "Resource detectors unavailable: %s"
+        if explicit:
+            _LOGGER.warning(message, ", ".join(missing))
+        else:
+            _LOGGER.info(message, ", ".join(missing))
     return tuple(resolved)
 
 
@@ -109,6 +118,7 @@ def _available_detectors() -> set[str]:
 
 def _resolve_detectors() -> list[ResourceDetector]:
     detectors: list[ResourceDetector] = []
+    explicit = _resource_detectors_explicit()
     configured = set(resolve_detector_names())
     for entry in _entry_points("opentelemetry_resource_detector"):
         if entry.name not in configured:
@@ -116,7 +126,11 @@ def _resolve_detectors() -> list[ResourceDetector]:
         try:
             detector = entry.load()
         except (AttributeError, ImportError, RuntimeError) as exc:
-            _LOGGER.warning("Failed to load resource detector %s: %s", entry.name, exc)
+            message = "Failed to load resource detector %s: %s"
+            if explicit:
+                _LOGGER.warning(message, entry.name, exc)
+            else:
+                _LOGGER.info(message, entry.name, exc)
             continue
         if isinstance(detector, type):
             try:

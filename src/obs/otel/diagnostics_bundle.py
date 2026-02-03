@@ -165,6 +165,23 @@ def _metric_payload(reader: InMemoryMetricReader | None) -> Mapping[str, object]
     return {}
 
 
+def _bundle_metadata(
+    *,
+    run_bundle_dir: Path,
+    run_id: str | None,
+    captured_at_unix_s: float,
+) -> dict[str, object]:
+    output_dir: str | None = None
+    parent = run_bundle_dir.parent
+    if parent.name == "run_bundle":
+        output_dir = str(parent.parent)
+    return {
+        "run_id": run_id,
+        "output_dir": output_dir,
+        "captured_at_unix_s": captured_at_unix_s,
+    }
+
+
 def snapshot_diagnostics() -> dict[str, object]:
     """Return a snapshot of spans, logs, and metrics for diagnostics.
 
@@ -207,26 +224,50 @@ def write_run_diagnostics_bundle(
     if _EXPORTERS["value"] is None:
         return None
     payload = snapshot_diagnostics()
-    payload["run_id"] = run_id
+    captured_at = payload.get("captured_at_unix_s")
+    captured_at_unix_s = (
+        float(captured_at) if isinstance(captured_at, (int, float)) else time.time()
+    )
+    metadata = _bundle_metadata(
+        run_bundle_dir=run_bundle_dir,
+        run_id=run_id,
+        captured_at_unix_s=captured_at_unix_s,
+    )
     run_bundle_dir.mkdir(parents=True, exist_ok=True)
     trace_path = run_bundle_dir / "otel_traces.json"
     metric_path = run_bundle_dir / "otel_metrics.json"
     log_path = run_bundle_dir / "otel_logs.json"
     with trace_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload.get("spans", []), handle, indent=2, sort_keys=True)
+        json.dump(
+            {
+                "metadata": metadata,
+                "spans": payload.get("spans", []),
+            },
+            handle,
+            indent=2,
+            sort_keys=True,
+        )
     with metric_path.open("w", encoding="utf-8") as handle:
         json.dump(
             {
+                "metadata": metadata,
                 "metrics": payload.get("metrics", {}),
                 "gauges": payload.get("gauges", {}),
-                "run_id": run_id,
             },
             handle,
             indent=2,
             sort_keys=True,
         )
     with log_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload.get("logs", []), handle, indent=2, sort_keys=True)
+        json.dump(
+            {
+                "metadata": metadata,
+                "logs": payload.get("logs", []),
+            },
+            handle,
+            indent=2,
+            sort_keys=True,
+        )
     return run_bundle_dir
 
 

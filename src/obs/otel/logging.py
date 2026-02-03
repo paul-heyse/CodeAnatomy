@@ -14,6 +14,11 @@ if TYPE_CHECKING:
         span_id: str | None
 
 
+TRACE_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s [trace_id=%(trace_id)s span_id=%(span_id)s] %(name)s: %(message)s"
+)
+
+
 class TraceContextFilter(logging.Filter):
     """Attach trace/span IDs to log records when available."""
 
@@ -38,6 +43,57 @@ class TraceContextFilter(logging.Filter):
         return True
 
 
+class TraceContextFormatter(logging.Formatter):
+    """Formatter that ensures trace/span IDs are present on log records."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record with ensured trace/span fields.
+
+        Returns
+        -------
+        str
+            Formatted log record string.
+        """
+        if not hasattr(record, "trace_id"):
+            record.trace_id = None
+        if not hasattr(record, "span_id"):
+            record.span_id = None
+        return super().format(record)
+
+
+def _formatter_includes_trace(formatter: logging.Formatter | None) -> bool:
+    if formatter is None:
+        return False
+    style = getattr(formatter, "_style", None)
+    fmt = getattr(style, "_fmt", None)
+    if not isinstance(fmt, str):
+        return False
+    return "trace_id" in fmt and "span_id" in fmt
+
+
+def apply_trace_context_formatter(
+    logger: logging.Logger | None = None,
+    *,
+    force: bool = False,
+    fmt: str | None = None,
+    datefmt: str | None = None,
+) -> None:
+    """Ensure log handlers include trace/span IDs in their formatter."""
+    target = logger or logging.getLogger()
+    formatter = TraceContextFormatter(fmt or TRACE_LOG_FORMAT, datefmt=datefmt)
+    if not target.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        target.addHandler(handler)
+        return
+    for handler in target.handlers:
+        if handler.__class__.__name__ == "LoggingHandler":
+            continue
+        if not force and _formatter_includes_trace(handler.formatter):
+            continue
+        handler.setFormatter(formatter)
+
+
 def install_trace_context_filter(logger: logging.Logger | None = None) -> None:
     """Install the trace context filter on the provided logger."""
     target = logger or logging.getLogger()
@@ -51,4 +107,10 @@ def install_trace_context_filter(logger: logging.Logger | None = None) -> None:
         handler.addFilter(TraceContextFilter())
 
 
-__all__ = ["TraceContextFilter", "install_trace_context_filter"]
+__all__ = [
+    "TRACE_LOG_FORMAT",
+    "TraceContextFilter",
+    "TraceContextFormatter",
+    "apply_trace_context_formatter",
+    "install_trace_context_filter",
+]

@@ -251,13 +251,24 @@ def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> 
     if not callable(install):
         msg = "DataFusion extension entrypoint install_function_factory is unavailable."
         raise TypeError(msg)
-    install(ctx, payload)
+    ctx_arg: object = ctx
+    module_name = getattr(module, "__name__", "")
+    if module_name in {"datafusion._internal", "datafusion_ext"}:
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is not None:
+            ctx_arg = internal_ctx
+    install(ctx_arg, payload)
 
 
 def _fallback_install_function_factory(ctx: SessionContext, *, payload: bytes) -> bool:
     try:
-        from test_support.datafusion_ext_stub import install_function_factory as stub_install
+        module = importlib.import_module("datafusion_ext")
     except ImportError:
+        return False
+    if not getattr(module, "IS_STUB", False):
+        return False
+    stub_install = getattr(module, "install_function_factory", None)
+    if not callable(stub_install):
         return False
     try:
         stub_install(ctx, payload)
@@ -301,10 +312,15 @@ def install_function_factory(
     try:
         _install_native_function_factory(ctx, payload=payload)
     except TypeError as exc:
-        if "cannot be converted" in str(exc) and _fallback_install_function_factory(
-            ctx, payload=payload
-        ):
-            return
+        if "cannot be converted" in str(exc):
+            if _fallback_install_function_factory(ctx, payload=payload):
+                return
+            msg = (
+                "FunctionFactory install failed due to SessionContext type mismatch. "
+                "Rebuild and install matching datafusion/datafusion_ext wheels "
+                "(scripts/build_datafusion_wheels.sh + uv sync)."
+            )
+            raise TypeError(msg) from exc
         raise
 
 

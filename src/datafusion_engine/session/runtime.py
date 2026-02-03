@@ -405,6 +405,40 @@ def _resolve_extension_module(required_attr: str | None = None) -> object | None
     return None
 
 
+def _resolve_tracing_context(
+    ctx: SessionContext,
+    module: object,
+) -> tuple[object | None, dict[str, object]]:
+    module_name = getattr(module, "__name__", "")
+    internal_ctx = getattr(ctx, "ctx", None)
+    session_type = getattr(module, "SessionContext", None)
+    ctx_module = type(ctx).__module__
+    internal_module = type(internal_ctx).__module__ if internal_ctx is not None else None
+    ctx_arg: object | None = None
+    if isinstance(session_type, type):
+        if isinstance(ctx, session_type):
+            ctx_arg = ctx
+        elif internal_ctx is not None and isinstance(internal_ctx, session_type):
+            ctx_arg = internal_ctx
+    elif (
+        internal_ctx is not None
+        and module_name
+        and internal_module is not None
+        and module_name in internal_module
+    ):
+        ctx_arg = internal_ctx
+    elif module_name and module_name in ctx_module:
+        ctx_arg = ctx
+    details = {
+        "module": module_name,
+        "context_type": type(ctx).__name__,
+        "context_module": ctx_module,
+        "internal_context_type": type(internal_ctx).__name__ if internal_ctx is not None else None,
+        "internal_context_module": internal_module,
+    }
+    return ctx_arg, details
+
+
 def delta_runtime_env_options(
     profile: DataFusionRuntimeProfile,
 ) -> _DeltaRuntimeEnvOptions | None:
@@ -4609,6 +4643,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "event_time_unix_ms": int(time.time() * 1000),
             "dataset": "libcst_files_v1",
         }
+        if not ctx.table_exist("cst_schema_diagnostics"):
+            payload["available"] = False
+            self.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+            return
         try:
             table = ctx.table("cst_schema_diagnostics").to_arrow_table()
             rows = table.to_pylist()
@@ -5439,6 +5477,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             },
         )
 
+    def _record_tracing_install(self, error: str, details: Mapping[str, object]) -> None:
+        if self.diagnostics_sink is None:
+            return
+        payload = {"error": error, **details}
+        self.record_artifact("datafusion_tracing_install_v1", payload)
+
     def _install_tracing(self, ctx: SessionContext) -> None:
         """Enable tracing when configured.
 
@@ -5458,7 +5502,23 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if not callable(install):
                 msg = "Tracing enabled but DataFusion extension install_tracing is unavailable."
                 raise ValueError(msg)
-            install(ctx)
+            ctx_arg, details = _resolve_tracing_context(ctx, module)
+            if ctx_arg is None:
+                logger.info(
+                    "Tracing install skipped: no compatible SessionContext for %s",
+                    details.get("module") or "unknown",
+                )
+                self._record_tracing_install("no_compatible_session_context", details)
+                return
+            try:
+                install(ctx_arg)
+            except TypeError as exc:
+                logger.info("Tracing install failed: %s", exc)
+                error_details = {
+                    "module": details.get("module"),
+                    "context_type": type(ctx_arg).__name__,
+                }
+                self._record_tracing_install(str(exc), error_details)
             return
         self.tracing_hook(ctx)
 

@@ -122,16 +122,27 @@ def _install_native_expr_planners(
     if not callable(install):
         msg = "DataFusion extension entrypoint install_expr_planners is unavailable."
         raise TypeError(msg)
+    ctx_arg: object = ctx
+    module_name = getattr(module, "__name__", "")
+    if module_name in {"datafusion._internal", "datafusion_ext"}:
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is not None:
+            ctx_arg = internal_ctx
     try:
-        install(ctx, list(planner_names))
+        install(ctx_arg, list(planner_names))
     except TypeError:
-        install(ctx, payload)
+        install(ctx_arg, payload)
 
 
 def _fallback_install_expr_planners(ctx: SessionContext, planner_names: Sequence[str]) -> bool:
     try:
-        from test_support.datafusion_ext_stub import install_expr_planners as stub_install
+        module = importlib.import_module("datafusion_ext")
     except ImportError:
+        return False
+    if not getattr(module, "IS_STUB", False):
+        return False
+    stub_install = getattr(module, "install_expr_planners", None)
+    if not callable(stub_install):
         return False
     try:
         stub_install(ctx, list(planner_names))

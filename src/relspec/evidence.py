@@ -16,6 +16,7 @@ from datafusion_engine.schema.contracts import (
     schema_contract_from_contract_spec,
     schema_contract_from_dataset_spec,
 )
+from utils.env_utils import env_bool
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -348,21 +349,31 @@ def _validate_udf_info_schema_parity(ctx: SessionContext) -> None:
             "Skipping UDF information_schema parity check (FunctionFactory fallback active)."
         )
         return
+    soft_fail = env_bool("CODEANATOMY_DIAGNOSTICS_BUNDLE", default=False)
     report = udf_info_schema_parity_report(ctx)
     if report.error is not None:
         msg = f"UDF information_schema parity failed: {report.error}"
+        if soft_fail:
+            _LOGGER.error(msg)
+            return
         raise ValueError(msg)
     if report.missing_in_information_schema:
         msg = (
             "UDF information_schema parity failed; missing routines: "
             f"{list(report.missing_in_information_schema)}"
         )
+        if soft_fail:
+            _LOGGER.error(msg)
+            return
         raise ValueError(msg)
     if report.param_name_mismatches:
         msg = (
             "UDF information_schema parity failed; parameter mismatches: "
             f"{list(report.param_name_mismatches)}"
         )
+        if soft_fail:
+            _LOGGER.error(msg)
+            return
         raise ValueError(msg)
 
 

@@ -276,7 +276,7 @@ def view_graph_nodes(
         runtime_config=runtime_config,
         semantic_ir=semantic_ir,
     )
-    return tuple([*nested_nodes, *semantic_nodes])
+    return (*nested_nodes, *semantic_nodes)
 
 
 def _semantic_dataset_specs() -> dict[str, DatasetSpec]:

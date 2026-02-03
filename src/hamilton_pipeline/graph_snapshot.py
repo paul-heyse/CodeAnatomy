@@ -43,24 +43,18 @@ class GraphSnapshotHook(lifecycle_api.GraphExecutionHook):
         """Bind a Hamilton driver so snapshots can be emitted."""
         self._driver = cast("_GraphSnapshotDriver", driver)
 
-    def run_before_graph_execution(
-        self,
-        *,
-        final_vars: list[str],
-        inputs: Mapping[str, object],
-        overrides: Mapping[str, object],
-        run_id: str,
-        graph: object,
-        execution_path: object,
-        **kwargs: object,
-    ) -> None:
+    def run_before_graph_execution(self, **kwargs: object) -> None:
         """Emit a graph snapshot before graph execution."""
-        _ = graph, execution_path, kwargs
         if not bool(self.config.get("enable_graph_snapshot", True)):
             return
         driver = self._driver
         if driver is None:
             return
+        final_vars = cast("list[str]", kwargs.get("final_vars", []))
+        inputs = cast("Mapping[str, object]", kwargs.get("inputs", {}))
+        overrides = cast("Mapping[str, object]", kwargs.get("overrides", {}))
+        run_id_value = kwargs.get("run_id")
+        run_id = run_id_value if isinstance(run_id_value, str) else "unknown"
         path = _graph_snapshot_path(self.config, plan_signature=self.plan_signature)
         path.parent.mkdir(parents=True, exist_ok=True)
         error: str | None = None

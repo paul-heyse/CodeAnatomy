@@ -242,7 +242,7 @@ def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
     suffix = rule_id[3:]
 
     # Map rule prefixes to record types
-    prefix_map = {
+    prefix_map: dict[str, RecordType] = {
         "def_": "def",
         "call_": "call",
         "import": "import",
@@ -259,7 +259,7 @@ def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
                 kind = suffix[len(prefix) :]
             else:
                 kind = suffix
-            return record_type, kind  # type: ignore[return-value]
+            return record_type, kind
 
     return None, ""
 

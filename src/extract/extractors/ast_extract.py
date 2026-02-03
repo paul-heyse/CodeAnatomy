@@ -759,6 +759,8 @@ def _ast_id_for_node(idx_map: dict[int, int], node: ast.AST) -> int:
 
 @dataclass(frozen=True)
 class AstNodeContext:
+    """Context for AST node extraction."""
+
     ast_id: int
     parent_ast_id: int | None
     field_name: str | None

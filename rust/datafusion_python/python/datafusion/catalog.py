@@ -202,7 +202,7 @@ class CatalogProvider(ABC):
         """Retrieve a specific schema from this catalog."""
         ...
 
-    def register_schema(  # noqa: B027
+    def register_schema(
         self, name: str, schema: SchemaProviderExportable | SchemaProvider | Schema
     ) -> None:
         """Add a schema to this catalog.
@@ -210,8 +210,9 @@ class CatalogProvider(ABC):
         This method is optional. If your catalog provides a fixed list of schemas, you
         do not need to implement this method.
         """
+        _ = (name, schema)
 
-    def deregister_schema(self, name: str, cascade: bool) -> None:  # noqa: B027
+    def deregister_schema(self, name: str, cascade: bool) -> None:
         """Remove a schema from this catalog.
 
         This method is optional. If your catalog provides a fixed list of schemas, you
@@ -221,6 +222,7 @@ class CatalogProvider(ABC):
             name: The name of the schema to remove.
             cascade: If true, deregister the tables within the schema.
         """
+        _ = (name, cascade)
 
 
 class SchemaProvider(ABC):
@@ -243,7 +245,7 @@ class SchemaProvider(ABC):
         """Retrieve a specific table from this schema."""
         ...
 
-    def register_table(  # noqa: B027
+    def register_table(
         self, name: str, table: Table | TableProviderExportable | Any
     ) -> None:
         """Add a table to this schema.
@@ -251,13 +253,15 @@ class SchemaProvider(ABC):
         This method is optional. If your schema provides a fixed list of tables, you do
         not need to implement this method.
         """
+        _ = (name, table)
 
-    def deregister_table(self, name: str, cascade: bool) -> None:  # noqa: B027
+    def deregister_table(self, name: str, cascade: bool) -> None:
         """Remove a table from this schema.
 
         This method is optional. If your schema provides a fixed list of tables, you do
         not need to implement this method.
         """
+        _ = (name, cascade)
 
     @abstractmethod
     def table_exist(self, name: str) -> bool:

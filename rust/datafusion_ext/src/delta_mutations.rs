@@ -188,7 +188,6 @@ pub async fn delta_data_check(
 }
 
 pub async fn delta_write_ipc(
-    // noqa: PLR0913
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
@@ -319,7 +318,6 @@ pub async fn delta_update(
 }
 
 pub async fn delta_merge(
-    // noqa: PLR0913
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,

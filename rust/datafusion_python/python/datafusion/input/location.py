@@ -33,17 +33,19 @@ class LocationInputPlugin(BaseInputSource):
     This can be read in from a file (on disk, remote etc.).
     """
 
-    def is_correct_input(self, input_item: Any, table_name: str, **kwargs: Any) -> bool:  # noqa: ARG002
+    def is_correct_input(self, input_item: Any, table_name: str, **kwargs: Any) -> bool:
         """Returns `True` if the input is valid."""
+        _ = (table_name, kwargs)
         return isinstance(input_item, str)
 
     def build_table(
         self,
         input_item: str,
         table_name: str,
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> SqlTable:
         """Create a table from the input source."""
+        _ = kwargs
         extension = Path(input_item).suffix
         file_format = extension.lstrip(".").lower()
         num_rows = 0  # Total number of rows in the file. Used for statistics
@@ -61,7 +63,7 @@ class LocationInputPlugin(BaseInputSource):
                 for col in metadata.schema
             ]
 
-        elif format == "csv":
+        elif file_format == "csv":
             # Consume header row and count number of rows for statistics.
             # TODO: Possibly makes sense to have the eager number of rows
             # calculated as a configuration since you must read the entire file
@@ -77,7 +79,7 @@ class LocationInputPlugin(BaseInputSource):
             msg = "TODO: Currently unable to support CSV input files."
             raise RuntimeError(msg)
         else:
-            msg = f"Input of format: `{format}` is currently not supported.\
+            msg = f"Input of format: `{file_format}` is currently not supported.\
                 Only Parquet and CSV."
             raise RuntimeError(msg)
 

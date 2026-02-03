@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -20,9 +20,13 @@ try:  # pragma: no cover - optional dependency
     from diskcache import Cache, FanoutCache
     _DISKCACHE_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
-    Cache = None  # type: ignore[assignment]
-    FanoutCache = None  # type: ignore[assignment]
     _DISKCACHE_AVAILABLE = False
+
+    class Cache:
+        """Fallback Cache stub when diskcache is unavailable."""
+
+    class FanoutCache:
+        """Fallback FanoutCache stub when diskcache is unavailable."""
 
 from tools.cq.cache.tag_index import TagIndex
 
@@ -192,19 +196,23 @@ _CACHE_POOL: dict[str, Cache | FanoutCache] = {}
 class NoOpCache:
     """Fallback cache when diskcache is unavailable."""
 
-    def get(self, key: str, default: object | None = None) -> object | None:  # noqa: ARG002
+    def get(self, key: str, default: object | None = None) -> object | None:
+        _ = key
         return default
 
-    def set(self, key: str, value: object, **kwargs) -> bool:  # noqa: ARG002
+    def set(self, key: str, value: object, **kwargs) -> bool:
+        _ = (key, value, kwargs)
         return False
 
-    def delete(self, key: str, **kwargs) -> bool:  # noqa: ARG002
+    def delete(self, key: str, **kwargs) -> bool:
+        _ = (key, kwargs)
         return False
 
-    def evict(self, tag: str, **kwargs) -> int:  # noqa: ARG002
+    def evict(self, tag: str, **kwargs) -> int:
+        _ = (tag, kwargs)
         return 0
 
-    def iterkeys(self):  # type: ignore[no-untyped-def]
+    def iterkeys(self) -> Iterator[str]:
         return iter(())
 
     def clear(self) -> int:
@@ -216,20 +224,23 @@ class NoOpCache:
     def volume(self) -> dict[str, object]:
         return {}
 
-    def expire(self, **kwargs) -> int:  # noqa: ARG002
+    def expire(self, **kwargs) -> int:
+        _ = kwargs
         return 0
 
-    def cull(self, **kwargs) -> int:  # noqa: ARG002
+    def cull(self, **kwargs) -> int:
+        _ = kwargs
         return 0
 
-    def check(self, **kwargs) -> list[object]:  # noqa: ARG002
+    def check(self, **kwargs) -> list[object]:
+        _ = kwargs
         return []
 
     def close(self) -> None:
         return None
 
     @contextmanager
-    def transact(self):  # type: ignore[no-untyped-def]
+    def transact(self) -> Iterator["NoOpCache"]:
         yield self
 
 

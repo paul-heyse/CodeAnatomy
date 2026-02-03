@@ -130,7 +130,7 @@ def comma_separated_list(type_: type[T]):
         return result
 
     # Mark as cyclopts converter
-    convert.__cyclopts_converter__ = True  # type: ignore[attr-defined]
+    setattr(convert, "__cyclopts_converter__", True)
     return convert
 
 
@@ -177,5 +177,5 @@ def comma_separated_enum(enum_type: type[T]):
                 result.append(enum_type(part))  # pyright: ignore[reportCallIssue]
         return result
 
-    convert.__cyclopts_converter__ = True  # type: ignore[attr-defined]
+    setattr(convert, "__cyclopts_converter__", True)
     return convert

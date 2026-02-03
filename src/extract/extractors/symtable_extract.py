@@ -616,6 +616,8 @@ def _build_scope_blocks(
 
 @dataclass(frozen=True)
 class ScopeBlockContext:
+    """Context for building symtable scope blocks."""
+
     table_id: int
     parent_map: Mapping[int, int]
     symbols_by_scope: Mapping[int, list[dict[str, object]]]

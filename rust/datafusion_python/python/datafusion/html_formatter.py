@@ -19,7 +19,29 @@
 
 import warnings
 
-from datafusion.dataframe_formatter import *  # noqa: F403
+from datafusion.dataframe_formatter import (
+    CellFormatter,
+    DataFrameHtmlFormatter,
+    DefaultStyleProvider,
+    FormatterManager,
+    StyleProvider,
+    configure_formatter,
+    get_formatter,
+    reset_formatter,
+    set_formatter,
+)
+
+__all__ = [
+    "CellFormatter",
+    "DataFrameHtmlFormatter",
+    "DefaultStyleProvider",
+    "FormatterManager",
+    "StyleProvider",
+    "configure_formatter",
+    "get_formatter",
+    "reset_formatter",
+    "set_formatter",
+]
 
 warnings.warn(
     "The module 'html_formatter' is deprecated and will be removed in the next release."

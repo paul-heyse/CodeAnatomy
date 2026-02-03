@@ -289,7 +289,7 @@ def _enrich_record(
 def enrich_records(
     records: list[SgRecord],
     root: Path,
-    python_path: str | None = None,  # noqa: ARG001
+    python_path: str | None = None,
 ) -> dict[str, dict]:
     """Enrich records with symtable and bytecode analysis.
 
@@ -309,6 +309,8 @@ def enrich_records(
         - symtable_info: SymtableInfo if available
         - bytecode_info: BytecodeInfo if available
     """
+    if python_path is not None:
+        logger.debug("python_path is currently unused: %s", python_path)
     enrichment_map: dict[str, dict] = {}
 
     # Group records by file for efficient processing

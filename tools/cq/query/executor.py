@@ -11,7 +11,7 @@ import re
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ast_grep_py import SgRoot
 import msgspec
@@ -726,7 +726,8 @@ def _collect_match_spans(
         for rule in rules:
             rule_dict = rule.to_yaml_dict()
             if rule.requires_inline_rule():
-                matches = node.find_all({"rule": rule_dict})  # type: ignore[arg-type]
+                rule_config = cast("dict[str, object]", {"rule": rule_dict})
+                matches = node.find_all(rule_config)
             elif "pattern" in rule_dict and rule_dict.get("pattern") in {"$FUNC", "$METHOD", "$CLASS"}:
                 kind = rule_dict.get("kind")
                 if kind:

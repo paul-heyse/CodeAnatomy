@@ -67,9 +67,9 @@ class ArrowStreamExportable(Protocol):
     https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
     """
 
-    def __arrow_c_stream__(  # noqa: D105
-        self, requested_schema: object | None = None
-    ) -> object: ...
+    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+        """Return an Arrow C Stream PyCapsule for this object."""
+        ...
 
 
 class ArrowArrayExportable(Protocol):
@@ -78,9 +78,11 @@ class ArrowArrayExportable(Protocol):
     https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
     """
 
-    def __arrow_c_array__(  # noqa: D105
+    def __arrow_c_array__(
         self, requested_schema: object | None = None
-    ) -> tuple[object, object]: ...
+    ) -> tuple[object, object]:
+        """Return an Arrow C Array PyCapsule and schema PyCapsule for this object."""
+        ...
 
 
 class TableProviderExportable(Protocol):
@@ -89,7 +91,9 @@ class TableProviderExportable(Protocol):
     https://datafusion.apache.org/python/user-guide/io/table_provider.html
     """
 
-    def __datafusion_table_provider__(self) -> object: ...  # noqa: D105
+    def __datafusion_table_provider__(self) -> object:
+        """Return a PyCapsule for a DataFusion table provider."""
+        ...
 
 
 class CatalogProviderExportable(Protocol):
@@ -98,7 +102,9 @@ class CatalogProviderExportable(Protocol):
     https://docs.rs/datafusion/latest/datafusion/catalog/trait.CatalogProvider.html
     """
 
-    def __datafusion_catalog_provider__(self) -> object: ...  # noqa: D105
+    def __datafusion_catalog_provider__(self) -> object:
+        """Return a PyCapsule for a DataFusion catalog provider."""
+        ...
 
 
 class SessionConfig:

@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class FindingCriteria:
+    """Filter criteria for matching findings in cq test outputs."""
+
     category: str | None = None
     message_contains: str | None = None
     file: str | None = None
@@ -27,11 +29,20 @@ class FindingCriteria:
     detail_checks: dict[str, str | int | bool] = field(default_factory=dict)
 
     def matches(self, finding: Finding) -> bool:
+        """Return True when the finding satisfies all populated criteria.
+
+        Returns
+        -------
+        bool
+            True when the finding matches the configured criteria.
+        """
         if self.category is not None and finding.category != self.category:
             return False
         if self.message_contains is not None and self.message_contains not in finding.message:
             return False
-        if self.file is not None and (finding.anchor is None or self.file not in finding.anchor.file):
+        if self.file is not None and (
+            finding.anchor is None or self.file not in finding.anchor.file
+        ):
             return False
         if self.severity is not None and finding.severity != self.severity:
             return False
@@ -40,6 +51,13 @@ class FindingCriteria:
         return all(finding.details.get(k) == v for k, v in self.detail_checks.items())
 
     def summary(self) -> str:
+        """Summarize the criteria for error reporting.
+
+        Returns
+        -------
+        str
+            Human-readable criteria summary.
+        """
         criteria = []
         if self.category:
             criteria.append(f"category={self.category}")
@@ -240,6 +258,7 @@ def assert_finding_exists() -> Callable[..., Finding]:
     >>> finding = assert_finding_exists(result, category="call_site", file="graph.py")
     >>> assert finding.anchor.file == "graph.py"
     """
+
     def _assert(
         result: CqResult,
         *,

@@ -76,7 +76,6 @@ class Compression(Enum):
     LZ4 = "lz4"
     # lzo is not implemented yet
     # https://github.com/apache/arrow-rs/issues/6970
-    # LZO = "lzo"  # noqa: ERA001
     ZSTD = "zstd"
     LZ4_RAW = "lz4_raw"
 
@@ -846,9 +845,10 @@ class DataFrame:
         # This check is to prevent breaking API changes where users prior to
         # DF 43.0.0 would  pass the join_keys as a positional argument instead
         # of a keyword argument.
+        expected_join_key_len = 2
         if (
             isinstance(on, tuple)
-            and len(on) == 2  # noqa: PLR2004
+            and len(on) == expected_join_key_len
             and isinstance(on[0], list)
             and isinstance(on[1], list)
         ):

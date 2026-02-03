@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EngineSessionOptions:
+    """Options for constructing an EngineSession."""
+
     diagnostics: DiagnosticsCollector | None = None
     surface_policy: MaterializationPolicy | None = None
     diagnostics_policy: DiagnosticsPolicy | None = None

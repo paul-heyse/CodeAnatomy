@@ -11,18 +11,25 @@ from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 
 try:  # pragma: no cover - optional dependency
-    from diskcache import Lock
+    from diskcache import Lock as DiskcacheLock
 except ImportError:  # pragma: no cover - optional dependency
-    class Lock:  # type: ignore[no-redef]
-        def __init__(self, cache, key) -> None:  # noqa: ARG002
-            pass
+    class DiskcacheLock:
+        def __init__(self, cache: object, key: object) -> None:
+            _ = (cache, key)
 
         def __enter__(self):
             return self
 
-        def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # noqa: ARG002
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            _ = (exc_type, exc_val, exc_tb)
             return None
 
 from tools.cq.cache.diskcache_profile import cache_for_kind, default_cq_diskcache_profile
@@ -481,7 +488,7 @@ class DefIndex:
         lock_cache = cache_for_kind(profile, "cq_coordination")
         lock_key = f"def_index:{root_path}"
 
-        with Lock(lock_cache, lock_key):
+        with DiskcacheLock(lock_cache, lock_key):
             index = DefIndex(root=str(root_path))
             for filepath in _iter_source_files(
                 root_path,

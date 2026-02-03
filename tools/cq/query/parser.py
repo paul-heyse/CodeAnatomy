@@ -13,7 +13,7 @@ Example query strings:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from tools.cq.query.ir import (
     CompositeRule,
@@ -32,6 +32,8 @@ from tools.cq.query.ir import (
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import EntityType, ExpanderKind, FieldType, RelationalOp, StrictnessMode
+
+JoinType = Literal["used_by", "defines", "raises", "exports"]
 
 
 class QueryParseError(ValueError):
@@ -295,7 +297,7 @@ def _parse_entity(entity_str: str) -> EntityType:
         raise QueryParseError(
             f"Invalid entity type: {entity_str!r}. Valid types: {', '.join(valid_entities)}"
         )
-    return entity_str  # type: ignore[return-value]
+    return cast("EntityType", entity_str)
 
 
 def _parse_strictness(strictness_str: str) -> StrictnessMode:
@@ -305,7 +307,7 @@ def _parse_strictness(strictness_str: str) -> StrictnessMode:
         raise QueryParseError(
             f"Invalid strictness mode: {strictness_str!r}. Valid modes: {', '.join(valid_modes)}"
         )
-    return strictness_str  # type: ignore[return-value]
+    return cast("StrictnessMode", strictness_str)
 
 
 def _parse_relational_op(op_str: str) -> RelationalOp:
@@ -315,7 +317,7 @@ def _parse_relational_op(op_str: str) -> RelationalOp:
         raise QueryParseError(
             f"Invalid relational operator: {op_str!r}. Valid operators: {', '.join(valid_ops)}"
         )
-    return op_str  # type: ignore[return-value]
+    return cast("RelationalOp", op_str)
 
 
 def _parse_relational_constraints(tokens: dict[str, str]) -> tuple[RelationalConstraint, ...]:
@@ -332,14 +334,16 @@ def _parse_relational_constraints(tokens: dict[str, str]) -> tuple[RelationalCon
     relational_ops: tuple[RelationalOp, ...] = ("inside", "has", "precedes", "follows")
 
     # Global stopBy/field (applies to all if not overridden)
-    global_stop_by = tokens.get("stopBy", "neighbor")
+    global_stop_by: str = tokens.get("stopBy") or "neighbor"
     global_field = tokens.get("field")
 
     for op in relational_ops:
         pattern = tokens.get(op)
         if pattern:
             # Try dot notation first, then underscore, then global
-            stop_by = tokens.get(f"{op}.stopBy") or tokens.get(f"{op}_stop_by") or global_stop_by
+            stop_by: str = (
+                tokens.get(f"{op}.stopBy") or tokens.get(f"{op}_stop_by") or global_stop_by
+            )
             field_name = (
                 tokens.get(f"{op}.field")
                 or tokens.get(f"{op}_field")
@@ -350,7 +354,7 @@ def _parse_relational_constraints(tokens: dict[str, str]) -> tuple[RelationalCon
                 RelationalConstraint(
                     operator=op,
                     pattern=pattern,
-                    stop_by=stop_by,  # type: ignore[arg-type]
+                    stop_by=stop_by,
                     field_name=field_name,
                 )
             )
@@ -410,7 +414,7 @@ def _parse_joins(tokens: dict[str, str]) -> tuple[JoinConstraint, ...]:
     """
     constraints: list[JoinConstraint] = []
 
-    join_types = ("used_by", "defines", "raises", "exports")
+    join_types: tuple[JoinType, ...] = ("used_by", "defines", "raises", "exports")
 
     for join_type in join_types:
         target_str = tokens.get(join_type)
@@ -418,7 +422,7 @@ def _parse_joins(tokens: dict[str, str]) -> tuple[JoinConstraint, ...]:
             target = JoinTarget.parse(target_str)
             constraints.append(
                 JoinConstraint(
-                    join_type=join_type,  # type: ignore[arg-type]
+                    join_type=join_type,
                     target=target,
                 )
             )
@@ -497,7 +501,7 @@ def _parse_expander_kind(kind_str: str) -> ExpanderKind:
         raise QueryParseError(
             f"Invalid expander kind: {kind_str!r}. Valid kinds: {', '.join(valid_kinds)}"
         )
-    return kind_str  # type: ignore[return-value]
+    return cast("ExpanderKind", kind_str)
 
 
 def _parse_expander_params(params_str: str) -> int:
@@ -547,7 +551,7 @@ def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
             raise QueryParseError(
                 f"Invalid field: {field_str!r}. Valid fields: {', '.join(valid_fields)}"
             )
-        fields.append(field_str)  # type: ignore[arg-type]
+        fields.append(cast("FieldType", field_str))
 
     return tuple(fields) if fields else ("def",)
 

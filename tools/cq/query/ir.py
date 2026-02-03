@@ -5,7 +5,7 @@ Defines the dataclasses that represent parsed queries before execution.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast, get_args
 
 import msgspec
 
@@ -503,7 +503,11 @@ class JoinTarget(msgspec.Struct, frozen=True):
         else:
             entity_str = spec
             name = None
-        return cls(entity=entity_str, name=name)  # type: ignore[arg-type]
+        valid_entities = get_args(EntityType)
+        if entity_str not in valid_entities:
+            msg = f"Invalid join target entity: {entity_str!r}. Valid types: {', '.join(valid_entities)}"
+            raise ValueError(msg)
+        return cls(entity=cast(EntityType, entity_str), name=name)
 
 
 class JoinConstraint(msgspec.Struct, frozen=True):

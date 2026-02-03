@@ -46,6 +46,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class MapFieldOptions:
+    """Options for map fields in nested type builders."""
+
     nullable: bool = True
     keys_sorted: bool = False
     metadata: dict[bytes, bytes] | None = None

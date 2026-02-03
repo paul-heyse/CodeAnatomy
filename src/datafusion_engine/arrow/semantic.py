@@ -69,11 +69,12 @@ def _arrow_ext_serialize(self: _SemanticExtensionType) -> bytes:
 
 @classmethod
 def _arrow_ext_deserialize(
-    cls,
+    cls: type[_SemanticExtensionType],
     _storage_type: pa.DataType,
     serialized: object,
     *_args: object,
 ) -> pa.ExtensionType:
+    _ = cls
     payload = _coerce_extension_payload(serialized, _args)
     name = payload.decode("utf-8")
     if name == SPAN_TYPE_INFO.name:

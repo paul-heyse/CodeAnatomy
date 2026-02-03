@@ -19,7 +19,31 @@
 
 import warnings
 
-from datafusion.user_defined import *  # noqa: F403
+from datafusion.user_defined import (
+    Accumulator,
+    AggregateUDF,
+    AggregateUDFExportable,
+    ScalarUDF,
+    ScalarUDFExportable,
+    TableFunction,
+    Volatility,
+    WindowEvaluator,
+    WindowUDF,
+    WindowUDFExportable,
+)
+
+__all__ = [
+    "Accumulator",
+    "AggregateUDF",
+    "AggregateUDFExportable",
+    "ScalarUDF",
+    "ScalarUDFExportable",
+    "TableFunction",
+    "Volatility",
+    "WindowEvaluator",
+    "WindowUDF",
+    "WindowUDFExportable",
+]
 
 warnings.warn(
     "The module 'udf' is deprecated and will be removed in the next release. "

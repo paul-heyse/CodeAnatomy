@@ -68,9 +68,7 @@ class Plan:
         return self.plan_internal.encode()
 
 
-@deprecated("Use `Plan` instead.")
-class plan(Plan):  # noqa: N801
-    """See `Plan`."""
+plan = deprecated("Use `Plan` instead.")(Plan)
 
 
 class Serde:
@@ -138,9 +136,7 @@ class Serde:
         return Plan(substrait_internal.Serde.deserialize_bytes(proto_bytes))
 
 
-@deprecated("Use `Serde` instead.")
-class serde(Serde):  # noqa: N801
-    """See `Serde` instead."""
+serde = deprecated("Use `Serde` instead.")(Serde)
 
 
 class Producer:
@@ -164,9 +160,7 @@ class Producer:
         )
 
 
-@deprecated("Use `Producer` instead.")
-class producer(Producer):  # noqa: N801
-    """Use `Producer` instead."""
+producer = deprecated("Use `Producer` instead.")(Producer)
 
 
 class Consumer:
@@ -188,6 +182,4 @@ class Consumer:
         )
 
 
-@deprecated("Use `Consumer` instead.")
-class consumer(Consumer):  # noqa: N801
-    """Use `Consumer` instead."""
+consumer = deprecated("Use `Consumer` instead.")(Consumer)

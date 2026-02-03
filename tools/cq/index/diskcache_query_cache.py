@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -248,11 +249,11 @@ def _compute_paths_hash(
     return hasher.hexdigest()[:16]
 
 
-def _iter_cache_keys(cache_obj: object):  # type: ignore[no-untyped-def]
+def _iter_cache_keys(cache_obj: object) -> Iterator[object]:
     iterkeys = getattr(type(cache_obj), "iterkeys", None)
     if callable(iterkeys):
-        return cache_obj.iterkeys()  # type: ignore[no-any-return]
-    return iter(cache_obj)
+        return cast(Iterator[object], cache_obj.iterkeys())
+    return cast(Iterator[object], iter(cache_obj))
 
 
 def make_cache_key(query_type: str, file: str, params: Mapping[str, object]) -> str:

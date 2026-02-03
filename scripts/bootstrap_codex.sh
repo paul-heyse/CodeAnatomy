@@ -83,7 +83,7 @@ import sys
 
 try:
     mod = importlib.import_module("datafusion_ext")
-except Exception as exc:  # noqa: BLE001
+except ImportError as exc:
     print(f"Failed to import datafusion_ext: {exc}", file=sys.stderr)
     raise SystemExit(1) from exc
 

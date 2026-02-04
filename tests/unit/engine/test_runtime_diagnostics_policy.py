@@ -12,4 +12,4 @@ def test_diagnostics_policy_applies_semantic_quality_flag() -> None:
     profile = DataFusionRuntimeProfile()
     policy = DiagnosticsPolicy(emit_semantic_quality_diagnostics=False)
     runtime = build_engine_runtime(runtime_profile=profile, diagnostics_policy=policy)
-    assert runtime.datafusion_profile.emit_semantic_quality_diagnostics is False
+    assert runtime.datafusion_profile.diagnostics.emit_semantic_quality_diagnostics is False

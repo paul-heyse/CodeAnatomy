@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
+
+import msgspec
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -30,7 +33,7 @@ class EngineRuntime:
         EngineRuntime
             Updated engine runtime bundle.
         """
-        return replace(
+        return dataclass_replace(
             self,
             datafusion_profile=profile,
         )
@@ -57,9 +60,9 @@ def build_engine_runtime(
             diagnostics_policy,
         )
     if diagnostics is not None:
-        datafusion_profile = replace(
+        datafusion_profile = msgspec.structs.replace(
             datafusion_profile,
-            diagnostics=replace(
+            diagnostics=msgspec.structs.replace(
                 datafusion_profile.diagnostics,
                 diagnostics_sink=diagnostics,
             ),
@@ -84,9 +87,14 @@ def _apply_diagnostics_policy(
     enable_metrics = policy.capture_datafusion_metrics
     enable_tracing = policy.capture_datafusion_traces
     capture_plan_artifacts = capture_explain
-    return replace(
+    return msgspec.structs.replace(
         profile,
-        diagnostics=replace(
+        features=msgspec.structs.replace(
+            profile.features,
+            enable_metrics=enable_metrics,
+            enable_tracing=enable_tracing,
+        ),
+        diagnostics=msgspec.structs.replace(
             profile.diagnostics,
             capture_explain=capture_explain,
             explain_analyze=policy.explain_analyze,
@@ -94,9 +102,7 @@ def _apply_diagnostics_policy(
             explain_collector=profile.diagnostics.explain_collector if capture_explain else None,
             capture_plan_artifacts=capture_plan_artifacts,
             plan_collector=profile.diagnostics.plan_collector if capture_plan_artifacts else None,
-            enable_metrics=enable_metrics,
             metrics_collector=profile.diagnostics.metrics_collector if enable_metrics else None,
-            enable_tracing=enable_tracing,
             tracing_collector=profile.diagnostics.tracing_collector if enable_tracing else None,
             emit_semantic_quality_diagnostics=policy.emit_semantic_quality_diagnostics,
         ),

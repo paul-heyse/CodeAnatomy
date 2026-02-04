@@ -37,5 +37,5 @@ policy_profile = "integration"
     payload = json.loads(captured.out)
 
     assert exit_code == 0
-    assert payload["plan_allow_partial"] is True
-    assert payload["cache_policy_profile"] == "integration"
+    assert payload["plan"]["allow_partial"] is True
+    assert payload["cache"]["policy_profile"] == "integration"

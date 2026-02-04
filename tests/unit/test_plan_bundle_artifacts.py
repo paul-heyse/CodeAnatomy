@@ -262,7 +262,14 @@ def test_plan_bundle_captures_udf_planner_snapshot() -> None:
 
 
 def test_plan_bundle_captures_async_udf_settings() -> None:
-    """Ensure async UDF runtime settings are captured in plan artifacts."""
+    """Ensure async UDF runtime settings are captured in plan artifacts.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the native extension fails for reasons other than missing
+        async UDF support.
+    """
     try:
         import importlib
 
@@ -288,7 +295,12 @@ def test_plan_bundle_captures_async_udf_settings() -> None:
             async_udf_batch_size=async_batch_size,
         ),
     )
-    runtime = profile.session_runtime()
+    try:
+        runtime = profile.session_runtime()
+    except RuntimeError as exc:
+        if "async-udf" in str(exc).lower():
+            pytest.skip("async UDF feature is not enabled in the native extension.")
+        raise
     ctx = runtime.ctx
     register_arrow_table(ctx, name="events", value=pa.table({"id": [1, 2]}))
     df = ctx.sql("SELECT id FROM events")

@@ -321,27 +321,27 @@ def dataset_catalog_from_profile(
     _register_locations(
         catalog,
         profile=profile_ref,
-        locations=profile.data_sources.extract_dataset_locations,
+        locations=profile.data_sources.extract_output.dataset_locations,
     )
     _register_registry_catalog_name(
         catalog,
         profile=profile_ref,
-        name=profile.data_sources.extract_output_catalog_name,
+        name=profile.data_sources.extract_output.output_catalog_name,
     )
     _register_locations(
         catalog,
         profile=profile_ref,
-        locations=profile.data_sources.semantic_output_locations,
+        locations=profile.data_sources.semantic_output.locations,
     )
     _register_registry_catalog_name(
         catalog,
         profile=profile_ref,
-        name=profile.data_sources.semantic_output_catalog_name,
+        name=profile.data_sources.semantic_output.output_catalog_name,
     )
 
     unified_catalog = build_semantic_dataset_catalog(
-        semantic_output_root=profile.data_sources.semantic_output_root,
-        extract_output_root=profile.data_sources.extract_output_root,
+        semantic_output_root=profile.data_sources.semantic_output.output_root,
+        extract_output_root=profile.data_sources.extract_output.output_root,
     )
     _register_registry_catalog(
         catalog,
@@ -351,7 +351,7 @@ def dataset_catalog_from_profile(
     _register_locations(
         catalog,
         profile=profile_ref,
-        locations=profile.data_sources.scip_dataset_locations,
+        locations=profile.data_sources.extract_output.scip_dataset_locations,
     )
     _register_locations(
         catalog,
@@ -566,11 +566,11 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
         _resolve_override(location, overrides, "table_spec", fallback_spec=False),
     )
     datafusion_provider = location.datafusion_provider
-    if datafusion_provider is None:
-        if (delta_cdf_policy is not None and delta_cdf_policy.required) or (
-            dataset_spec is not None and dataset_spec.dataset_kind == "delta_cdf"
-        ):
-            datafusion_provider = "delta_cdf"
+    if datafusion_provider is None and (
+        (delta_cdf_policy is not None and delta_cdf_policy.required)
+        or (dataset_spec is not None and dataset_spec.dataset_kind == "delta_cdf")
+    ):
+        datafusion_provider = "delta_cdf"
     delta_log_storage_options = (
         location.delta_log_storage_options or location.storage_options or None
     )

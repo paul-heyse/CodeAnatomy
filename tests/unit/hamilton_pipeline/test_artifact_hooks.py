@@ -34,7 +34,7 @@ class _DummyDriver:
 def test_graph_snapshot_hook_writes_snapshot(tmp_path: Path) -> None:
     """Graph snapshots should be emitted to the cache path."""
     plan_signature = "plan_signature_test"
-    config: Mapping[str, JsonValue] = {"cache_path": str(tmp_path)}
+    config: Mapping[str, JsonValue] = {"cache": {"path": str(tmp_path)}}
     hook = GraphSnapshotHook(
         profile=cast("DataFusionRuntimeProfile", None),
         plan_signature=plan_signature,

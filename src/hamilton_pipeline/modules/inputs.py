@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import msgspec
 from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
@@ -160,31 +161,34 @@ def runtime_profile_spec(
         return resolved
     resolved_semantic_catalog_name = catalog_name
     resolved_extract_catalog_name = extract_catalog_name
-    updated_profile = replace(
+    updated_profile = msgspec.structs.replace(
         resolved.datafusion,
-        data_sources=replace(
+        data_sources=msgspec.structs.replace(
             resolved.datafusion.data_sources,
-            normalize_output_root=normalize_root,
-            semantic_output_root=semantic_root,
-            semantic_output_catalog_name=resolved_semantic_catalog_name,
-            extract_output_root=extract_root,
-            extract_output_catalog_name=resolved_extract_catalog_name,
+            semantic_output=msgspec.structs.replace(
+                resolved.datafusion.data_sources.semantic_output,
+                normalize_output_root=normalize_root,
+                output_root=semantic_root,
+                output_catalog_name=resolved_semantic_catalog_name,
+            ),
+            extract_output=msgspec.structs.replace(
+                resolved.datafusion.data_sources.extract_output,
+                output_root=extract_root,
+                output_catalog_name=resolved_extract_catalog_name,
+            ),
         ),
-        policies=replace(
+        policies=msgspec.structs.replace(
             resolved.datafusion.policies,
             cache_output_root=cache_root,
         ),
-        catalog=replace(
+        catalog=msgspec.structs.replace(
             resolved.datafusion.catalog,
             registry_catalogs=registry_catalogs,
         ),
     )
-    return RuntimeProfileSpec(
-        name=resolved.name,
+    return msgspec.structs.replace(
+        resolved,
         datafusion=updated_profile,
-        determinism_tier=resolved.determinism_tier,
-        tracker_config=resolved.tracker_config,
-        hamilton_telemetry=resolved.hamilton_telemetry,
     )
 
 

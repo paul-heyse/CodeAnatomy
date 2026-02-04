@@ -42,6 +42,7 @@ from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     DataSourceConfig,
     DiagnosticsConfig,
+    ExtractOutputConfig,
     FeatureGatesConfig,
     PolicyBundleConfig,
 )
@@ -60,7 +61,9 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
         )
     }
     profile = DataFusionRuntimeProfile(
-        data_sources=DataSourceConfig(extract_dataset_locations=dataset_locations),
+        data_sources=DataSourceConfig(
+            extract_output=ExtractOutputConfig(dataset_locations=dataset_locations)
+        ),
         features=FeatureGatesConfig(
             enable_schema_registry=False,
             enable_schema_evolution_adapter=False,

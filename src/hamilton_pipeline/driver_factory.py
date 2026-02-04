@@ -89,6 +89,26 @@ def default_modules() -> list[ModuleType]:
     return hamilton_modules.load_all_modules()
 
 
+def _config_section(
+    config: Mapping[str, JsonValue],
+    key: str,
+) -> Mapping[str, JsonValue]:
+    value = config.get(key)
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, JsonValue]", value)
+    return {}
+
+
+def _mutable_config_section(
+    config: dict[str, JsonValue],
+    key: str,
+) -> dict[str, JsonValue]:
+    value = config.get(key)
+    section = dict(value) if isinstance(value, Mapping) else {}
+    config[key] = section
+    return section
+
+
 def driver_config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     """Compute a stable driver config fingerprint for caching.
 
@@ -276,11 +296,12 @@ def _compile_plan(
 ) -> ExecutionPlan:
     from relspec.execution_plan import ExecutionPlanRequest, compile_execution_plan
 
-    requested = _task_name_list_from_config(config, key="plan_requested_tasks")
-    impacted = _task_name_list_from_config(config, key="plan_impacted_tasks")
-    allow_partial = bool(config.get("plan_allow_partial", False))
+    plan_config = _config_section(config, "plan")
+    requested = _task_name_list_from_config(plan_config, key="requested_tasks")
+    impacted = _task_name_list_from_config(plan_config, key="impacted_tasks")
+    allow_partial = bool(plan_config.get("allow_partial", False))
     enable_metric_scheduling = True
-    metric_flag = config.get("enable_metric_scheduling")
+    metric_flag = plan_config.get("enable_metric_scheduling")
     if isinstance(metric_flag, bool):
         enable_metric_scheduling = metric_flag
     request = ExecutionPlanRequest(
@@ -296,7 +317,8 @@ def _compile_plan(
 
 
 def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
-    if bool(config.get("incremental_enabled")):
+    incremental_config = _config_section(config, "incremental")
+    if bool(incremental_config.get("enabled")):
         return True
     mode = (env_value("CODEANATOMY_PIPELINE_MODE") or "").lower()
     return mode in {"incremental", "streaming"}
@@ -309,7 +331,8 @@ def _resolve_incremental_state_dir(config: Mapping[str, JsonValue]) -> Path | No
     if not isinstance(repo_root_value, str) or not repo_root_value.strip():
         return None
     repo_root = Path(repo_root_value).expanduser()
-    state_dir_value = config.get("incremental_state_dir")
+    incremental_config = _config_section(config, "incremental")
+    state_dir_value = incremental_config.get("state_dir")
     state_dir_env = env_value("CODEANATOMY_STATE_DIR")
     state_dir = state_dir_value if isinstance(state_dir_value, str) else state_dir_env
     if isinstance(state_dir, str) and state_dir.strip():
@@ -512,20 +535,21 @@ def _maybe_build_tracker_adapter(
     if hamilton_adapters is None:
         return None
 
-    if not bool(config.get("enable_hamilton_tracker", False)):
+    hamilton_config = _config_section(config, "hamilton")
+    if not bool(hamilton_config.get("enable_tracker", False)):
         return None
 
     project_id = _tracker_project_id(
         _tracker_value(
-            config,
-            config_key="hamilton_project_id",
+            hamilton_config,
+            config_key="project_id",
             env_key="HAMILTON_PROJECT_ID",
         )
     )
     username = _tracker_username(
         _tracker_value(
-            config,
-            config_key="hamilton_username",
+            hamilton_config,
+            config_key="username",
             env_key="HAMILTON_USERNAME",
         )
     )
@@ -534,21 +558,21 @@ def _maybe_build_tracker_adapter(
 
     dag_name = _tracker_dag_name(
         _tracker_value(
-            config,
-            config_key="hamilton_dag_name",
+            hamilton_config,
+            config_key="dag_name",
             env_key="HAMILTON_DAG_NAME",
         )
     )
-    tags = _tracker_tags(config.get("hamilton_tags"))
+    tags = _tracker_tags(hamilton_config.get("tags"))
     api_url_value = _tracker_value(
-        config,
-        config_key="hamilton_api_url",
+        hamilton_config,
+        config_key="api_url",
         env_key="HAMILTON_API_URL",
     )
     api_url = api_url_value if isinstance(api_url_value, str) else None
     ui_url_value = _tracker_value(
-        config,
-        config_key="hamilton_ui_url",
+        hamilton_config,
+        config_key="ui_url",
         env_key="HAMILTON_UI_URL",
     )
     ui_url = ui_url_value if isinstance(ui_url_value, str) else None
@@ -585,15 +609,16 @@ def _with_graph_tags(
     plan: ExecutionPlan,
 ) -> dict[str, JsonValue]:
     config_payload = dict(config)
-    dag_name = _resolve_dag_name(config_payload)
-    config_payload["hamilton_dag_name"] = dag_name
-    merged_tags = _merge_graph_tags(config_payload, plan=plan)
-    config_payload["hamilton_tags"] = merged_tags
+    hamilton_payload = _mutable_config_section(config_payload, "hamilton")
+    dag_name = _resolve_dag_name(hamilton_payload)
+    hamilton_payload["dag_name"] = dag_name
+    merged_tags = _merge_graph_tags(config_payload, hamilton_payload, plan=plan)
+    hamilton_payload["tags"] = merged_tags
     return config_payload
 
 
-def _resolve_dag_name(config_payload: Mapping[str, JsonValue]) -> str:
-    dag_name_value = config_payload.get("hamilton_dag_name")
+def _resolve_dag_name(hamilton_payload: Mapping[str, JsonValue]) -> str:
+    dag_name_value = hamilton_payload.get("dag_name")
     if isinstance(dag_name_value, str) and dag_name_value:
         return dag_name_value
     return _DEFAULT_DAG_NAME
@@ -601,17 +626,21 @@ def _resolve_dag_name(config_payload: Mapping[str, JsonValue]) -> str:
 
 def _merge_graph_tags(
     config_payload: Mapping[str, JsonValue],
+    hamilton_payload: Mapping[str, JsonValue],
     *,
     plan: ExecutionPlan,
 ) -> dict[str, str]:
-    merged_tags = _base_graph_tags(config_payload)
+    merged_tags = _base_graph_tags(config_payload, hamilton_payload)
     _append_plan_tags(merged_tags, plan=plan)
-    _append_telemetry_tags(merged_tags, config_payload)
+    _append_telemetry_tags(merged_tags, hamilton_payload)
     return merged_tags
 
 
-def _base_graph_tags(config_payload: Mapping[str, JsonValue]) -> dict[str, str]:
-    tags_value = config_payload.get("hamilton_tags")
+def _base_graph_tags(
+    config_payload: Mapping[str, JsonValue],
+    hamilton_payload: Mapping[str, JsonValue],
+) -> dict[str, str]:
+    tags_value = hamilton_payload.get("tags")
     merged_tags: dict[str, str] = {}
     if isinstance(tags_value, Mapping):
         merged_tags.update({str(k): str(v) for k, v in tags_value.items()})
@@ -627,7 +656,7 @@ def _base_graph_tags(config_payload: Mapping[str, JsonValue]) -> dict[str, str]:
     determinism = _determinism_override(config_payload)
     if determinism is not None:
         merged_tags.setdefault("determinism_tier", determinism.value)
-    telemetry_profile = _string_override(config_payload, "hamilton_telemetry_profile")
+    telemetry_profile = _string_override(hamilton_payload, "telemetry_profile")
     if telemetry_profile is not None:
         merged_tags.setdefault("telemetry_profile", telemetry_profile)
     merged_tags.setdefault("semantic_version", _SEMANTIC_VERSION)
@@ -695,18 +724,18 @@ def _append_plan_tags(tags: dict[str, str], *, plan: ExecutionPlan) -> None:
 
 def _append_telemetry_tags(
     tags: dict[str, str],
-    config_payload: Mapping[str, JsonValue],
+    hamilton_payload: Mapping[str, JsonValue],
 ) -> None:
-    capture_stats_value = config_payload.get("hamilton_capture_data_statistics")
+    capture_stats_value = hamilton_payload.get("capture_data_statistics")
     if isinstance(capture_stats_value, bool):
         tags.setdefault(
             "capture_data_statistics",
             "true" if capture_stats_value else "false",
         )
-    max_list_value = config_payload.get("hamilton_max_list_length_capture")
+    max_list_value = hamilton_payload.get("max_list_length_capture")
     if isinstance(max_list_value, int):
         tags.setdefault("max_list_length_capture", str(max_list_value))
-    max_dict_value = config_payload.get("hamilton_max_dict_length_capture")
+    max_dict_value = hamilton_payload.get("max_dict_length_capture")
     if isinstance(max_dict_value, int):
         tags.setdefault("max_dict_length_capture", str(max_dict_value))
 
@@ -719,18 +748,19 @@ def _apply_tracker_config_from_profile(
     tracker = profile_spec.tracker_config
     if tracker is None:
         return config
+    hamilton_payload = _mutable_config_section(config, "hamilton")
     if tracker.project_id is not None:
-        config.setdefault("hamilton_project_id", tracker.project_id)
+        hamilton_payload.setdefault("project_id", tracker.project_id)
     if tracker.username is not None:
-        config.setdefault("hamilton_username", tracker.username)
+        hamilton_payload.setdefault("username", tracker.username)
     if tracker.dag_name is not None:
-        config.setdefault("hamilton_dag_name", tracker.dag_name)
+        hamilton_payload.setdefault("dag_name", tracker.dag_name)
     if tracker.api_url is not None:
-        config.setdefault("hamilton_api_url", tracker.api_url)
+        hamilton_payload.setdefault("api_url", tracker.api_url)
     if tracker.ui_url is not None:
-        config.setdefault("hamilton_ui_url", tracker.ui_url)
+        hamilton_payload.setdefault("ui_url", tracker.ui_url)
     if tracker.enabled:
-        config.setdefault("enable_hamilton_tracker", True)
+        hamilton_payload.setdefault("enable_tracker", True)
     return config
 
 
@@ -742,12 +772,13 @@ def _apply_hamilton_telemetry_profile(
     telemetry = getattr(profile_spec, "hamilton_telemetry", None)
     if telemetry is None:
         return config
-    config.setdefault("hamilton_telemetry_profile", telemetry.name)
-    config.setdefault("hamilton_capture_data_statistics", telemetry.capture_data_statistics)
-    config.setdefault("hamilton_max_list_length_capture", telemetry.max_list_length_capture)
-    config.setdefault("hamilton_max_dict_length_capture", telemetry.max_dict_length_capture)
-    if "enable_hamilton_tracker" not in config:
-        config["enable_hamilton_tracker"] = telemetry.enable_tracker
+    hamilton_payload = _mutable_config_section(config, "hamilton")
+    hamilton_payload.setdefault("telemetry_profile", telemetry.name)
+    hamilton_payload.setdefault("capture_data_statistics", telemetry.capture_data_statistics)
+    hamilton_payload.setdefault("max_list_length_capture", telemetry.max_list_length_capture)
+    hamilton_payload.setdefault("max_dict_length_capture", telemetry.max_dict_length_capture)
+    if "enable_tracker" not in hamilton_payload:
+        hamilton_payload["enable_tracker"] = telemetry.enable_tracker
     return config
 
 
@@ -765,11 +796,12 @@ def _configure_hamilton_sdk_capture(
         from hamilton_sdk.tracking import constants as sdk_constants
     except ModuleNotFoundError:
         return
-    capture = config.get("hamilton_capture_data_statistics")
+    hamilton_config = _config_section(config, "hamilton")
+    capture = hamilton_config.get("capture_data_statistics")
     capture_value = capture if isinstance(capture, bool) else telemetry.capture_data_statistics
-    max_list = config.get("hamilton_max_list_length_capture")
+    max_list = hamilton_config.get("max_list_length_capture")
     max_list_value = max_list if isinstance(max_list, int) else telemetry.max_list_length_capture
-    max_dict = config.get("hamilton_max_dict_length_capture")
+    max_dict = hamilton_config.get("max_dict_length_capture")
     max_dict_value = max_dict if isinstance(max_dict, int) else telemetry.max_dict_length_capture
     sdk_constants.CAPTURE_DATA_STATISTICS = capture_value
     sdk_constants.MAX_LIST_LENGTH_CAPTURE = max_list_value
@@ -846,7 +878,8 @@ def _resolve_config_payload(
     else:
         config_payload.setdefault("enable_dynamic_scan_units", True)
     config_payload.setdefault("enable_output_validation", True)
-    config_payload.setdefault("enable_graph_snapshot", True)
+    hamilton_payload = _mutable_config_section(config_payload, "hamilton")
+    hamilton_payload.setdefault("enable_graph_snapshot", True)
     config_payload.setdefault("hamilton.enable_power_user_mode", True)
     config_payload = _apply_tracker_config_from_profile(
         config_payload,
@@ -966,9 +999,12 @@ def _executor_from_kind(
         except ImportError as exc:
             msg = "Dask executor requested but Hamilton dask plugin is not installed."
             raise ValueError(msg) from exc
-        client_kwargs = _parse_dask_client_kwargs(
-            executor_config.dask_client_kwargs if executor_config is not None else None
+        raw_kwargs = (
+            cast("Mapping[str, JsonValue] | None", executor_config.dask_client_kwargs)
+            if executor_config is not None
+            else None
         )
+        client_kwargs = _parse_dask_client_kwargs(raw_kwargs)
         if executor_config is not None and executor_config.dask_scheduler:
             client = Client(executor_config.dask_scheduler, **client_kwargs)
         else:
@@ -1003,9 +1039,13 @@ def _apply_dynamic_execution(
         plan_task_submission_hook,
     )
 
-    enable_submission_hook = bool(options.config.get("enable_plan_task_submission_hook", True))
-    enable_grouping_hook = bool(options.config.get("enable_plan_task_grouping_hook", True))
-    enforce_submission = bool(options.config.get("enforce_plan_task_submission", True))
+    plan_config = _config_section(options.config, "plan")
+    submission_value = plan_config.get("enable_plan_task_submission_hook")
+    enable_submission_hook = submission_value if isinstance(submission_value, bool) else True
+    grouping_value = plan_config.get("enable_plan_task_grouping_hook")
+    enable_grouping_hook = grouping_value if isinstance(grouping_value, bool) else True
+    enforce_value = plan_config.get("enforce_plan_task_submission")
+    enforce_submission = enforce_value if isinstance(enforce_value, bool) else True
     local_executor = executors.SynchronousLocalTaskExecutor()
     remote_kind = resolved_config.remote_kind or resolved_config.kind
     remote_max_tasks = resolved_config.remote_max_tasks or resolved_config.max_tasks
@@ -1049,15 +1089,14 @@ def _apply_dynamic_execution(
 def _graph_adapter_config_from_config(
     config: Mapping[str, JsonValue],
 ) -> GraphAdapterConfig | None:
-    value = config.get("hamilton_graph_adapter_kind") or config.get("graph_adapter_kind")
+    graph_adapter = _config_section(config, "graph_adapter")
+    value = graph_adapter.get("kind")
     if not isinstance(value, str) or not value.strip():
         return None
     normalized = value.strip().lower()
     if normalized not in {"threadpool", "dask", "ray"}:
         return None
-    options_value = config.get("hamilton_graph_adapter_options") or config.get(
-        "graph_adapter_options"
-    )
+    options_value = graph_adapter.get("options")
     options: dict[str, JsonValue] | None = None
     if isinstance(options_value, Mapping):
         options = {str(key): cast("JsonValue", value) for key, value in options_value.items()}
@@ -1069,7 +1108,7 @@ def _graph_adapter_from_config(
     *,
     executor_config: ExecutorConfig | None,
 ) -> HamiltonGraphAdapter:
-    options = dict(adapter_config.options or {})
+    options = cast("dict[str, JsonValue]", dict(adapter_config.options or {}))
     if adapter_config.kind == "threadpool":
         return _threadpool_adapter(options, executor_config=executor_config)
     if adapter_config.kind == "ray":
@@ -1292,28 +1331,30 @@ def _cache_behavior_override(
 
 
 def _cache_policy_profile(config: Mapping[str, JsonValue]) -> CachePolicyProfile:
-    profile_value = config.get("cache_policy_profile")
+    cache_config = _config_section(config, "cache")
+    profile_value = cache_config.get("policy_profile")
     profile_name = profile_value.strip() if isinstance(profile_value, str) else ""
-    cache_opt_in = bool(config.get("cache_opt_in", True))
+    cache_opt_in_value = cache_config.get("opt_in")
+    cache_opt_in = cache_opt_in_value if isinstance(cache_opt_in_value, bool) else True
     default_behavior: CacheBehavior = "disable" if cache_opt_in else "default"
     default_loader_behavior: CacheBehavior = "recompute"
     default_saver_behavior: CacheBehavior = "disable"
     if profile_name == "aggressive":
         default_loader_behavior = "default"
         default_saver_behavior = "default"
-    default_override = _cache_behavior_override(config, "cache_default_behavior")
+    default_override = _cache_behavior_override(cache_config, "default_behavior")
     if default_override is not None:
         default_behavior = default_override
     loader_override = _cache_behavior_override(
-        config,
-        "cache_default_loader_behavior",
+        cache_config,
+        "default_loader_behavior",
     )
     if loader_override is not None:
         default_loader_behavior = loader_override
-    saver_override = _cache_behavior_override(config, "cache_default_saver_behavior")
+    saver_override = _cache_behavior_override(cache_config, "default_saver_behavior")
     if saver_override is not None:
         default_saver_behavior = saver_override
-    log_to_file_value = config.get("cache_log_to_file")
+    log_to_file_value = cache_config.get("log_to_file")
     log_to_file = log_to_file_value if isinstance(log_to_file_value, bool) else True
     resolved_name = profile_name or "strict_causal"
     return CachePolicyProfile(
@@ -1365,7 +1406,8 @@ def _cache_default_nodes(
     config: Mapping[str, JsonValue],
     profile_spec: RuntimeProfileSpec,
 ) -> tuple[str, ...]:
-    explicit = _task_name_list_from_config(config, key="cache_default_nodes")
+    cache_config = _config_section(config, "cache")
+    explicit = _task_name_list_from_config(cache_config, key="default_nodes")
     if explicit is not None:
         return explicit
     from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
@@ -1387,9 +1429,8 @@ def _cache_default_nodes(
 
 
 def _cache_path_from_config(config: Mapping[str, JsonValue]) -> str | None:
-    value = config.get("cache_path")
-    if not isinstance(value, str) or not value.strip():
-        value = config.get("hamilton_cache_path")
+    cache_config = _config_section(config, "cache")
+    value = cache_config.get("path")
     if not isinstance(value, str) or not value.strip():
         value = env_value("CODEANATOMY_HAMILTON_CACHE_PATH")
     if not isinstance(value, str) or not value.strip():
@@ -1407,7 +1448,7 @@ class _AdapterContext:
     profile_spec: RuntimeProfileSpec
 
 
-def _apply_adapters(
+def _apply_adapters(  # noqa: C901, PLR0912
     builder: driver.Builder,
     *,
     config: Mapping[str, JsonValue],
@@ -1416,13 +1457,28 @@ def _apply_adapters(
     tracker = _maybe_build_tracker_adapter(config, profile_spec=context.profile_spec)
     if tracker is not None:
         builder = builder.with_adapters(tracker)
-    if bool(config.get("enable_hamilton_type_checker", True)):
+    hamilton_config = _config_section(config, "hamilton")
+    otel_config = _config_section(config, "otel")
+    plan_config = _config_section(config, "plan")
+    enable_type_checker = hamilton_config.get("enable_type_checker")
+    if not isinstance(enable_type_checker, bool):
+        enable_type_checker = True
+    if enable_type_checker:
         builder = builder.with_adapters(CodeAnatomyTypeChecker())
-    if bool(config.get("enable_hamilton_node_diagnostics", True)):
+    enable_node_diagnostics = hamilton_config.get("enable_node_diagnostics")
+    if not isinstance(enable_node_diagnostics, bool):
+        enable_node_diagnostics = True
+    if enable_node_diagnostics:
         builder = builder.with_adapters(DiagnosticsNodeHook(context.diagnostics))
-    if bool(config.get("enable_otel_node_tracing", True)):
+    enable_node_tracing = otel_config.get("enable_node_tracing")
+    if not isinstance(enable_node_tracing, bool):
+        enable_node_tracing = True
+    if enable_node_tracing:
         builder = builder.with_adapters(OtelNodeHook())
-    if bool(config.get("enable_plan_diagnostics", True)):
+    enable_plan_diagnostics = plan_config.get("enable_plan_diagnostics")
+    if not isinstance(enable_plan_diagnostics, bool):
+        enable_plan_diagnostics = True
+    if enable_plan_diagnostics:
         builder = builder.with_adapters(
             PlanDiagnosticsHook(
                 plan=context.plan,
@@ -1430,7 +1486,10 @@ def _apply_adapters(
                 collector=context.diagnostics,
             )
         )
-    if bool(config.get("enable_structured_run_logs", True)):
+    enable_structured_logs = hamilton_config.get("enable_structured_run_logs")
+    if not isinstance(enable_structured_logs, bool):
+        enable_structured_logs = True
+    if enable_structured_logs:
         from hamilton_pipeline.structured_logs import StructuredLogHook
 
         builder = builder.with_adapters(
@@ -1440,7 +1499,10 @@ def _apply_adapters(
                 plan_signature=context.plan.plan_signature,
             )
         )
-    if bool(config.get("enable_otel_plan_tracing", True)):
+    enable_plan_tracing = otel_config.get("enable_plan_tracing")
+    if not isinstance(enable_plan_tracing, bool):
+        enable_plan_tracing = True
+    if enable_plan_tracing:
         builder = builder.with_adapters(OtelPlanHook())
     return builder
 
@@ -1585,7 +1647,8 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         context=adapter_context,
     )
     cache_lineage_hook: CacheLineageHook | None = None
-    cache_path = config_payload.get("cache_path")
+    cache_config = _config_section(config_payload, "cache")
+    cache_path = cache_config.get("path")
     if isinstance(cache_path, str) and cache_path:
         from hamilton_pipeline.cache_lineage import (
             CacheLineageHook as _CacheLineageHook,
@@ -1598,7 +1661,11 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         )
         builder = builder.with_adapters(cache_lineage_hook)
     graph_snapshot_hook: GraphSnapshotHook | None = None
-    if bool(config_payload.get("enable_graph_snapshot", True)):
+    hamilton_config = _config_section(config_payload, "hamilton")
+    enable_snapshot = hamilton_config.get("enable_graph_snapshot")
+    if not isinstance(enable_snapshot, bool):
+        enable_snapshot = True
+    if enable_snapshot:
         from hamilton_pipeline.graph_snapshot import (
             GraphSnapshotHook as _GraphSnapshotHook,
         )
@@ -1620,9 +1687,9 @@ def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
     """Build a Hamilton Driver for the pipeline.
 
     Key knobs supported via config:
-      - cache_path: str | None
-      - cache_opt_in: bool (if True, default_behavior="disable")
-      - enable_hamilton_tracker and tracker config keys
+      - cache.path: str | None
+      - cache.opt_in: bool (if True, default_behavior="disable")
+      - hamilton.enable_tracker and tracker config keys
 
     Returns
     -------

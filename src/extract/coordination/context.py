@@ -10,7 +10,7 @@ The row building utilities delegate to the canonical implementations in
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -146,10 +146,10 @@ class ExtractExecutionContext:
             Resolved DataFusion runtime profile.
         """
         profile = self.ensure_session().engine_session.datafusion_profile
-        if profile.capture_plan_artifacts:
-            return replace(
+        if profile.diagnostics.capture_plan_artifacts:
+            return msgspec.structs.replace(
                 profile,
-                diagnostics=replace(
+                diagnostics=msgspec.structs.replace(
                     profile.diagnostics,
                     capture_plan_artifacts=False,
                 ),

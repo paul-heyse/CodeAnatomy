@@ -60,20 +60,12 @@ To force a specific config file, use the global `--config` flag:
 codeanatomy --config ./codeanatomy.toml build .
 ```
 
-### Config normalization
+### Config structure
 
-Nested sections in TOML are normalized into the flat keys expected by `driver_factory.py`.
-Examples:
+Configuration is **nested-only** (no flat-key normalization). Use TOML sections
+like `[plan]`, `[cache]`, `[graph_adapter]`, etc. to set values.
 
-| Nested TOML | Flat key | Purpose |
-|---|---|---|
-| `[plan] allow_partial = true` | `plan_allow_partial = true` | Partial plan compilation |
-| `[plan] requested_tasks = ["..."]` | `plan_requested_tasks = [...]` | Explicit task allowlist |
-| `[cache] policy_profile = "aggressive"` | `cache_policy_profile = "aggressive"` | Cache policy profile |
-| `[graph_adapter] kind = "ray"` | `graph_adapter_kind = "ray"` | Graph adapter selection |
-| `[incremental] enabled = true` | `incremental_enabled = true` | Enable incremental mode |
-
-Use `codeanatomy config show` to inspect the normalized payload:
+Use `codeanatomy config show` to inspect the effective payload:
 
 ```bash
 codeanatomy config show
@@ -123,9 +115,9 @@ to see where each configuration value is coming from.
 | `CODEANATOMY_ENABLE_LOGS` | Enable OpenTelemetry logs | `--enable-logs` |
 | `CODEANATOMY_OTEL_TEST_MODE` | In-memory OTel exporters (tests) | `--otel-test-mode` |
 
-### Legacy/advanced environment toggles
+### Advanced environment toggles
 
-The pipeline still honors a few legacy toggles defined in the runtime layers:
+The pipeline honors a few runtime toggles defined in the engine layers:
 
 - `CODEANATOMY_FORCE_TIER2` (forces canonical determinism)
 - `CODEANATOMY_PIPELINE_MODE` (incremental/streaming mode)

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 
 from utils.hashing import hash_json_canonical
 from utils.registry_protocol import MutableRegistry
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
+    from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.tables.spec import TableSpec
 
@@ -186,9 +188,15 @@ class ProviderRegistry:
         ValueError
             When table already registered and overwrite is False.
         """
-        if spec.name in self._registrations and not overwrite:
-            msg = f"Table {spec.name!r} already registered. Use overwrite=True."
-            raise ValueError(msg)
+        from datafusion_engine.schema.introspection import table_names_snapshot
+        from datafusion_engine.session.helpers import deregister_table
+
+        if not overwrite:
+            if spec.name in self._registrations or spec.name in table_names_snapshot(self.ctx):
+                msg = f"Table {spec.name!r} already registered. Use overwrite=True."
+                raise ValueError(msg)
+        else:
+            deregister_table(self.ctx, spec.name)
 
         df, metadata = self._do_registration(spec, cache_policy=cache_policy)
         self._registrations.register(spec.name, metadata, overwrite=overwrite)
@@ -220,8 +228,21 @@ class ProviderRegistry:
 
         schema = resolve_dataset_schema(location)
         if schema is None:
-            msg = f"Schema unavailable for dataset location {name!r}."
-            raise ValueError(msg)
+            if location.format != "delta":
+                try:
+                    dataset = ds.dataset(
+                        list(location.files) if location.files is not None else location.path,
+                        format=location.format,
+                        filesystem=location.filesystem,
+                        partitioning=location.partitioning,
+                    )
+                    schema = dataset.schema
+                except (TypeError, ValueError, OSError) as exc:
+                    msg = f"Schema required for dataset location {name!r}."
+                    raise ValueError(msg) from exc
+            if schema is None:
+                msg = f"Schema required for dataset location {name!r}."
+                raise ValueError(msg)
         spec = table_spec_from_location(name, location, schema=pa.schema(schema))
         return self.register_df(spec, overwrite=overwrite, cache_policy=cache_policy)
 

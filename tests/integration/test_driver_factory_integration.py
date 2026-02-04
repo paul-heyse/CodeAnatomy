@@ -125,10 +125,10 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
             enable_schema_registry=False,
             enable_expr_planners=False,
             enable_cache_manager=False,
-        ),
-        diagnostics=DiagnosticsConfig(
             enable_metrics=False,
             enable_tracing=False,
+        ),
+        diagnostics=DiagnosticsConfig(
             capture_plan_artifacts=False,
         ),
     )
@@ -150,12 +150,13 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
 
 def _base_config() -> dict[str, JsonValue]:
     return {
-        "enable_hamilton_tracker": False,
-        "enable_hamilton_type_checker": False,
-        "enable_hamilton_node_diagnostics": False,
-        "enable_plan_diagnostics": False,
-        "enable_otel_node_tracing": False,
-        "enable_otel_plan_tracing": False,
+        "hamilton": {
+            "enable_tracker": False,
+            "enable_type_checker": False,
+            "enable_node_diagnostics": False,
+        },
+        "plan": {"enable_plan_diagnostics": False},
+        "otel": {"enable_node_tracing": False, "enable_plan_tracing": False},
     }
 
 

@@ -40,28 +40,10 @@ def test_config_sources_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     config = load_effective_config_with_sources(None)
 
-    assert "plan_allow_partial" in config.values
-    assert "cache_policy_profile" in config.values
-    assert "incremental_state_dir" in config.values
+    assert "plan" in config.values
+    assert "cache" in config.values
+    assert "incremental" in config.values
 
-    plan_entry = config.values["plan_allow_partial"]
+    plan_entry = config.values["plan"]
     assert plan_entry.source == ConfigSource.CONFIG_FILE
     assert plan_entry.location == str(config_path)
-
-
-def test_env_overrides_take_precedence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Ensure environment variables override config values."""
-    config_path = tmp_path / "codeanatomy.toml"
-    _write_config(config_path)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CODEANATOMY_OUTPUT_DIR", "/tmp/out")
-
-    config = load_effective_config_with_sources(None)
-
-    assert "output_dir" in config.values
-    entry = config.values["output_dir"]
-    assert entry.source == ConfigSource.ENV
-    assert entry.location == "CODEANATOMY_OUTPUT_DIR"

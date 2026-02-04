@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
 import datafusion
+import msgspec
 import pyarrow as pa
 from datafusion import (
     RuntimeEnvBuilder,
@@ -111,7 +112,7 @@ from datafusion_engine.tables.metadata import table_provider_metadata
 from datafusion_engine.udf.catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf.factory import function_factory_payloads, install_function_factory
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
-from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat
+from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat, StructBaseStrict
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
 from utils.uuid_factory import uuid7_str
@@ -552,9 +553,10 @@ def normalize_dataset_locations_for_profile(
         Mapping of normalize dataset names to locations, or empty mapping
         when normalize output root is not configured.
     """
-    if profile.data_sources.normalize_output_root is None:
+    normalize_root = profile.data_sources.semantic_output.normalize_output_root
+    if normalize_root is None:
         return {}
-    root = Path(profile.data_sources.normalize_output_root)
+    root = Path(normalize_root)
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
@@ -578,20 +580,19 @@ def extract_output_locations_for_profile(
         Mapping of extract dataset names to locations, or empty mapping
         when extract output root/catalog is not configured.
     """
-    if profile.data_sources.extract_dataset_locations:
-        return profile.data_sources.extract_dataset_locations
-    if profile.data_sources.extract_output_catalog_name is not None:
-        catalog = profile.catalog.registry_catalogs.get(
-            profile.data_sources.extract_output_catalog_name
-        )
+    extract_output = profile.data_sources.extract_output
+    if extract_output.dataset_locations:
+        return extract_output.dataset_locations
+    if extract_output.output_catalog_name is not None:
+        catalog = profile.catalog.registry_catalogs.get(extract_output.output_catalog_name)
         if catalog is None:
             return {}
         return {name: catalog.get(name) for name in catalog.names()}
-    if profile.data_sources.extract_output_root is None:
+    if extract_output.output_root is None:
         return {}
     from datafusion_engine.extract.output_catalog import build_extract_output_catalog
 
-    catalog = build_extract_output_catalog(output_root=profile.data_sources.extract_output_root)
+    catalog = build_extract_output_catalog(output_root=extract_output.output_root)
     return {name: catalog.get(name) for name in catalog.names()}
 
 
@@ -610,12 +611,11 @@ def semantic_output_locations_for_profile(
     from semantics.registry import SEMANTIC_MODEL
 
     view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
-    if profile.data_sources.semantic_output_locations:
-        return profile.data_sources.semantic_output_locations
-    if profile.data_sources.semantic_output_catalog_name is not None:
-        catalog = profile.catalog.registry_catalogs.get(
-            profile.data_sources.semantic_output_catalog_name
-        )
+    semantic_output = profile.data_sources.semantic_output
+    if semantic_output.locations:
+        return semantic_output.locations
+    if semantic_output.output_catalog_name is not None:
+        catalog = profile.catalog.registry_catalogs.get(semantic_output.output_catalog_name)
         if catalog is None:
             return {}
         locations: dict[str, DatasetLocation] = {}
@@ -623,9 +623,9 @@ def semantic_output_locations_for_profile(
             if catalog.has(name):
                 locations[name] = catalog.get(name)
         return locations
-    if profile.data_sources.semantic_output_root is None:
+    if semantic_output.output_root is None:
         return {}
-    root = Path(profile.data_sources.semantic_output_root)
+    root = Path(semantic_output.output_root)
     locations: dict[str, DatasetLocation] = {}
     for name in view_names:
         locations[name] = DatasetLocation(
@@ -770,6 +770,33 @@ class DataFusionFeatureGates:
             settings.pop("datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown", None)
         return settings
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for feature gate settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing feature gate settings.
+        """
+        return {
+            "enable_dynamic_filter_pushdown": self.enable_dynamic_filter_pushdown,
+            "enable_join_dynamic_filter_pushdown": self.enable_join_dynamic_filter_pushdown,
+            "enable_aggregate_dynamic_filter_pushdown": (
+                self.enable_aggregate_dynamic_filter_pushdown
+            ),
+            "enable_topk_dynamic_filter_pushdown": self.enable_topk_dynamic_filter_pushdown,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for feature gate settings.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the feature gates.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
 
 @dataclass(frozen=True)
 class DataFusionJoinPolicy(FingerprintableConfig):
@@ -902,6 +929,35 @@ class SchemaHardeningProfile:
         if self.parser_dialect is not None:
             settings["datafusion.sql_parser.dialect"] = self.parser_dialect
         return settings
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for profile fingerprinting.
+        """
+        return {
+            "enable_view_types": self.enable_view_types,
+            "expand_views_at_output": self.expand_views_at_output,
+            "timezone": self.timezone,
+            "parser_dialect": self.parser_dialect,
+            "show_schema_in_explain": self.show_schema_in_explain,
+            "explain_format": self.explain_format,
+            "show_types_in_format": self.show_types_in_format,
+            "strict_aggregate_schema_check": self.strict_aggregate_schema_check,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the profile.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint string.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
     def apply(self, config: SessionConfig) -> SessionConfig:
         """Return SessionConfig with schema hardening settings applied.
@@ -2297,6 +2353,8 @@ def _effective_catalog_autoload_for_profile(
             profile.data_sources.bytecode.catalog_location,
             profile.data_sources.bytecode.catalog_format,
         )
+    if not profile.catalog.catalog_auto_load_enabled:
+        return (None, None)
     if (
         profile.catalog.catalog_auto_load_location is not None
         or profile.catalog.catalog_auto_load_format is not None
@@ -2564,10 +2622,14 @@ class _RuntimeDiagnosticsMixin:
         """
         profile = cast("DataFusionRuntimeProfile", self)
         return {
-            "version": 1,
+            "version": 2,
             "architecture_version": profile.architecture_version,
             "settings_hash": profile.settings_hash(),
             "telemetry_hash": profile.telemetry_payload_hash(),
+            "execution": profile.execution.fingerprint_payload(),
+            "catalog": profile.catalog.fingerprint_payload(),
+            "features": profile.features.fingerprint_payload(),
+            "policies": profile.policies.fingerprint_payload(),
         }
 
     def fingerprint(self) -> str:
@@ -2699,9 +2761,9 @@ class _RuntimeDiagnosticsMixin:
             "delta_plan_codecs_enabled": features.enable_delta_plan_codecs,
             "delta_plan_codec_physical": policies.delta_plan_codec_physical,
             "delta_plan_codec_logical": policies.delta_plan_codec_logical,
-            "metrics_enabled": diagnostics.enable_metrics,
+            "metrics_enabled": features.enable_metrics,
             "metrics_collector": bool(diagnostics.metrics_collector),
-            "tracing_enabled": diagnostics.enable_tracing,
+            "tracing_enabled": features.enable_tracing,
             "tracing_hook": bool(diagnostics.tracing_hook),
             "tracing_collector": bool(diagnostics.tracing_collector),
             "capture_explain": diagnostics.capture_explain,
@@ -3216,8 +3278,7 @@ def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
     return None
 
 
-@dataclass(frozen=True)
-class ExecutionConfig:
+class ExecutionConfig(StructBaseStrict, frozen=True):
     """Execution-level DataFusion settings."""
 
     target_partitions: int | None = None
@@ -3238,24 +3299,73 @@ class ExecutionConfig:
     share_context: bool = True
     session_context_key: str | None = None
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for execution settings.
 
-@dataclass(frozen=True)
-class CatalogConfig:
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing execution-level configuration values.
+        """
+        return {
+            "target_partitions": self.target_partitions,
+            "batch_size": self.batch_size,
+            "repartition_aggregations": self.repartition_aggregations,
+            "repartition_windows": self.repartition_windows,
+            "repartition_file_scans": self.repartition_file_scans,
+            "repartition_file_min_size": self.repartition_file_min_size,
+            "minimum_parallel_output_files": self.minimum_parallel_output_files,
+            "soft_max_rows_per_output_file": self.soft_max_rows_per_output_file,
+            "maximum_parallel_row_group_writers": self.maximum_parallel_row_group_writers,
+            "objectstore_writer_buffer_size": self.objectstore_writer_buffer_size,
+            "spill_dir": self.spill_dir,
+            "memory_pool": self.memory_pool,
+            "memory_limit_bytes": self.memory_limit_bytes,
+            "delta_max_spill_size": self.delta_max_spill_size,
+            "delta_max_temp_directory_size": self.delta_max_temp_directory_size,
+            "share_context": self.share_context,
+            "session_context_key": self.session_context_key,
+        }
+
+
+class CatalogConfig(StructBaseStrict, frozen=True):
     """Catalog and schema configuration."""
 
     default_catalog: str = "datafusion"
     default_schema: str = "public"
     view_catalog_name: str | None = None
     view_schema_name: str | None = "views"
-    registry_catalogs: Mapping[str, DatasetCatalog] = field(default_factory=dict)
+    registry_catalogs: Mapping[str, DatasetCatalog] = msgspec.field(default_factory=dict)
     registry_catalog_name: str | None = None
     catalog_auto_load_location: str | None = None
     catalog_auto_load_format: str | None = None
+    catalog_auto_load_enabled: bool = True
     enable_information_schema: bool = True
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for catalog settings.
 
-@dataclass(frozen=True)
-class TableSourceConfig:
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing catalog configuration values.
+        """
+        registry_names = tuple(sorted(self.registry_catalogs))
+        return {
+            "default_catalog": self.default_catalog,
+            "default_schema": self.default_schema,
+            "view_catalog_name": self.view_catalog_name,
+            "view_schema_name": self.view_schema_name,
+            "registry_catalogs": list(registry_names),
+            "registry_catalog_name": self.registry_catalog_name,
+            "catalog_auto_load_location": self.catalog_auto_load_location,
+            "catalog_auto_load_format": self.catalog_auto_load_format,
+            "catalog_auto_load_enabled": self.catalog_auto_load_enabled,
+            "enable_information_schema": self.enable_information_schema,
+        }
+
+
+class TableSourceConfig(StructBaseStrict, frozen=True):
     """Reusable table source configuration."""
 
     catalog_location: str | None = None
@@ -3298,28 +3408,37 @@ def _default_bytecode_source_config() -> TableSourceConfig:
     )
 
 
-@dataclass(frozen=True)
-class DataSourceConfig:
+class ExtractOutputConfig(StructBaseStrict, frozen=True):
+    """Extract output configuration."""
+
+    dataset_locations: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
+    output_catalog_name: str | None = None
+    output_root: str | None = None
+    scip_dataset_locations: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
+
+
+class SemanticOutputConfig(StructBaseStrict, frozen=True):
+    """Semantic output configuration."""
+
+    locations: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
+    output_catalog_name: str | None = None
+    output_root: str | None = None
+    normalize_output_root: str | None = None
+    cache_overrides: Mapping[str, CachePolicy] = msgspec.field(default_factory=dict)
+
+
+class DataSourceConfig(StructBaseStrict, frozen=True):
     """Dataset location and output configuration."""
 
-    ast: TableSourceConfig = field(default_factory=_default_ast_source_config)
-    bytecode: TableSourceConfig = field(default_factory=_default_bytecode_source_config)
-    extract_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
-    extract_output_catalog_name: str | None = None
-    extract_output_root: str | None = None
-    scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
-    semantic_output_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
-    semantic_output_catalog_name: str | None = None
-    normalize_output_root: str | None = None
-    semantic_output_root: str | None = None
-    semantic_cache_overrides: Mapping[str, CachePolicy] = field(default_factory=dict)
-    cdf_enabled: bool = False
+    ast: TableSourceConfig = msgspec.field(default_factory=_default_ast_source_config)
+    bytecode: TableSourceConfig = msgspec.field(default_factory=_default_bytecode_source_config)
+    extract_output: ExtractOutputConfig = msgspec.field(default_factory=ExtractOutputConfig)
+    semantic_output: SemanticOutputConfig = msgspec.field(default_factory=SemanticOutputConfig)
     cdf_cursor_store: CdfCursorStore | None = None
-    dataset_templates: Mapping[str, DatasetLocation] = field(default_factory=dict)
+    dataset_templates: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class FeatureGatesConfig:
+class FeatureGatesConfig(StructBaseStrict, frozen=True):
     """Feature toggle configuration."""
 
     enable_ident_normalization: bool = False
@@ -3333,15 +3452,47 @@ class FeatureGatesConfig:
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
     enable_async_udfs: bool = False
+    enable_delta_cdf: bool = False
     enable_delta_session_defaults: bool = False
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
+    enable_metrics: bool = False
+    enable_tracing: bool = False
     enforce_preflight: bool = True
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for feature gate settings.
 
-@dataclass(frozen=True)
-class DiagnosticsConfig:
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing feature gate values.
+        """
+        return {
+            "enable_ident_normalization": self.enable_ident_normalization,
+            "force_disable_ident_normalization": self.force_disable_ident_normalization,
+            "enable_url_table": self.enable_url_table,
+            "cache_enabled": self.cache_enabled,
+            "enable_cache_manager": self.enable_cache_manager,
+            "enable_function_factory": self.enable_function_factory,
+            "enable_schema_registry": self.enable_schema_registry,
+            "enable_expr_planners": self.enable_expr_planners,
+            "enable_schema_evolution_adapter": self.enable_schema_evolution_adapter,
+            "enable_udfs": self.enable_udfs,
+            "enable_async_udfs": self.enable_async_udfs,
+            "enable_delta_cdf": self.enable_delta_cdf,
+            "enable_delta_session_defaults": self.enable_delta_session_defaults,
+            "enable_delta_querybuilder": self.enable_delta_querybuilder,
+            "enable_delta_data_checker": self.enable_delta_data_checker,
+            "enable_delta_plan_codecs": self.enable_delta_plan_codecs,
+            "enable_metrics": self.enable_metrics,
+            "enable_tracing": self.enable_tracing,
+            "enforce_preflight": self.enforce_preflight,
+        }
+
+
+class DiagnosticsConfig(StructBaseStrict, frozen=True):
     """Diagnostics, explain, and observability settings."""
 
     capture_explain: bool = True
@@ -3349,20 +3500,18 @@ class DiagnosticsConfig:
     explain_analyze: bool = True
     explain_analyze_threshold_ms: float | None = None
     explain_analyze_level: str | None = None
-    explain_collector: _DataFusionExplainCollector | None = field(
+    explain_collector: _DataFusionExplainCollector | None = msgspec.field(
         default_factory=_DataFusionExplainCollector
     )
     capture_plan_artifacts: bool = True
     capture_semantic_diff: bool = False
     emit_semantic_quality_diagnostics: bool = True
-    plan_collector: _DataFusionPlanCollector | None = field(
+    plan_collector: _DataFusionPlanCollector | None = msgspec.field(
         default_factory=_DataFusionPlanCollector
     )
     diagnostics_sink: DiagnosticsSink | None = None
-    labeled_explains: list[dict[str, object]] = field(default_factory=list)
-    enable_metrics: bool = False
+    labeled_explains: list[dict[str, object]] = msgspec.field(default_factory=list)
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
-    enable_tracing: bool = False
     tracing_hook: Callable[[SessionContext], None] | None = None
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     substrait_validation: bool = False
@@ -3370,8 +3519,7 @@ class DiagnosticsConfig:
     strict_determinism: bool = False
 
 
-@dataclass(frozen=True)
-class PolicyBundleConfig:
+class PolicyBundleConfig(StructBaseStrict, frozen=True):
     """Policy, hook, and cache configuration."""
 
     config_policy_name: str | None = "symtable"
@@ -3382,10 +3530,10 @@ class PolicyBundleConfig:
     sql_policy_name: str | None = "write"
     sql_policy: DataFusionSqlPolicy | None = None
     param_identifier_allowlist: tuple[str, ...] = ()
-    external_table_options: Mapping[str, object] = field(default_factory=dict)
+    external_table_options: Mapping[str, object] = msgspec.field(default_factory=dict)
     write_policy: DataFusionWritePolicy | None = None
-    settings_overrides: Mapping[str, str] = field(default_factory=dict)
-    feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
+    settings_overrides: Mapping[str, str] = msgspec.field(default_factory=dict)
+    feature_gates: DataFusionFeatureGates = msgspec.field(default_factory=DataFusionFeatureGates)
     physical_rulepack_enabled: bool = True
     join_policy: DataFusionJoinPolicy | None = None
     cache_max_columns: int | None = 64
@@ -3394,7 +3542,7 @@ class PolicyBundleConfig:
     expr_planner_names: tuple[str, ...] = ("codeanatomy_domain",)
     expr_planner_hook: Callable[[SessionContext], None] | None = None
     physical_expr_adapter_factory: object | None = None
-    schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
+    schema_adapter_factories: Mapping[str, object] = msgspec.field(default_factory=dict)
     udf_catalog_policy: Literal["default", "strict"] = "default"
     async_udf_timeout_ms: int | None = None
     async_udf_batch_size: int | None = None
@@ -3403,7 +3551,9 @@ class PolicyBundleConfig:
     delta_store_policy: DeltaStorePolicy | None = None
     delta_protocol_support: DeltaProtocolSupport | None = None
     delta_protocol_mode: Literal["error", "warn", "ignore"] = "error"
-    diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    diskcache_profile: DiskCacheProfile | None = msgspec.field(
+        default_factory=default_diskcache_profile
+    )
     cache_output_root: str | None = None
     runtime_artifact_cache_enabled: bool = False
     runtime_artifact_cache_root: str | None = None
@@ -3439,7 +3589,7 @@ class PolicyBundleConfig:
         }
         ttl_seconds = {
             str(kind): profile.ttl_seconds.get(kind)
-            for kind in sorted(profile.ttl_seconds, key=lambda item: str(item))
+            for kind in sorted(profile.ttl_seconds, key=str)
         }
         return {
             "root": str(profile.root),
@@ -3485,7 +3635,7 @@ class PolicyBundleConfig:
             str(key): str(value) for key, value in self.settings_overrides.items()
         }
         schema_hardening_payload = (
-            _map_entries(self.schema_hardening.settings())
+            self.schema_hardening.fingerprint_payload()
             if self.schema_hardening is not None
             else None
         )
@@ -3507,7 +3657,7 @@ class PolicyBundleConfig:
                 self.write_policy.fingerprint() if self.write_policy is not None else None
             ),
             "settings_overrides": settings_overrides,
-            "feature_gates": dict(self.feature_gates.settings()),
+            "feature_gates": self.feature_gates.fingerprint_payload(),
             "physical_rulepack_enabled": self.physical_rulepack_enabled,
             "join_policy": self.join_policy.fingerprint() if self.join_policy is not None else None,
             "cache_max_columns": self.cache_max_columns,
@@ -3567,8 +3717,7 @@ class PolicyBundleConfig:
         return config_fingerprint(self.fingerprint_payload())
 
 
-@dataclass(frozen=True)
-class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
+class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):
     """DataFusion runtime configuration.
 
     Identifier normalization is disabled by default to preserve case-sensitive
@@ -3577,54 +3726,19 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     """
 
     architecture_version: str = "v2"
-    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
-    catalog: CatalogConfig = field(default_factory=CatalogConfig)
-    data_sources: DataSourceConfig = field(default_factory=DataSourceConfig)
-    features: FeatureGatesConfig = field(default_factory=FeatureGatesConfig)
-    diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
-    policies: PolicyBundleConfig = field(default_factory=PolicyBundleConfig)
-    view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
+    execution: ExecutionConfig = msgspec.field(default_factory=ExecutionConfig)
+    catalog: CatalogConfig = msgspec.field(default_factory=CatalogConfig)
+    data_sources: DataSourceConfig = msgspec.field(default_factory=DataSourceConfig)
+    features: FeatureGatesConfig = msgspec.field(default_factory=FeatureGatesConfig)
+    diagnostics: DiagnosticsConfig = msgspec.field(default_factory=DiagnosticsConfig)
+    policies: PolicyBundleConfig = msgspec.field(default_factory=PolicyBundleConfig)
+    view_registry: DataFusionViewRegistry | None = msgspec.field(
+        default_factory=DataFusionViewRegistry
+    )
     plan_cache: PlanCache | None = None
     plan_proto_cache: PlanProtoCache | None = None
-    udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
-    delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
-
-    def __getattr__(self, name: str) -> object:
-        """Resolve configuration attributes from composed profile sections.
-
-        Returns
-        -------
-        object
-            Attribute value when found on a profile section.
-
-        Raises
-        ------
-        AttributeError
-            Raised when the attribute is not present on any profile section.
-        """
-        for section in (
-            self.execution,
-            self.catalog,
-            self.data_sources,
-            self.features,
-            self.diagnostics,
-            self.policies,
-        ):
-            value = getattr(section, name, _MISSING)
-            if value is not _MISSING:
-                return value
-        for prefix, source in (
-            ("ast_", self.data_sources.ast),
-            ("bytecode_", self.data_sources.bytecode),
-        ):
-            if not name.startswith(prefix):
-                continue
-            suffix = name[len(prefix) :]
-            value = getattr(source, suffix, _MISSING)
-            if value is not _MISSING:
-                return value
-        msg = f"{type(self).__name__!s} has no attribute {name!r}"
-        raise AttributeError(msg)
+    udf_catalog_cache: dict[int, UdfCatalog] = msgspec.field(default_factory=dict)
+    delta_commit_runs: dict[str, DataFusionRun] = msgspec.field(default_factory=dict)
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:
@@ -3690,7 +3804,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             object.__setattr__(
                 self,
                 "diagnostics",
-                replace(self.diagnostics, diagnostics_sink=diagnostics_sink),
+                msgspec.structs.replace(
+                    self.diagnostics,
+                    diagnostics_sink=diagnostics_sink,
+                ),
             )
         async_policy = self._validate_async_udf_policy()
         if not async_policy["valid"]:
@@ -3860,9 +3977,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Session context configured for Delta operations.
         """
         if storage_options:
-            return replace(
+            return msgspec.structs.replace(
                 self,
-                execution=replace(self.execution, share_context=False),
+                execution=msgspec.structs.replace(
+                    self.execution,
+                    share_context=False,
+                ),
             ).delta_runtime_ctx()
         return self.delta_runtime_ctx()
 
@@ -4183,7 +4303,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 policy.allow_dml,
                 policy.allow_statements,
             )
-            installers.physical_config_installer(ctx, self.physical_rulepack_enabled)
+            installers.physical_config_installer(ctx, self.policies.physical_rulepack_enabled)
             installers.rule_installer(ctx)
             installers.physical_installer(ctx)
         except TypeError as exc:
@@ -4196,7 +4316,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "UdfCatalog requires information_schema to be enabled."
             raise ValueError(msg)
         introspector = self._schema_introspector(ctx)
-        if self.udf_catalog_policy == "strict":
+        if self.policies.udf_catalog_policy == "strict":
             catalog = get_strict_udf_catalog(introspector=introspector)
         else:
             catalog = get_default_udf_catalog(introspector=introspector)
@@ -4238,7 +4358,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "datafusion_udf_validation_v1",
                     {
                         "event_time_unix_ms": int(time.time() * 1000),
-                        "udf_catalog_policy": self.udf_catalog_policy,
+                        "udf_catalog_policy": self.policies.udf_catalog_policy,
                         "missing_udfs": sorted(missing),
                         "missing_count": len(missing),
                     },
@@ -4499,15 +4619,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         catalog_location, catalog_format = self._effective_catalog_autoload()
         if catalog_location is None and catalog_format is None:
             return
+        ast = self.data_sources.ast
+        bytecode = self.data_sources.bytecode
         introspector = self._schema_introspector(ctx)
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
             "catalog_auto_load_location": catalog_location,
             "catalog_auto_load_format": catalog_format,
-            "ast_catalog_location": self.ast_catalog_location,
-            "ast_catalog_format": self.ast_catalog_format,
-            "bytecode_catalog_location": self.bytecode_catalog_location,
-            "bytecode_catalog_format": self.bytecode_catalog_format,
+            "ast_catalog_location": ast.catalog_location,
+            "ast_catalog_format": ast.catalog_format,
+            "bytecode_catalog_location": bytecode.catalog_location,
+            "bytecode_catalog_format": bytecode.catalog_format,
         }
         try:
             tables = [
@@ -4604,47 +4726,46 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         template = self._dataset_template("ast_files_v1")
         if template is not None:
             return template
-        if self.ast_external_location and self.ast_delta_location:
+        ast = self.data_sources.ast
+        if ast.external_location and ast.delta_location:
             msg = "AST dataset config cannot set both external and delta locations."
             raise ValueError(msg)
-        if self.ast_delta_location:
-            delta_scan = self.ast_delta_scan
+        if ast.delta_location:
+            delta_scan = ast.delta_scan
             from datafusion_engine.dataset.registry import DatasetLocation
             from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
 
             return DatasetLocation(
-                path=self.ast_delta_location,
+                path=ast.delta_location,
                 format="delta",
-                delta_version=self.ast_delta_version,
-                delta_timestamp=self.ast_delta_timestamp,
-                delta_constraints=self.ast_delta_constraints,
+                delta_version=ast.delta_version,
+                delta_timestamp=ast.delta_timestamp,
+                delta_constraints=ast.delta_constraints,
                 delta_scan=delta_scan,
                 dataset_spec=extract_dataset_spec("ast_files_v1"),
             )
-        if self.ast_external_location:
+        if ast.external_location:
             from datafusion_engine.dataset.registry import DatasetLocation
             from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
 
             scan = DataFusionScanOptions(
-                partition_cols=self.ast_external_partition_cols,
-                file_sort_order=self.ast_external_ordering,
-                schema_force_view_types=self.ast_external_schema_force_view_types,
-                skip_arrow_metadata=self.ast_external_skip_arrow_metadata,
+                partition_cols=ast.external_partition_cols,
+                file_sort_order=ast.external_ordering,
+                schema_force_view_types=ast.external_schema_force_view_types,
+                skip_arrow_metadata=ast.external_skip_arrow_metadata,
                 listing_table_factory_infer_partitions=(
-                    self.ast_external_listing_table_factory_infer_partitions
+                    ast.external_listing_table_factory_infer_partitions
                 ),
-                listing_table_ignore_subdirectory=(
-                    self.ast_external_listing_table_ignore_subdirectory
-                ),
-                collect_statistics=self.ast_external_collect_statistics,
-                meta_fetch_concurrency=self.ast_external_meta_fetch_concurrency,
-                list_files_cache_ttl=self.ast_external_list_files_cache_ttl,
-                list_files_cache_limit=self.ast_external_list_files_cache_limit,
+                listing_table_ignore_subdirectory=(ast.external_listing_table_ignore_subdirectory),
+                collect_statistics=ast.external_collect_statistics,
+                meta_fetch_concurrency=ast.external_meta_fetch_concurrency,
+                list_files_cache_ttl=ast.external_list_files_cache_ttl,
+                list_files_cache_limit=ast.external_list_files_cache_limit,
             )
             return DatasetLocation(
-                path=self.ast_external_location,
-                format=self.ast_external_format,
-                datafusion_provider=self.ast_external_provider,
+                path=ast.external_location,
+                format=ast.external_format,
+                datafusion_provider=ast.external_provider,
                 datafusion_scan=scan,
                 dataset_spec=extract_dataset_spec("ast_files_v1"),
             )
@@ -4679,47 +4800,48 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         template = self._dataset_template("bytecode_files_v1")
         if template is not None:
             return template
-        if self.bytecode_external_location and self.bytecode_delta_location:
+        bytecode = self.data_sources.bytecode
+        if bytecode.external_location and bytecode.delta_location:
             msg = "Bytecode dataset config cannot set both external and delta locations."
             raise ValueError(msg)
-        if self.bytecode_delta_location:
-            delta_scan = self.bytecode_delta_scan
+        if bytecode.delta_location:
+            delta_scan = bytecode.delta_scan
             from datafusion_engine.dataset.registry import DatasetLocation
             from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
 
             return DatasetLocation(
-                path=self.bytecode_delta_location,
+                path=bytecode.delta_location,
                 format="delta",
-                delta_version=self.bytecode_delta_version,
-                delta_timestamp=self.bytecode_delta_timestamp,
-                delta_constraints=self.bytecode_delta_constraints,
+                delta_version=bytecode.delta_version,
+                delta_timestamp=bytecode.delta_timestamp,
+                delta_constraints=bytecode.delta_constraints,
                 delta_scan=delta_scan,
                 dataset_spec=extract_dataset_spec("bytecode_files_v1"),
             )
-        if self.bytecode_external_location:
+        if bytecode.external_location:
             from datafusion_engine.dataset.registry import DatasetLocation
             from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
 
             scan = DataFusionScanOptions(
-                partition_cols=self.bytecode_external_partition_cols,
-                file_sort_order=self.bytecode_external_ordering,
-                schema_force_view_types=self.bytecode_external_schema_force_view_types,
-                skip_arrow_metadata=self.bytecode_external_skip_arrow_metadata,
+                partition_cols=bytecode.external_partition_cols,
+                file_sort_order=bytecode.external_ordering,
+                schema_force_view_types=bytecode.external_schema_force_view_types,
+                skip_arrow_metadata=bytecode.external_skip_arrow_metadata,
                 listing_table_factory_infer_partitions=(
-                    self.bytecode_external_listing_table_factory_infer_partitions
+                    bytecode.external_listing_table_factory_infer_partitions
                 ),
                 listing_table_ignore_subdirectory=(
-                    self.bytecode_external_listing_table_ignore_subdirectory
+                    bytecode.external_listing_table_ignore_subdirectory
                 ),
-                collect_statistics=self.bytecode_external_collect_statistics,
-                meta_fetch_concurrency=self.bytecode_external_meta_fetch_concurrency,
-                list_files_cache_ttl=self.bytecode_external_list_files_cache_ttl,
-                list_files_cache_limit=self.bytecode_external_list_files_cache_limit,
+                collect_statistics=bytecode.external_collect_statistics,
+                meta_fetch_concurrency=bytecode.external_meta_fetch_concurrency,
+                list_files_cache_ttl=bytecode.external_list_files_cache_ttl,
+                list_files_cache_limit=bytecode.external_list_files_cache_limit,
             )
             return DatasetLocation(
-                path=self.bytecode_external_location,
-                format=self.bytecode_external_format,
-                datafusion_provider=self.bytecode_external_provider,
+                path=bytecode.external_location,
+                format=bytecode.external_format,
+                datafusion_provider=bytecode.external_provider,
                 datafusion_scan=scan,
                 dataset_spec=extract_dataset_spec("bytecode_files_v1"),
             )
@@ -4758,16 +4880,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         DatasetLocation | None
             Extract dataset location when configured.
         """
-        template = self._dataset_template(name)
-        if template is not None:
-            return template
-        location = extract_output_locations_for_profile(self).get(name)
+        location = self._dataset_template(name)
+        if location is None:
+            location = extract_output_locations_for_profile(self).get(name)
         if location is None:
             if name == "ast_files_v1":
-                return self._ast_dataset_location()
-            if name == "bytecode_files_v1":
-                return self._bytecode_dataset_location()
-            location = self.data_sources.scip_dataset_locations.get(name)
+                location = self._ast_dataset_location()
+            elif name == "bytecode_files_v1":
+                location = self._bytecode_dataset_location()
+            else:
+                location = self.data_sources.extract_output.scip_dataset_locations.get(name)
         if location is None:
             return None
         if location.dataset_spec is None and location.table_spec is None:
@@ -4776,8 +4898,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             try:
                 spec = extract_dataset_spec(name)
             except KeyError:
-                return location
-            return replace(location, dataset_spec=spec)
+                spec = None
+            if spec is not None:
+                location = replace(location, dataset_spec=spec)
         return location
 
     def dataset_location(self, name: str) -> DatasetLocation | None:
@@ -4821,12 +4944,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return location
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
-        if not self.data_sources.scip_dataset_locations:
+        scip_locations = self.data_sources.extract_output.scip_dataset_locations
+        if not scip_locations:
             return
         from datafusion_engine.io.adapter import DataFusionIOAdapter
 
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
-        for name, location in sorted(self.data_sources.scip_dataset_locations.items()):
+        for name, location in sorted(scip_locations.items()):
             resolved = location
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(name)
@@ -4964,7 +5088,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_scip_datasets_v1", payload)
 
     def _validate_ast_catalog_autoload(self, ctx: SessionContext) -> None:
-        if self.ast_catalog_location is None and self.ast_catalog_format is None:
+        ast = self.data_sources.ast
+        if ast.catalog_location is None and ast.catalog_format is None:
             return
         try:
             ctx.table("ast_files_v1")
@@ -4980,7 +5105,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise ValueError(msg) from exc
 
     def _validate_bytecode_catalog_autoload(self, ctx: SessionContext) -> None:
-        if self.bytecode_catalog_location is None and self.bytecode_catalog_format is None:
+        bytecode = self.data_sources.bytecode
+        if bytecode.catalog_location is None and bytecode.catalog_format is None:
             return
         try:
             ctx.table("bytecode_files_v1")
@@ -5271,8 +5397,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ast_registration: bool,
         bytecode_registration: bool,
     ) -> None:
+        ast = self.data_sources.ast
+        bytecode = self.data_sources.bytecode
         if not ast_registration and (
-            self.ast_catalog_location is not None or self.ast_catalog_format is not None
+            ast.catalog_location is not None or ast.catalog_format is not None
         ):
             from datafusion_engine.io.adapter import DataFusionIOAdapter
 
@@ -5281,7 +5409,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 adapter.deregister_table("ast_files_v1")
             self._validate_ast_catalog_autoload(ctx)
         if not bytecode_registration and (
-            self.bytecode_catalog_location is not None or self.bytecode_catalog_format is not None
+            bytecode.catalog_location is not None or bytecode.catalog_format is not None
         ):
             from datafusion_engine.io.adapter import DataFusionIOAdapter
 
@@ -5860,7 +5988,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when tracing is enabled without a hook.
         """
-        if not self.diagnostics.enable_tracing:
+        if not self.features.enable_tracing:
             return
         if self.diagnostics.tracing_hook is None:
             module = _resolve_extension_module(required_attr="install_tracing")
@@ -6311,7 +6439,7 @@ def collect_datafusion_metrics(
     Mapping[str, object] | None
         Metrics payload when enabled and available.
     """
-    if not profile.diagnostics.enable_metrics or profile.diagnostics.metrics_collector is None:
+    if not profile.features.enable_metrics or profile.diagnostics.metrics_collector is None:
         return None
     return profile.diagnostics.metrics_collector()
 
@@ -6422,7 +6550,7 @@ def collect_datafusion_traces(
     Mapping[str, object] | None
         Tracing payload when enabled and available.
     """
-    if not profile.diagnostics.enable_tracing or profile.diagnostics.tracing_collector is None:
+    if not profile.features.enable_tracing or profile.diagnostics.tracing_collector is None:
         return None
     return profile.diagnostics.tracing_collector()
 

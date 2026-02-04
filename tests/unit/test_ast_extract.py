@@ -43,7 +43,7 @@ def test_ast_extract_enriched_outputs() -> None:
         "def baz(x):\n"
         "    return x\n"
         "\n"
-        "x = 1  # ignore\n"
+        "x = 1  # type: ignore\n"
     )
     repo_files = pa.table(
         {

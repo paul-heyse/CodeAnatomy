@@ -776,7 +776,7 @@ class WritePipeline:
         normalized_destination = str(destination)
         locations = [
             sorted(extract_output_locations_for_profile(self.runtime_profile).items()),
-            sorted(self.runtime_profile.data_sources.scip_dataset_locations.items()),
+            sorted(self.runtime_profile.data_sources.extract_output.scip_dataset_locations.items()),
             sorted(normalize_dataset_locations_for_profile(self.runtime_profile).items()),
             sorted(semantic_output_locations_for_profile(self.runtime_profile).items()),
         ]
@@ -1918,7 +1918,7 @@ def _validate_delta_protocol_support(
     log_storage_options: Mapping[str, str] | None,
     gate: DeltaFeatureGate | None,
 ) -> None:
-    if runtime_profile is None or runtime_profile.delta_protocol_support is None:
+    if runtime_profile is None or runtime_profile.policies.delta_protocol_support is None:
         return
     from datafusion_engine.delta.protocol import delta_protocol_compatibility
     from serde_msgspec import to_builtins
@@ -1930,15 +1930,18 @@ def _validate_delta_protocol_support(
         log_storage_options=log_storage_options,
         gate=gate,
     )
-    compatibility = delta_protocol_compatibility(snapshot, runtime_profile.delta_protocol_support)
+    compatibility = delta_protocol_compatibility(
+        snapshot,
+        runtime_profile.policies.delta_protocol_support,
+    )
     compatibility_payload = cast(
         "dict[str, object]",
         to_builtins(compatibility, str_keys=True),
     )
     compatible = compatibility.compatible
-    if compatible is True or runtime_profile.delta_protocol_mode == "ignore":
+    if compatible is True or runtime_profile.policies.delta_protocol_mode == "ignore":
         return
-    if runtime_profile.delta_protocol_mode == "warn":
+    if runtime_profile.policies.delta_protocol_mode == "warn":
         from datafusion_engine.lineage.diagnostics import record_artifact
 
         record_artifact(

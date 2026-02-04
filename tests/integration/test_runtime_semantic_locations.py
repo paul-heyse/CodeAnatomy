@@ -9,6 +9,7 @@ import pyarrow as pa
 from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     DataSourceConfig,
+    SemanticOutputConfig,
     normalize_dataset_locations_for_profile,
 )
 from semantics.catalog.dataset_specs import dataset_spec
@@ -30,7 +31,9 @@ def _as_schema(value: object) -> pa.Schema:
 def test_normalize_locations_use_semantic_ir(tmp_path: Path) -> None:
     """Normalize output locations are derived from IR-emitted dataset rows."""
     profile = DataFusionRuntimeProfile(
-        data_sources=DataSourceConfig(normalize_output_root=str(tmp_path)),
+        data_sources=DataSourceConfig(
+            semantic_output=SemanticOutputConfig(normalize_output_root=str(tmp_path))
+        ),
     )
     locations = normalize_dataset_locations_for_profile(profile)
 

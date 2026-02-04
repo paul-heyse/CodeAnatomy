@@ -338,8 +338,16 @@ def _semantic_cdf_policy(row: SemanticDatasetRow) -> DeltaCdfPolicy | None:
     return DeltaCdfPolicy(required=True, allow_out_of_range=False)
 
 
+def _effective_materialization(row: SemanticDatasetRow) -> str | None:
+    if row.materialization is not None:
+        return row.materialization
+    if row.role == "input":
+        return None
+    return "delta"
+
+
 def _semantic_maintenance_policy(row: SemanticDatasetRow) -> DeltaMaintenancePolicy | None:
-    if row.materialization != "delta":
+    if _effective_materialization(row) != "delta":
         return None
     zorder_cols = row.merge_keys if row.merge_keys else tuple(row.join_keys)
     zorder_when = "after_partition_complete" if zorder_cols else "never"
@@ -354,7 +362,7 @@ def _semantic_maintenance_policy(row: SemanticDatasetRow) -> DeltaMaintenancePol
 
 
 def _semantic_write_policy(row: SemanticDatasetRow) -> DeltaWritePolicy | None:
-    if row.materialization != "delta":
+    if _effective_materialization(row) != "delta":
         return None
     return write_policy_from_row(row)
 
@@ -399,13 +407,14 @@ def build_dataset_spec(row: SemanticDatasetRow) -> DatasetSpec:
     """
     table_spec = _build_table_spec(row)
     contract_spec = make_contract_spec(table_spec=table_spec)
+    materialization = _effective_materialization(row)
     registration = DatasetRegistration(
         contract_spec=contract_spec,
         delta_cdf_policy=_semantic_cdf_policy(row),
         delta_maintenance_policy=_semantic_maintenance_policy(row),
         delta_write_policy=_semantic_write_policy(row),
         delta_schema_policy=DeltaSchemaPolicy(schema_mode="merge", column_mapping_mode="name")
-        if row.materialization == "delta"
+        if materialization == "delta"
         else None,
         delta_feature_gate=None,
         metadata_spec=_build_metadata_spec(row),

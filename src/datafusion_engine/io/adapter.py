@@ -405,11 +405,11 @@ class DataFusionIOAdapter:
         profile = self.profile
         if profile is None:
             return None
-        schema = profile.view_schema_name
+        schema = profile.catalog.view_schema_name
         if schema is None:
             return None
-        catalog = profile.view_catalog_name or profile.default_catalog
-        if schema == profile.default_schema and catalog == profile.default_catalog:
+        catalog = profile.catalog.view_catalog_name or profile.catalog.default_catalog
+        if schema == profile.catalog.default_schema and catalog == profile.catalog.default_catalog:
             return None
         return catalog, schema
 

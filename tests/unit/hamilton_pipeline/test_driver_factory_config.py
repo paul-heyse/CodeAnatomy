@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
 import pytest
 
+from core_types import JsonValue
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.driver_factory import ExecutionMode, _resolve_config_payload
 from relspec.execution_plan import ExecutionPlan
@@ -60,15 +62,15 @@ def test_resolve_config_payload_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     """Ensure config payload defaults are applied consistently."""
     monkeypatch.setenv("CODEANATOMY_RUNTIME_PROFILE", "profile-x")
     payload = _resolve_config_payload(
-        {"hamilton_tags": {"foo": "bar"}},
+        {"hamilton": {"tags": {"foo": "bar"}}},
         profile_spec=_stub_profile_spec(),
         plan=_stub_plan(),
         execution_mode=None,
     )
     assert payload["runtime_profile_name_override"] == "profile-x"
     assert payload["enable_dynamic_scan_units"] is True
-    tags = payload["hamilton_tags"]
-    assert isinstance(tags, dict)
+    hamilton_payload = cast("Mapping[str, JsonValue]", payload["hamilton"])
+    tags = cast("Mapping[str, JsonValue]", hamilton_payload["tags"])
     assert tags["plan_signature"] == "plan123"
 
 

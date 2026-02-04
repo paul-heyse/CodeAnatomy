@@ -595,7 +595,7 @@ def _cdf_changed_inputs(
     from storage.deltalake import delta_cdf_enabled, delta_table_version
 
     _ = ctx
-    cursor_store = runtime_config.cdf_cursor_store or runtime_profile.cdf_cursor_store
+    cursor_store = runtime_config.cdf_cursor_store or runtime_profile.data_sources.cdf_cursor_store
     if cursor_store is None:
         return None
     if not isinstance(cursor_store, CdfCursorStore):
@@ -1871,7 +1871,7 @@ def _emit_semantic_quality_diagnostics(
     schema_policy: SchemaEvolutionPolicy,
     requested_outputs: Collection[str] | None,
 ) -> None:
-    if not runtime_profile.emit_semantic_quality_diagnostics:
+    if not runtime_profile.diagnostics.emit_semantic_quality_diagnostics:
         return
     context = _build_semantic_diagnostics_context(
         ctx,

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, cast
 
+import msgspec
 from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
 
@@ -124,15 +125,19 @@ def _apply_cache_overrides(
     options: PipelineExecutionOptions,
 ) -> None:
     config = options.config
-    cache_path_value = config.get("cache_path")
-    if not isinstance(cache_path_value, str) or not cache_path_value.strip():
-        cache_path_value = config.get("hamilton_cache_path")
+    cache_config = config.get("cache")
+    cache_payload = (
+        cast("Mapping[str, JsonValue]", cache_config)
+        if isinstance(cache_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    cache_path_value = cache_payload.get("path")
     if isinstance(cache_path_value, str) and cache_path_value.strip():
         execute_overrides.setdefault("cache_path", cache_path_value.strip())
-    cache_log_value = config.get("cache_log_to_file")
+    cache_log_value = cache_payload.get("log_to_file")
     if isinstance(cache_log_value, bool):
         execute_overrides.setdefault("cache_log_to_file", cache_log_value)
-    cache_policy_value = config.get("cache_policy_profile")
+    cache_policy_value = cache_payload.get("policy_profile")
     if isinstance(cache_policy_value, str) and cache_policy_value.strip():
         execute_overrides.setdefault("cache_policy_profile", cache_policy_value.strip())
 
@@ -229,9 +234,9 @@ def _record_cache_run_summary(
     profile = profile_spec.datafusion
     cache_root = _cache_output_root_for_options(options)
     if cache_root is not None and profile.policies.cache_output_root is None:
-        profile = replace(
+        profile = msgspec.structs.replace(
             profile,
-            policies=replace(
+            policies=msgspec.structs.replace(
                 profile.policies,
                 cache_output_root=cache_root,
             ),

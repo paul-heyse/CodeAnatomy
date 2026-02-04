@@ -203,8 +203,9 @@ class TestFindFilesWithPattern:
         """Test timeout handling returns empty results."""
         from tools.cq.search import adapter as adapter_module
 
-        def _raise_timeout(*args: object, **kwargs: object) -> list[object]:
-            raise TimeoutError("timeout")
+        def _raise_timeout(*_args: object, **_kwargs: object) -> list[object]:
+            msg = "timeout"
+            raise TimeoutError(msg)
 
         monkeypatch.setattr(adapter_module, "search_sync_with_timeout", _raise_timeout)
         limits = SearchLimits(timeout_seconds=0.001)

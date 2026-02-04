@@ -6,26 +6,11 @@
       "policy_profile": "default"
     }
   },
-  "cache_policy_profile": {
-    "location": "<CONFIG_DIR>/codeanatomy.toml",
-    "source": "config_file",
-    "value": "default"
-  },
-  "output_dir": {
-    "location": "CODEANATOMY_OUTPUT_DIR",
-    "source": "env",
-    "value": "/tmp/out"
-  },
   "plan": {
     "location": "<CONFIG_DIR>/codeanatomy.toml",
     "source": "config_file",
     "value": {
       "allow_partial": true
     }
-  },
-  "plan_allow_partial": {
-    "location": "<CONFIG_DIR>/codeanatomy.toml",
-    "source": "config_file",
-    "value": true
   }
 }

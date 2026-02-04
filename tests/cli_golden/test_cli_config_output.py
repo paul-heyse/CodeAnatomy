@@ -30,7 +30,6 @@ def _capture_with_sources(
     config_path = tmp_path / "codeanatomy.toml"
     _write_config(config_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CODEANATOMY_OUTPUT_DIR", "/tmp/out")
 
     exit_code = show_config(with_sources=True, run_context=None)
     assert exit_code == 0

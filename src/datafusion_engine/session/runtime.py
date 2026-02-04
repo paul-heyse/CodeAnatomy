@@ -685,8 +685,7 @@ _AST_OPTIONAL_VIEW_FUNCTIONS: dict[str, tuple[str, ...]] = {
 }
 
 
-@dataclass(frozen=True)
-class DataFusionConfigPolicy(FingerprintableConfig):
+class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
     """Configuration policy for DataFusion SessionConfig."""
 
     settings: Mapping[str, str]
@@ -732,8 +731,7 @@ class DataFusionConfigPolicy(FingerprintableConfig):
         return config
 
 
-@dataclass(frozen=True)
-class DataFusionFeatureGates:
+class DataFusionFeatureGates(StructBaseStrict, frozen=True):
     """Feature gate toggles for DataFusion optimizer behavior."""
 
     enable_dynamic_filter_pushdown: bool = True
@@ -798,8 +796,7 @@ class DataFusionFeatureGates:
         return config_fingerprint(self.fingerprint_payload())
 
 
-@dataclass(frozen=True)
-class DataFusionJoinPolicy(FingerprintableConfig):
+class DataFusionJoinPolicy(StructBaseStrict, frozen=True):
     """Join algorithm preferences for DataFusion."""
 
     enable_hash_join: bool = True
@@ -868,8 +865,7 @@ class DataFusionJoinPolicy(FingerprintableConfig):
         return settings
 
 
-@dataclass(frozen=True)
-class DataFusionSettingsContract:
+class DataFusionSettingsContract(StructBaseStrict, frozen=True):
     """Settings contract for DataFusion session configuration."""
 
     settings: Mapping[str, str]
@@ -889,8 +885,7 @@ class DataFusionSettingsContract:
         return config
 
 
-@dataclass(frozen=True)
-class SchemaHardeningProfile:
+class SchemaHardeningProfile(StructBaseStrict, frozen=True):
     """Schema-stability settings for DataFusion SessionConfig."""
 
     enable_view_types: bool = False

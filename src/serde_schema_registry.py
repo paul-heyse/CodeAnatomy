@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -38,8 +40,9 @@ from serde_artifacts import (
 from serde_msgspec import dumps_msgpack, json_default
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from utils.hashing import hash_sha256_hex
+from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
 
-SCHEMA_TYPES = (
+_SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     PlanArtifacts,
     PlanArtifactRow,
     WriteArtifactRow,
@@ -70,7 +73,7 @@ SCHEMA_TYPES = (
     ParquetWriterPolicy,
 )
 
-_SCHEMA_TAGS: dict[type[object], dict[str, object]] = {
+_SCHEMA_TAGS: dict[type[msgspec.Struct], dict[str, object]] = {
     PlanArtifacts: {"x-codeanatomy-domain": "artifact", "x-codeanatomy-scope": "plan"},
     PlanArtifactRow: {"x-codeanatomy-domain": "artifact", "x-codeanatomy-scope": "plan_row"},
     WriteArtifactRow: {"x-codeanatomy-domain": "artifact", "x-codeanatomy-scope": "write_row"},
@@ -153,8 +156,107 @@ _SCHEMA_TAGS: dict[type[object], dict[str, object]] = {
 }
 
 
-def _schema_hook(obj: type[object]) -> dict[str, object]:
-    payload = dict(_SCHEMA_TAGS.get(obj, {}))
+@dataclass(frozen=True)
+class SchemaTypeSpec:
+    """Registry entry for msgspec schema types."""
+
+    schema_type: type[msgspec.Struct]
+    tags: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, SchemaTypeSpec]):
+    """Registry for msgspec schema types and tags."""
+
+    _entries: MutableRegistry[str, SchemaTypeSpec] = field(default_factory=MutableRegistry)
+
+    def register(self, key: str, value: SchemaTypeSpec) -> None:
+        """Register a schema type spec by name."""
+        self._entries.register(key, value, overwrite=True)
+
+    def get(self, key: str) -> SchemaTypeSpec | None:
+        """Return a schema type spec by name.
+
+        Returns
+        -------
+        SchemaTypeSpec | None
+            Schema type spec when present.
+        """
+        return self._entries.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a schema type is registered.
+
+        Returns
+        -------
+        bool
+            ``True`` when the schema type is registered.
+        """
+        return key in self._entries
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered schema type names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator of registered schema type names.
+        """
+        return iter(self._entries)
+
+    def __len__(self) -> int:
+        """Return the count of registered schema types.
+
+        Returns
+        -------
+        int
+            Number of registered schema types.
+        """
+        return len(self._entries)
+
+    def snapshot(self) -> Mapping[str, SchemaTypeSpec]:
+        """Return a snapshot of the registry entries.
+
+        Returns
+        -------
+        Mapping[str, SchemaTypeSpec]
+            Snapshot of registry entries.
+        """
+        return self._entries.snapshot()
+
+    def restore(self, snapshot: Mapping[str, SchemaTypeSpec]) -> None:
+        """Restore registry entries from a snapshot."""
+        self._entries.restore(snapshot)
+
+
+_SCHEMA_REGISTRY = SchemaTypeRegistry()
+for _schema_type in _SCHEMA_TYPES:
+    _SCHEMA_REGISTRY.register(
+        _schema_type.__name__,
+        SchemaTypeSpec(_schema_type, tags=_SCHEMA_TAGS.get(_schema_type, {})),
+    )
+
+SCHEMA_TYPES = tuple(spec.schema_type for spec in _SCHEMA_REGISTRY.snapshot().values())
+
+
+def schema_type_registry() -> SchemaTypeRegistry:
+    """Return the schema type registry.
+
+    Returns
+    -------
+    SchemaTypeRegistry
+        Schema type registry instance.
+    """
+    return _SCHEMA_REGISTRY
+
+
+def _schema_registry_types() -> tuple[type[msgspec.Struct], ...]:
+    return tuple(spec.schema_type for spec in _SCHEMA_REGISTRY.snapshot().values())
+
+
+def _schema_hook(obj: type[msgspec.Struct]) -> dict[str, object]:
+    spec = _SCHEMA_REGISTRY.get(obj.__name__)
+    payload = dict(spec.tags) if spec is not None else dict(_SCHEMA_TAGS.get(obj, {}))
     payload.setdefault("title", obj.__name__)
     doc = inspect.getdoc(obj)
     if doc:
@@ -170,19 +272,17 @@ def schema_components() -> tuple[dict[str, object], dict[str, object]]:
     tuple[dict[str, object], dict[str, object]]
         Schema map and shared component definitions.
     """
-    schemas, components = msgspec.json.schema_components(
-        SCHEMA_TYPES,
-        schema_hook=_schema_hook,
-    )
+    schema_types = _schema_registry_types()
+    schemas, components = msgspec.json.schema_components(schema_types, schema_hook=_schema_hook)
     schema_map: dict[str, object] = {
         schema_type.__name__: schema
-        for schema_type, schema in zip(SCHEMA_TYPES, schemas, strict=False)
+        for schema_type, schema in zip(schema_types, schemas, strict=False)
     }
     component_map: dict[str, object] = dict(components)
     external_components: dict[str, object] = _external_schema_components()
     component_map.update(external_components)
     schema_map.update(external_components)
-    for schema_type in SCHEMA_TYPES:
+    for schema_type in schema_types:
         name = schema_type.__name__
         schema = component_map.get(name)
         if not isinstance(schema, dict):
@@ -267,9 +367,10 @@ def schema_contract_index() -> list[dict[str, object]]:
     list[dict[str, object]]
         List of contract entries with type info payloads.
     """
-    type_info = msgspec.inspect.multi_type_info(SCHEMA_TYPES)
+    schema_types = _schema_registry_types()
+    type_info = msgspec.inspect.multi_type_info(schema_types)
     entries: list[dict[str, object]] = []
-    for schema_type, info in zip(SCHEMA_TYPES, type_info, strict=False):
+    for schema_type, info in zip(schema_types, type_info, strict=False):
         payload = msgspec.to_builtins(info, str_keys=True, enc_hook=_schema_enc_hook)
         entries.append({"name": schema_type.__name__, "type_info": payload})
     entries.sort(key=lambda item: cast("str", item.get("name", "")))
@@ -304,11 +405,14 @@ def write_openapi_docs(path: Path) -> None:
 
 __all__ = [
     "SCHEMA_TYPES",
+    "SchemaTypeRegistry",
+    "SchemaTypeSpec",
     "openapi_contract_payload",
     "schema_components",
     "schema_contract_hash",
     "schema_contract_index",
     "schema_contract_payload",
+    "schema_type_registry",
     "write_openapi_docs",
     "write_schema_docs",
 ]

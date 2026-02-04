@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -115,18 +116,21 @@ def _feature_control_span(
     options: DeltaFeatureMutationOptions,
     *,
     operation: str,
-) -> Iterator[Span]:
+) -> AbstractContextManager[Span]:
     attrs = _storage_span_attributes(
         operation="feature_control",
         table_path=options.path,
         dataset_name=options.dataset_name,
         extra={"codeanatomy.feature_name": operation},
     )
-    return stage_span(
-        "storage.feature_control",
-        stage="storage",
-        scope_name=SCOPE_STORAGE,
-        attributes=attrs,
+    return cast(
+        "AbstractContextManager[Span]",
+        stage_span(
+            "storage.feature_control",
+            stage="storage",
+            scope_name=SCOPE_STORAGE,
+            attributes=attrs,
+        ),
     )
 
 

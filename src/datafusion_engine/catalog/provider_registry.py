@@ -94,6 +94,26 @@ class ProviderRegistry(
 
     def register(
         self,
+        key: str,
+        value: RegistrationMetadata,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Register metadata for a table name.
+
+        Parameters
+        ----------
+        key
+            Table name to register.
+        value
+            Registration metadata for the table.
+        overwrite
+            Whether to overwrite an existing registration.
+        """
+        self._registrations.register(key, value, overwrite=overwrite)
+
+    def register_spec(
+        self,
         spec: TableSpec,
         *,
         overwrite: bool = False,
@@ -160,7 +180,7 @@ class ProviderRegistry(
         if spec.format != "delta":
             msg = f"Expected delta format, got {spec.format!r}"
             raise ValueError(msg)
-        return self.register(spec, overwrite=overwrite, cache_policy=cache_policy)
+        return self.register_spec(spec, overwrite=overwrite, cache_policy=cache_policy)
 
     def register_df(
         self,

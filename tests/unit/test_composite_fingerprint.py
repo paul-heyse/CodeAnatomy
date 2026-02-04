@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from core.fingerprinting import CompositeFingerprint
 
 
@@ -19,7 +21,8 @@ def test_composite_fingerprint_payload_and_extend() -> None:
     fp = CompositeFingerprint.from_components(1, alpha="x")
     extended = fp.extend(beta="y")
 
-    payload = extended.payload()
+    payload = cast("dict[str, object]", extended.payload())
+    components = cast("dict[str, dict[str, object]]", payload["components"])
     assert payload["version"] == 1
-    assert payload["components"]["alpha"]["value"] == "x"
-    assert payload["components"]["beta"]["value"] == "y"
+    assert components["alpha"]["value"] == "x"
+    assert components["beta"]["value"] == "y"

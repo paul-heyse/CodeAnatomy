@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
+from datafusion_engine.catalog.provider_registry import RegistrationMetadata
 from serde_msgspec import StructBaseStrict
 from utils.registry_protocol import Registry, SnapshotRegistry
 from utils.uuid_factory import uuid7_str
@@ -13,12 +14,26 @@ from utils.uuid_factory import uuid7_str
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
-    from datafusion_engine.catalog.provider_registry import ProviderRegistry
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataFusionViewRegistry
     from datafusion_engine.udf.catalog import DataFusionUdfSpec, UdfCatalogAdapter
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
+
+
+class ProviderRegistryLike(
+    Registry[str, RegistrationMetadata], SnapshotRegistry[str, RegistrationMetadata], Protocol
+):
+    """Protocol for provider registries used by the facade."""
+
+    def register_location(
+        self,
+        *,
+        name: str,
+        location: DatasetLocation,
+        overwrite: bool = False,
+        cache_policy: DataFusionCachePolicy | None = None,
+    ) -> DataFrame: ...
 
 
 class RegistrationResult(StructBaseStrict, frozen=True):
@@ -38,7 +53,7 @@ class RegistryFacade:
         self,
         *,
         dataset_catalog: DatasetCatalog,
-        provider_registry: ProviderRegistry,
+        provider_registry: ProviderRegistryLike,
         udf_registry: UdfCatalogAdapter | None = None,
         view_registry: DataFusionViewRegistry | None = None,
     ) -> None:

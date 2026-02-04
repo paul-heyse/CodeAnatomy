@@ -9,7 +9,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tools.cq.core.schema import CqResult, Finding
+    from tools.cq.core.schema import CqResult
 
 
 def render_mermaid_flowchart(result: CqResult) -> str:
@@ -121,7 +121,7 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
                 func_id = _sanitize_node_id(name)
                 if kind in ("function", "async_function"):
                     lines.append(f"    class {func_id} {{")
-                    lines.append(f"        <<function>>")
+                    lines.append("        <<function>>")
                     lines.append("    }")
 
     lines.append("```")

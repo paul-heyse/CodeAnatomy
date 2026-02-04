@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind, group_records_by_file
+from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind
 
 
 @dataclass
@@ -103,7 +103,7 @@ class SymbolTable:
         for record in import_records:
             bindings = _parse_import(record)
             for binding in bindings:
-                table.imports[(record.file, binding.local_name)] = binding
+                table.imports[record.file, binding.local_name] = binding
 
         return table
 
@@ -182,7 +182,8 @@ def _extract_def_name(record: SgRecord) -> str | None:
 def _file_to_module_path(file_path: str) -> str:
     """Convert file path to module-style path.
 
-    Examples:
+    Examples
+    --------
         src/cli/app.py -> src/cli/app
         src/cli/__init__.py -> src/cli
     """

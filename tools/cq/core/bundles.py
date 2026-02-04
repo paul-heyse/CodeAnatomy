@@ -16,9 +16,9 @@ from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
 from tools.cq.query.executor import execute_plan
+from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
-from tools.cq.query.ir import Scope
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain

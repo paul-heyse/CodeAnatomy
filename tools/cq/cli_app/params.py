@@ -156,5 +156,3 @@ class FilterOptions:
             severity=[str(s) for s in self.severity],
             limit=self.limit,
         )
-
-

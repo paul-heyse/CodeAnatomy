@@ -13,7 +13,7 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def report(
+def report(  # noqa: PLR0913
     preset: Annotated[str, Parameter(help="Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)")],
     *,
     target: Annotated[str, Parameter(help="Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)")],
@@ -29,8 +29,19 @@ def report(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Run target-scoped report bundles."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Run target-scoped report bundles.
+
+    Returns
+    -------
+    CliResult
+        Report results with context and filters.
+
+    Raises
+    ------
+    RuntimeError
+        If the CLI context was not injected.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
 
@@ -88,7 +99,7 @@ def report(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(
+def _build_filters(  # noqa: PLR0913, PLR0917
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,
@@ -122,24 +133,24 @@ def _build_filters(
 
     impact_list: list[str] = []
     if impact:
-        for part in impact.split(","):
-            part = part.strip()
-            if part:
-                impact_list.append(part)
+        for segment in impact.split(","):
+            value = segment.strip()
+            if value:
+                impact_list.append(value)
 
     confidence_list: list[str] = []
     if confidence:
-        for part in confidence.split(","):
-            part = part.strip()
-            if part:
-                confidence_list.append(part)
+        for segment in confidence.split(","):
+            value = segment.strip()
+            if value:
+                confidence_list.append(value)
 
     severity_list: list[str] = []
     if severity:
-        for part in severity.split(","):
-            part = part.strip()
-            if part:
-                severity_list.append(part)
+        for segment in severity.split(","):
+            value = segment.strip()
+            if value:
+                severity_list.append(value)
 
     return FilterConfig(
         include=list(include) if include else [],

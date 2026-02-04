@@ -6,13 +6,14 @@ Enum member names ARE the CLI tokens for correct cyclopts coercion.
 
 from __future__ import annotations
 
-from enum import Enum
+from collections.abc import Callable
+from enum import StrEnum
 from typing import TypeVar
 
 T = TypeVar("T")
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     """Output format options.
 
     Member names are the CLI tokens (e.g., --format md).
@@ -31,7 +32,7 @@ class OutputFormat(str, Enum):
         return self.value
 
 
-class ImpactBucket(str, Enum):
+class ImpactBucket(StrEnum):
     """Impact level buckets."""
 
     low = "low"
@@ -43,7 +44,7 @@ class ImpactBucket(str, Enum):
         return self.value
 
 
-class ConfidenceBucket(str, Enum):
+class ConfidenceBucket(StrEnum):
     """Confidence level buckets."""
 
     low = "low"
@@ -55,7 +56,7 @@ class ConfidenceBucket(str, Enum):
         return self.value
 
 
-class SeverityLevel(str, Enum):
+class SeverityLevel(StrEnum):
     """Severity levels."""
 
     info = "info"
@@ -67,7 +68,7 @@ class SeverityLevel(str, Enum):
         return self.value
 
 
-class ReportPreset(str, Enum):
+class ReportPreset(StrEnum):
     """Report preset options."""
 
     refactor_impact = "refactor-impact"
@@ -80,7 +81,7 @@ class ReportPreset(str, Enum):
         return self.value
 
 
-def comma_separated_list(type_: type[T]):
+def comma_separated_list(type_: type[T]) -> Callable[[str | list[str]], list[T]]:
     """Create a converter for comma-separated values.
 
     This handles both:
@@ -115,26 +116,26 @@ def comma_separated_list(type_: type[T]):
             # Flatten any comma-separated items in the list
             result: list[T] = []
             for item in value:
-                for part in str(item).split(","):
-                    part = part.strip()
-                    if part:
-                        result.append(type_(part))  # pyright: ignore[reportCallIssue]
+                for segment in str(item).split(","):
+                    segment = segment.strip()
+                    if segment:
+                        result.append(type_(segment))  # pyright: ignore[reportCallIssue]
             return result
 
         # Single comma-separated string
         result = []
-        for part in value.split(","):
-            part = part.strip()
-            if part:
-                result.append(type_(part))  # pyright: ignore[reportCallIssue]
+        for segment in value.split(","):
+            segment = segment.strip()
+            if segment:
+                result.append(type_(segment))  # pyright: ignore[reportCallIssue]
         return result
 
     # Mark as cyclopts converter
-    setattr(convert, "__cyclopts_converter__", True)
+    convert.__cyclopts_converter__ = True
     return convert
 
 
-def comma_separated_enum(enum_type: type[T]):
+def comma_separated_enum(enum_type: type[T]) -> Callable[[str | list[str]], list[T]]:
     """Create a converter for comma-separated enum values.
 
     Parameters
@@ -164,18 +165,18 @@ def comma_separated_enum(enum_type: type[T]):
         if isinstance(value, list):
             result: list[T] = []
             for item in value:
-                for part in str(item).split(","):
-                    part = part.strip()
-                    if part:
-                        result.append(enum_type(part))  # pyright: ignore[reportCallIssue]
+                for segment in str(item).split(","):
+                    segment = segment.strip()
+                    if segment:
+                        result.append(enum_type(segment))  # pyright: ignore[reportCallIssue]
             return result
 
         result = []
-        for part in value.split(","):
-            part = part.strip()
-            if part:
-                result.append(enum_type(part))  # pyright: ignore[reportCallIssue]
+        for segment in value.split(","):
+            segment = segment.strip()
+            if segment:
+                result.append(enum_type(segment))  # pyright: ignore[reportCallIssue]
         return result
 
-    setattr(convert, "__cyclopts_converter__", True)
+    convert.__cyclopts_converter__ = True
     return convert

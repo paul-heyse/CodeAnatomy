@@ -14,7 +14,7 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def impact(
+def impact(  # noqa: PLR0913
     function: Annotated[str, Parameter(help="Function name to analyze")],
     *,
     param: Annotated[str, Parameter(help="Parameter name to trace")],
@@ -27,8 +27,19 @@ def impact(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Trace data flow from a function parameter."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Trace data flow from a function parameter.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.impact import ImpactRequest, cmd_impact
 
     if ctx is None:
@@ -49,7 +60,7 @@ def impact(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def calls(
+def calls(  # noqa: PLR0913
     function: Annotated[str, Parameter(help="Function name to find calls for")],
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -60,8 +71,19 @@ def calls(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Census all call sites for a function."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Census all call sites for a function.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.calls import cmd_calls
 
     if ctx is None:
@@ -79,7 +101,7 @@ def calls(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def imports(
+def imports(  # noqa: PLR0913
     *,
     cycles: Annotated[bool, Parameter(help="Run cycle detection")] = False,
     module: Annotated[str | None, Parameter(help="Focus on specific module")] = None,
@@ -91,8 +113,19 @@ def imports(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Analyze import structure and cycles."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Analyze import structure and cycles.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.imports import ImportRequest, cmd_imports
 
     if ctx is None:
@@ -112,7 +145,7 @@ def imports(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def exceptions(
+def exceptions(  # noqa: PLR0913
     *,
     function: Annotated[str | None, Parameter(help="Focus on specific function")] = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -123,8 +156,19 @@ def exceptions(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Analyze exception handling patterns."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Analyze exception handling patterns.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.exceptions import cmd_exceptions
 
     if ctx is None:
@@ -142,7 +186,7 @@ def exceptions(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def sig_impact(
+def sig_impact(  # noqa: PLR0913
     symbol: Annotated[str, Parameter(help="Function name to analyze")],
     *,
     to: Annotated[str, Parameter(help='New signature (e.g., "foo(a, b, *, c=None)")')],
@@ -154,8 +198,19 @@ def sig_impact(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Analyze impact of a signature change."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Analyze impact of a signature change.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
 
     if ctx is None:
@@ -175,7 +230,7 @@ def sig_impact(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def side_effects(
+def side_effects(  # noqa: PLR0913
     *,
     max_files: Annotated[int, Parameter(help="Maximum files to scan")] = 2000,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -186,8 +241,19 @@ def side_effects(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Detect import-time side effects."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Detect import-time side effects.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 
     if ctx is None:
@@ -206,7 +272,7 @@ def side_effects(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def scopes(
+def scopes(  # noqa: PLR0913
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -217,8 +283,19 @@ def scopes(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Analyze scope capture (closures)."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Analyze scope capture (closures).
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 
     if ctx is None:
@@ -237,7 +314,7 @@ def scopes(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def bytecode_surface(
+def bytecode_surface(  # noqa: PLR0913
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
     show: Annotated[str, Parameter(help="What to show: globals,attrs,constants,opcodes")] = "globals,attrs,constants",
@@ -249,8 +326,19 @@ def bytecode_surface(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Analyze bytecode for hidden dependencies."""
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    """Analyze bytecode for hidden dependencies.
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    """
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 
     if ctx is None:
@@ -270,7 +358,7 @@ def bytecode_surface(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(
+def _build_filters(  # noqa: PLR0913, PLR0917
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,
@@ -305,23 +393,23 @@ def _build_filters(
     impact_list: list[str] = []
     if impact:
         for part in impact.split(","):
-            part = part.strip()
-            if part:
-                impact_list.append(part)
+            segment = part.strip()
+            if segment:
+                impact_list.append(segment)
 
     confidence_list: list[str] = []
     if confidence:
         for part in confidence.split(","):
-            part = part.strip()
-            if part:
-                confidence_list.append(part)
+            segment = part.strip()
+            if segment:
+                confidence_list.append(segment)
 
     severity_list: list[str] = []
     if severity:
         for part in severity.split(","):
-            part = part.strip()
-            if part:
-                severity_list.append(part)
+            segment = part.strip()
+            if segment:
+                severity_list.append(segment)
 
     return FilterConfig(
         include=list(include) if include else [],

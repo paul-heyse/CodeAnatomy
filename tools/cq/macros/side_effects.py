@@ -6,9 +6,10 @@ Detects function calls at module top-level, global state writes, and ambient rea
 from __future__ import annotations
 
 import ast
-import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.core.schema import (
     Anchor,

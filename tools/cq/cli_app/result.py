@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from tools.cq.core.artifacts import save_artifact_json
-from tools.cq.core.findings_table import apply_filters, build_frame, flatten_result, rehydrate_result
+from tools.cq.core.findings_table import (
+    apply_filters,
+    build_frame,
+    flatten_result,
+    rehydrate_result,
+)
 from tools.cq.core.renderers import (
     render_dot,
     render_mermaid_class_diagram,
@@ -76,31 +81,21 @@ def render_result(
     """
     format_value = str(output_format)
 
-    if format_value == "json":
-        return dumps_json(result, indent=2)
-
-    if format_value == "md":
-        return render_markdown(result)
-
-    if format_value == "summary":
-        return render_summary(result)
-
     if format_value == "both":
         md = render_markdown(result)
         js = dumps_json(result, indent=2)
         return f"{md}\n\n---\n\n{js}"
 
-    if format_value == "mermaid":
-        return render_mermaid_flowchart(result)
-
-    if format_value == "mermaid-class":
-        return render_mermaid_class_diagram(result)
-
-    if format_value == "dot":
-        return render_dot(result)
-
-    # Default to markdown
-    return render_markdown(result)
+    renderers: dict[str, Callable[[CqResult], str]] = {
+        "json": lambda payload: dumps_json(payload, indent=2),
+        "md": render_markdown,
+        "summary": render_summary,
+        "mermaid": render_mermaid_flowchart,
+        "mermaid-class": render_mermaid_class_diagram,
+        "dot": render_dot,
+    }
+    renderer = renderers.get(format_value, render_markdown)
+    return renderer(result)
 
 
 def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) -> int:

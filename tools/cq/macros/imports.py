@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.core.schema import (
     Anchor,

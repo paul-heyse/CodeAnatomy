@@ -36,7 +36,7 @@ def compute_file_hash(path: Path) -> str | None:
     try:
         content = path.read_bytes()
         return hashlib.sha256(content).hexdigest()
-    except (OSError, IOError):
+    except OSError:
         return None
 
 
@@ -61,7 +61,7 @@ def compute_file_mtime(path: Path) -> float | None:
     """
     try:
         return path.stat().st_mtime
-    except (OSError, IOError):
+    except OSError:
         return None
 
 

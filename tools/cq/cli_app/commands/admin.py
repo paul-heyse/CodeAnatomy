@@ -31,6 +31,16 @@ def index(
 
     The caching infrastructure has been removed from cq.
     This command is a no-op placeholder.
+
+    Returns
+    -------
+    int
+        Process exit code.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
     """
     # Parameters rebuild and status are deprecated placeholders - intentionally unused
     del rebuild, status
@@ -59,6 +69,16 @@ def cache(
 
     The caching infrastructure has been removed from cq.
     This command is a no-op placeholder.
+
+    Returns
+    -------
+    int
+        Process exit code.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
     """
     # Parameters stats and clear are deprecated placeholders - intentionally unused
     del stats, clear
@@ -82,7 +102,20 @@ def schema(
     ] = "result",
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> int:
-    """Emit msgspec JSON Schema for CQ types."""
+    """Emit msgspec JSON Schema for CQ types.
+
+    Returns
+    -------
+    int
+        Process exit code.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
+    ValueError
+        Raised when an unknown schema kind is requested.
+    """
     from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
 
     if ctx is None:

@@ -9,7 +9,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tools.cq.core.schema import CqResult, Finding
+    from tools.cq.core.schema import CqResult
 
 
 def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:

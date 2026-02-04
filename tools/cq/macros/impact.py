@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import ast
 from contextlib import suppress
-import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.core.schema import (
     Anchor,

@@ -5,19 +5,62 @@ This module contains the 'q' query command.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
-from cyclopts import Parameter
 import msgspec
+from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def q(
+def _is_plain_search(query_string: str) -> bool:
+    """Check if query is plain search (no key=value pairs).
+
+    Parameters
+    ----------
+    query_string
+        The query string to check.
+
+    Returns
+    -------
+    bool
+        True if the query should route to smart search.
+
+    Notes
+    -----
+    A plain search is detected when:
+    - No '=' in the query at all, OR
+    - No valid query tokens (entity=, pattern=, pattern.context=)
+
+    This enables fallback to smart search for simple identifier queries
+    while preserving explicit q queries.
+    """
+    if "=" not in query_string:
+        return True
+
+    # Check for valid query tokens using the tokenizer pattern
+    token_pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
+    matches = list(re.finditer(token_pattern, query_string))
+
+    if not matches:
+        return True
+
+    # Check if any key is a valid query token
+    valid_keys = {"entity", "pattern", "pattern.context"}
+    keys_found = {m.group(1) for m in matches}
+
+    # If no entity or pattern token, it's a plain search
+    return not bool(keys_found & valid_keys)
+
+
+def q(  # noqa: PLR0913
     query_string: Annotated[str, Parameter(help='Query string (e.g., "entity=function name=foo")')],
     *,
-    explain_files: Annotated[bool, Parameter(name="--explain-files", help="Include file filtering diagnostics")] = False,
+    explain_files: Annotated[
+        bool, Parameter(name="--explain-files", help="Include file filtering diagnostics")
+    ] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
     include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
     exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
@@ -26,7 +69,7 @@ def q(
     severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
     limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
-    """Declarative code query using ast-grep.
+    """Run a declarative code query using ast-grep.
 
     Query syntax: key=value pairs separated by spaces.
 
@@ -43,12 +86,27 @@ def q(
         limit=N        Maximum results
         explain=true   Include query plan explanation
 
-    Examples:
+    For plain queries without key=value pairs (e.g., "build_graph"),
+    this command falls back to Smart Search.
+
+    Examples
+    --------
         cq q "entity=function name=build_graph_product"
         cq q "entity=function name=detect expand=callers(depth=2) in=tools/cq/"
         cq q "entity=class in=src/relspec/ fields=def,imports"
+        cq q build_graph  # falls back to smart search
+
+    Returns
+    -------
+    CliResult
+        Structured command result.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when CLI context is unavailable.
     """
-    from tools.cq.cli_app.context import CliResult, FilterConfig
+    from tools.cq.cli_app.context import CliResult
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
@@ -57,6 +115,27 @@ def q(
     if ctx is None:
         msg = "Context not injected"
         raise RuntimeError(msg)
+
+    # Check for plain search fallback
+    if _is_plain_search(query_string):
+        from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+
+        # Build include globs from include patterns
+        include_globs = list(include) if include else None
+
+        result = smart_search(
+            ctx.root,
+            query_string,
+            mode=None,  # Auto-detect
+            include_globs=include_globs,
+            exclude_globs=list(exclude) if exclude else None,
+            include_strings=False,
+            limits=SMART_SEARCH_LIMITS,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
+        filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
+        return CliResult(result=result, context=ctx, filters=filters)
 
     # Parse the query string
     try:
@@ -92,7 +171,7 @@ def q(
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(
+def _build_filters(  # noqa: PLR0913, PLR0917
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,
@@ -127,23 +206,23 @@ def _build_filters(
     impact_list: list[str] = []
     if impact:
         for part in impact.split(","):
-            part = part.strip()
-            if part:
-                impact_list.append(part)
+            segment = part.strip()
+            if segment:
+                impact_list.append(segment)
 
     confidence_list: list[str] = []
     if confidence:
         for part in confidence.split(","):
-            part = part.strip()
-            if part:
-                confidence_list.append(part)
+            segment = part.strip()
+            if segment:
+                confidence_list.append(segment)
 
     severity_list: list[str] = []
     if severity:
         for part in severity.split(","):
-            part = part.strip()
-            if part:
-                severity_list.append(part)
+            segment = part.strip()
+            if segment:
+                severity_list.append(segment)
 
     return FilterConfig(
         include=list(include) if include else [],

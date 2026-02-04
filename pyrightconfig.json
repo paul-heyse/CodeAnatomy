@@ -5,7 +5,7 @@
   "venvPath": ".",
   "venv": ".venv",
   "useLibraryCodeForTypes": true,
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "tools", "rust"],
   "exclude": [
     ".git",
     ".venv",
@@ -17,7 +17,8 @@
     ".",
     "src",
     "tests",
-    "mkdocs_gen"
+    "tools",
+    "rust",
   ],
   "executionEnvironments": [
     {
@@ -26,7 +27,8 @@
         ".",
         "src",
         "tests",
-        "mkdocs_gen"
+        "tools",
+        "rust",
       ],
       "pythonVersion": "3.13"
     },
@@ -36,16 +38,11 @@
         ".",
         "src",
         "tests",
-      ],
-      "pythonVersion": "3.13"
-    },
-    {
-      "root": "mkdocs_gen",
-      "extraPaths": [
-        ".",
-        "src"
+        "tools",
+        "rust",
       ],
       "pythonVersion": "3.13"
     }
+    
   ]
 }

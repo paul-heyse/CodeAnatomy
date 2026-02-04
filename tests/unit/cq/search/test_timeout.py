@@ -92,7 +92,7 @@ class TestAsyncTimeout:
             await asyncio.sleep(0.01)
             return "success"
 
-        result = await search_async_with_timeout(fast_coroutine(), timeout=1.0)
+        result = await search_async_with_timeout(fast_coroutine(), timeout_seconds=1.0)
         assert result == "success"
 
     @pytest.mark.asyncio
@@ -104,7 +104,7 @@ class TestAsyncTimeout:
             return "too late"
 
         with pytest.raises(TimeoutError, match="timed out after"):
-            await search_async_with_timeout(slow_coroutine(), timeout=0.1)
+            await search_async_with_timeout(slow_coroutine(), timeout_seconds=0.1)
 
     @pytest.mark.asyncio
     async def test_preserves_exceptions(self) -> None:
@@ -116,7 +116,7 @@ class TestAsyncTimeout:
             raise ValueError(msg)
 
         with pytest.raises(ValueError, match="async error"):
-            await search_async_with_timeout(failing_coroutine(), timeout=1.0)
+            await search_async_with_timeout(failing_coroutine(), timeout_seconds=1.0)
 
     @pytest.mark.asyncio
     async def test_cancellation_cleanup(self) -> None:
@@ -134,7 +134,7 @@ class TestAsyncTimeout:
                 return "should not reach"
 
         with pytest.raises(TimeoutError):
-            await search_async_with_timeout(cancellable_coroutine(), timeout=0.1)
+            await search_async_with_timeout(cancellable_coroutine(), timeout_seconds=0.1)
 
         # Give cancellation time to propagate
         await asyncio.sleep(0.01)
@@ -168,7 +168,7 @@ class TestTimeoutEdgeCases:
 
         # Zero timeout is valid
         try:
-            result = await search_async_with_timeout(instant_coroutine(), timeout=0.0)
+            result = await search_async_with_timeout(instant_coroutine(), timeout_seconds=0.0)
             assert result == "result"
         except TimeoutError:
             pass  # Also acceptable
@@ -193,7 +193,7 @@ class TestTimeoutEdgeCases:
         coro = any_coroutine()
         try:
             with pytest.raises(ValueError, match="Timeout must be positive"):
-                await search_async_with_timeout(coro, timeout=-1.0)
+                await search_async_with_timeout(coro, timeout_seconds=-1.0)
         finally:
             coro.close()
 
@@ -216,5 +216,7 @@ class TestTimeoutEdgeCases:
             await asyncio.sleep(0.01)
             return timeout_seconds
 
-        result = await search_async_with_timeout(quick_coroutine(), timeout=timeout_seconds)
+        result = await search_async_with_timeout(
+            quick_coroutine(), timeout_seconds=timeout_seconds
+        )
         assert result == timeout_seconds

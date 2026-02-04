@@ -42,13 +42,16 @@ class TargetScope:
     dirs: frozenset[Path]
 
     def matches(self, file_path: Path) -> bool:
-        """Return True if file_path is within scope."""
+        """Return True if file_path is within scope.
+
+        Returns
+        -------
+        bool
+            True if the file is included by file or directory scope.
+        """
         if file_path in self.files:
             return True
-        for directory in self.dirs:
-            if file_path.is_relative_to(directory):
-                return True
-        return False
+        return any(file_path.is_relative_to(directory) for directory in self.dirs)
 
 
 @dataclass(frozen=True)
@@ -74,7 +77,18 @@ class BundleStepResult:
 
 
 def parse_target_spec(value: str) -> TargetSpec:
-    """Parse a target spec string like 'function:foo'."""
+    """Parse a target spec string like 'function:foo'.
+
+    Returns
+    -------
+    TargetSpec
+        Parsed target kind and value.
+
+    Raises
+    ------
+    ValueError
+        If the spec is missing a kind/value separator or is unsupported.
+    """
     if ":" not in value:
         msg = "Target spec must be in the form kind:value"
         raise ValueError(msg)
@@ -91,7 +105,13 @@ def parse_target_spec(value: str) -> TargetSpec:
 
 
 def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
-    """Run a report bundle preset."""
+    """Run a report bundle preset.
+
+    Returns
+    -------
+    CqResult
+        Merged result for the selected bundle.
+    """
     target_scope = resolve_target_scope(ctx)
     results: list[CqResult] = []
 
@@ -105,7 +125,13 @@ def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
 
 
 def resolve_target_scope(ctx: BundleContext) -> TargetScope:
-    """Resolve target scope to file and directory sets."""
+    """Resolve target scope to file and directory sets.
+
+    Returns
+    -------
+    TargetScope
+        File and directory scope derived from the target.
+    """
     root = ctx.root
     target = ctx.target
 
@@ -149,7 +175,14 @@ def filter_result_by_scope(
     root: Path,
     scope: TargetScope,
 ) -> CqResult:
-    """Filter findings in a result to the target scope."""
+    """Filter findings in a result to the target scope.
+
+    Returns
+    -------
+    CqResult
+        Result containing findings within the target scope.
+    """
+
     def _in_scope(finding: Finding) -> bool:
         if finding.anchor is None:
             return True
@@ -181,7 +214,13 @@ def filter_result_by_scope(
 
 
 def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult]) -> CqResult:
-    """Merge macro results into a single bundle report."""
+    """Merge macro results into a single bundle report.
+
+    Returns
+    -------
+    CqResult
+        Combined bundle report result.
+    """
     started = ms()
     run = mk_runmeta(f"report:{preset}", ctx.argv, str(ctx.root), started, ctx.tc.to_dict())
     merged = mk_result(run)
@@ -283,11 +322,11 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
                 )
             )
         else:
-            results.append(
-                BundleStepResult(result=_skip_result(ctx, "sig-impact", "missing --to"))
-            )
+            results.append(BundleStepResult(result=_skip_result(ctx, "sig-impact", "missing --to")))
     else:
-        results.append(BundleStepResult(result=_skip_result(ctx, "calls", "requires function target")))
+        results.append(
+            BundleStepResult(result=_skip_result(ctx, "calls", "requires function target"))
+        )
         results.append(
             BundleStepResult(result=_skip_result(ctx, "impact", "requires function target"))
         )
@@ -316,9 +355,7 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     )
     results.append(
         BundleStepResult(
-            result=cmd_side_effects(
-                SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv)
-            )
+            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
         )
     )
     return results
@@ -334,9 +371,7 @@ def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
     )
     results.append(
         BundleStepResult(
-            result=cmd_side_effects(
-                SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv)
-            )
+            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
         )
     )
     return results
@@ -425,9 +460,7 @@ def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
     )
     results.append(
         BundleStepResult(
-            result=cmd_side_effects(
-                SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv)
-            )
+            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
         )
     )
     results.append(

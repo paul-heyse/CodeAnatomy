@@ -68,7 +68,7 @@ console = _make_console()
 
 
 @app.meta.default
-def launcher(  # noqa: C901, PLR0912, PLR0913, PLR0914
+def launcher(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     root: Annotated[
         Path | None, Parameter(name="--root", group=global_group, help="Repository root")

@@ -8,15 +8,12 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-T = TypeVar("T")
-
-
-def search_sync_with_timeout(
+def search_sync_with_timeout[T](
     fn: Callable[..., T],
     timeout: float,
     *,
@@ -29,7 +26,7 @@ def search_sync_with_timeout(
     ----------
     fn : Callable[..., T]
         Function to execute
-    timeout : float
+    timeout_seconds : float
         Timeout in seconds
     args : tuple[object, ...] | None, optional
         Positional arguments to pass to fn
@@ -65,9 +62,9 @@ def search_sync_with_timeout(
             raise TimeoutError(msg) from e
 
 
-async def search_async_with_timeout(
+async def search_async_with_timeout[T](
     coro: Awaitable[T],
-    timeout: float,
+    timeout_seconds: float,
 ) -> T:
     """Execute an awaitable with a timeout.
 
@@ -91,12 +88,14 @@ async def search_async_with_timeout(
         If the execution exceeds the timeout
 
     """
-    if timeout < 0:
+    if timeout_seconds < 0:
         msg = "Timeout must be positive"
         raise ValueError(msg)
 
     try:
-        return await asyncio.wait_for(coro, timeout=timeout if timeout > 0 else None)
+        return await asyncio.wait_for(
+            coro, timeout=timeout_seconds if timeout_seconds > 0 else None
+        )
     except TimeoutError as e:
-        msg = f"Async search operation timed out after {timeout:.1f} seconds"
+        msg = f"Async search operation timed out after {timeout_seconds:.1f} seconds"
         raise TimeoutError(msg) from e

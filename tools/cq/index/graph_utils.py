@@ -36,11 +36,7 @@ def _build_digraph(graph: dict[str, set[str]]) -> tuple[rx.PyDiGraph, list[str],
     edges: list[tuple[int, int]] = []
     for src, targets in graph.items():
         src_idx = node_to_idx[src]
-        edges.extend(
-            (src_idx, node_to_idx[tgt])
-            for tgt in targets
-            if tgt in node_to_idx
-        )
+        edges.extend((src_idx, node_to_idx[tgt]) for tgt in targets if tgt in node_to_idx)
     g.add_edges_from_no_data(edges)
 
     return g, nodes, node_to_idx

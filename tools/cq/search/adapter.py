@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 from tools.cq.search.profiles import DEFAULT
 from tools.cq.search.timeout import search_sync_with_timeout
 
+_CASE_SENSITIVE_DEFAULT = True
+
 
 def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
     """Find all def/async def lines in a file with their indentation.
@@ -89,7 +91,7 @@ def find_files_with_pattern(
         RipGrepSearch()
         .set_working_directory(root)
         .add_pattern(pattern)
-        .case_sensitive(True)
+        .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .max_count(limits.max_matches_per_file)
         .max_depth(limits.max_depth)
         .max_file_size(limits.max_file_size_bytes)
@@ -163,7 +165,7 @@ def find_call_candidates(
         .set_working_directory(root)
         .add_pattern(pattern)
         .include_type("py")
-        .case_sensitive(True)
+        .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .max_count(limits.max_matches_per_file)
         .max_depth(limits.max_depth)
         .max_file_size(limits.max_file_size_bytes)
@@ -266,7 +268,7 @@ def search_content(
         RipGrepSearch()
         .set_working_directory(root)
         .add_pattern(pattern)
-        .case_sensitive(True)
+        .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .max_count(limits.max_matches_per_file)
         .max_depth(limits.max_depth)
         .max_file_size(limits.max_file_size_bytes)

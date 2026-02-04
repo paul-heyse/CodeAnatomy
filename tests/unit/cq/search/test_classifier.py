@@ -8,11 +8,15 @@ import pytest
 from tools.cq.search.classifier import (
     QueryMode,
     classify_from_node,
+    classify_from_records,
     classify_heuristic,
     clear_caches,
     detect_query_mode,
     enrich_with_symtable,
+    get_def_lines_cached,
+    get_node_index,
     get_sg_root,
+    get_symtable_table,
 )
 
 
@@ -218,6 +222,69 @@ import os
         if result is not None:
             # Scope could be the method or class
             pass
+
+    def test_classify_from_records_import(self, python_source: Path) -> None:
+        """Record-based classification should detect imports."""
+        clear_caches()
+        root = python_source.parent
+        result = classify_from_records(python_source, root, 13, 0)
+        assert result is not None
+        assert result.category in {"from_import", "import"}
+
+
+class TestCacheHelpers:
+    """Tests for classifier cache helpers."""
+
+    def test_def_lines_cached(self, tmp_path: Path) -> None:
+        """Def line cache should return the same object for repeated calls."""
+        source = tmp_path / "sample.py"
+        source.write_text("def foo():\n    return 1\n\nasync def bar():\n    pass\n")
+        clear_caches()
+        first = get_def_lines_cached(source)
+        second = get_def_lines_cached(source)
+        assert first is second
+        assert any(line == 1 for line, _ in first)
+
+    def test_symtable_cached(self, tmp_path: Path) -> None:
+        """Symtable cache should reuse the same table object."""
+        source = tmp_path / "sym.py"
+        source.write_text("def foo(x):\n    return x\n")
+        clear_caches()
+        text = source.read_text()
+        table1 = get_symtable_table(source, text)
+        table2 = get_symtable_table(source, text)
+        assert table1 is not None
+        assert table1 is table2
+
+
+class TestNodeIndex:
+    """Tests for AST node index caching and scaling."""
+
+    def test_node_index_cached(self, tmp_path: Path) -> None:
+        """Node index should be cached per file."""
+        source = tmp_path / "nodes.py"
+        source.write_text("def foo():\n    return 1\n")
+        clear_caches()
+        sg_root = get_sg_root(source)
+        assert sg_root is not None
+        index1 = get_node_index(source, sg_root)
+        index2 = get_node_index(source, sg_root)
+        assert index1 is index2
+
+    def test_node_index_large_file(self, tmp_path: Path) -> None:
+        """Node index should handle large files without error."""
+        source = tmp_path / "large.py"
+        lines = []
+        for i in range(200):
+            lines.append(f"def func_{i}():\n")
+            lines.append(f"    return {i}\n\n")
+        source.write_text("".join(lines))
+        clear_caches()
+        sg_root = get_sg_root(source)
+        assert sg_root is not None
+        index = get_node_index(source, sg_root)
+        node = index.find_containing(2, 4)
+        assert node is not None
 
 
 class TestSymtableEnrichment:

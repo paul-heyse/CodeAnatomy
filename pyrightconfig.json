@@ -5,20 +5,20 @@
   "venvPath": ".",
   "venv": ".venv",
   "useLibraryCodeForTypes": true,
-  "include": ["src", "tests", "tools", "rust"],
+  "include": ["src", "tests", "tools"],
   "exclude": [
     ".git",
     ".venv",
     ".ruff_cache",
     ".pytest_cache",
     "docs/**",
+    "rust/**"
   ],
   "extraPaths": [
     ".",
     "src",
     "tests",
-    "tools",
-    "rust",
+    "tools"
   ],
   "executionEnvironments": [
     {
@@ -27,8 +27,7 @@
         ".",
         "src",
         "tests",
-        "tools",
-        "rust",
+        "tools"
       ],
       "pythonVersion": "3.13"
     },
@@ -38,8 +37,7 @@
         ".",
         "src",
         "tests",
-        "tools",
-        "rust",
+        "tools"
       ],
       "pythonVersion": "3.13"
     }

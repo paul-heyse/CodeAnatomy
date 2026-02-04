@@ -184,8 +184,7 @@ def _iter_search_files(root: Path, max_files: int) -> Iterator[Path]:
         None,
         extensions=(".py",),
     )
-    for pyfile in result.files[:max_files]:
-        yield pyfile
+    yield from result.files[:max_files]
 
 
 def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]:
@@ -342,9 +341,7 @@ def _append_opcode_summary(
     if "opcodes" not in show_set or not total_opcodes:
         return
     op_section = Section(title="Opcode Summary")
-    for op, count in sorted(total_opcodes.items(), key=lambda item: -item[1])[
-        :_MAX_OPCODE_SUMMARY
-    ]:
+    for op, count in sorted(total_opcodes.items(), key=lambda item: -item[1])[:_MAX_OPCODE_SUMMARY]:
         op_section.findings.append(
             Finding(
                 category="opcode",

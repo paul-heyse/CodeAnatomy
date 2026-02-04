@@ -8,9 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 class OutputFormat(StrEnum):
@@ -28,7 +25,13 @@ class OutputFormat(StrEnum):
     dot = "dot"
 
     def __str__(self) -> str:
-        """Return the CLI token."""
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
         return self.value
 
 
@@ -40,7 +43,13 @@ class ImpactBucket(StrEnum):
     high = "high"
 
     def __str__(self) -> str:
-        """Return the CLI token."""
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
         return self.value
 
 
@@ -52,7 +61,13 @@ class ConfidenceBucket(StrEnum):
     high = "high"
 
     def __str__(self) -> str:
-        """Return the CLI token."""
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
         return self.value
 
 
@@ -64,7 +79,13 @@ class SeverityLevel(StrEnum):
     error = "error"
 
     def __str__(self) -> str:
-        """Return the CLI token."""
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
         return self.value
 
 
@@ -77,11 +98,17 @@ class ReportPreset(StrEnum):
     dependency_health = "dependency-health"
 
     def __str__(self) -> str:
-        """Return the CLI token."""
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
         return self.value
 
 
-def comma_separated_list(type_: type[T]) -> Callable[[str | list[str]], list[T]]:
+def comma_separated_list[T](type_: type[T]) -> Callable[[str | list[str]], list[T]]:
     """Create a converter for comma-separated values.
 
     This handles both:
@@ -117,17 +144,17 @@ def comma_separated_list(type_: type[T]) -> Callable[[str | list[str]], list[T]]
             result: list[T] = []
             for item in value:
                 for segment in str(item).split(","):
-                    segment = segment.strip()
-                    if segment:
-                        result.append(type_(segment))  # pyright: ignore[reportCallIssue]
+                    cleaned = segment.strip()
+                    if cleaned:
+                        result.append(type_(cleaned))  # pyright: ignore[reportCallIssue]
             return result
 
         # Single comma-separated string
         result = []
         for segment in value.split(","):
-            segment = segment.strip()
-            if segment:
-                result.append(type_(segment))  # pyright: ignore[reportCallIssue]
+            cleaned = segment.strip()
+            if cleaned:
+                result.append(type_(cleaned))  # pyright: ignore[reportCallIssue]
         return result
 
     # Mark as cyclopts converter
@@ -135,7 +162,7 @@ def comma_separated_list(type_: type[T]) -> Callable[[str | list[str]], list[T]]
     return convert
 
 
-def comma_separated_enum(enum_type: type[T]) -> Callable[[str | list[str]], list[T]]:
+def comma_separated_enum[T](enum_type: type[T]) -> Callable[[str | list[str]], list[T]]:
     """Create a converter for comma-separated enum values.
 
     Parameters
@@ -166,16 +193,16 @@ def comma_separated_enum(enum_type: type[T]) -> Callable[[str | list[str]], list
             result: list[T] = []
             for item in value:
                 for segment in str(item).split(","):
-                    segment = segment.strip()
-                    if segment:
-                        result.append(enum_type(segment))  # pyright: ignore[reportCallIssue]
+                    cleaned = segment.strip()
+                    if cleaned:
+                        result.append(enum_type(cleaned))  # pyright: ignore[reportCallIssue]
             return result
 
         result = []
         for segment in value.split(","):
-            segment = segment.strip()
-            if segment:
-                result.append(enum_type(segment))  # pyright: ignore[reportCallIssue]
+            cleaned = segment.strip()
+            if cleaned:
+                result.append(enum_type(cleaned))  # pyright: ignore[reportCallIssue]
         return result
 
     convert.__cyclopts_converter__ = True

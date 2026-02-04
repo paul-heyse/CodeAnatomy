@@ -95,16 +95,34 @@ class CFG:
 
     @property
     def block_count(self) -> int:
-        """Get number of basic blocks."""
+        """Get number of basic blocks.
+
+        Returns
+        -------
+        int
+            Count of basic blocks.
+        """
         return len(self.blocks)
 
     @property
     def edge_count(self) -> int:
-        """Get number of edges."""
+        """Get number of edges.
+
+        Returns
+        -------
+        int
+            Count of edges.
+        """
         return len(self.edges)
 
     def get_block_at_offset(self, offset: int) -> BasicBlock | None:
-        """Get block containing instruction at offset."""
+        """Get block containing instruction at offset.
+
+        Returns
+        -------
+        BasicBlock | None
+            Matching block if found.
+        """
         for block in self.blocks.values():
             if block.start_offset <= offset <= block.end_offset:
                 return block
@@ -194,6 +212,11 @@ def _find_block_starts(index: BytecodeIndex) -> set[int]:
     - Offset 0 (entry)
     - Jump targets
     - Instructions following jumps/returns
+
+    Returns
+    -------
+    set[int]
+        Offsets that begin basic blocks.
     """
     starts: set[int] = {0}
 
@@ -204,14 +227,12 @@ def _find_block_starts(index: BytecodeIndex) -> set[int]:
             starts.add(instr.offset)
 
         # Instruction after jump/exit is block start
-        if instr.opname in JUMP_OPCODES | EXIT_OPCODES:
-            if i + 1 < len(instructions):
-                starts.add(instructions[i + 1].offset)
+        if instr.opname in JUMP_OPCODES | EXIT_OPCODES and i + 1 < len(instructions):
+            starts.add(instructions[i + 1].offset)
 
         # Jump target offset is block start
-        if instr.opname in JUMP_OPCODES:
-            if isinstance(instr.argval, int):
-                starts.add(instr.argval)
+        if instr.opname in JUMP_OPCODES and isinstance(instr.argval, int):
+            starts.add(instr.argval)
 
     return starts
 
@@ -250,7 +271,10 @@ def build_cfg(code: CodeType) -> CFG:
         end_offset = start_offset
         for instr in instructions:
             if instr.offset >= start_offset:
-                if block_id + 1 < len(sorted_starts) and instr.offset >= sorted_starts[block_id + 1]:
+                if (
+                    block_id + 1 < len(sorted_starts)
+                    and instr.offset >= sorted_starts[block_id + 1]
+                ):
                     break
                 end_offset = instr.offset
 
@@ -300,22 +324,21 @@ def build_cfg(code: CodeType) -> CFG:
                 blocks[next_block_id].predecessors.append(block_id)
 
         # Add jump edge
-        if last_instr.opname in JUMP_OPCODES:
-            if isinstance(last_instr.argval, int):
-                target_offset = last_instr.argval
-                if target_offset in offset_to_block:
-                    target_block_id = offset_to_block[target_offset]
-                    edges.append(
-                        CFGEdge(
-                            source=block_id,
-                            target=target_block_id,
-                            edge_type="jump",
-                        )
+        if last_instr.opname in JUMP_OPCODES and isinstance(last_instr.argval, int):
+            target_offset = last_instr.argval
+            if target_offset in offset_to_block:
+                target_block_id = offset_to_block[target_offset]
+                edges.append(
+                    CFGEdge(
+                        source=block_id,
+                        target=target_block_id,
+                        edge_type="jump",
                     )
-                    if target_block_id not in block.successors:
-                        block.successors.append(target_block_id)
-                    if block_id not in blocks[target_block_id].predecessors:
-                        blocks[target_block_id].predecessors.append(block_id)
+                )
+                if target_block_id not in block.successors:
+                    block.successors.append(target_block_id)
+                if block_id not in blocks[target_block_id].predecessors:
+                    blocks[target_block_id].predecessors.append(block_id)
 
     # Add exception edges
     exc_table = parse_exception_table(code)

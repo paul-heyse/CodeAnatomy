@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -24,19 +26,21 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
-from tools.cq.search.adapter import find_def_lines
 from tools.cq.search.classifier import (
     MatchCategory,
     NodeClassification,
     QueryMode,
     SymtableEnrichment,
     classify_from_node,
+    classify_from_records,
     classify_heuristic,
     clear_caches,
     detect_query_mode,
-    enrich_with_symtable,
+    enrich_with_symtable_from_table,
     get_cached_source,
+    get_def_lines_cached,
     get_sg_root,
+    get_symtable_table,
 )
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.timeout import search_sync_with_timeout
@@ -57,6 +61,27 @@ SMART_SEARCH_LIMITS = replace(
     max_file_size_bytes=2 * 1024 * 1024,
     timeout_seconds=30.0,
 )
+_CASE_SENSITIVE_DEFAULT = True
+
+# Evidence disclosure cap to keep output high-signal
+MAX_EVIDENCE = 100
+
+
+@lru_cache(maxsize=1)
+def _get_context_helpers() -> tuple[
+    Callable[[int, list[tuple[int, int]], int], dict[str, int]],
+    Callable[[list[str], int, int], str | None],
+]:
+    """Lazily import context helpers to avoid circular imports.
+
+    Returns
+    -------
+    tuple[Callable[[int, list[tuple[int, int]], int], dict[str, int]], Callable[[list[str], int, int], str]]
+        Context window and snippet helpers.
+    """
+    from tools.cq.macros.calls import _compute_context_window, _extract_context_snippet
+
+    return _compute_context_window, _extract_context_snippet
 
 
 class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -80,10 +105,6 @@ class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
         Column offset of match end.
     submatch_index
         Which submatch on this line.
-    context_before
-        Lines before match (line_no -> text).
-    context_after
-        Lines after match (line_no -> text).
     """
 
     file: str
@@ -94,8 +115,6 @@ class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
     match_start: int
     match_end: int
     submatch_index: int = 0
-    context_before: dict[int, str] | None = None
-    context_after: dict[int, str] | None = None
 
 
 class SearchStats(msgspec.Struct, omit_defaults=True):
@@ -120,6 +139,8 @@ class SearchStats(msgspec.Struct, omit_defaults=True):
     total_matches: int
     truncated: bool = False
     timed_out: bool = False
+    max_files_hit: bool = False
+    max_matches_hit: bool = False
 
 
 class EnrichedMatch(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -224,7 +245,7 @@ def build_candidate_searcher(
         .set_working_directory(root)
         .add_safe_defaults()
         .include_type("py")
-        .case_sensitive(True)
+        .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .before_context(1)
         .after_context(1)
         .max_count(limits.max_matches_per_file)
@@ -281,6 +302,8 @@ def collect_candidates(
     seen_files: set[str] = set()
     truncated = False
     timed_out = False
+    max_files_hit = False
+    max_matches_hit = False
 
     try:
         results = search_sync_with_timeout(
@@ -291,40 +314,28 @@ def collect_candidates(
         timed_out = True
         results: list[RipGrepSearchResult] = []
 
-    # Build context map from rpygrep helpers if available
-    context_map: dict[tuple[str, int], tuple[dict[int, str], dict[int, str]]] = {}
-    try:
-        from rpygrep.helpers import MatchedFile
-
-        matched_files = MatchedFile.from_search_results(results, before_context=1, after_context=1)
-        for mf in matched_files:
-            for ml in mf.matched_lines:
-                for line_no in ml.match:
-                    context_map[str(mf.path), line_no] = (ml.before, ml.after)
-    except Exception:
-        context_map = {}
-
     for result in results:
         file_path = str(result.path)
         if file_path not in seen_files:
             if len(seen_files) >= limits.max_files:
                 truncated = True
+                max_files_hit = True
                 break
             seen_files.add(file_path)
 
         for match in result.matches:
             if len(matches) >= limits.max_total_matches:
                 truncated = True
+                max_matches_hit = True
                 break
 
             line_text = match.data.lines.text or ""
-            before, after = context_map.get((file_path, match.data.line_number), ({}, {}))
-
             # Emit one RawMatch per submatch
             if match.data.submatches:
                 for i, sub in enumerate(match.data.submatches):
                     if len(matches) >= limits.max_total_matches:
                         truncated = True
+                        max_matches_hit = True
                         break
                     raw = RawMatch(
                         file=file_path,
@@ -335,8 +346,6 @@ def collect_candidates(
                         match_start=sub.start,
                         match_end=sub.end,
                         submatch_index=i,
-                        context_before=before if before else None,
-                        context_after=after if after else None,
                     )
                     matches.append(raw)
             else:
@@ -349,8 +358,6 @@ def collect_candidates(
                     match_start=0,
                     match_end=len(line_text),
                     submatch_index=0,
-                    context_before=before if before else None,
-                    context_after=after if after else None,
                 )
                 matches.append(raw)
 
@@ -363,98 +370,11 @@ def collect_candidates(
         total_matches=len(matches),
         truncated=truncated,
         timed_out=timed_out,
+        max_files_hit=max_files_hit,
+        max_matches_hit=max_matches_hit,
     )
 
     return matches, stats
-
-
-def _compute_context_window(
-    call_line: int,
-    def_lines: list[tuple[int, int]],
-    total_lines: int,
-) -> dict[str, int]:
-    """Compute context window for a match.
-
-    Parameters
-    ----------
-    call_line
-        Line number of the match.
-    def_lines
-        List of (line_number, indent_level) for all defs.
-    total_lines
-        Total lines in the file.
-
-    Returns
-    -------
-    dict[str, int]
-        Dict with 'start_line' and 'end_line' keys.
-    """
-    containing_def: tuple[int, int] | None = None
-    for def_line, def_indent in reversed(def_lines):
-        if def_line < call_line:
-            containing_def = (def_line, def_indent)
-            break
-
-    if containing_def is None:
-        return {"start_line": 1, "end_line": total_lines}
-
-    start_line, def_indent = containing_def
-    end_line = total_lines
-
-    for def_line, indent in def_lines:
-        if def_line > start_line and indent <= def_indent:
-            end_line = def_line - 1
-            break
-
-    return {"start_line": start_line, "end_line": end_line}
-
-
-def _extract_context_snippet(
-    source_lines: list[str],
-    start_line: int,
-    end_line: int,
-    *,
-    max_lines: int = 30,
-) -> str | None:
-    """Extract source snippet for context window.
-
-    Parameters
-    ----------
-    source_lines
-        All lines of the source file.
-    start_line
-        1-indexed start line.
-    end_line
-        1-indexed end line.
-    max_lines
-        Maximum lines before truncation.
-
-    Returns
-    -------
-    str | None
-        Extracted snippet, or None on error.
-    """
-    try:
-        start_idx = max(0, start_line - 1)
-        end_idx = min(len(source_lines), end_line)
-        snippet_lines = source_lines[start_idx:end_idx]
-
-        if not snippet_lines:
-            return None
-
-        total = len(snippet_lines)
-        if total <= max_lines:
-            return "\n".join(snippet_lines)
-
-        head_count = 15
-        tail_count = 5
-        omitted = total - head_count - tail_count
-        head = snippet_lines[:head_count]
-        tail = snippet_lines[-tail_count:]
-        marker = f"    # ... truncated ({omitted} more lines) ..."
-        return "\n".join([*head, marker, *tail])
-    except (IndexError, TypeError):
-        return None
 
 
 def classify_match(
@@ -510,11 +430,14 @@ def classify_match(
             evidence_kind="rg_only",
         )
 
-    sg_root = get_sg_root(file_path)
-
     ast_result: NodeClassification | None = None
-    if sg_root is not None:
-        ast_result = classify_from_node(sg_root, raw.line, raw.col)
+    record_result = classify_from_records(file_path, root, raw.line, raw.col)
+    if record_result is not None:
+        ast_result = record_result
+    else:
+        sg_root = get_sg_root(file_path)
+        if sg_root is not None:
+            ast_result = classify_from_node(sg_root, raw.line, raw.col)
 
     # Determine best classification
     if ast_result is not None:
@@ -541,12 +464,13 @@ def classify_match(
     if enable_symtable and category in {"definition", "callsite", "reference", "assignment"}:
         source = get_cached_source(file_path)
         if source is not None:
-            symtable_enrichment = enrich_with_symtable(
-                source,
-                raw.file,
-                match_text,
-                raw.line,
-            )
+            table = get_symtable_table(file_path, source)
+            if table is not None:
+                symtable_enrichment = enrich_with_symtable_from_table(
+                    table,
+                    match_text,
+                    raw.line,
+                )
 
     # Compute context window and snippet
     context_window: dict[str, int] | None = None
@@ -554,10 +478,11 @@ def classify_match(
     source = get_cached_source(file_path)
     if source is not None:
         source_lines = source.splitlines()
-        def_lines = find_def_lines(file_path)
+        def_lines = get_def_lines_cached(file_path)
         if def_lines:
-            context_window = _compute_context_window(raw.line, def_lines, len(source_lines))
-            context_snippet = _extract_context_snippet(
+            compute_context_window, extract_context_snippet = _get_context_helpers()
+            context_window = compute_context_window(raw.line, def_lines, len(source_lines))
+            context_snippet = extract_context_snippet(
                 source_lines,
                 context_window["start_line"],
                 context_window["end_line"],
@@ -658,6 +583,7 @@ def _evidence_to_bucket(evidence_kind: str) -> str:
     """
     return {
         "resolved_ast": "high",
+        "resolved_ast_record": "high",
         "resolved_ast_heuristic": "medium",
         "heuristic": "medium",
         "rg_only": "low",
@@ -701,12 +627,14 @@ def _category_message(category: MatchCategory, match: EnrichedMatch) -> str:
 def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     """Convert EnrichedMatch to Finding.
 
+    Used by the smart search pipeline to emit standardized findings.
+
     Parameters
     ----------
     match
         Enriched match.
-    root
-        Repository root.
+    _root
+        Repository root (unused; kept for interface compatibility).
 
     Returns
     -------
@@ -896,15 +824,22 @@ def build_summary(
         "context_lines": {"before": 1, "after": 1},
         "limit": limit if limit is not None else limits.max_total_matches,
         "scanned_files": stats.scanned_files,
+        "scanned_files_is_estimate": True,
         "matched_files": stats.matched_files,
         "total_matches": stats.total_matches,
         "returned_matches": len(matches),
         "scan_method": "hybrid",
         "pattern": pattern,
         "case_sensitive": True,
-        "caps_hit": "timeout"
-        if stats.timed_out
-        else ("max_total_matches" if stats.truncated else "none"),
+        "caps_hit": (
+            "timeout"
+            if stats.timed_out
+            else (
+                "max_files"
+                if stats.max_files_hit
+                else ("max_total_matches" if stats.max_matches_hit else "none")
+            )
+        ),
         "truncated": stats.truncated,
         "timed_out": stats.timed_out,
     }
@@ -943,11 +878,7 @@ def build_sections(
     non_code_categories = {"docstring_match", "comment_match", "string_match"}
 
     # Sort by relevance
-    sorted_matches = sorted(
-        matches,
-        key=lambda m: compute_relevance_score(m),
-        reverse=True,
-    )
+    sorted_matches = sorted(matches, key=compute_relevance_score, reverse=True)
 
     visible_matches = (
         sorted_matches
@@ -1162,7 +1093,7 @@ def smart_search(
         summary=summary,
         sections=sections,
         key_findings=sections[0].findings[:5] if sections else [],
-        evidence=[build_finding(m, root) for m in enriched_matches],
+        evidence=[build_finding(m, root) for m in enriched_matches[:MAX_EVIDENCE]],
     )
 
 

@@ -212,6 +212,8 @@ def compile_query(query: Query) -> ToolPlan:
     query
         Parsed query to compile.
 
+    Used by the CLI query command and bundle builders to create execution plans.
+
     Returns
     -------
     ToolPlan
@@ -225,7 +227,15 @@ def compile_query(query: Query) -> ToolPlan:
 
 
 def _compile_entity_query(query: Query) -> ToolPlan:
-    """Compile an entity-based query into a ToolPlan."""
+    """Compile an entity-based query into a ToolPlan.
+
+    Used by ``compile_query`` when a query targets entities (functions, classes, etc.).
+
+    Returns
+    -------
+    ToolPlan
+        Execution plan for the entity query.
+    """
     # Determine required ast-grep record types based on query
     sg_record_types = _determine_record_types(query)
 
@@ -249,7 +259,15 @@ def _compile_entity_query(query: Query) -> ToolPlan:
 
 
 def _compile_pattern_query(query: Query) -> ToolPlan:
-    """Compile a pattern-based query into a ToolPlan."""
+    """Compile a pattern-based query into a ToolPlan.
+
+    Used by ``compile_query`` when a query uses ast-grep patterns.
+
+    Returns
+    -------
+    ToolPlan
+        Execution plan for the pattern query.
+    """
     assert query.pattern_spec is not None
 
     # Build ast-grep rule from pattern spec
@@ -276,7 +294,15 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
 
 
 def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
-    """Convert entity query with relational constraints to ast-grep rules."""
+    """Convert entity query with relational constraints to ast-grep rules.
+
+    Used by ``_compile_entity_query`` to translate entity filters into ast-grep rules.
+
+    Returns
+    -------
+    tuple[AstGrepRule, ...]
+        One or more ast-grep rules representing the entity query.
+    """
     assert query.entity is not None
 
     # Map entity types to ast-grep patterns/kinds
@@ -349,7 +375,7 @@ def _apply_relational_constraints(
     def _normalize_stop_by(constraint: RelationalConstraint) -> str | None:
         if constraint.stop_by != "neighbor":
             return str(constraint.stop_by)
-        if constraint.operator not in ("inside", "has"):
+        if constraint.operator not in {"inside", "has"}:
             return None
         pattern = constraint.pattern.strip()
         if pattern.startswith(("class ", "def ", "async def ")):
@@ -392,7 +418,15 @@ def _apply_relational_constraints(
 
 
 def _determine_record_types(query: Query) -> set[str]:
-    """Determine which ast-grep record types are needed."""
+    """Determine which ast-grep record types are needed.
+
+    Used by ``_compile_entity_query`` to determine ast-grep extraction types.
+
+    Returns
+    -------
+    set[str]
+        Set of ast-grep record types required by the query.
+    """
     record_types: set[str] = set()
 
     # Base record types based on entity
@@ -412,7 +446,7 @@ def _determine_record_types(query: Query) -> set[str]:
 
     # Add record types based on expanders
     for expander in query.expand:
-        if expander.kind in ("callers", "callees"):
+        if expander.kind in {"callers", "callees"}:
             record_types.add("def")
             record_types.add("call")
         elif expander.kind == "imports":
@@ -434,33 +468,43 @@ def _determine_record_types(query: Query) -> set[str]:
 
 
 def _needs_symtable(query: Query) -> bool:
-    """Check if query requires symtable information."""
+    """Check if query requires symtable information.
+
+    Used by plan compilation to decide if symtable analysis is needed.
+
+    Returns
+    -------
+    bool
+        True if symtable analysis is required.
+    """
     # Symtable needed for scope analysis
     if any(e.kind == "scope" for e in query.expand):
         return True
 
     # Symtable useful for accurate caller/callee resolution
-    if any(e.kind in ("callers", "callees") for e in query.expand):
+    if any(e.kind in {"callers", "callees"} for e in query.expand):
         return True
 
     # Symtable needed for scope filtering (closure detection, etc.)
-    if query.scope_filter is not None:
-        return True
-
-    return False
+    return query.scope_filter is not None
 
 
 def _needs_bytecode(query: Query) -> bool:
-    """Check if query requires bytecode analysis."""
+    """Check if query requires bytecode analysis.
+
+    Used by plan compilation to decide if bytecode inspection is needed.
+
+    Returns
+    -------
+    bool
+        True if bytecode analysis is required.
+    """
     # Bytecode needed for bytecode_surface expander
     if any(e.kind == "bytecode_surface" for e in query.expand):
         return True
 
     # Bytecode useful for more accurate call resolution
-    if "evidence" in query.fields:
-        return True
-
-    return False
+    return "evidence" in query.fields
 
 
 def scope_to_paths(scope: Scope, root: Path) -> list[Path]:
@@ -490,7 +534,15 @@ def scope_to_paths(scope: Scope, root: Path) -> list[Path]:
 
 
 def scope_to_globs(scope: Scope) -> list[str]:
-    """Convert scope constraints to ast-grep globs."""
+    """Convert scope constraints to ast-grep globs.
+
+    Used by the search executor to configure ast-grep include/exclude patterns.
+
+    Returns
+    -------
+    list[str]
+        Glob patterns for ast-grep (including exclusions).
+    """
     globs: list[str] = []
     if scope.globs:
         globs.extend(scope.globs)

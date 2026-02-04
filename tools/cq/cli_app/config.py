@@ -61,9 +61,7 @@ def build_config_chain(
     if config_file:
         providers.append(Toml(Path(config_file), must_exist=True))
     else:
-        providers.append(
-            Toml("pyproject.toml", root_keys=("tool", "cq"), must_exist=False)
-        )
+        providers.append(Toml("pyproject.toml", root_keys=("tool", "cq"), must_exist=False))
 
     return providers
 

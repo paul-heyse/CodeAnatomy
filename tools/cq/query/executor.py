@@ -25,6 +25,7 @@ from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
+from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
@@ -45,68 +46,6 @@ class ScanContext:
     file_index: FileIntervalIndex
     calls_by_def: dict[SgRecord, list[SgRecord]]
     all_records: list[SgRecord]
-
-
-@dataclass
-class IntervalIndex:
-    """Index for efficient interval containment queries.
-
-    Enables O(log n) lookup of which definition contains a given position.
-    """
-
-    # Sorted list of (start_line, end_line, record) tuples
-    intervals: list[tuple[int, int, SgRecord]]
-
-    @classmethod
-    def from_records(cls, records: list[SgRecord]) -> IntervalIndex:
-        """Build interval index from definition records."""
-        intervals = [(r.start_line, r.end_line, r) for r in records]
-        # Sort by start line, then by end line (larger spans first for nesting)
-        intervals.sort(key=lambda x: (x[0], -x[1]))
-        return cls(intervals=intervals)
-
-    def find_containing(self, line: int) -> SgRecord | None:
-        """Find the innermost definition containing the given line.
-
-        Returns None if no definition contains the line.
-        """
-        # Binary search for candidates
-        candidates: list[SgRecord] = []
-        for start, end, record in self.intervals:
-            if start <= line <= end:
-                candidates.append(record)
-            elif start > line:
-                break
-
-        if not candidates:
-            return None
-
-        # Return innermost (smallest span)
-        return min(candidates, key=lambda r: r.end_line - r.start_line)
-
-
-@dataclass(frozen=True)
-class FileIntervalIndex:
-    """Per-file interval indexes to avoid cross-file attribution."""
-
-    by_file: dict[str, IntervalIndex]
-
-    @classmethod
-    def from_records(cls, records: list[SgRecord]) -> FileIntervalIndex:
-        """Build per-file interval indexes."""
-        grouped = group_records_by_file(records)
-        return cls(
-            by_file={
-                file_path: IntervalIndex.from_records(recs) for file_path, recs in grouped.items()
-            }
-        )
-
-    def find_containing(self, record: SgRecord) -> SgRecord | None:
-        """Find the innermost definition containing the record."""
-        index = self.by_file.get(record.file)
-        if index is None:
-            return None
-        return index.find_containing(record.start_line)
 
 
 def execute_plan(
@@ -169,7 +108,13 @@ def _execute_entity_query(
     argv: list[str] | None,
     started_ms: float,
 ) -> CqResult:
-    """Execute an entity-based query."""
+    """Execute an entity-based query.
+
+    Returns
+    -------
+    CqResult
+        Query result with findings and summary metadata.
+    """
     # Get paths to scan
     paths = scope_to_paths(plan.scope, root)
     if not paths:
@@ -287,7 +232,13 @@ def _execute_pattern_query(
     argv: list[str] | None,
     started_ms: float,
 ) -> CqResult:
-    """Execute a pattern-based query using inline ast-grep rules."""
+    """Execute a pattern-based query using inline ast-grep rules.
+
+    Returns
+    -------
+    CqResult
+        Query result with findings and summary metadata.
+    """
     scope_globs = scope_to_globs(plan.scope)
     if not tc.has_sgpy:
         run = mk_runmeta(
@@ -341,7 +292,7 @@ def _execute_pattern_query(
         return result
 
     # Execute ast-grep rules
-    findings, records, raw_matches = _execute_ast_grep_rules(
+    findings, records, _ = _execute_ast_grep_rules(
         plan.sg_rules,
         paths,
         root,
@@ -397,7 +348,7 @@ def _execute_ast_grep_rules(
     paths: list[Path],
     root: Path,
     query: Query | None = None,
-    globs: list[str] | None = None,
+    _globs: list[str] | None = None,
 ) -> tuple[list[Finding], list[SgRecord], list[dict]]:
     """Execute ast-grep rules using ast-grep-py and return findings.
 
@@ -411,7 +362,7 @@ def _execute_ast_grep_rules(
         Repository root
     query
         Optional query for metavar filtering
-    globs
+    _globs
         Optional glob filters (not used with ast-grep-py, filtering done upstream)
 
     Returns
@@ -585,7 +536,13 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, object]:
 
 
 def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
-    """Convert ast-grep match to Finding and SgRecord."""
+    """Convert ast-grep match to Finding and SgRecord.
+
+    Returns
+    -------
+    tuple[Finding | None, SgRecord | None]
+        Finding and record for the match when available.
+    """
     if "range" not in data or "file" not in data:
         return None, None
 
@@ -634,7 +591,13 @@ def _collect_match_spans(
     query: Query,
     globs: list[str] | None,
 ) -> dict[str, list[tuple[int, int]]]:
-    """Collect matched spans for relational constraints using ast-grep-py."""
+    """Collect matched spans for relational constraints using ast-grep-py.
+
+    Returns
+    -------
+    dict[str, list[tuple[int, int]]]
+        Mapping from file to matched (start_line, end_line) spans.
+    """
     from tools.cq.query.metavar import apply_metavar_filters
 
     repo_context = resolve_repo_context(root)
@@ -665,7 +628,11 @@ def _collect_match_spans(
             if rule.requires_inline_rule():
                 rule_config = cast("dict[str, object]", {"rule": rule_dict})
                 matches = node.find_all(rule_config)
-            elif "pattern" in rule_dict and rule_dict.get("pattern") in {"$FUNC", "$METHOD", "$CLASS"}:
+            elif "pattern" in rule_dict and rule_dict.get("pattern") in {
+                "$FUNC",
+                "$METHOD",
+                "$CLASS",
+            }:
                 kind = rule_dict.get("kind")
                 if kind:
                     matches = node.find_all(kind=kind)
@@ -721,7 +688,13 @@ def _filter_records_by_spans(
     records: list[SgRecord],
     spans: dict[str, list[tuple[int, int]]],
 ) -> list[SgRecord]:
-    """Filter records to those overlapping matched spans."""
+    """Filter records to those overlapping matched spans.
+
+    Returns
+    -------
+    list[SgRecord]
+        Records that overlap the provided spans.
+    """
     if not spans:
         return records
 
@@ -738,7 +711,13 @@ def _filter_records_by_spans(
 
 
 def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
-    """Return a stable key for a record."""
+    """Return a stable key for a record.
+
+    Returns
+    -------
+    tuple[str, int, int, int, int]
+        Stable key identifying a record location.
+    """
     return (
         record.file,
         record.start_line,
@@ -749,7 +728,13 @@ def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
 
 
 def _normalize_match_file(file_path: str, root: Path) -> str:
-    """Normalize match paths to repo-relative POSIX strings."""
+    """Normalize match paths to repo-relative POSIX strings.
+
+    Returns
+    -------
+    str
+        Repository-relative POSIX path.
+    """
     path = Path(file_path)
     if path.is_absolute():
         try:
@@ -763,7 +748,13 @@ def _build_def_evidence_map(
     def_records: list[SgRecord],
     root: Path,
 ) -> dict[tuple[str, int, int, int, int], dict[str, object]]:
-    """Build a map of definition records to symtable/bytecode evidence."""
+    """Build a map of definition records to symtable/bytecode evidence.
+
+    Returns
+    -------
+    dict[tuple[str, int, int, int, int], dict[str, object]]
+        Evidence details keyed by record location.
+    """
     from tools.cq.query.enrichment import BytecodeInfo, SymtableInfo, enrich_records
 
     unique_records: dict[tuple[str, int, int, int, int], SgRecord] = {}
@@ -912,13 +903,13 @@ def _process_decorator_query(
     candidate_records = def_candidates if def_candidates is not None else ctx.def_records
     for def_record in candidate_records:
         # Skip non-function/class definitions
-        if def_record.kind not in (
+        if def_record.kind not in {
             "function",
             "async_function",
             "function_typeparams",
             "class",
             "class_bases",
-        ):
+        }:
             continue
 
         # Check if matches name pattern
@@ -947,17 +938,23 @@ def _process_decorator_query(
             count = len(decorators)
 
             # Filter by decorated_by
-            if query.decorator_filter.decorated_by:
-                if query.decorator_filter.decorated_by not in decorators:
-                    continue
+            if (
+                query.decorator_filter.decorated_by
+                and query.decorator_filter.decorated_by not in decorators
+            ):
+                continue
 
             # Filter by count
-            if query.decorator_filter.decorator_count_min is not None:
-                if count < query.decorator_filter.decorator_count_min:
-                    continue
-            if query.decorator_filter.decorator_count_max is not None:
-                if count > query.decorator_filter.decorator_count_max:
-                    continue
+            if (
+                query.decorator_filter.decorator_count_min is not None
+                and count < query.decorator_filter.decorator_count_min
+            ):
+                continue
+            if (
+                query.decorator_filter.decorator_count_max is not None
+                and count > query.decorator_filter.decorator_count_max
+            ):
+                continue
 
         # Only include if has decorators (for entity=decorator queries)
         if decorator_info.get("decorator_count", 0) > 0:
@@ -1159,7 +1156,13 @@ def _filter_to_matching(
     def_records: list[SgRecord],
     query: Query,
 ) -> list[SgRecord]:
-    """Filter definitions to those matching the query."""
+    """Filter definitions to those matching the query.
+
+    Returns
+    -------
+    list[SgRecord]
+        Records that match the query filters.
+    """
     matching: list[SgRecord] = []
 
     for record in def_records:
@@ -1177,7 +1180,13 @@ def _filter_to_matching(
 
 
 def _matches_entity(record: SgRecord, entity: str | None) -> bool:
-    """Check if record matches entity type."""
+    """Check if record matches entity type.
+
+    Returns
+    -------
+    bool
+        True if the record matches the entity type.
+    """
     if entity is None:
         return False
 
@@ -1218,7 +1227,13 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
 
 
 def _matches_name(record: SgRecord, name: str) -> bool:
-    """Check if record matches name pattern."""
+    """Check if record matches name pattern.
+
+    Returns
+    -------
+    bool
+        True if the record matches the name pattern.
+    """
     # Extract name based on record type
     if record.record == "import":
         extracted_name = _extract_import_name(record)
@@ -1240,7 +1255,13 @@ def _matches_name(record: SgRecord, name: str) -> bool:
 
 
 def _extract_def_name(record: SgRecord) -> str | None:
-    """Extract the name from a definition record."""
+    """Extract the name from a definition record.
+
+    Returns
+    -------
+    str | None
+        Definition name when available.
+    """
     text = record.text.lstrip()
 
     # Match def name(...) or class name
@@ -1257,6 +1278,11 @@ def _extract_import_name(record: SgRecord) -> str | None:
 
     For single imports, returns the imported name or alias.
     For multi-imports (comma-separated or parenthesized), returns the module name.
+
+    Returns
+    -------
+    str | None
+        Imported name or module name when extractable.
     """
     text = record.text.strip()
     kind = record.kind
@@ -1270,25 +1296,43 @@ def _extract_import_name(record: SgRecord) -> str | None:
         return _extract_from_import(text)
     if kind == "from_import_as":
         return _extract_from_import_alias(text)
-    if kind in ("from_import_multi", "from_import_paren"):
+    if kind in {"from_import_multi", "from_import_paren"}:
         return _extract_from_module(text)
     return None
 
 
 def _extract_simple_import(text: str) -> str | None:
-    """Extract name from 'import foo' or 'import foo.bar'."""
+    """Extract name from 'import foo' or 'import foo.bar'.
+
+    Returns
+    -------
+    str | None
+        Imported module name when found.
+    """
     match = re.match(r"import\s+([\w.]+)", text)
     return match.group(1) if match else None
 
 
 def _extract_import_alias(text: str) -> str | None:
-    """Extract alias from 'import foo as bar'."""
+    """Extract alias from 'import foo as bar'.
+
+    Returns
+    -------
+    str | None
+        Alias name when found.
+    """
     match = re.match(r"import\s+[\w.]+\s+as\s+(\w+)", text)
     return match.group(1) if match else None
 
 
 def _extract_from_import(text: str) -> str | None:
-    """Extract name from 'from x import y' (single import only)."""
+    """Extract name from 'from x import y' (single import only).
+
+    Returns
+    -------
+    str | None
+        Imported name or module name when extractable.
+    """
     if "," not in text:
         match = re.search(r"import\s+(\w+)\s*$", text)
         if match:
@@ -1298,13 +1342,25 @@ def _extract_from_import(text: str) -> str | None:
 
 
 def _extract_from_import_alias(text: str) -> str | None:
-    """Extract alias from 'from x import y as z'."""
+    """Extract alias from 'from x import y as z'.
+
+    Returns
+    -------
+    str | None
+        Alias name when found.
+    """
     match = re.search(r"as\s+(\w+)\s*$", text)
     return match.group(1) if match else None
 
 
 def _extract_from_module(text: str) -> str | None:
-    """Extract module name from 'from x import ...'."""
+    """Extract module name from 'from x import ...'.
+
+    Returns
+    -------
+    str | None
+        Module name when found.
+    """
     match = re.match(r"from\s+([\w.]+)", text)
     return match.group(1) if match else None
 
@@ -1313,7 +1369,13 @@ def _def_to_finding(
     def_record: SgRecord,
     calls_within: list[SgRecord],
 ) -> Finding:
-    """Convert a definition record to a Finding."""
+    """Convert a definition record to a Finding.
+
+    Returns
+    -------
+    Finding
+        Finding describing the definition record.
+    """
     def_name = _extract_def_name(def_record) or "unknown"
 
     # Build anchor
@@ -1355,7 +1417,13 @@ def _def_to_finding(
 
 
 def _import_to_finding(import_record: SgRecord) -> Finding:
-    """Convert an import record to a Finding."""
+    """Convert an import record to a Finding.
+
+    Returns
+    -------
+    Finding
+        Finding describing the import record.
+    """
     import_name = _extract_import_name(import_record) or "unknown"
 
     anchor = Anchor(
@@ -1367,12 +1435,12 @@ def _import_to_finding(import_record: SgRecord) -> Finding:
     )
 
     # Determine category based on import kind
-    if import_record.kind in (
+    if import_record.kind in {
         "from_import",
         "from_import_as",
         "from_import_multi",
         "from_import_paren",
-    ):
+    }:
         category = "from_import"
     else:
         category = "import"
@@ -1396,7 +1464,13 @@ def _build_callers_section(
     index: FileIntervalIndex,
     root: Path,
 ) -> Section:
-    """Build section showing callers of target definitions."""
+    """Build section showing callers of target definitions.
+
+    Returns
+    -------
+    Section
+        Callers section for the report.
+    """
     findings: list[Finding] = []
 
     # Get names of target definitions
@@ -1435,9 +1509,12 @@ def _build_callers_section(
                     methods = class_methods.get(caller_class_name, set())
                     if call_target not in methods:
                         continue
-        if receiver is None and call_target in method_targets:
-            if call_target not in function_targets:
-                continue
+        if (
+            receiver is None
+            and call_target in method_targets
+            and call_target not in function_targets
+        ):
+            continue
         call_contexts.append((call, call_target, containing))
 
     containing_defs = [containing for _, _, containing in call_contexts if containing is not None]
@@ -1481,7 +1558,13 @@ def _build_callees_section(
     calls_by_def: dict[SgRecord, list[SgRecord]],
     root: Path,
 ) -> Section:
-    """Build section showing callees for target definitions."""
+    """Build section showing callees for target definitions.
+
+    Returns
+    -------
+    Section
+        Callees section for the report.
+    """
     findings: list[Finding] = []
     evidence_map = _build_def_evidence_map(target_defs, root)
 
@@ -1522,7 +1605,13 @@ def _build_imports_section(
     target_defs: list[SgRecord],
     all_records: list[SgRecord],
 ) -> Section:
-    """Build section showing imports within target files."""
+    """Build section showing imports within target files.
+
+    Returns
+    -------
+    Section
+        Imports section for the report.
+    """
     target_files = {record.file for record in target_defs}
     findings: list[Finding] = []
 
@@ -1544,7 +1633,13 @@ def _build_raises_section(
     all_records: list[SgRecord],
     index: FileIntervalIndex,
 ) -> Section:
-    """Build section showing raises/excepts within target definitions."""
+    """Build section showing raises/excepts within target definitions.
+
+    Returns
+    -------
+    Section
+        Raises section for the report.
+    """
     findings: list[Finding] = []
     target_def_keys = {_record_key(record) for record in target_defs}
 
@@ -1583,7 +1678,13 @@ def _build_scope_section(
     root: Path,
     calls_by_def: dict[SgRecord, list[SgRecord]],
 ) -> Section:
-    """Build section showing scope details for target definitions."""
+    """Build section showing scope details for target definitions.
+
+    Returns
+    -------
+    Section
+        Scope section for the report.
+    """
     from tools.cq.query.enrichment import SymtableEnricher
 
     findings: list[Finding] = []
@@ -1621,7 +1722,13 @@ def _build_bytecode_surface_section(
     target_defs: list[SgRecord],
     root: Path,
 ) -> Section:
-    """Build section showing bytecode surface info for target definitions."""
+    """Build section showing bytecode surface info for target definitions.
+
+    Returns
+    -------
+    Section
+        Bytecode surface section for the report.
+    """
     from tools.cq.query.enrichment import enrich_records
 
     findings: list[Finding] = []
@@ -1669,7 +1776,13 @@ def _call_to_finding(
     *,
     extra_details: dict[str, object] | None = None,
 ) -> Finding:
-    """Convert a call record to a Finding."""
+    """Convert a call record to a Finding.
+
+    Returns
+    -------
+    Finding
+        Finding describing the callsite.
+    """
     call_target = _extract_call_target(record) or "<unknown>"
     anchor = Anchor(
         file=record.file,
@@ -1691,11 +1804,17 @@ def _call_to_finding(
 
 
 def _extract_call_target(call: SgRecord) -> str:
-    """Extract the target name from a call record."""
+    """Extract the target name from a call record.
+
+    Returns
+    -------
+    str
+        Extracted target name.
+    """
     text = call.text.lstrip()
 
     # For attribute calls (obj.method()), extract the method name
-    if call.kind == "attr_call" or call.kind == "attr":
+    if call.kind in {"attr_call", "attr"}:
         match = re.search(r"\.(\w+)\s*\(", text)
         if match:
             return match.group(1)
@@ -1709,7 +1828,13 @@ def _extract_call_target(call: SgRecord) -> str:
 
 
 def _extract_call_receiver(call: SgRecord) -> str | None:
-    """Extract the receiver name for attribute calls."""
+    """Extract the receiver name for attribute calls.
+
+    Returns
+    -------
+    str | None
+        Receiver name when present.
+    """
     if call.kind not in {"attr_call", "attr"}:
         return None
     match = re.search(r"(\w+)\s*\.", call.text.lstrip())
@@ -1722,7 +1847,13 @@ def _find_enclosing_class(
     record: SgRecord,
     index: FileIntervalIndex,
 ) -> SgRecord | None:
-    """Find the innermost class containing a record."""
+    """Find the innermost class containing a record.
+
+    Returns
+    -------
+    SgRecord | None
+        Enclosing class record when found.
+    """
     class_kinds = {
         "class",
         "class_bases",
@@ -1746,6 +1877,12 @@ def _find_enclosing_class(
 
 
 def _extract_call_name(call: SgRecord) -> str | None:
-    """Extract the name for callsite matching."""
+    """Extract the name for callsite matching.
+
+    Returns
+    -------
+    str | None
+        Extracted call name when available.
+    """
     target = _extract_call_target(call)
     return target or None

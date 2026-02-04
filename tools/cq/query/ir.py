@@ -56,32 +56,50 @@ StopByMode = Literal["neighbor", "end"]
 MetaVarKind = Literal["single", "multi", "unnamed"]
 
 # Common Python AST field names for field-scoped searches
-PYTHON_AST_FIELDS: frozenset[str] = frozenset({
-    # Function
-    "name", "args", "body", "decorator_list", "returns", "type_params",
-    # Arguments
-    "posonlyargs", "vararg", "kwonlyargs", "kw_defaults", "kwarg", "defaults",
-    # Class
-    "bases", "keywords",
-    # Dict
-    "keys", "values",
-    # Call
-    "func",
-    # Subscript
-    "value", "slice",
-    # Attribute
-    "attr",
-    # Assign
-    "targets",
-    # If/While/For
-    "test", "orelse",
-    # Try
-    "handlers", "finalbody",
-    # With
-    "items",
-    # Match
-    "subject", "cases",
-})
+PYTHON_AST_FIELDS: frozenset[str] = frozenset(
+    {
+        # Function
+        "name",
+        "args",
+        "body",
+        "decorator_list",
+        "returns",
+        "type_params",
+        # Arguments
+        "posonlyargs",
+        "vararg",
+        "kwonlyargs",
+        "kw_defaults",
+        "kwarg",
+        "defaults",
+        # Class
+        "bases",
+        "keywords",
+        # Dict
+        "keys",
+        "values",
+        # Call
+        "func",
+        # Subscript
+        "value",
+        "slice",
+        # Attribute
+        "attr",
+        # Assign
+        "targets",
+        # If/While/For
+        "test",
+        "orelse",
+        # Try
+        "handlers",
+        "finalbody",
+        # With
+        "items",
+        # Match
+        "subject",
+        "cases",
+    }
+)
 
 
 class Expander(msgspec.Struct, frozen=True):
@@ -271,11 +289,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
             - selector is provided (for node extraction)
             - strictness is not "smart" (default)
         """
-        return (
-            self.context is not None
-            or self.selector is not None
-            or self.strictness != "smart"
-        )
+        return self.context is not None or self.selector is not None or self.strictness != "smart"
 
     def to_yaml_dict(self) -> dict:
         """Convert to ast-grep YAML rule format.
@@ -346,9 +360,16 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
     field_name: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate constraint configuration."""
+        """Validate constraint configuration.
+
+        Raises
+        ------
+        ValueError
+            If a field constraint is used with a relational operator that
+            does not support field scoping.
+        """
         # precedes/follows don't support field constraint
-        if self.operator in ("precedes", "follows") and self.field_name:
+        if self.operator in {"precedes", "follows"} and self.field_name:
             msg = f"{self.operator!r} operator does not support 'field' constraint"
             raise ValueError(msg)
 
@@ -365,7 +386,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
         if self.stop_by != "neighbor":
             inner["stopBy"] = self.stop_by
 
-        if self.field_name and self.operator in ("inside", "has"):
+        if self.field_name and self.operator in {"inside", "has"}:
             inner["field"] = self.field_name
 
         return {self.operator: inner}
@@ -396,12 +417,12 @@ class CompositeRule(msgspec.Struct, frozen=True):
     --------
     Match functions with specific patterns:
     ```
-    all=['def $F($$$)', 'inside=class Config']
+    all = ["def $F($$$)", "inside=class Config"]
     ```
 
     Match any logging pattern:
     ```
-    any=['logger.$M($$$)', 'print($$$)', 'console.log($$$)']
+    any = ["logger.$M($$$)", "print($$$)", "console.log($$$)"]
     ```
 
     Exclude debug statements:
@@ -421,6 +442,11 @@ class CompositeRule(msgspec.Struct, frozen=True):
         -------
         dict
             Dictionary suitable for ast-grep YAML rule.
+
+        Raises
+        ------
+        ValueError
+            If a ``not`` rule is configured with multiple patterns.
         """
         if self.operator == "not":
             # Not takes a single rule
@@ -497,6 +523,11 @@ class JoinTarget(msgspec.Struct, frozen=True):
         -------
         JoinTarget
             Parsed join target.
+
+        Raises
+        ------
+        ValueError
+            If the target entity is not a supported join type.
         """
         if ":" in spec:
             entity_str, name = spec.split(":", 1)
@@ -583,7 +614,13 @@ class Query(msgspec.Struct, frozen=True):
     nth_child: NthChildSpec | None = None
 
     def __post_init__(self) -> None:
-        """Validate query configuration."""
+        """Validate query configuration.
+
+        Raises
+        ------
+        ValueError
+            If neither or both of ``entity`` and ``pattern_spec`` are set.
+        """
         if self.entity is None and self.pattern_spec is None:
             msg = "Query must specify either 'entity' or 'pattern_spec'"
             raise ValueError(msg)
@@ -597,7 +634,15 @@ class Query(msgspec.Struct, frozen=True):
         return self.pattern_spec is not None
 
     def with_scope(self, scope: Scope) -> Query:
-        """Return a new Query with updated scope."""
+        """Return a new Query with updated scope.
+
+        Used by bundle builders to apply CLI scope constraints.
+
+        Returns
+        -------
+        Query
+            New Query instance with updated scope.
+        """
         return Query(
             entity=self.entity,
             name=self.name,
@@ -617,7 +662,15 @@ class Query(msgspec.Struct, frozen=True):
         )
 
     def with_expand(self, *expanders: Expander) -> Query:
-        """Return a new Query with additional expanders."""
+        """Return a new Query with additional expanders.
+
+        Used by bundle builders to add CLI ``expand`` options.
+
+        Returns
+        -------
+        Query
+            New Query instance with expanded graph options.
+        """
         return Query(
             entity=self.entity,
             name=self.name,
@@ -637,7 +690,15 @@ class Query(msgspec.Struct, frozen=True):
         )
 
     def with_fields(self, *fields: FieldType) -> Query:
-        """Return a new Query with specified fields."""
+        """Return a new Query with specified fields.
+
+        Used by bundle builders to override field selections.
+
+        Returns
+        -------
+        Query
+            New Query instance with updated field selection.
+        """
         return Query(
             entity=self.entity,
             name=self.name,
@@ -657,7 +718,15 @@ class Query(msgspec.Struct, frozen=True):
         )
 
     def with_relational(self, *constraints: RelationalConstraint) -> Query:
-        """Return a new Query with additional relational constraints."""
+        """Return a new Query with additional relational constraints.
+
+        Used by bundle builders to apply CLI ``inside/has/precedes`` filters.
+
+        Returns
+        -------
+        Query
+            New Query instance with appended relational constraints.
+        """
         return Query(
             entity=self.entity,
             name=self.name,

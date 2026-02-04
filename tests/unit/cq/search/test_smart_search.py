@@ -123,8 +123,8 @@ class TestRawMatch:
         assert raw.col == 4
         assert raw.match_text == "build_graph"
 
-    def test_raw_match_with_context(self) -> None:
-        """Test RawMatch with context lines."""
+    def test_raw_match_no_context_fields(self) -> None:
+        """RawMatch should not store line-context payloads."""
         raw = RawMatch(
             file="src/module.py",
             line=10,
@@ -133,11 +133,9 @@ class TestRawMatch:
             match_text="build_graph",
             match_start=9,
             match_end=20,
-            context_before={9: "# Previous line"},
-            context_after={11: "# Next line"},
         )
-        assert raw.context_before == {9: "# Previous line"}
-        assert raw.context_after == {11: "# Next line"}
+        assert not hasattr(raw, "context_before")
+        assert not hasattr(raw, "context_after")
 
 
 class TestSearchStats:
@@ -154,6 +152,8 @@ class TestSearchStats:
         assert stats.matched_files == 10
         assert stats.truncated is False
         assert stats.timed_out is False
+        assert stats.max_files_hit is False
+        assert stats.max_matches_hit is False
 
     def test_search_stats_truncated(self) -> None:
         """Test truncated SearchStats."""
@@ -162,8 +162,10 @@ class TestSearchStats:
             matched_files=10,
             total_matches=500,
             truncated=True,
+            max_matches_hit=True,
         )
         assert stats.truncated is True
+        assert stats.max_matches_hit is True
 
 
 class TestEnrichedMatch:
@@ -432,6 +434,7 @@ class TestBuildSummary:
         assert summary["query"] == "build_graph"
         assert summary["mode"] == "identifier"
         assert summary["scanned_files"] == 100
+        assert summary["scanned_files_is_estimate"] is True
         assert summary["matched_files"] == 10
         assert summary["returned_matches"] == 1
 
@@ -442,6 +445,7 @@ class TestBuildSummary:
             matched_files=10,
             total_matches=500,
             truncated=True,
+            max_matches_hit=True,
         )
         summary = build_summary(
             "build_graph",
@@ -512,6 +516,75 @@ class TestBuildSections:
         if non_code_section:
             assert non_code_section.collapsed is True
 
+    def test_sections_group_by_scope(self, sample_repo: Path) -> None:
+        """Top contexts should group by containing scope within a file."""
+        matches = [
+            EnrichedMatch(
+                file="src/module.py",
+                line=10,
+                col=4,
+                text="build_graph()",
+                match_text="build_graph",
+                category="callsite",
+                confidence=0.95,
+                evidence_kind="resolved_ast",
+                containing_scope="helper",
+            ),
+            EnrichedMatch(
+                file="src/module.py",
+                line=11,
+                col=4,
+                text="build_graph()",
+                match_text="build_graph",
+                category="callsite",
+                confidence=0.95,
+                evidence_kind="resolved_ast",
+                containing_scope="helper",
+            ),
+            EnrichedMatch(
+                file="src/module.py",
+                line=20,
+                col=4,
+                text="build_graph()",
+                match_text="build_graph",
+                category="callsite",
+                confidence=0.95,
+                evidence_kind="resolved_ast",
+                containing_scope="worker",
+            ),
+        ]
+        sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
+        top_contexts = sections[0]
+        messages = {f.message for f in top_contexts.findings}
+        assert "helper (src/module.py)" in messages
+        assert "worker (src/module.py)" in messages
+        assert len(top_contexts.findings) == 2
+
+    def test_sections_include_strings_when_enabled(self, sample_repo: Path) -> None:
+        """Non-code matches should only appear in top contexts when include_strings is set."""
+        matches = [
+            EnrichedMatch(
+                file="src/module.py",
+                line=2,
+                col=0,
+                text="# build_graph comment",
+                match_text="build_graph",
+                category="comment_match",
+                confidence=0.95,
+                evidence_kind="heuristic",
+            )
+        ]
+        sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
+        assert sections[0].findings == []
+        sections_with_strings = build_sections(
+            matches,
+            sample_repo,
+            "build_graph",
+            QueryMode.IDENTIFIER,
+            include_strings=True,
+        )
+        assert len(sections_with_strings[0].findings) == 1
+
 
 class TestSmartSearch:
     """Tests for the full smart search pipeline."""
@@ -553,6 +626,17 @@ class TestSmartSearch:
         result = smart_search(sample_repo, "build_graph")
         # Key findings should be populated from top contexts
         assert len(result.key_findings) > 0 or len(result.sections) == 0
+
+    def test_evidence_cap(self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Evidence should respect MAX_EVIDENCE cap."""
+        import importlib
+
+        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
+
+        clear_caches()
+        monkeypatch.setattr(smart_search_module, "MAX_EVIDENCE", 1)
+        result = smart_search_module.smart_search(sample_repo, "build_graph")
+        assert len(result.evidence) <= 1
 
 
 class TestCandidateSearcher:

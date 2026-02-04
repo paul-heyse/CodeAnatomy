@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from tools.cq.core.artifacts import save_artifact_json
 from tools.cq.core.findings_table import (

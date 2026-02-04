@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from tools.cq.query.sg_parser import SgRecord, filter_records_by_kind
 
@@ -24,11 +23,26 @@ class SymbolKey:
     qualname: str
 
     def __str__(self) -> str:
+        """Render the symbol key in ``module_path:qualname`` form.
+
+        Returns
+        -------
+        str
+            Serialized symbol key.
+        """
         return f"{self.module_path}:{self.qualname}"
 
     @classmethod
     def from_string(cls, key_str: str) -> SymbolKey:
-        """Parse a symbol key from string format."""
+        """Parse a symbol key from string format.
+
+        Used by symbol resolution utilities when deserializing keys.
+
+        Returns
+        -------
+        SymbolKey
+            Parsed symbol key.
+        """
         if ":" not in key_str:
             return cls(module_path="", qualname=key_str)
         parts = key_str.split(":", 1)
@@ -49,7 +63,15 @@ class ImportBinding:
 
     @property
     def original_name(self) -> str:
-        """Get the original name in the source module."""
+        """Get the original name in the source module.
+
+        Used by import resolution to map aliases back to source names.
+
+        Returns
+        -------
+        str
+            Original name as defined in the source module.
+        """
         return self.source_name or self.local_name
 
 
@@ -73,7 +95,6 @@ class SymbolTable:
     def from_records(
         cls,
         records: list[SgRecord],
-        root: Path,
     ) -> SymbolTable:
         """Build symbol table from ast-grep records.
 
@@ -81,8 +102,6 @@ class SymbolTable:
         ----------
         records
             All ast-grep records
-        root
-            Repository root for module path calculation
 
         Returns
         -------
@@ -94,7 +113,7 @@ class SymbolTable:
         # Process definitions
         def_records = filter_records_by_kind(records, "def")
         for record in def_records:
-            key = _build_symbol_key(record, root)
+            key = _build_symbol_key(record)
             if key:
                 table.definitions[str(key)] = record
 
@@ -139,7 +158,15 @@ class SymbolTable:
         return None
 
     def _resolve_import(self, binding: ImportBinding) -> SgRecord | None:
-        """Resolve an imported name to its definition."""
+        """Resolve an imported name to its definition.
+
+        Used by ``resolve`` when a name resolves via an import binding.
+
+        Returns
+        -------
+        SgRecord | None
+            Definition record if resolved.
+        """
         # Convert module to path pattern
         module_parts = binding.source_module.split(".")
 
@@ -153,8 +180,16 @@ class SymbolTable:
         return None
 
 
-def _build_symbol_key(record: SgRecord, root: Path) -> SymbolKey | None:
-    """Build a symbol key for a definition record."""
+def _build_symbol_key(record: SgRecord) -> SymbolKey | None:
+    """Build a symbol key for a definition record.
+
+    Used by ``SymbolTable.from_records`` to index definition records.
+
+    Returns
+    -------
+    SymbolKey | None
+        Symbol key for the record, or None if no name is found.
+    """
     # Extract name from definition
     name = _extract_def_name(record)
     if not name:
@@ -167,7 +202,15 @@ def _build_symbol_key(record: SgRecord, root: Path) -> SymbolKey | None:
 
 
 def _extract_def_name(record: SgRecord) -> str | None:
-    """Extract the name from a definition record."""
+    """Extract the name from a definition record.
+
+    Used by ``_build_symbol_key`` to derive a qualname.
+
+    Returns
+    -------
+    str | None
+        Definition name if one is found.
+    """
     text = record.text.lstrip()
 
     # Match def name(...) or class name
@@ -186,6 +229,13 @@ def _file_to_module_path(file_path: str) -> str:
     --------
         src/cli/app.py -> src/cli/app
         src/cli/__init__.py -> src/cli
+
+    Used by symbol resolution to align file paths with import paths.
+
+    Returns
+    -------
+    str
+        Module-style path without ``.py`` or ``/__init__`` suffixes.
     """
     path = file_path
 
@@ -201,7 +251,15 @@ def _file_to_module_path(file_path: str) -> str:
 
 
 def _parse_import(record: SgRecord) -> list[ImportBinding]:
-    """Parse an import record into import bindings."""
+    """Parse an import record into import bindings.
+
+    Used by ``SymbolTable.from_records`` to track imports.
+
+    Returns
+    -------
+    list[ImportBinding]
+        Import bindings extracted from the record.
+    """
     bindings: list[ImportBinding] = []
     text = record.text
 
@@ -225,17 +283,17 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
             )
         else:
             # Plain import
-            for module in remainder.split(","):
-                module = module.strip()
-                if module:
-                    bindings.append(
-                        ImportBinding(
-                            local_name=module.split(".")[-1],
-                            source_module=module,
-                            source_name=None,
-                            is_from_import=False,
-                        )
-                    )
+    for module_name in remainder.split(","):
+        cleaned_module = module_name.strip()
+        if cleaned_module:
+            bindings.append(
+                ImportBinding(
+                    local_name=cleaned_module.split(".")[-1],
+                    source_module=cleaned_module,
+                    source_name=None,
+                    is_from_import=False,
+                )
+            )
 
     # Handle "from x import y" or "from x import y as z"
     elif text.startswith("from "):
@@ -253,17 +311,17 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
 
             # Parse each imported name
             for name_spec in names_part.split(","):
-                name_spec = name_spec.strip()
-                if not name_spec:
+                cleaned_spec = name_spec.strip()
+                if not cleaned_spec:
                     continue
 
-                if " as " in name_spec:
-                    parts = name_spec.split(" as ", 1)
+                if " as " in cleaned_spec:
+                    parts = cleaned_spec.split(" as ", 1)
                     source_name = parts[0].strip()
                     local_name = parts[1].strip()
                 else:
-                    source_name = name_spec
-                    local_name = name_spec
+                    source_name = cleaned_spec
+                    local_name = cleaned_spec
 
                 bindings.append(
                     ImportBinding(
@@ -313,11 +371,19 @@ def resolve_call_target(
 
 
 def _extract_call_target(call: SgRecord) -> str:
-    """Extract the target name from a call record."""
+    """Extract the target name from a call record.
+
+    Used by ``resolve_call_target`` to normalize call expressions.
+
+    Returns
+    -------
+    str
+        Extracted call target name, or empty string if unknown.
+    """
     text = call.text.lstrip()
 
     # For attribute calls (obj.method()), extract the method name
-    if call.kind in ("attr_call", "attr"):
+    if call.kind in {"attr_call", "attr"}:
         match = re.search(r"\.(\w+)\s*\(", text)
         if match:
             return match.group(1)
@@ -331,17 +397,83 @@ def _extract_call_target(call: SgRecord) -> str:
 
 
 def _is_builtin(name: str) -> bool:
-    """Check if a name is a Python builtin."""
+    """Check if a name is a Python builtin.
+
+    Used by ``resolve_call_target`` to short-circuit builtin calls.
+
+    Returns
+    -------
+    bool
+        True if the name is a builtin.
+    """
     builtins = {
-        "abs", "all", "any", "ascii", "bin", "bool", "breakpoint", "bytearray",
-        "bytes", "callable", "chr", "classmethod", "compile", "complex",
-        "delattr", "dict", "dir", "divmod", "enumerate", "eval", "exec",
-        "filter", "float", "format", "frozenset", "getattr", "globals",
-        "hasattr", "hash", "help", "hex", "id", "input", "int", "isinstance",
-        "issubclass", "iter", "len", "list", "locals", "map", "max",
-        "memoryview", "min", "next", "object", "oct", "open", "ord", "pow",
-        "print", "property", "range", "repr", "reversed", "round", "set",
-        "setattr", "slice", "sorted", "staticmethod", "str", "sum", "super",
-        "tuple", "type", "vars", "zip",
+        "abs",
+        "all",
+        "any",
+        "ascii",
+        "bin",
+        "bool",
+        "breakpoint",
+        "bytearray",
+        "bytes",
+        "callable",
+        "chr",
+        "classmethod",
+        "compile",
+        "complex",
+        "delattr",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "eval",
+        "exec",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "getattr",
+        "globals",
+        "hasattr",
+        "hash",
+        "help",
+        "hex",
+        "id",
+        "input",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "locals",
+        "map",
+        "max",
+        "memoryview",
+        "min",
+        "next",
+        "object",
+        "oct",
+        "open",
+        "ord",
+        "pow",
+        "print",
+        "property",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "staticmethod",
+        "str",
+        "sum",
+        "super",
+        "tuple",
+        "type",
+        "vars",
+        "zip",
     }
     return name in builtins

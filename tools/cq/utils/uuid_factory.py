@@ -53,17 +53,46 @@ def uuid7() -> uuid.UUID:
 
 
 def uuid7_str() -> str:
-    """Return a UUIDv7 as a string."""
+    """Return a UUIDv7 as a string.
+
+    Used by CQ identifiers that prefer a string representation.
+
+    Returns
+    -------
+    str
+        UUIDv7 string.
+    """
     return str(uuid7())
 
 
 def uuid7_hex() -> str:
-    """Return a UUIDv7 as a 32-character hex string."""
+    """Return a UUIDv7 as a 32-character hex string.
+
+    Used by CQ artifacts that need compact, sortable identifiers.
+
+    Returns
+    -------
+    str
+        UUIDv7 hex string.
+    """
     return uuid7().hex
 
 
 def uuid7_suffix(length: int = 12) -> str:
-    """Return a short suffix from the UUIDv7 random tail."""
+    """Return a short suffix from the UUIDv7 random tail.
+
+    Used when a shorter ID suffix is sufficient for logs or filenames.
+
+    Returns
+    -------
+    str
+        UUIDv7 suffix string.
+
+    Raises
+    ------
+    ValueError
+        If ``length`` is non-positive or exceeds ``UUID7_HEX_LENGTH``.
+    """
     if length <= 0:
         msg = "length must be positive."
         raise ValueError(msg)
@@ -74,7 +103,20 @@ def uuid7_suffix(length: int = 12) -> str:
 
 
 def secure_token_hex(nbytes: int = 16) -> str:
-    """Return a CSPRNG-backed hex token."""
+    """Return a CSPRNG-backed hex token.
+
+    Used for security-sensitive tokens where UUIDv7 is not appropriate.
+
+    Returns
+    -------
+    str
+        Hex-encoded random token.
+
+    Raises
+    ------
+    ValueError
+        If ``nbytes`` is non-positive.
+    """
     if nbytes <= 0:
         msg = "nbytes must be positive."
         raise ValueError(msg)

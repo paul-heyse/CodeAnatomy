@@ -1,0 +1,13 @@
+# cq search
+
+## Summary
+- **query**: build_graph
+- **mode**: identifier
+- **include**: ["src/**"]
+- **exclude**: ["tests/**"]
+- **pattern**: \bbuild_graph\b
+- **caps_hit**: max_total_matches
+- **scanned_files_is_estimate**: True
+
+---
+_Completed in 12ms | Schema: cq.v1_

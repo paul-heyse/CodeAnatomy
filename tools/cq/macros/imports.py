@@ -86,6 +86,7 @@ _CYCLE_LIMIT = 10
 _EXTERNAL_LIMIT = 30
 _REL_IMPORT_LIMIT = 20
 
+
 class ImportInfo(msgspec.Struct):
     """Information about an import statement.
 

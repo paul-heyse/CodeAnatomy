@@ -213,7 +213,13 @@ def _analyze_call(node: ast.Call) -> dict:
 
 
 def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
-    """Check if a call expression matches the target name."""
+    """Check if a call expression matches the target name.
+
+    Returns
+    -------
+    bool
+        True if the expression matches the target name.
+    """
     parts = target_name.split(".")
     if isinstance(func, ast.Name):
         return func.id == target_name or func.id == parts[-1]
@@ -231,7 +237,13 @@ def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
 
 
 def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
-    """Extract call name and determine if method call."""
+    """Extract call name and determine if method call.
+
+    Returns
+    -------
+    tuple[str, bool, str | None]
+        (name, is_method, receiver_name) for the call.
+    """
     if isinstance(func, ast.Name):
         return (func.id, False, None)
     if isinstance(func, ast.Attribute):
@@ -310,10 +322,9 @@ def _find_function_signature(
 
         # Walk AST to find matching function
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.name == base_name:
-                    params = [arg.arg for arg in node.args.args]
-                    return f"({', '.join(params)})"
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
+                params = [arg.arg for arg in node.args.args]
+                return f"({', '.join(params)})"
 
     return ""
 
@@ -986,7 +997,7 @@ def cmd_calls(
                 record_types={"call"},
                 root=root_path,
             )
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             used_fallback = True
     else:
         used_fallback = True

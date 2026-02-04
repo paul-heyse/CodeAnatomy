@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import symtable
-import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -167,6 +167,7 @@ def extract_scope_graph(source: str, filename: str) -> ScopeGraph:
 def _walk_table(
     table: symtable.SymbolTable,
     graph: ScopeGraph,
+    *,
     is_nested: bool,
 ) -> None:
     """Recursively walk symbol table and extract scope facts."""
@@ -193,10 +194,8 @@ def _walk_table(
     # Get line number if available (Python 3.12+)
     lineno = 0
     if hasattr(table, "get_lineno"):
-        try:
+        with suppress(AttributeError):
             lineno = table.get_lineno()
-        except AttributeError:
-            pass
 
     # Determine if scope is optimized (uses fast locals)
     is_optimized = False
@@ -226,20 +225,22 @@ def _walk_table(
 
 
 def _get_scope_type(table: symtable.SymbolTable) -> ScopeType:
-    """Determine scope type from symbol table."""
-    # Python 3.12+ has get_type() returning an enum
-    if sys.version_info >= (3, 12):
-        try:
-            type_str = table.get_type()
-            # Handle both string and enum
-            if hasattr(type_str, "value"):
-                type_str = type_str.value
-            type_str = str(type_str).lower()
-        except AttributeError:
-            type_str = "module"
-    else:
-        # Pre-3.12: get_type() returns a string
-        type_str = table.get_type().lower()
+    """Determine scope type from symbol table.
+
+    Returns
+    -------
+    ScopeType
+        Parsed scope type for the symbol table.
+    """
+    # Python 3.12+ has get_type() returning an enum/string
+    try:
+        type_str = table.get_type()
+        # Handle both string and enum
+        if hasattr(type_str, "value"):
+            type_str = type_str.value
+        type_str = str(type_str).lower()
+    except AttributeError:
+        type_str = "module"
 
     type_map = {
         "module": ScopeType.MODULE,
@@ -258,7 +259,13 @@ def _get_scope_type(table: symtable.SymbolTable) -> ScopeType:
 
 
 def _extract_symbol_fact(sym: symtable.Symbol) -> SymbolFact:
-    """Extract fact from a symbol."""
+    """Extract fact from a symbol.
+
+    Returns
+    -------
+    SymbolFact
+        Extracted symbol facts.
+    """
     return SymbolFact(
         name=sym.get_name(),
         is_local=sym.is_local(),
@@ -276,6 +283,11 @@ def _is_cell(sym: symtable.Symbol) -> bool:
     """Check if symbol is a cell variable.
 
     Cell variables are captured by nested scopes (closures).
+
+    Returns
+    -------
+    bool
+        True if the symbol is a cell variable.
     """
     # In Python, a cell variable is local but also free in a nested scope
     # We can detect this by checking if it's not free but is referenced
@@ -291,15 +303,33 @@ def _is_cell(sym: symtable.Symbol) -> bool:
 
 
 def get_free_vars(scope: ScopeFact) -> tuple[str, ...]:
-    """Get free variables (closure captures) for a scope."""
+    """Get free variables (closure captures) for a scope.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Free variable names.
+    """
     return scope.free_vars
 
 
 def get_cell_vars(scope: ScopeFact) -> tuple[str, ...]:
-    """Get cell variables (captured by children) for a scope."""
+    """Get cell variables (captured by children) for a scope.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Cell variable names.
+    """
     return scope.cell_vars
 
 
 def is_closure(scope: ScopeFact) -> bool:
-    """Check if scope is a closure (has free variables)."""
+    """Check if scope is a closure (has free variables).
+
+    Returns
+    -------
+    bool
+        True if the scope captures free variables.
+    """
     return scope.has_free_vars

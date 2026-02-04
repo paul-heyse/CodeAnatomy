@@ -262,9 +262,8 @@ def _tainted_call(visitor: TaintVisitor, expr: ast.Call) -> bool:
     if any(visitor.expr_tainted(kw.value) for kw in expr.keywords):
         return True
     # Check if method receiver is tainted (e.g., `tainted_obj.method()`)
-    if isinstance(expr.func, ast.Attribute):
-        if visitor.expr_tainted(expr.func.value):
-            return True
+    if isinstance(expr.func, ast.Attribute) and visitor.expr_tainted(expr.func.value):
+        return True
     return False
 
 
@@ -293,27 +292,57 @@ def _tainted_joined(visitor: TaintVisitor, expr: ast.JoinedStr) -> bool:
 
 
 def _tainted_boolop(visitor: TaintVisitor, expr: ast.BoolOp) -> bool:
-    """Handle `or` and `and` expressions (e.g., `sources or {}`)."""
+    """Handle `or` and `and` expressions (e.g., `sources or {}`).
+
+    Returns
+    -------
+    bool
+        True if any operand is tainted.
+    """
     return any(visitor.expr_tainted(val) for val in expr.values)
 
 
 def _tainted_namedexpr(visitor: TaintVisitor, expr: ast.NamedExpr) -> bool:
-    """Handle walrus operator (e.g., `(x := tainted_val)`)."""
+    """Handle walrus operator (e.g., `(x := tainted_val)`).
+
+    Returns
+    -------
+    bool
+        True if the assigned value is tainted.
+    """
     return visitor.expr_tainted(expr.value)
 
 
 def _tainted_starred(visitor: TaintVisitor, expr: ast.Starred) -> bool:
-    """Handle starred expressions (e.g., `*tainted_list`)."""
+    """Handle starred expressions (e.g., `*tainted_list`).
+
+    Returns
+    -------
+    bool
+        True if the starred value is tainted.
+    """
     return visitor.expr_tainted(expr.value)
 
 
 def _tainted_lambda(_visitor: TaintVisitor, _expr: ast.Lambda) -> bool:
-    """Lambda captures are not tracked; assume not tainted for simplicity."""
+    """Lambda captures are not tracked; assume not tainted for simplicity.
+
+    Returns
+    -------
+    bool
+        Always False for lambdas.
+    """
     return False
 
 
 def _tainted_generator(visitor: TaintVisitor, expr: ast.GeneratorExp) -> bool:
-    """Handle generator expressions - tainted if iterating over tainted data."""
+    """Handle generator expressions - tainted if iterating over tainted data.
+
+    Returns
+    -------
+    bool
+        True if any generator source or element is tainted.
+    """
     for gen in expr.generators:
         if visitor.expr_tainted(gen.iter):
             return True
@@ -321,7 +350,13 @@ def _tainted_generator(visitor: TaintVisitor, expr: ast.GeneratorExp) -> bool:
 
 
 def _tainted_listcomp(visitor: TaintVisitor, expr: ast.ListComp) -> bool:
-    """Handle list comprehensions - tainted if iterating over tainted data."""
+    """Handle list comprehensions - tainted if iterating over tainted data.
+
+    Returns
+    -------
+    bool
+        True if any generator source or element is tainted.
+    """
     for gen in expr.generators:
         if visitor.expr_tainted(gen.iter):
             return True
@@ -329,7 +364,13 @@ def _tainted_listcomp(visitor: TaintVisitor, expr: ast.ListComp) -> bool:
 
 
 def _tainted_setcomp(visitor: TaintVisitor, expr: ast.SetComp) -> bool:
-    """Handle set comprehensions - tainted if iterating over tainted data."""
+    """Handle set comprehensions - tainted if iterating over tainted data.
+
+    Returns
+    -------
+    bool
+        True if any generator source or element is tainted.
+    """
     for gen in expr.generators:
         if visitor.expr_tainted(gen.iter):
             return True
@@ -337,7 +378,13 @@ def _tainted_setcomp(visitor: TaintVisitor, expr: ast.SetComp) -> bool:
 
 
 def _tainted_dictcomp(visitor: TaintVisitor, expr: ast.DictComp) -> bool:
-    """Handle dict comprehensions - tainted if iterating over tainted data."""
+    """Handle dict comprehensions - tainted if iterating over tainted data.
+
+    Returns
+    -------
+    bool
+        True if any generator source or key/value is tainted.
+    """
     for gen in expr.generators:
         if visitor.expr_tainted(gen.iter):
             return True

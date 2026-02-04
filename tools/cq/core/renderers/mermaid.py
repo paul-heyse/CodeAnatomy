@@ -35,7 +35,7 @@ def render_mermaid_flowchart(result: CqResult) -> str:
 
     # Process key findings for definitions
     for finding in result.key_findings:
-        if finding.category in ("definition", "function", "class"):
+        if finding.category in {"definition", "function", "class"}:
             name = finding.details.get("name", "unknown")
             node_id = _sanitize_node_id(name)
             nodes.add(node_id)
@@ -96,10 +96,10 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
         if finding.category == "definition":
             name = finding.details.get("name", "unknown")
 
-            if kind in ("class", "class_bases", "class_typeparams"):
+            if kind in {"class", "class_bases", "class_typeparams"}:
                 if name not in classes:
                     classes[name] = []
-            elif kind in ("function", "async_function", "method"):
+            elif kind in {"function", "async_function", "method"}:
                 # Try to associate with a class based on file context
                 # For now, add as standalone
                 pass
@@ -108,8 +108,7 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
     for class_name, methods in classes.items():
         class_id = _sanitize_node_id(class_name)
         lines.append(f"    class {class_id} {{")
-        for method in methods:
-            lines.append(f"        +{method}()")
+        lines.extend(f"        +{method}()" for method in methods)
         lines.append("    }")
 
     # If no classes found, show functions as nodes
@@ -119,7 +118,7 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
                 name = finding.details.get("name", "unknown")
                 kind = finding.details.get("kind", "")
                 func_id = _sanitize_node_id(name)
-                if kind in ("function", "async_function"):
+                if kind in {"function", "async_function"}:
                     lines.append(f"    class {func_id} {{")
                     lines.append("        <<function>>")
                     lines.append("    }")

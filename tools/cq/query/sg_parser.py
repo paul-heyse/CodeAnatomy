@@ -99,7 +99,6 @@ def list_scan_files(
         root = Path.cwd()
     return _tabulate_scan_files(paths, root, globs)
 
-
     # No caching: scan all files directly.
 
 
@@ -108,7 +107,15 @@ def _tabulate_scan_files(
     root: Path,
     globs: list[str] | None,
 ) -> list[Path]:
-    """Tabulate files to scan using the file index."""
+    """Tabulate files to scan using the file index.
+
+    Used by ``sg_scan`` and ``list_scan_files`` to build the scan list.
+
+    Returns
+    -------
+    list[Path]
+        Files selected for scanning.
+    """
     repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     result = tabulate_files(
@@ -124,14 +131,30 @@ def _filter_records(
     records: list[SgRecord],
     record_types: set[str] | None,
 ) -> list[SgRecord]:
-    """Filter records by record type."""
+    """Filter records by record type.
+
+    Used by ``sg_scan`` to prune records after scanning.
+
+    Returns
+    -------
+    list[SgRecord]
+        Records matching the requested record types.
+    """
     if record_types is None:
         return records
     return [record for record in records if record.record in record_types]
 
 
 def _normalize_file_path(file_path: str, root: Path) -> str:
-    """Normalize file paths to repo-relative POSIX paths."""
+    """Normalize file paths to repo-relative POSIX paths.
+
+    Used by record normalization to stabilize file identifiers.
+
+    Returns
+    -------
+    str
+        Normalized POSIX path, relative to ``root`` when possible.
+    """
     path = Path(file_path)
     if path.is_absolute():
         try:
@@ -153,6 +176,13 @@ def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
     - py_raise -> (raise, raise)
     - py_except_as -> (except, except_as)
     - py_ctor_assign_name -> (assign_ctor, ctor_assign_name)
+
+    Used by record normalization to derive record type/kind.
+
+    Returns
+    -------
+    tuple[RecordType | None, str]
+        Parsed record type and kind name.
     """
     if not rule_id.startswith("py_"):
         return None, ""
@@ -174,10 +204,7 @@ def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
     for prefix, record_type in prefix_map.items():
         if suffix.startswith(prefix):
             # Kind is the full suffix (e.g., "def_function" -> kind="function")
-            if prefix.endswith("_"):
-                kind = suffix[len(prefix) :]
-            else:
-                kind = suffix
+            kind = suffix[len(prefix) :] if prefix.endswith("_") else suffix
             return record_type, kind
 
     return None, ""

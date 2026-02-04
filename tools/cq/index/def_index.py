@@ -491,6 +491,11 @@ class DefIndex:
         """Build a fresh definition index.
 
         Build is always fresh; no caching is performed.
+
+        Returns
+        -------
+        DefIndex
+            Populated definition index.
         """
         root_path = Path(root).resolve()
         if include_patterns is None:

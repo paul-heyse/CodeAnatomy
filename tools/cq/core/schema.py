@@ -39,7 +39,13 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
 
     @classmethod
     def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
-        """Convert legacy detail dicts into a structured payload."""
+        """Convert legacy detail dicts into a structured payload.
+
+        Returns
+        -------
+        DetailPayload
+            Structured payload with score and data fields split.
+        """
         score_values: dict[str, object] = {}
         data: dict[str, object] = {}
         kind: str | None = None
@@ -64,7 +70,13 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         return cls(kind=kind, score=score, data=data)
 
     def get(self, key: str, default: object | None = None) -> object | None:
-        """Mapping-style get for detail payloads."""
+        """Mapping-style get for detail payloads.
+
+        Returns
+        -------
+        object | None
+            Value for the key when present, otherwise the default.
+        """
         if key == "kind":
             return self.kind if self.kind is not None else default
         if key in _SCORE_FIELDS and self.score is not None:
@@ -73,12 +85,25 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         return self.data.get(key, default)
 
     def __getitem__(self, key: str) -> object:
+        """Return the value for a key, raising KeyError if absent.
+
+        Returns
+        -------
+        object
+            Value for the key.
+
+        Raises
+        ------
+        KeyError
+            If the key is not present in the payload.
+        """
         value = self.get(key, None)
         if value is None and key not in self:
             raise KeyError(key)
         return value
 
     def __setitem__(self, key: str, value: object) -> None:
+        """Set a value for a key in the detail payload."""
         if key == "kind":
             self.kind = None if value is None else str(value)
             return
@@ -89,6 +114,13 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         self.data[key] = value
 
     def __contains__(self, key: object) -> bool:
+        """Return True if the key exists in the detail payload.
+
+        Returns
+        -------
+        bool
+            True if the key exists.
+        """
         if not isinstance(key, str):
             return False
         if key == "kind":
@@ -156,6 +188,7 @@ class Finding(msgspec.Struct):
     details: DetailPayload = msgspec.field(default_factory=DetailPayload)
 
     def __post_init__(self) -> None:
+        """Normalize legacy detail dicts into structured payloads."""
         if isinstance(self.details, dict):
             self.details = DetailPayload.from_legacy(self.details)
 

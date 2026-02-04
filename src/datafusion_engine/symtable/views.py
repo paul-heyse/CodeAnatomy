@@ -8,14 +8,14 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.udf.shims import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_engine.udf.expr import udf_expr
 
 MAX_SCOPE_PARENT_DEPTH = 16
 
 
 def _prefixed_hash_expr(_ctx: SessionContext, prefix: str, *parts: Expr) -> Expr:
     combined = f.concat_ws(":", *parts)
-    return prefixed_hash64(prefix, combined)
+    return udf_expr("prefixed_hash_parts64", prefix, combined)
 
 
 def _scope_type_filter(scope_type: Expr) -> Expr:

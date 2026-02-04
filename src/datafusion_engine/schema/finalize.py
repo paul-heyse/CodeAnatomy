@@ -41,7 +41,7 @@ from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from datafusion_engine.session.helpers import deregister_table, register_temp_table, temp_table
-from datafusion_engine.udf.shims import stable_hash64
+from datafusion_engine.udf.expr import udf_expr
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
@@ -583,7 +583,9 @@ def _row_id_for_errors(
                     expr = lit(_HASH_NULL_SENTINEL)
                 parts.append(expr)
             concat_expr = f.concat_ws(_HASH_JOIN_SEPARATOR, *parts)
-            result = df.select(stable_hash64(concat_expr).alias("row_id")).to_arrow_table()
+            result = df.select(
+                udf_expr("stable_hash64", concat_expr).alias("row_id")
+            ).to_arrow_table()
         return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 

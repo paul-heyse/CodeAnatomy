@@ -126,6 +126,7 @@ if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
     from datafusion_engine.catalog.introspection import IntrospectionCache
+    from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
     from semantics.incremental.cdf_cursors import CdfCursorStore
@@ -140,7 +141,6 @@ if TYPE_CHECKING:
 from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
-    DataFusionScanOptions,
     DatasetSpec,
     DeltaScanOptions,
     dataset_spec_from_schema,
@@ -2337,22 +2337,6 @@ def _resolved_schema_hardening_for_profile(
 def _effective_catalog_autoload_for_profile(
     profile: DataFusionRuntimeProfile,
 ) -> tuple[str | None, str | None]:
-    if (
-        profile.data_sources.ast.catalog_location is not None
-        or profile.data_sources.ast.catalog_format is not None
-    ):
-        return (
-            profile.data_sources.ast.catalog_location,
-            profile.data_sources.ast.catalog_format,
-        )
-    if (
-        profile.data_sources.bytecode.catalog_location is not None
-        or profile.data_sources.bytecode.catalog_format is not None
-    ):
-        return (
-            profile.data_sources.bytecode.catalog_location,
-            profile.data_sources.bytecode.catalog_format,
-        )
     if not profile.catalog.catalog_auto_load_enabled:
         return (None, None)
     if (
@@ -2658,14 +2642,41 @@ class _RuntimeDiagnosticsMixin:
         features = profile.features
         diagnostics = profile.diagnostics
         policies = profile.policies
-        ast = data_sources.ast
-        bytecode = data_sources.bytecode
-        ast_partitions = [
-            {"name": name, "dtype": str(dtype)} for name, dtype in ast.external_partition_cols
-        ]
-        bytecode_partitions = [
-            {"name": name, "dtype": str(dtype)} for name, dtype in bytecode.external_partition_cols
-        ]
+        template_payloads: dict[str, object] = {}
+        for name, location in sorted(data_sources.dataset_templates.items()):
+            resolved = location.resolved
+            scan = resolved.datafusion_scan
+            scan_payload: dict[str, object] | None = None
+            if scan is not None:
+                scan_payload = {
+                    "file_sort_order": [list(key) for key in scan.file_sort_order],
+                    "partition_cols": [
+                        {"name": col_name, "dtype": str(dtype)}
+                        for col_name, dtype in scan.partition_cols
+                    ],
+                    "schema_force_view_types": scan.schema_force_view_types,
+                    "skip_arrow_metadata": scan.skip_arrow_metadata,
+                    "listing_table_factory_infer_partitions": (
+                        scan.listing_table_factory_infer_partitions
+                    ),
+                    "listing_table_ignore_subdirectory": (scan.listing_table_ignore_subdirectory),
+                    "collect_statistics": scan.collect_statistics,
+                    "meta_fetch_concurrency": scan.meta_fetch_concurrency,
+                    "list_files_cache_limit": scan.list_files_cache_limit,
+                    "list_files_cache_ttl": scan.list_files_cache_ttl,
+                    "unbounded": scan.unbounded,
+                }
+            template_payloads[name] = {
+                "path": str(location.path),
+                "format": location.format,
+                "datafusion_provider": resolved.datafusion_provider,
+                "delta_version": location.delta_version,
+                "delta_timestamp": location.delta_timestamp,
+                "delta_constraints": list(resolved.delta_constraints)
+                if resolved.delta_constraints
+                else None,
+                "scan": scan_payload,
+            }
         return {
             "datafusion_version": datafusion.__version__,
             "target_partitions": execution.target_partitions,
@@ -2686,56 +2697,7 @@ class _RuntimeDiagnosticsMixin:
             "catalog_auto_load_format": catalog.catalog_auto_load_format,
             "delta_store_policy_hash": delta_store_policy_hash(policies.delta_store_policy),
             "delta_store_policy": _delta_store_policy_payload(policies.delta_store_policy),
-            "ast_catalog_location": ast.catalog_location,
-            "ast_catalog_format": ast.catalog_format,
-            "ast_external_location": ast.external_location,
-            "ast_external_format": ast.external_format,
-            "ast_external_provider": ast.external_provider,
-            "ast_external_ordering": [list(key) for key in ast.external_ordering],
-            "ast_external_partitions": ast_partitions or None,
-            "ast_external_schema_force_view_types": ast.external_schema_force_view_types,
-            "ast_external_skip_arrow_metadata": ast.external_skip_arrow_metadata,
-            "ast_external_listing_table_factory_infer_partitions": (
-                ast.external_listing_table_factory_infer_partitions
-            ),
-            "ast_external_listing_table_ignore_subdirectory": (
-                ast.external_listing_table_ignore_subdirectory
-            ),
-            "ast_external_collect_statistics": ast.external_collect_statistics,
-            "ast_external_meta_fetch_concurrency": ast.external_meta_fetch_concurrency,
-            "ast_external_list_files_cache_ttl": ast.external_list_files_cache_ttl,
-            "ast_external_list_files_cache_limit": ast.external_list_files_cache_limit,
-            "ast_delta_location": ast.delta_location,
-            "ast_delta_version": ast.delta_version,
-            "ast_delta_timestamp": ast.delta_timestamp,
-            "ast_delta_constraints": list(ast.delta_constraints),
-            "ast_delta_scan": bool(ast.delta_scan),
-            "bytecode_catalog_location": bytecode.catalog_location,
-            "bytecode_catalog_format": bytecode.catalog_format,
-            "bytecode_external_location": bytecode.external_location,
-            "bytecode_external_format": bytecode.external_format,
-            "bytecode_external_provider": bytecode.external_provider,
-            "bytecode_external_ordering": [list(key) for key in bytecode.external_ordering],
-            "bytecode_external_partitions": bytecode_partitions or None,
-            "bytecode_external_schema_force_view_types": (
-                bytecode.external_schema_force_view_types
-            ),
-            "bytecode_external_skip_arrow_metadata": bytecode.external_skip_arrow_metadata,
-            "bytecode_external_listing_table_factory_infer_partitions": (
-                bytecode.external_listing_table_factory_infer_partitions
-            ),
-            "bytecode_external_listing_table_ignore_subdirectory": (
-                bytecode.external_listing_table_ignore_subdirectory
-            ),
-            "bytecode_external_collect_statistics": bytecode.external_collect_statistics,
-            "bytecode_external_meta_fetch_concurrency": (bytecode.external_meta_fetch_concurrency),
-            "bytecode_external_list_files_cache_ttl": bytecode.external_list_files_cache_ttl,
-            "bytecode_external_list_files_cache_limit": (bytecode.external_list_files_cache_limit),
-            "bytecode_delta_location": bytecode.delta_location,
-            "bytecode_delta_version": bytecode.delta_version,
-            "bytecode_delta_timestamp": bytecode.delta_timestamp,
-            "bytecode_delta_constraints": list(bytecode.delta_constraints),
-            "bytecode_delta_scan": bool(bytecode.delta_scan),
+            "dataset_templates": template_payloads or None,
             "enable_information_schema": catalog.enable_information_schema,
             "enable_url_table": features.enable_url_table,
             "cache_enabled": features.cache_enabled,
@@ -3365,49 +3327,6 @@ class CatalogConfig(StructBaseStrict, frozen=True):
         }
 
 
-class TableSourceConfig(StructBaseStrict, frozen=True):
-    """Reusable table source configuration."""
-
-    catalog_location: str | None = None
-    catalog_format: str | None = None
-    external_location: str | None = None
-    external_format: str = "delta"
-    external_provider: Literal["listing"] | None = None
-    external_ordering: tuple[tuple[str, str], ...] = ()
-    external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
-    external_schema_force_view_types: bool | None = False
-    external_skip_arrow_metadata: bool | None = False
-    external_listing_table_factory_infer_partitions: bool | None = True
-    external_listing_table_ignore_subdirectory: bool | None = False
-    external_collect_statistics: bool | None = False
-    external_meta_fetch_concurrency: int | None = 64
-    external_list_files_cache_ttl: str | None = None
-    external_list_files_cache_limit: str | None = None
-    delta_location: str | None = None
-    delta_version: int | None = None
-    delta_timestamp: str | None = None
-    delta_constraints: tuple[str, ...] = ()
-    delta_scan: DeltaScanOptions | None = None
-
-
-def _default_ast_source_config() -> TableSourceConfig:
-    return TableSourceConfig(
-        external_ordering=(("repo", "ascending"), ("path", "ascending")),
-        external_partition_cols=(("repo", pa.string()), ("path", pa.string())),
-        external_list_files_cache_ttl="2m",
-        external_list_files_cache_limit=str(64 * 1024 * 1024),
-    )
-
-
-def _default_bytecode_source_config() -> TableSourceConfig:
-    return TableSourceConfig(
-        external_ordering=(("path", "ascending"), ("file_id", "ascending")),
-        external_partition_cols=(),
-        external_list_files_cache_ttl="5m",
-        external_list_files_cache_limit="10000",
-    )
-
-
 class ExtractOutputConfig(StructBaseStrict, frozen=True):
     """Extract output configuration."""
 
@@ -3430,12 +3349,10 @@ class SemanticOutputConfig(StructBaseStrict, frozen=True):
 class DataSourceConfig(StructBaseStrict, frozen=True):
     """Dataset location and output configuration."""
 
-    ast: TableSourceConfig = msgspec.field(default_factory=_default_ast_source_config)
-    bytecode: TableSourceConfig = msgspec.field(default_factory=_default_bytecode_source_config)
+    dataset_templates: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
     extract_output: ExtractOutputConfig = msgspec.field(default_factory=ExtractOutputConfig)
     semantic_output: SemanticOutputConfig = msgspec.field(default_factory=SemanticOutputConfig)
     cdf_cursor_store: CdfCursorStore | None = None
-    dataset_templates: Mapping[str, DatasetLocation] = msgspec.field(default_factory=dict)
 
 
 class FeatureGatesConfig(StructBaseStrict, frozen=True):
@@ -3717,7 +3634,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
-class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):
+class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):  # noqa: PLR0904
     """DataFusion runtime configuration.
 
     Identifier normalization is disabled by default to preserve case-sensitive
@@ -3958,6 +3875,18 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             Session context configured for Delta access paths.
         """
         return self.session_context()
+
+    def delta_service(self) -> DeltaService:
+        """Return the Delta service bound to this runtime profile.
+
+        Returns
+        -------
+        DeltaService
+            Delta service instance bound to this runtime profile.
+        """
+        from datafusion_engine.delta.service import DeltaService
+
+        return DeltaService(profile=self)
 
     def _delta_runtime_profile_ctx(
         self,
@@ -4619,17 +4548,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         catalog_location, catalog_format = self._effective_catalog_autoload()
         if catalog_location is None and catalog_format is None:
             return
-        ast = self.data_sources.ast
-        bytecode = self.data_sources.bytecode
         introspector = self._schema_introspector(ctx)
+        template_names = sorted(self.data_sources.dataset_templates)
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
             "catalog_auto_load_location": catalog_location,
             "catalog_auto_load_format": catalog_format,
-            "ast_catalog_location": ast.catalog_location,
-            "ast_catalog_format": ast.catalog_format,
-            "bytecode_catalog_location": bytecode.catalog_location,
-            "bytecode_catalog_format": bytecode.catalog_format,
+            "dataset_templates": template_names or None,
         }
         try:
             tables = [
@@ -4723,53 +4648,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         return None
 
     def _ast_dataset_location(self) -> DatasetLocation | None:
-        template = self._dataset_template("ast_files_v1")
-        if template is not None:
-            return template
-        ast = self.data_sources.ast
-        if ast.external_location and ast.delta_location:
-            msg = "AST dataset config cannot set both external and delta locations."
-            raise ValueError(msg)
-        if ast.delta_location:
-            delta_scan = ast.delta_scan
-            from datafusion_engine.dataset.registry import DatasetLocation
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-
-            return DatasetLocation(
-                path=ast.delta_location,
-                format="delta",
-                delta_version=ast.delta_version,
-                delta_timestamp=ast.delta_timestamp,
-                delta_constraints=ast.delta_constraints,
-                delta_scan=delta_scan,
-                dataset_spec=extract_dataset_spec("ast_files_v1"),
-            )
-        if ast.external_location:
-            from datafusion_engine.dataset.registry import DatasetLocation
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-
-            scan = DataFusionScanOptions(
-                partition_cols=ast.external_partition_cols,
-                file_sort_order=ast.external_ordering,
-                schema_force_view_types=ast.external_schema_force_view_types,
-                skip_arrow_metadata=ast.external_skip_arrow_metadata,
-                listing_table_factory_infer_partitions=(
-                    ast.external_listing_table_factory_infer_partitions
-                ),
-                listing_table_ignore_subdirectory=(ast.external_listing_table_ignore_subdirectory),
-                collect_statistics=ast.external_collect_statistics,
-                meta_fetch_concurrency=ast.external_meta_fetch_concurrency,
-                list_files_cache_ttl=ast.external_list_files_cache_ttl,
-                list_files_cache_limit=ast.external_list_files_cache_limit,
-            )
-            return DatasetLocation(
-                path=ast.external_location,
-                format=ast.external_format,
-                datafusion_provider=ast.external_provider,
-                datafusion_scan=scan,
-                dataset_spec=extract_dataset_spec("ast_files_v1"),
-            )
-        return None
+        return self._dataset_template("ast_files_v1")
 
     def ast_dataset_location(self) -> DatasetLocation | None:
         """Return the configured AST dataset location, when available.
@@ -4797,55 +4676,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self._record_ast_registration(location=location)
 
     def _bytecode_dataset_location(self) -> DatasetLocation | None:
-        template = self._dataset_template("bytecode_files_v1")
-        if template is not None:
-            return template
-        bytecode = self.data_sources.bytecode
-        if bytecode.external_location and bytecode.delta_location:
-            msg = "Bytecode dataset config cannot set both external and delta locations."
-            raise ValueError(msg)
-        if bytecode.delta_location:
-            delta_scan = bytecode.delta_scan
-            from datafusion_engine.dataset.registry import DatasetLocation
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-
-            return DatasetLocation(
-                path=bytecode.delta_location,
-                format="delta",
-                delta_version=bytecode.delta_version,
-                delta_timestamp=bytecode.delta_timestamp,
-                delta_constraints=bytecode.delta_constraints,
-                delta_scan=delta_scan,
-                dataset_spec=extract_dataset_spec("bytecode_files_v1"),
-            )
-        if bytecode.external_location:
-            from datafusion_engine.dataset.registry import DatasetLocation
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-
-            scan = DataFusionScanOptions(
-                partition_cols=bytecode.external_partition_cols,
-                file_sort_order=bytecode.external_ordering,
-                schema_force_view_types=bytecode.external_schema_force_view_types,
-                skip_arrow_metadata=bytecode.external_skip_arrow_metadata,
-                listing_table_factory_infer_partitions=(
-                    bytecode.external_listing_table_factory_infer_partitions
-                ),
-                listing_table_ignore_subdirectory=(
-                    bytecode.external_listing_table_ignore_subdirectory
-                ),
-                collect_statistics=bytecode.external_collect_statistics,
-                meta_fetch_concurrency=bytecode.external_meta_fetch_concurrency,
-                list_files_cache_ttl=bytecode.external_list_files_cache_ttl,
-                list_files_cache_limit=bytecode.external_list_files_cache_limit,
-            )
-            return DatasetLocation(
-                path=bytecode.external_location,
-                format=bytecode.external_format,
-                datafusion_provider=bytecode.external_provider,
-                datafusion_scan=scan,
-                dataset_spec=extract_dataset_spec("bytecode_files_v1"),
-            )
-        return None
+        return self._dataset_template("bytecode_files_v1")
 
     def _register_bytecode_dataset(self, ctx: SessionContext) -> None:
         location = self._bytecode_dataset_location()
@@ -4884,15 +4715,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         if location is None:
             location = extract_output_locations_for_profile(self).get(name)
         if location is None:
-            if name == "ast_files_v1":
-                location = self._ast_dataset_location()
-            elif name == "bytecode_files_v1":
-                location = self._bytecode_dataset_location()
-            else:
-                location = self.data_sources.extract_output.scip_dataset_locations.get(name)
+            location = self.data_sources.extract_output.scip_dataset_locations.get(name)
         if location is None:
             return None
-        if location.dataset_spec is None and location.table_spec is None:
+        if location.dataset_spec is None:
             from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
 
             try:
@@ -4974,13 +4800,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
     def _record_ast_registration(self, *, location: DatasetLocation) -> None:
         if self.diagnostics.diagnostics_sink is None:
             return
-        scan = location.datafusion_scan
+        resolved = location.resolved
+        scan = resolved.datafusion_scan
         payload = {
             "event_time_unix_ms": int(time.time() * 1000),
             "name": "ast_files_v1",
             "location": str(location.path),
             "format": location.format,
-            "datafusion_provider": location.datafusion_provider,
+            "datafusion_provider": resolved.datafusion_provider,
             "file_sort_order": (
                 [list(key) for key in scan.file_sort_order] if scan is not None else None
             ),
@@ -5003,20 +4830,23 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
-            "delta_constraints": list(location.delta_constraints),
+            "delta_constraints": (
+                list(resolved.delta_constraints) if resolved.delta_constraints else None
+            ),
         }
         self.record_artifact("datafusion_ast_dataset_v1", payload)
 
     def _record_bytecode_registration(self, *, location: DatasetLocation) -> None:
         if self.diagnostics.diagnostics_sink is None:
             return
-        scan = location.datafusion_scan
+        resolved = location.resolved
+        scan = resolved.datafusion_scan
         payload = {
             "event_time_unix_ms": int(time.time() * 1000),
             "name": "bytecode_files_v1",
             "location": str(location.path),
             "format": location.format,
-            "datafusion_provider": location.datafusion_provider,
+            "datafusion_provider": resolved.datafusion_provider,
             "file_sort_order": (
                 [list(key) for key in scan.file_sort_order] if scan is not None else None
             ),
@@ -5039,7 +4869,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
-            "delta_constraints": list(location.delta_constraints),
+            "delta_constraints": (
+                list(resolved.delta_constraints) if resolved.delta_constraints else None
+            ),
         }
         self.record_artifact("datafusion_bytecode_dataset_v1", payload)
 
@@ -5051,13 +4883,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         if self.diagnostics.diagnostics_sink is None:
             return
         location = snapshot.location
-        scan = location.datafusion_scan
+        resolved = location.resolved
+        scan = resolved.datafusion_scan
         payload = {
             "event_time_unix_ms": int(time.time() * 1000),
             "name": snapshot.name,
             "location": str(location.path),
             "format": location.format,
-            "datafusion_provider": location.datafusion_provider,
+            "datafusion_provider": resolved.datafusion_provider,
             "file_sort_order": (
                 [list(key) for key in scan.file_sort_order] if scan is not None else None
             ),
@@ -5080,7 +4913,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
-            "delta_constraints": list(location.delta_constraints),
+            "delta_constraints": (
+                list(resolved.delta_constraints) if resolved.delta_constraints else None
+            ),
             "expected_schema_identity_hash": snapshot.expected_fingerprint,
             "observed_schema_identity_hash": snapshot.actual_fingerprint,
             "schema_match": snapshot.schema_match,
@@ -5088,8 +4923,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self.record_artifact("datafusion_scip_datasets_v1", payload)
 
     def _validate_ast_catalog_autoload(self, ctx: SessionContext) -> None:
-        ast = self.data_sources.ast
-        if ast.catalog_location is None and ast.catalog_format is None:
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is None and catalog_format is None:
             return
         try:
             ctx.table("ast_files_v1")
@@ -5105,8 +4940,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             raise ValueError(msg) from exc
 
     def _validate_bytecode_catalog_autoload(self, ctx: SessionContext) -> None:
-        bytecode = self.data_sources.bytecode
-        if bytecode.catalog_location is None and bytecode.catalog_format is None:
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is None and catalog_format is None:
             return
         try:
             ctx.table("bytecode_files_v1")
@@ -5397,20 +5232,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         ast_registration: bool,
         bytecode_registration: bool,
     ) -> None:
-        ast = self.data_sources.ast
-        bytecode = self.data_sources.bytecode
-        if not ast_registration and (
-            ast.catalog_location is not None or ast.catalog_format is not None
-        ):
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is None and catalog_format is None:
+            return
+        if not ast_registration:
             from datafusion_engine.io.adapter import DataFusionIOAdapter
 
             adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table("ast_files_v1")
             self._validate_ast_catalog_autoload(ctx)
-        if not bytecode_registration and (
-            bytecode.catalog_location is not None or bytecode.catalog_format is not None
-        ):
+        if not bytecode_registration:
             from datafusion_engine.io.adapter import DataFusionIOAdapter
 
             adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
@@ -5507,16 +5339,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self._record_catalog_autoload_snapshot(ctx)
         ast_view_names, _, ast_gate_payload = self._ast_feature_gates(ctx)
         self._record_ast_feature_gates(ast_gate_payload)
-        ast_registration = (
-            self.data_sources.ast.external_location is not None
-            or self.data_sources.ast.delta_location is not None
-        )
+        ast_registration = self._ast_dataset_location() is not None
         if ast_registration:
             self._register_ast_dataset(ctx)
-        bytecode_registration = (
-            self.data_sources.bytecode.external_location is not None
-            or self.data_sources.bytecode.delta_location is not None
-        )
+        bytecode_registration = self._bytecode_dataset_location() is not None
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
@@ -7092,18 +6918,21 @@ def read_delta_as_reader(
     """
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
     from datafusion_engine.dataset.resolution import (
         DatasetResolutionRequest,
         resolve_dataset_provider,
     )
 
+    overrides = None
+    if delta_scan is not None:
+        overrides = DatasetLocationOverrides(delta_scan=delta_scan)
     location = DatasetLocation(
         path=path,
         format="delta",
         storage_options=dict(storage_options or {}),
         delta_log_storage_options=dict(log_storage_options or {}),
-        delta_scan=delta_scan,
+        overrides=overrides,
     )
     resolution = resolve_dataset_provider(
         DatasetResolutionRequest(
@@ -7308,7 +7137,6 @@ __all__ = [
     "PreparedStatementSpec",
     "SchemaHardeningProfile",
     "SessionRuntime",
-    "TableSourceConfig",
     "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",

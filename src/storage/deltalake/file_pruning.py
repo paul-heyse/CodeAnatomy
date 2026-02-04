@@ -14,7 +14,9 @@ from datafusion import functions as f
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
-from datafusion_engine.udf.shims import list_extract, map_extract
+from datafusion_engine.udf.expr import udf_expr
+from obs.otel.scopes import SCOPE_STORAGE
+from obs.otel.tracing import stage_span
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -306,26 +308,37 @@ def evaluate_and_select_files(
         Pruning result with candidate files and statistics.
     """
     total_files = index.num_rows
+    with stage_span(
+        "storage.file_pruning",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes={
+            "codeanatomy.total_files": total_files,
+            "codeanatomy.has_filters": policy.has_filters(),
+        },
+    ) as span:
+        if ctx is not None and policy.has_filters():
+            filtered_index = evaluate_filters_against_index(index, policy, ctx)
+            candidate_paths = [str(p) for p in filtered_index.column("path").to_pylist()]
+        else:
+            candidate_paths = select_candidate_files(index, policy)
 
-    if ctx is not None and policy.has_filters():
-        filtered_index = evaluate_filters_against_index(index, policy, ctx)
-        candidate_paths = [str(p) for p in filtered_index.column("path").to_pylist()]
-    else:
-        candidate_paths = select_candidate_files(index, policy)
+        candidate_count = len(candidate_paths)
+        pruned_count = total_files - candidate_count
+        span.set_attribute("codeanatomy.files_selected", candidate_count)
+        span.set_attribute("codeanatomy.files_scanned", total_files)
+        span.set_attribute("codeanatomy.files_pruned", pruned_count)
 
-    candidate_count = len(candidate_paths)
-    pruned_count = total_files - candidate_count
-
-    return FilePruningResult(
-        candidate_count=candidate_count,
-        total_files=total_files,
-        pruned_count=pruned_count,
-        candidate_paths=candidate_paths,
-    )
+        return FilePruningResult(
+            candidate_count=candidate_count,
+            total_files=total_files,
+            pruned_count=pruned_count,
+            candidate_paths=candidate_paths,
+        )
 
 
 def _map_value_expr(map_col: str, key: str, *, cast_type: str | None = None) -> Expr:
-    value_expr = list_extract(map_extract(col(map_col), key), 1)
+    value_expr = udf_expr("list_extract", udf_expr("map_extract", col(map_col), key), 1)
     if cast_type is None:
         return value_expr
     return safe_cast(value_expr, cast_type)

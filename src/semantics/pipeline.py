@@ -55,7 +55,7 @@ from utils.uuid_factory import uuid7_str
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
-    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
     from datafusion_engine.io.write import WritePipeline
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
@@ -1545,10 +1545,12 @@ def _semantic_output_locations(
             format="delta",
             storage_options=storage_options,
             dataset_spec=spec,
-            delta_write_policy=spec.delta_write_policy,
-            delta_schema_policy=spec.delta_schema_policy,
-            delta_maintenance_policy=spec.delta_maintenance_policy,
-            delta_feature_gate=spec.delta_feature_gate,
+            overrides=DatasetLocationOverrides(
+                delta_write_policy=spec.delta_write_policy,
+                delta_schema_policy=spec.delta_schema_policy,
+                delta_maintenance_policy=spec.delta_maintenance_policy,
+                delta_feature_gate=spec.delta_feature_gate,
+            ),
         )
     return output_locations
 

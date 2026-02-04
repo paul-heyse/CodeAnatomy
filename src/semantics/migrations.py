@@ -47,9 +47,9 @@ def _ensure_span_column(df: DataFrame) -> DataFrame:
         return df
     from datafusion import col
 
-    from datafusion_engine.udf.shims import span_make
+    from datafusion_engine.udf.expr import udf_expr
 
-    return df.with_column("span", span_make(col("bstart"), col("bend")))
+    return df.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
 
 
 def migrate_cpg_nodes_v1_to_v2(ctx: SessionContext) -> DataFrame:

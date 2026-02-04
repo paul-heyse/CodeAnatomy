@@ -30,7 +30,7 @@ if not callable(getattr(datafusion_ext, "delta_write_ipc", None)):
 
 from deltalake import DeltaTable
 
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.protocol import DeltaProtocolSupport
 from datafusion_engine.io.write import (
     WriteFormat,
@@ -57,7 +57,9 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
         "events": DatasetLocation(
             path=str(delta_path),
             format="delta",
-            delta_schema_policy=DeltaSchemaPolicy(schema_mode="merge"),
+            overrides=DatasetLocationOverrides(
+                delta_schema_policy=DeltaSchemaPolicy(schema_mode="merge")
+            ),
         )
     }
     profile = DataFusionRuntimeProfile(

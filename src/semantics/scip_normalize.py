@@ -11,8 +11,8 @@ from datafusion import functions as f
 
 from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.schema.introspection import table_names_snapshot
+from datafusion_engine.udf.expr import udf_expr
 from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
-from datafusion_engine.udf.shims import col_to_byte
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
 
@@ -151,7 +151,7 @@ def scip_to_byte_offsets(
         def _byte_offset(line_start: str, line_text: str, col_name: str) -> Expr:
             base = col(line_start).cast(pa.int64())
             char_col = col(col_name).cast(pa.int64())
-            offset = col_to_byte(col(line_text), char_col, col("col_unit"))
+            offset = udf_expr("col_to_byte", col(line_text), char_col, col("col_unit"))
             guard = (
                 col(line_start).is_null()
                 | col(line_text).is_null()
@@ -168,9 +168,7 @@ def scip_to_byte_offsets(
             "bend",
             _byte_offset("end_line_start_byte", "end_line_text", "end_char"),
         )
-        from datafusion_engine.udf.shims import span_make
-
-        df = df.with_column("span", span_make(col("bstart"), col("bend")))
+        df = df.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
 
         return df.drop(
             "start_line_no",

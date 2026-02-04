@@ -12,7 +12,7 @@ from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
 )
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from schema_spec.system import DataFusionScanOptions
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
@@ -36,8 +36,8 @@ def test_listing_refresh_records_event(tmp_path: Path) -> None:
     location = DatasetLocation(
         path=str(parquet_path),
         format="parquet",
-        datafusion_scan=scan,
         datafusion_provider="listing",
+        overrides=DatasetLocationOverrides(datafusion_scan=scan),
     )
     register_dataset_df(
         ctx,

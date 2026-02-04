@@ -67,6 +67,7 @@ from datafusion_engine.catalog.introspection import (
 from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
+    DatasetLocationOverrides,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
     resolve_delta_cdf_policy,
@@ -535,7 +536,7 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
         Dataset location with default scan options applied.
     """
     updated = location
-    if location.datafusion_scan is not None:
+    if resolve_datafusion_scan_options(location) is not None:
         return updated
     schema: SchemaLike | None = None
     try:
@@ -545,7 +546,12 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
     defaults = _default_scan_options_for_dataset(name, schema=schema)
     if defaults is None:
         return updated
-    return replace(updated, datafusion_scan=defaults)
+    overrides = updated.overrides
+    if overrides is None:
+        overrides = DatasetLocationOverrides(datafusion_scan=defaults)
+    else:
+        overrides = replace(overrides, datafusion_scan=defaults)
+    return replace(updated, overrides=overrides)
 
 
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
@@ -1094,8 +1100,8 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
     if location.dataset_spec is not None:
         return location.dataset_spec
-    if location.table_spec is not None:
-        return make_dataset_spec(table_spec=location.table_spec)
+    if location.overrides is not None and location.overrides.table_spec is not None:
+        return make_dataset_spec(table_spec=location.overrides.table_spec)
     schema = resolve_dataset_schema(location)
     if schema is None:
         return None
@@ -1161,7 +1167,7 @@ def register_dataset_df(
             runtime_profile=resolved.runtime_profile,
         ),
     )
-    scan = location.datafusion_scan
+    scan = resolve_datafusion_scan_options(location)
     if (
         existing
         and scan is not None
@@ -2419,7 +2425,12 @@ def apply_projection_scan_overrides(
         if scan.projection_exprs == projection_exprs:
             continue
         updated_scan = replace(scan, projection_exprs=projection_exprs)
-        updated_location = replace(location, datafusion_scan=updated_scan)
+        overrides = location.overrides
+        if overrides is None:
+            overrides = DatasetLocationOverrides(datafusion_scan=updated_scan)
+        else:
+            overrides = replace(overrides, datafusion_scan=updated_scan)
+        updated_location = replace(location, overrides=overrides)
         adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
         with suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(table_name)

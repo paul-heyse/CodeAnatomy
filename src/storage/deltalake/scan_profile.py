@@ -2,29 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from schema_spec.system import DatasetSpec, DeltaScanOptions
-
-
-class DeltaScanLocation(Protocol):
-    """Protocol for objects carrying Delta scan configuration."""
-
-    @property
-    def format(self) -> str:
-        """Return the dataset format string."""
-        ...
-
-    @property
-    def delta_scan(self) -> DeltaScanOptions | None:
-        """Return override scan options, if any."""
-        ...
-
-    @property
-    def dataset_spec(self) -> DatasetSpec | None:
-        """Return dataset spec, if any."""
-        ...
-
 
 _DEFAULT_DELTA_SCAN = DeltaScanOptions(
     file_column_name="__delta_rs_path",
@@ -35,20 +13,25 @@ _DEFAULT_DELTA_SCAN = DeltaScanOptions(
 )
 
 
-def build_delta_scan_config(location: DeltaScanLocation) -> DeltaScanOptions | None:
-    """Return the effective Delta scan configuration for a location.
+def build_delta_scan_config(
+    *,
+    dataset_format: str,
+    dataset_spec: DatasetSpec | None,
+    override: DeltaScanOptions | None,
+) -> DeltaScanOptions | None:
+    """Return the effective Delta scan configuration for a dataset.
 
     Returns
     -------
     DeltaScanOptions | None
         Resolved Delta scan options when applicable.
     """
-    if location.format != "delta":
+    if dataset_format != "delta":
         return None
     base = _DEFAULT_DELTA_SCAN
-    if location.dataset_spec is not None:
-        base = _merge_delta_scan(base, location.dataset_spec.delta_scan)
-    return _merge_delta_scan(base, location.delta_scan)
+    if dataset_spec is not None:
+        base = _merge_delta_scan(base, dataset_spec.delta_scan)
+    return _merge_delta_scan(base, override)
 
 
 def _merge_delta_scan(
@@ -78,4 +61,4 @@ def _merge_delta_scan(
     )
 
 
-__all__ = ["DeltaScanLocation", "build_delta_scan_config"]
+__all__ = ["build_delta_scan_config"]

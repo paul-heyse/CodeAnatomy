@@ -10,7 +10,7 @@ from datafusion import functions as f
 
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.expr.cast import safe_cast
-from datafusion_engine.udf.shims import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_engine.udf.expr import udf_expr
 from semantics.catalog.dataset_specs import dataset_spec
 
 if TYPE_CHECKING:
@@ -71,7 +71,7 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
         col("def_id").alias("def_id"),
         def_kind_expr.alias("def_kind_norm"),
         col("name").alias("name"),
-        prefixed_hash64("qname", qname_name).alias("qname_id"),
+        udf_expr("prefixed_hash_parts64", "qname", qname_name).alias("qname_id"),
         qname_name.alias("qname"),
         qname_source.alias("qname_source"),
         symbol_expr.alias("symbol"),

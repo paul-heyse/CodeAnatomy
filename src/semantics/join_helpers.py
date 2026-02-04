@@ -81,10 +81,10 @@ def join_by_span_overlap(
     DataFrame
         Joined DataFrame where spans overlap.
     """
-    from datafusion_engine.udf.shims import span_overlaps
+    from datafusion_engine.udf.expr import udf_expr
 
     joined = join_by_path(left, right, left_sem, right_sem)
-    overlap_filter = span_overlaps(left_sem.span_expr(), right_sem.span_expr())
+    overlap_filter = udf_expr("span_overlaps", left_sem.span_expr(), right_sem.span_expr())
     return joined.filter(overlap_filter)
 
 
@@ -120,13 +120,13 @@ def join_by_span_contains(
     DataFrame
         Joined DataFrame where containment holds.
     """
-    from datafusion_engine.udf.shims import span_contains
+    from datafusion_engine.udf.expr import udf_expr
 
     joined = join_by_path(left, right, left_sem, right_sem)
     if left_contains_right:
-        contains_filter = span_contains(left_sem.span_expr(), right_sem.span_expr())
+        contains_filter = udf_expr("span_contains", left_sem.span_expr(), right_sem.span_expr())
     else:
-        contains_filter = span_contains(right_sem.span_expr(), left_sem.span_expr())
+        contains_filter = udf_expr("span_contains", right_sem.span_expr(), left_sem.span_expr())
     return joined.filter(contains_filter)
 
 

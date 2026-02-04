@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING
 import msgspec
 import pyarrow as pa
 
-from datafusion_engine.dataset.registry import DatasetLocation, resolve_delta_log_storage_options
+from datafusion_engine.dataset.registry import (
+    DatasetLocation,
+    DatasetLocationOverrides,
+    resolve_delta_feature_gate,
+    resolve_delta_log_storage_options,
+)
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.sql.options import planning_sql_options
@@ -934,9 +939,15 @@ def _hamilton_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocat
 def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
     resolved_scan = resolve_delta_scan_options(location)
     resolved_log = resolve_delta_log_storage_options(location)
+    overrides = location.overrides
+    if resolved_scan is not None:
+        if overrides is None:
+            overrides = DatasetLocationOverrides(delta_scan=resolved_scan)
+        else:
+            overrides = replace(overrides, delta_scan=resolved_scan)
     return replace(
         location,
-        delta_scan=resolved_scan,
+        overrides=overrides,
         delta_log_storage_options=dict(resolved_log or {}),
     )
 
@@ -949,7 +960,7 @@ def _delta_schema_available(location: DatasetLocation) -> bool:
             log_storage_options=location.delta_log_storage_options or None,
             version=location.delta_version,
             timestamp=location.delta_timestamp,
-            gate=location.delta_feature_gate,
+            gate=resolve_delta_feature_gate(location),
         )
     )
     return schema is not None

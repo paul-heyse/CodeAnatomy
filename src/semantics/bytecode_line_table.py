@@ -14,7 +14,7 @@ from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.arrow.semantic import span_metadata, span_type
 from datafusion_engine.schema.introspection import table_names_snapshot
 from datafusion_engine.schema.registry import extract_schema_for
-from datafusion_engine.udf.shims import span_make
+from datafusion_engine.udf.expr import udf_expr
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
 
@@ -123,7 +123,7 @@ def py_bc_line_table_with_bytes(
         bstart = col("line_start_byte").cast(pa.int64())
         bend = f.coalesce(col("line_end_byte").cast(pa.int64()), bstart)
         joined = joined.with_column("bstart", bstart).with_column("bend", bend)
-        joined = joined.with_column("span", span_make(col("bstart"), col("bend")))
+        joined = joined.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
         joined = joined.with_column("col_unit", lit("byte"))
         return joined.drop("line_no")
 

@@ -831,7 +831,7 @@ def _interval_best_matches(
     cfg: IntervalAlignOptions,
     right_name_map: Mapping[str, str],
 ) -> DataFrame:
-    from datafusion_engine.udf.shims import interval_align_score
+    from datafusion_engine.udf.expr import udf_expr
 
     left_start = _normalize_span_expr(cfg.left_start_col)
     left_end = _normalize_span_expr(cfg.left_end_col)
@@ -846,7 +846,7 @@ def _interval_best_matches(
         right_end=right_end,
     )
     matched = joined.filter(match_mask)
-    match_score = interval_align_score(left_start, left_end, right_start, right_end)
+    match_score = udf_expr("interval_align_score", left_start, left_end, right_start, right_end)
     matched = matched.with_column(prepared.score_col, match_score)
     if cfg.emit_match_meta:
         matched = matched.with_column(cfg.match_kind_col, lit(cfg.mode))

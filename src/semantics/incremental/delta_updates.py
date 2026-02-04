@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.metadata import encoding_policy_from_schema
+from datafusion_engine.delta import DeltaMutationRequest
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -25,8 +26,8 @@ from semantics.incremental.write_helpers import (
     write_delta_table_via_pipeline,
 )
 from storage.deltalake import (
+    DeltaDeleteWhereRequest,
     coerce_delta_table,
-    delta_delete_where,
     idempotent_commit_properties,
 )
 
@@ -412,26 +413,27 @@ def _delete_delta_partitions(
         extra_metadata=commit_metadata,
     )
     ctx = context.runtime.session_runtime().ctx
-    from storage.deltalake import DeltaDeleteWhereRequest
-
     dataset_location = (
         context.runtime.profile.dataset_location(dataset_name) if dataset_name else None
     )
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
-    delta_delete_where(
-        ctx,
-        request=DeltaDeleteWhereRequest(
-            path=base_dir,
-            predicate=predicate,
-            storage_options=resolved_storage.storage_options,
-            log_storage_options=resolved_storage.log_storage_options,
-            commit_properties=commit_properties,
-            commit_metadata=commit_metadata,
-            extra_constraints=extra_constraints,
-            runtime_profile=context.runtime.profile,
-            dataset_name=dataset_name,
+    delta_service = context.runtime.profile.delta_service()
+    delta_service.mutate(
+        DeltaMutationRequest(
+            delete=DeltaDeleteWhereRequest(
+                path=base_dir,
+                predicate=predicate,
+                storage_options=resolved_storage.storage_options,
+                log_storage_options=resolved_storage.log_storage_options,
+                commit_properties=commit_properties,
+                commit_metadata=commit_metadata,
+                extra_constraints=extra_constraints,
+                runtime_profile=context.runtime.profile,
+                dataset_name=dataset_name,
+            )
         ),
+        ctx=ctx,
     )
     context.runtime.profile.finalize_delta_commit(
         key=base_dir,

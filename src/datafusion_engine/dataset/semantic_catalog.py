@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
+from datafusion_engine.dataset.registry import (
+    DatasetCatalog,
+    DatasetLocation,
+    DatasetLocationOverrides,
+)
 from semantics.catalog.dataset_rows import get_all_dataset_rows
 from semantics.catalog.spec_builder import build_dataset_spec
 from semantics.naming import canonical_output_name
@@ -77,11 +81,13 @@ def build_semantic_dataset_catalog(
                     path=str(semantic_root / row.name),
                     format="delta",
                     dataset_spec=spec,
-                    delta_cdf_policy=spec.delta_cdf_policy,
-                    delta_maintenance_policy=spec.delta_maintenance_policy,
-                    delta_write_policy=spec.delta_write_policy,
-                    delta_schema_policy=spec.delta_schema_policy,
-                    delta_feature_gate=spec.delta_feature_gate,
+                    overrides=DatasetLocationOverrides(
+                        delta_cdf_policy=spec.delta_cdf_policy,
+                        delta_maintenance_policy=spec.delta_maintenance_policy,
+                        delta_write_policy=spec.delta_write_policy,
+                        delta_schema_policy=spec.delta_schema_policy,
+                        delta_feature_gate=spec.delta_feature_gate,
+                    ),
                 ),
             )
 
@@ -136,11 +142,13 @@ def semantic_dataset_location(
         path=str(root / name),
         format="delta",
         dataset_spec=spec,
-        delta_cdf_policy=spec.delta_cdf_policy,
-        delta_maintenance_policy=spec.delta_maintenance_policy,
-        delta_write_policy=spec.delta_write_policy,
-        delta_schema_policy=spec.delta_schema_policy,
-        delta_feature_gate=spec.delta_feature_gate,
+        overrides=DatasetLocationOverrides(
+            delta_cdf_policy=spec.delta_cdf_policy,
+            delta_maintenance_policy=spec.delta_maintenance_policy,
+            delta_write_policy=spec.delta_write_policy,
+            delta_schema_policy=spec.delta_schema_policy,
+            delta_feature_gate=spec.delta_feature_gate,
+        ),
     )
 
 

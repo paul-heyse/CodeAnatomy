@@ -17,6 +17,9 @@ from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
+from obs.otel.run_context import get_run_id
+from obs.otel.scopes import SCOPE_STORAGE
+from obs.otel.tracing import stage_span
 from storage.ipc_utils import ipc_bytes
 from utils.storage_options import merged_storage_options
 from utils.value_coercion import coerce_int, coerce_str_list
@@ -87,6 +90,26 @@ def _runtime_profile_for_delta(
     return DataFusionRuntimeProfile()
 
 
+def _storage_span_attributes(
+    *,
+    operation: str,
+    table_path: str | None = None,
+    dataset_name: str | None = None,
+    extra: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    attrs: dict[str, object] = {"codeanatomy.operation": operation}
+    if table_path:
+        attrs["codeanatomy.table"] = str(table_path)
+    run_id = get_run_id()
+    if run_id:
+        attrs["codeanatomy.run_id"] = run_id
+    if dataset_name:
+        attrs["codeanatomy.dataset_name"] = dataset_name
+    if extra:
+        attrs.update({key: value for key, value in extra.items() if value is not None})
+    return attrs
+
+
 def query_delta_sql(
     sql: str,
     tables: Mapping[str, str],
@@ -99,13 +122,27 @@ def query_delta_sql(
     RecordBatchReaderLike
         Query results as a record batch reader.
     """
-    from storage.deltalake.query_builder import execute_query, open_delta_table
+    attrs = _storage_span_attributes(
+        operation="sql_query",
+        extra={
+            "codeanatomy.sql_len": len(sql),
+            "codeanatomy.table_count": len(tables),
+            "codeanatomy.tables": sorted(tables),
+        },
+    )
+    with stage_span(
+        "storage.sql_query",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        from storage.deltalake.query_builder import execute_query, open_delta_table
 
-    delta_tables = {
-        name: open_delta_table(path, storage_options=storage_options)
-        for name, path in tables.items()
-    }
-    return execute_query(sql, delta_tables)
+        delta_tables = {
+            name: open_delta_table(path, storage_options=storage_options)
+            for name, path in tables.items()
+        }
+        return execute_query(sql, delta_tables)
 
 
 @dataclass(frozen=True)
@@ -297,25 +334,39 @@ def delta_table_version(
     int | None
         Latest Delta table version, or None if not a Delta table.
     """
-    snapshot = _snapshot_info(
-        DeltaSnapshotLookup(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            gate=gate,
-        )
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=path,
+        extra={"codeanatomy.metadata_kind": "version"},
     )
-    if snapshot is None:
-        return None
-    version_value = snapshot.get("version")
-    if isinstance(version_value, int):
-        return version_value
-    if isinstance(version_value, str) and version_value.strip():
-        try:
-            return int(version_value)
-        except ValueError:
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        snapshot = _snapshot_info(
+            DeltaSnapshotLookup(
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                gate=gate,
+            )
+        )
+        if snapshot is None:
             return None
-    return None
+        version_value = snapshot.get("version")
+        if isinstance(version_value, int):
+            span.set_attribute("codeanatomy.version", version_value)
+            return version_value
+        if isinstance(version_value, str) and version_value.strip():
+            try:
+                version = int(version_value)
+            except ValueError:
+                return None
+            span.set_attribute("codeanatomy.version", version)
+            return version
+        return None
 
 
 def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
@@ -331,46 +382,64 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     pyarrow.Schema | None
         Arrow schema for the Delta table or ``None`` when the table does not exist.
     """
-    storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    profile = _runtime_profile_for_delta(None)
-    ctx = profile.session_context()
-    from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.dataset.resolution import (
-        DatasetResolutionRequest,
-        resolve_dataset_provider,
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=request.path,
+        extra={"codeanatomy.metadata_kind": "schema"},
     )
-
-    try:
-        location = DatasetLocation(
-            path=request.path,
-            format="delta",
-            storage_options=dict(storage or {}),
-            delta_log_storage_options=dict(request.log_storage_options or {}),
-            delta_version=request.version,
-            delta_timestamp=request.timestamp,
-            delta_feature_gate=request.gate,
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        profile = _runtime_profile_for_delta(None)
+        ctx = profile.session_context()
+        from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
+        from datafusion_engine.dataset.resolution import (
+            DatasetResolutionRequest,
+            resolve_dataset_provider,
         )
-        resolution = resolve_dataset_provider(
-            DatasetResolutionRequest(
-                ctx=ctx,
-                location=location,
-                runtime_profile=profile,
+
+        try:
+            overrides = None
+            if request.gate is not None:
+                overrides = DatasetLocationOverrides(delta_feature_gate=request.gate)
+            location = DatasetLocation(
+                path=request.path,
+                format="delta",
+                storage_options=dict(storage or {}),
+                delta_log_storage_options=dict(request.log_storage_options or {}),
+                delta_version=request.version,
+                delta_timestamp=request.timestamp,
+                overrides=overrides,
             )
-        )
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    from datafusion_engine.tables.metadata import TableProviderCapsule
+            resolution = resolve_dataset_provider(
+                DatasetResolutionRequest(
+                    ctx=ctx,
+                    location=location,
+                    runtime_profile=profile,
+                )
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        from datafusion_engine.tables.metadata import TableProviderCapsule
 
-    df = ctx.read_table(TableProviderCapsule(resolution.provider))
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_pyarrow = getattr(schema, "to_pyarrow", None)
-    if callable(to_pyarrow):
-        resolved = to_pyarrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    return None
+        df = ctx.read_table(TableProviderCapsule(resolution.provider))
+        schema = df.schema()
+        resolved_schema: pa.Schema | None = None
+        if isinstance(schema, pa.Schema):
+            resolved_schema = schema
+        else:
+            to_pyarrow = getattr(schema, "to_pyarrow", None)
+            if callable(to_pyarrow):
+                candidate = to_pyarrow()
+                if isinstance(candidate, pa.Schema):
+                    resolved_schema = candidate
+        if resolved_schema is not None:
+            span.set_attribute("codeanatomy.schema_columns", len(resolved_schema))
+        return resolved_schema
 
 
 def read_delta_table(request: DeltaReadRequest) -> TableLike:
@@ -389,50 +458,74 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
     if request.version is not None and request.timestamp is not None:
         msg = "Delta read request must set either version or timestamp, not both."
         raise ValueError(msg)
-    storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    profile = _runtime_profile_for_delta(request.runtime_profile)
-    ctx = profile.session_context()
-    from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.dataset.resolution import (
-        DatasetResolutionRequest,
-        resolve_dataset_provider,
+    attrs = _storage_span_attributes(
+        operation="read",
+        table_path=request.path,
+        extra={
+            "codeanatomy.version": request.version,
+            "codeanatomy.timestamp": request.timestamp,
+            "codeanatomy.has_filters": bool(request.predicate),
+            "codeanatomy.column_count": len(request.columns)
+            if request.columns is not None
+            else None,
+        },
     )
-
-    try:
-        location = DatasetLocation(
-            path=request.path,
-            format="delta",
-            storage_options=dict(storage or {}),
-            delta_log_storage_options=dict(request.log_storage_options or {}),
-            delta_version=request.version,
-            delta_timestamp=request.timestamp,
-            delta_feature_gate=request.gate,
+    with stage_span(
+        "storage.read_table",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        profile = _runtime_profile_for_delta(request.runtime_profile)
+        ctx = profile.session_context()
+        from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
+        from datafusion_engine.dataset.resolution import (
+            DatasetResolutionRequest,
+            resolve_dataset_provider,
         )
-        resolution = resolve_dataset_provider(
-            DatasetResolutionRequest(
-                ctx=ctx,
-                location=location,
-                runtime_profile=profile,
-            )
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Delta read provider request failed: {exc}"
-        raise ValueError(msg) from exc
-    from datafusion_engine.tables.metadata import TableProviderCapsule
 
-    df = ctx.read_table(TableProviderCapsule(resolution.provider))
-    if request.predicate:
         try:
-            predicate_expr = df.parse_sql_expr(request.predicate)
+            overrides = None
+            if request.gate is not None:
+                overrides = DatasetLocationOverrides(delta_feature_gate=request.gate)
+            location = DatasetLocation(
+                path=request.path,
+                format="delta",
+                storage_options=dict(storage or {}),
+                delta_log_storage_options=dict(request.log_storage_options or {}),
+                delta_version=request.version,
+                delta_timestamp=request.timestamp,
+                overrides=overrides,
+            )
+            resolution = resolve_dataset_provider(
+                DatasetResolutionRequest(
+                    ctx=ctx,
+                    location=location,
+                    runtime_profile=profile,
+                )
+            )
         except (RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Delta read predicate parse failed: {exc}"
+            msg = f"Delta read provider request failed: {exc}"
             raise ValueError(msg) from exc
-        df = df.filter(predicate_expr)
-    if request.columns:
-        from datafusion import col
+        from datafusion_engine.tables.metadata import TableProviderCapsule
 
-        df = df.select(*(col(name) for name in request.columns))
-    return cast("TableLike", df.to_arrow_table())
+        df = ctx.read_table(TableProviderCapsule(resolution.provider))
+        if request.predicate:
+            try:
+                predicate_expr = df.parse_sql_expr(request.predicate)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                msg = f"Delta read predicate parse failed: {exc}"
+                raise ValueError(msg) from exc
+            df = df.filter(predicate_expr)
+        if request.columns:
+            from datafusion import col
+
+            df = df.select(*(col(name) for name in request.columns))
+        table = cast("TableLike", df.to_arrow_table())
+        if isinstance(table, pa.Table):
+            span.set_attribute("codeanatomy.rows_read", table.num_rows)
+        return table
 
 
 def delta_table_features(
@@ -1778,40 +1871,56 @@ def vacuum_delta(
         Raised when the Rust control-plane vacuum call fails.
     """
     options = options or DeltaVacuumOptions()
-    storage = merged_storage_options(storage_options, log_storage_options)
-    profile = _runtime_profile_for_delta(None)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaCommitOptions,
-            DeltaVacuumRequest,
-            delta_vacuum,
-        )
+    attrs = _storage_span_attributes(
+        operation="vacuum",
+        table_path=path,
+        extra={
+            "codeanatomy.retention_hours": options.retention_hours,
+            "codeanatomy.dry_run": options.dry_run,
+            "codeanatomy.enforce_retention_duration": options.enforce_retention_duration,
+        },
+    )
+    with stage_span(
+        "storage.vacuum",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        storage = merged_storage_options(storage_options, log_storage_options)
+        profile = _runtime_profile_for_delta(None)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaCommitOptions,
+                DeltaVacuumRequest,
+                delta_vacuum,
+            )
 
-        report = delta_vacuum(
-            ctx,
-            request=DeltaVacuumRequest(
-                table_uri=path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                retention_hours=options.retention_hours,
-                dry_run=options.dry_run,
-                enforce_retention_duration=options.enforce_retention_duration,
-                require_vacuum_protocol_check=options.require_vacuum_protocol_check,
-                commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
-            ),
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Delta vacuum failed via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    metrics = report.get("metrics")
-    if isinstance(metrics, Mapping):
-        for key in ("files", "removed_files", "deleted_files"):
-            value = metrics.get(key)
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-                return [str(item) for item in value]
-    return []
+            report = delta_vacuum(
+                ctx,
+                request=DeltaVacuumRequest(
+                    table_uri=path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                    retention_hours=options.retention_hours,
+                    dry_run=options.dry_run,
+                    enforce_retention_duration=options.enforce_retention_duration,
+                    require_vacuum_protocol_check=options.require_vacuum_protocol_check,
+                    commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta vacuum failed via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        metrics = report.get("metrics")
+        if isinstance(metrics, Mapping):
+            for key in ("files", "removed_files", "deleted_files"):
+                value = metrics.get(key)
+                if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                    span.set_attribute("codeanatomy.files_removed", len(value))
+                    return [str(item) for item in value]
+        return []
 
 
 def create_delta_checkpoint(
@@ -1987,32 +2096,55 @@ def read_delta_cdf(
         If CDF is not enabled on the Delta table.
     """
     resolved_options = cdf_options or DeltaCdfOptions()
-    bundle = _delta_cdf_table_provider(
-        table_path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-        options=resolved_options,
+    attrs = _storage_span_attributes(
+        operation="read_cdf",
+        table_path=table_path,
+        extra={
+            "codeanatomy.starting_version": resolved_options.starting_version,
+            "codeanatomy.ending_version": resolved_options.ending_version,
+            "codeanatomy.starting_timestamp": resolved_options.starting_timestamp,
+            "codeanatomy.ending_timestamp": resolved_options.ending_timestamp,
+            "codeanatomy.has_filters": bool(resolved_options.predicate),
+            "codeanatomy.column_count": len(resolved_options.columns)
+            if resolved_options.columns is not None
+            else None,
+        },
     )
-    if bundle is None:
-        msg = "Delta CDF provider requires Rust control-plane support."
-        raise ValueError(msg)
-    provider = bundle.provider
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    with stage_span(
+        "storage.read_cdf",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        bundle = _delta_cdf_table_provider(
+            table_path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            options=resolved_options,
+        )
+        if bundle is None:
+            msg = "Delta CDF provider requires Rust control-plane support."
+            raise ValueError(msg)
+        provider = bundle.provider
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
-    ctx = DataFusionRuntimeProfile().session_context()
-    df = ctx.read_table(provider)
-    if resolved_options.predicate:
-        try:
-            predicate_expr = df.parse_sql_expr(resolved_options.predicate)
-            df = df.filter(predicate_expr)
-        except (RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Delta CDF predicate parse failed: {exc}"
-            raise ValueError(msg) from exc
-    if resolved_options.columns:
-        from datafusion import col
+        ctx = DataFusionRuntimeProfile().session_context()
+        df = ctx.read_table(provider)
+        if resolved_options.predicate:
+            try:
+                predicate_expr = df.parse_sql_expr(resolved_options.predicate)
+                df = df.filter(predicate_expr)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                msg = f"Delta CDF predicate parse failed: {exc}"
+                raise ValueError(msg) from exc
+        if resolved_options.columns:
+            from datafusion import col
 
-        df = df.select(*(col(name) for name in resolved_options.columns))
-    return cast("TableLike", df.to_arrow_table())
+            df = df.select(*(col(name) for name in resolved_options.columns))
+        table = cast("TableLike", df.to_arrow_table())
+        if isinstance(table, pa.Table):
+            span.set_attribute("codeanatomy.rows_read", table.num_rows)
+        return table
 
 
 def delta_delete_where(
@@ -2034,42 +2166,63 @@ def delta_delete_where(
     Mapping[str, object]
         Control-plane mutation report payload.
     """
-    storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    commit_options = _delta_commit_options(
-        commit_properties=request.commit_properties,
-        commit_metadata=request.commit_metadata,
-        app_id=None,
-        app_version=None,
+    attrs = _storage_span_attributes(
+        operation="delete",
+        table_path=request.path,
+        dataset_name=request.dataset_name,
+        extra={"codeanatomy.has_filters": bool(request.predicate)},
     )
-    from datafusion_engine.delta.control_plane import DeltaDeleteRequest, delta_delete
-
-    report = delta_delete(
-        ctx,
-        request=DeltaDeleteRequest(
-            table_uri=request.path,
-            storage_options=storage or None,
-            version=None,
-            timestamp=None,
-            predicate=request.predicate,
-            extra_constraints=request.extra_constraints,
-            commit_options=commit_options,
-        ),
-    )
-    _record_mutation_artifact(
-        _MutationArtifactRequest(
-            profile=request.runtime_profile,
-            report=report,
-            table_uri=request.path,
-            operation="delete",
-            mode="delete",
-            commit_metadata=request.commit_metadata,
+    with stage_span(
+        "storage.delete",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        commit_options = _delta_commit_options(
             commit_properties=request.commit_properties,
-            constraint_status=_constraint_status(request.extra_constraints, checked=False),
-            constraint_violations=(),
-            dataset_name=request.dataset_name,
+            commit_metadata=request.commit_metadata,
+            app_id=None,
+            app_version=None,
         )
-    )
-    return report
+        from datafusion_engine.delta.control_plane import DeltaDeleteRequest, delta_delete
+
+        report = delta_delete(
+            ctx,
+            request=DeltaDeleteRequest(
+                table_uri=request.path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                predicate=request.predicate,
+                extra_constraints=request.extra_constraints,
+                commit_options=commit_options,
+            ),
+        )
+        metrics = report.get("metrics") if isinstance(report, Mapping) else None
+        if isinstance(metrics, Mapping):
+            for key in ("rows_deleted", "deleted_rows", "num_deleted"):
+                value = metrics.get(key)
+                if value is not None:
+                    rows_affected = coerce_int(value)
+                    if rows_affected is not None:
+                        span.set_attribute("codeanatomy.rows_affected", rows_affected)
+                    break
+        _record_mutation_artifact(
+            _MutationArtifactRequest(
+                profile=request.runtime_profile,
+                report=report,
+                table_uri=request.path,
+                operation="delete",
+                mode="delete",
+                commit_metadata=request.commit_metadata,
+                commit_properties=request.commit_properties,
+                constraint_status=_constraint_status(request.extra_constraints, checked=False),
+                constraint_violations=(),
+                dataset_name=request.dataset_name,
+            )
+        )
+        return report
 
 
 def delta_merge_arrow(
@@ -2091,65 +2244,99 @@ def delta_merge_arrow(
     Mapping[str, object]
         Control-plane mutation report payload.
     """
-    storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    resolved_source_alias = request.source_alias or "source"
-    resolved_target_alias = request.target_alias or "target"
-    resolved_updates = dict(request.matched_updates or {})
-    resolved_inserts = dict(request.not_matched_inserts or {})
-    if request.update_all:
-        for name in request.source.schema.names:
-            resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
-    if request.insert_all:
-        for name in request.source.schema.names:
-            resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
-    source_table = register_temp_table(ctx, request.source)
-    commit_options = _delta_commit_options(
-        commit_properties=request.commit_properties,
-        commit_metadata=request.commit_metadata,
-        app_id=None,
-        app_version=None,
+    attrs = _storage_span_attributes(
+        operation="merge",
+        table_path=request.path,
+        dataset_name=request.dataset_name,
+        extra={
+            "codeanatomy.source_rows": request.source.num_rows,
+            "codeanatomy.has_filters": bool(request.predicate),
+        },
     )
-    from datafusion_engine.delta.control_plane import DeltaMergeRequest, delta_merge
+    with stage_span(
+        "storage.merge",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ) as span:
+        storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        resolved_source_alias = request.source_alias or "source"
+        resolved_target_alias = request.target_alias or "target"
+        resolved_updates = dict(request.matched_updates or {})
+        resolved_inserts = dict(request.not_matched_inserts or {})
+        if request.update_all:
+            for name in request.source.schema.names:
+                resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
+        if request.insert_all:
+            for name in request.source.schema.names:
+                resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
+        source_table = register_temp_table(ctx, request.source)
+        commit_options = _delta_commit_options(
+            commit_properties=request.commit_properties,
+            commit_metadata=request.commit_metadata,
+            app_id=None,
+            app_version=None,
+        )
+        from datafusion_engine.delta.control_plane import DeltaMergeRequest, delta_merge
 
-    try:
-        report = delta_merge(
-            ctx,
-            request=DeltaMergeRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                source_table=source_table,
-                predicate=request.predicate,
-                source_alias=resolved_source_alias,
-                target_alias=resolved_target_alias,
-                matched_predicate=request.matched_predicate,
-                matched_updates=resolved_updates,
-                not_matched_predicate=request.not_matched_predicate,
-                not_matched_inserts=resolved_inserts,
-                not_matched_by_source_predicate=request.not_matched_by_source_predicate,
-                delete_not_matched_by_source=request.delete_not_matched_by_source,
-                extra_constraints=request.extra_constraints,
-                commit_options=commit_options,
-            ),
-        )
-        _record_mutation_artifact(
-            _MutationArtifactRequest(
-                profile=request.runtime_profile,
-                report=report,
-                table_uri=request.path,
-                operation="merge",
-                mode="merge",
-                commit_metadata=request.commit_metadata,
-                commit_properties=request.commit_properties,
-                constraint_status=_constraint_status(request.extra_constraints, checked=True),
-                constraint_violations=(),
-                dataset_name=request.dataset_name,
+        try:
+            report = delta_merge(
+                ctx,
+                request=DeltaMergeRequest(
+                    table_uri=request.path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                    source_table=source_table,
+                    predicate=request.predicate,
+                    source_alias=resolved_source_alias,
+                    target_alias=resolved_target_alias,
+                    matched_predicate=request.matched_predicate,
+                    matched_updates=resolved_updates,
+                    not_matched_predicate=request.not_matched_predicate,
+                    not_matched_inserts=resolved_inserts,
+                    not_matched_by_source_predicate=request.not_matched_by_source_predicate,
+                    delete_not_matched_by_source=request.delete_not_matched_by_source,
+                    extra_constraints=request.extra_constraints,
+                    commit_options=commit_options,
+                ),
             )
-        )
-        return report
-    finally:
-        deregister_table(ctx, source_table)
+            metrics = report.get("metrics") if isinstance(report, Mapping) else None
+            if isinstance(metrics, Mapping):
+                rows = 0
+                found = False
+                for key in (
+                    "rows_inserted",
+                    "rows_updated",
+                    "rows_deleted",
+                    "num_inserted",
+                    "num_updated",
+                    "num_deleted",
+                ):
+                    value = metrics.get(key)
+                    if value is None:
+                        continue
+                    found = True
+                    rows += int(coerce_int(value) or 0)
+                if found:
+                    span.set_attribute("codeanatomy.rows_affected", rows)
+            _record_mutation_artifact(
+                _MutationArtifactRequest(
+                    profile=request.runtime_profile,
+                    report=report,
+                    table_uri=request.path,
+                    operation="merge",
+                    mode="merge",
+                    commit_metadata=request.commit_metadata,
+                    commit_properties=request.commit_properties,
+                    constraint_status=_constraint_status(request.extra_constraints, checked=True),
+                    constraint_violations=(),
+                    dataset_name=request.dataset_name,
+                )
+            )
+            return report
+        finally:
+            deregister_table(ctx, source_table)
 
 
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
@@ -2217,21 +2404,33 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:
     if request.runtime_profile is None:
         return
-    from datafusion_engine.delta.observability import (
-        DeltaMutationArtifact,
-        record_delta_mutation,
+    attrs = _storage_span_attributes(
+        operation="feature_control",
+        table_path=request.path,
+        dataset_name=request.dataset_name,
+        extra={"codeanatomy.feature_name": request.operation},
     )
+    with stage_span(
+        "storage.feature_control",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        from datafusion_engine.delta.observability import (
+            DeltaMutationArtifact,
+            record_delta_mutation,
+        )
 
-    record_delta_mutation(
-        request.runtime_profile,
-        artifact=DeltaMutationArtifact(
-            table_uri=request.path,
-            operation=request.operation,
-            report=request.report,
-            dataset_name=request.dataset_name,
-            commit_metadata=request.commit_metadata,
-        ),
-    )
+        record_delta_mutation(
+            request.runtime_profile,
+            artifact=DeltaMutationArtifact(
+                table_uri=request.path,
+                operation=request.operation,
+                report=request.report,
+                dataset_name=request.dataset_name,
+                commit_metadata=request.commit_metadata,
+            ),
+        )
 
 
 def _record_delta_maintenance(request: _DeltaMaintenanceRecord) -> None:

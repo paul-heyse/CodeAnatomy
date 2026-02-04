@@ -13,7 +13,7 @@ from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.interop import TableLike, coerce_table_like
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.schema.alignment import align_table
-from datafusion_engine.udf.shims import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_engine.udf.expr import udf_expr
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.registry_specs import dataset_schema
 from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
@@ -89,7 +89,7 @@ def _build_exported_defs_base(
         col("def_id").alias("def_id"),
         f.coalesce(col("def_kind_norm"), col("kind")).alias("def_kind_norm"),
         col("name").alias("name"),
-        prefixed_hash64("qname", qname_name).alias("qname_id"),
+        udf_expr("prefixed_hash_parts64", "qname", qname_name).alias("qname_id"),
         qname_name.alias("qname"),
         qname_source.alias("qname_source"),
         symbol_expr.alias("symbol"),

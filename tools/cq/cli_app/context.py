@@ -45,7 +45,7 @@ class CliContext:
     save_artifact: bool = True
 
     @classmethod
-    def build(  # noqa: PLR0913
+    def build(
         cls,
         argv: list[str],
         root: Path | None = None,

@@ -14,7 +14,7 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def impact(  # noqa: PLR0913
+def impact(
     function: Annotated[str, Parameter(help="Function name to analyze")],
     *,
     param: Annotated[str, Parameter(help="Parameter name to trace")],
@@ -60,7 +60,7 @@ def impact(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def calls(  # noqa: PLR0913
+def calls(
     function: Annotated[str, Parameter(help="Function name to find calls for")],
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -101,7 +101,7 @@ def calls(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def imports(  # noqa: PLR0913
+def imports(
     *,
     cycles: Annotated[bool, Parameter(help="Run cycle detection")] = False,
     module: Annotated[str | None, Parameter(help="Focus on specific module")] = None,
@@ -145,7 +145,7 @@ def imports(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def exceptions(  # noqa: PLR0913
+def exceptions(
     *,
     function: Annotated[str | None, Parameter(help="Focus on specific function")] = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -186,7 +186,7 @@ def exceptions(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def sig_impact(  # noqa: PLR0913
+def sig_impact(
     symbol: Annotated[str, Parameter(help="Function name to analyze")],
     *,
     to: Annotated[str, Parameter(help='New signature (e.g., "foo(a, b, *, c=None)")')],
@@ -230,7 +230,7 @@ def sig_impact(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def side_effects(  # noqa: PLR0913
+def side_effects(
     *,
     max_files: Annotated[int, Parameter(help="Maximum files to scan")] = 2000,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -272,7 +272,7 @@ def side_effects(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def scopes(  # noqa: PLR0913
+def scopes(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
@@ -314,10 +314,12 @@ def scopes(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def bytecode_surface(  # noqa: PLR0913
+def bytecode_surface(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
-    show: Annotated[str, Parameter(help="What to show: globals,attrs,constants,opcodes")] = "globals,attrs,constants",
+    show: Annotated[
+        str, Parameter(help="What to show: globals,attrs,constants,opcodes")
+    ] = "globals,attrs,constants",
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
     include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
     exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
@@ -358,7 +360,7 @@ def bytecode_surface(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(  # noqa: PLR0913, PLR0917
+def _build_filters(
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,

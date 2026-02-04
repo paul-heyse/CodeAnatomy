@@ -74,7 +74,13 @@ def resolve_repo_context(start: Path | None = None) -> RepoContext:
 
 
 def open_repo(repo_context: RepoContext) -> pygit2.Repository | None:
-    """Open a pygit2 repository if git_dir is available."""
+    """Open a pygit2 repository if git_dir is available.
+
+    Returns
+    -------
+    pygit2.Repository | None
+        Repository handle when available.
+    """
     if repo_context.git_dir is None:
         return None
     try:

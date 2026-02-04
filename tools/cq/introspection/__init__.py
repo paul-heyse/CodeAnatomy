@@ -30,24 +30,21 @@ from tools.cq.introspection.symtable_extract import (
 )
 
 __all__ = [
-    # Bytecode
+    "CFG",
+    "BasicBlock",
     "BytecodeIndex",
+    "CFGEdge",
     "ExceptionEntry",
     "InstructionFact",
-    "extract_instruction_facts",
-    "parse_exception_table",
-    # CFG
-    "BasicBlock",
-    "CFG",
-    "CFGEdge",
-    "build_cfg",
-    # Symtable
     "ScopeFact",
     "ScopeGraph",
     "ScopeType",
     "SymbolFact",
+    "build_cfg",
+    "extract_instruction_facts",
     "extract_scope_graph",
     "get_cell_vars",
     "get_free_vars",
     "is_closure",
+    "parse_exception_table",
 ]

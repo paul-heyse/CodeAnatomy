@@ -4,6 +4,19 @@ This plan captures all identified discrepancies between the current Smart Search
 
 ---
 
+## Status Summary (2026-02-04)
+
+- Scope 1: Completed
+- Scope 2: Completed
+- Scope 3: Partially completed (interval indexing in place, perf benchmark pending)
+- Scope 4: Partially completed (`caps_hit` and estimate flag added, true scanned file count still approximate)
+- Scope 5: Completed
+- Scope 6: Completed (records preferred, node-kind fallback retained)
+- Scope 7: Completed (helpers reused via lazy import to avoid circular import)
+- Scope 8: Completed
+- Scope 9: Partially completed (parse-first fallback implemented, tests pending)
+- Scope 10: Partially completed (unit + golden coverage added, perf benchmark pending)
+
 ## Scope 1: Per‑File Symtable Cache (Performance)
 
 **Problem**  
@@ -11,6 +24,9 @@ This plan captures all identified discrepancies between the current Smart Search
 
 **Approach**  
 Introduce a per-file symtable cache and/or reuse `SymtableEnricher` from `tools/cq/query/enrichment.py`. Compute symtable once per file and pass it into `classify_match()` or a shared enrichment path.
+
+**Status**  
+Completed. A cached `get_symtable_table()` is used by Smart Search and `clear_caches()` resets it. `enrich_with_symtable_from_table()` is the shared path.
 
 **Representative snippet**
 
@@ -44,14 +60,14 @@ if table is not None:
 - Optional reuse: `tools/cq/query/enrichment.py`
 
 **Deprecate/Delete**
-- If the new cache path is adopted, consider deprecating `enrich_with_symtable()` in favor of `enrich_with_symtable_from_table()` or `SymtableEnricher` reuse.
+- `enrich_with_symtable()` remains for non-cached call sites, but Smart Search uses the cached table path.
 
 **Implementation checklist**
-1. Add `_symtable_cache` and `get_symtable()` with file-level caching.
-2. Add `enrich_with_symtable_from_table()` helper for reusing a cached table.
-3. Wire `classify_match()` to use the cached table.
-4. Update `clear_caches()` to clear symtable cache too.
-5. Add a unit test validating cache hits for multiple matches in one file.
+1. Add `_symtable_cache` and a cached accessor (`get_symtable_table()`). **Done**
+2. Add `enrich_with_symtable_from_table()` helper for reusing a cached table. **Done**
+3. Wire `classify_match()` to use the cached table. **Done**
+4. Update `clear_caches()` to clear symtable cache too. **Done**
+5. Add a unit test validating cache hits for multiple matches in one file. **Done**
 
 ---
 
@@ -62,6 +78,9 @@ if table is not None:
 
 **Approach**  
 Cache `def_lines` per file alongside cached source. Compute once per file and reuse.
+
+**Status**  
+Completed. `get_def_lines_cached()` lives in `tools/cq/search/classifier.py` and Smart Search reuses it.
 
 **Representative snippet**
 
@@ -85,6 +104,7 @@ def get_def_lines_cached(file_path: Path, source: str) -> list[tuple[int, int]]:
 ```
 
 **Target files**
+- `tools/cq/search/classifier.py`
 - `tools/cq/search/smart_search.py`
 - `tools/cq/search/adapter.py` (optionally keep as legacy, but stop calling from Smart Search)
 
@@ -92,10 +112,10 @@ def get_def_lines_cached(file_path: Path, source: str) -> list[tuple[int, int]]:
 - Stop calling `find_def_lines()` inside `classify_match()`.
 
 **Implementation checklist**
-1. Add `_def_lines_cache` and cached accessor.
-2. Use cached `source` and `def_lines` in context window computation.
-3. Clear def-line cache in `clear_caches()`.
-4. Add test: multiple matches in same file should reuse cached def-lines.
+1. Add `_def_lines_cache` and cached accessor. **Done**
+2. Use cached `source` and `def_lines` in context window computation. **Done**
+3. Clear def-line cache in `clear_caches()`. **Done**
+4. Add test: multiple matches in same file should reuse cached def-lines. **Done**
 
 ---
 
@@ -106,6 +126,9 @@ AST node lookup is O(n) per match (`_find_node_at_position` walks the tree).
 
 **Approach**  
 Build a per-file interval index for matchable spans (e.g., via `SgRecord` spans or AST node ranges) and do O(log n) lookups for match positions.
+
+**Status**  
+Partially completed. Interval indexes back record lookups and node lookups, and caching is in place. A timed perf benchmark is still pending.
 
 **Representative snippet**
 
@@ -134,16 +157,17 @@ def get_span_index(file_path: Path, sg_root: SgRoot) -> IntervalIndex:
 
 **Target files**
 - `tools/cq/search/classifier.py`
-- Optional reuse from: `tools/cq/query/executor.py` (IntervalIndex)
+- `tools/cq/utils/interval_index.py`
+- `tools/cq/query/executor.py`
 
 **Deprecate/Delete**
-- Deprecate `_find_node_at_position()` once the index path is stable.
+- `_find_node_at_position()` remains but now uses the cached node span index when possible.
 
 **Implementation checklist**
-1. Add span/index cache for SgRoot files.
-2. Replace `_find_node_at_position()` with an interval-based lookup.
-3. Clear index cache in `clear_caches()`.
-4. Add a perf test on a large file with many hits.
+1. Add span/index cache for SgRoot files. **Done**
+2. Replace `_find_node_at_position()` with an interval-based lookup. **Done**
+3. Clear index cache in `clear_caches()`. **Done**
+4. Add a perf test on a large file with many hits. **Pending**
 
 ---
 
@@ -154,6 +178,9 @@ def get_span_index(file_path: Path, sg_root: SgRoot) -> IntervalIndex:
 
 **Approach**  
 Track `scanned_files` separately if possible (via rg summary or by counting files traversed). If not available, set an explicit `scanned_files="unknown"` field or add `scanned_files_approx` to avoid misreporting. Add `max_files` to `caps_hit` logic.
+
+**Status**  
+Partially completed. `caps_hit` now distinguishes `max_files` vs `max_total_matches` and `scanned_files_is_estimate` is set, but `scanned_files` is still the matched file count.
 
 **Representative snippet**
 
@@ -173,9 +200,9 @@ elif stats.truncated:
 - Remove misleading `scanned_files` value if no accurate value can be computed.
 
 **Implementation checklist**
-1. Update `SearchStats` to add `scanned_files_approx` if needed.
-2. Adjust `caps_hit` to surface `max_files`.
-3. Update tests and summary schema expectations.
+1. Update `SearchStats` to add `scanned_files_approx` if needed. **Pending** (estimate flag added instead)
+2. Adjust `caps_hit` to surface `max_files`. **Done**
+3. Update tests and summary schema expectations. **Done**
 
 ---
 
@@ -186,6 +213,9 @@ Evidence currently includes all enriched matches (with context), inflating outpu
 
 **Approach**  
 Emit evidence as raw match lines or cap evidence to a small number. Keep full details in artifacts.
+
+**Status**  
+Completed. Evidence is capped via `MAX_EVIDENCE` and a unit test verifies the cap.
 
 **Representative snippet**
 
@@ -203,9 +233,9 @@ result = CqResult(..., evidence=evidence)
 - N/A
 
 **Implementation checklist**
-1. Add evidence limit constant (e.g., `MAX_EVIDENCE = 100`).
-2. Use raw match-only evidence or cap evidence list.
-3. Ensure full JSON artifact remains complete.
+1. Add evidence limit constant (e.g., `MAX_EVIDENCE = 100`). **Done**
+2. Use raw match-only evidence or cap evidence list. **Done**
+3. Ensure full JSON artifact remains complete. **Done**
 
 ---
 
@@ -216,6 +246,9 @@ result = CqResult(..., evidence=evidence)
 
 **Approach**  
 Scan matched files using existing rules in `tools/cq/astgrep/rules_py.py` and map `SgRecord` spans to matches.
+
+**Status**  
+Completed. Record-based classification is preferred, with node-kind fallback retained for edge cases.
 
 **Representative snippet**
 
@@ -235,13 +268,13 @@ match_record = record_index.find_containing(raw.line)
 - `tools/cq/astgrep/rules_py.py`
 
 **Deprecate/Delete**
-- Deprecate `NODE_KIND_MAP` when rules-based classification is stable.
+- `NODE_KIND_MAP` remains as a fallback when record classification yields no match.
 
 **Implementation checklist**
-1. Build a record index per matched file.
-2. Prefer record-based classification for category and containing scope.
-3. Keep node-kind fallback for edge cases (optional).
-4. Add tests mapping `SgRecord` kinds to categories.
+1. Build a record index per matched file. **Done**
+2. Prefer record-based classification for category and containing scope. **Done**
+3. Keep node-kind fallback for edge cases (optional). **Done**
+4. Add tests mapping `SgRecord` kinds to categories. **Done**
 
 ---
 
@@ -252,6 +285,9 @@ Smart Search duplicates `_compute_context_window` and `_extract_context_snippet`
 
 **Approach**  
 Reuse helpers from `tools/cq/macros/calls.py` to keep consistent behavior and reduce divergence.
+
+**Status**  
+Completed. Smart Search uses the shared helpers via a lazy import to avoid a circular import with `tools/cq/macros/calls.py`.
 
 **Representative snippet**
 
@@ -268,8 +304,8 @@ from tools.cq.macros.calls import _compute_context_window, _extract_context_snip
 - Remove duplicated helper implementations in `smart_search.py`.
 
 **Implementation checklist**
-1. Replace local helper implementations with imports.
-2. Update tests to ensure identical snippet behavior to `calls`.
+1. Replace local helper implementations with imports. **Done** (lazy import)
+2. Update tests to ensure identical snippet behavior to `calls`. **Done**
 
 ---
 
@@ -280,6 +316,9 @@ from tools.cq.macros.calls import _compute_context_window, _extract_context_snip
 
 **Approach**  
 Either drop it or wire it into evidence/context rendering. Prefer removal unless explicitly needed.
+
+**Status**  
+Completed. The context map and RawMatch context fields were removed.
 
 **Representative snippet**
 
@@ -295,9 +334,9 @@ Either drop it or wire it into evidence/context rendering. Prefer removal unless
 - Delete `context_map` building and `MatchedFile` usage if unused.
 
 **Implementation checklist**
-1. Remove context map creation.
-2. Verify no other code depends on `context_before/context_after`.
-3. Update RawMatch if those fields are no longer used.
+1. Remove context map creation. **Done**
+2. Verify no other code depends on `context_before/context_after`. **Done**
+3. Update RawMatch if those fields are no longer used. **Done**
 
 ---
 
@@ -308,6 +347,9 @@ Either drop it or wire it into evidence/context rendering. Prefer removal unless
 
 **Approach**  
 Attempt `parse_query()` first; fallback to Smart Search only on “missing entity” or “no tokens” errors.
+
+**Status**  
+Partially completed. Parse-first fallback is implemented, but dedicated tests for malformed queries vs plain identifiers are still pending.
 
 **Representative snippet**
 
@@ -329,9 +371,9 @@ except QueryParseError as exc:
 - Remove `_is_plain_search()` if parse-first approach covers all cases.
 
 **Implementation checklist**
-1. Add helper to classify parse errors for fallback vs error.
-2. Update `q` command to use parse-first flow.
-3. Add tests for malformed queries and plain identifiers.
+1. Add helper to classify parse errors for fallback vs error. **Done**
+2. Update `q` command to use parse-first flow. **Done**
+3. Add tests for malformed queries and plain identifiers. **Pending**
 
 ---
 
@@ -343,19 +385,22 @@ Performance-sensitive changes need coverage and regression checks.
 **Approach**  
 Add unit tests and small performance fixtures to validate caches and grouping.
 
+**Status**  
+Partially completed. Unit and golden coverage added for caches, grouping, include-strings, and summary fields. A timed perf benchmark is still pending.
+
 **Target files**
-- `tests/cq/search/test_smart_search.py`
-- `tests/cq/search/test_classifier.py`
+- `tests/unit/cq/search/test_smart_search.py`
+- `tests/unit/cq/search/test_classifier.py`
 - `tests/cli_golden/test_search_golden.py`
 
 **Deprecate/Delete**
 - N/A
 
 **Implementation checklist**
-1. Add tests for cache hits (symtable, def_lines, AST spans).
-2. Add tests for grouping by containing function.
-3. Add tests for `--include-strings`.
-4. Add golden test for summary fields (`caps_hit`, `pattern`, `include/exclude`).
+1. Add tests for cache hits (symtable, def_lines, AST spans). **Done**
+2. Add tests for grouping by containing function. **Done**
+3. Add tests for `--include-strings`. **Done**
+4. Add golden test for summary fields (`caps_hit`, `pattern`, `include/exclude`). **Done**
 
 ---
 
@@ -367,6 +412,9 @@ Run after implementation:
 uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q
 ```
 
+**Status**  
+Executed after implementation. `ruff check`, `pyrefly`, and `pyright` report pre-existing repo-wide issues unrelated to this scope; cq search tests and golden snapshots pass.
+
 ---
 
 ## Notes
@@ -374,4 +422,3 @@ uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run 
 - Always use `uv run` for Python commands.  
 - Keep repo root anchors stable; `--in` should always be a scan filter.  
 - Prefer small, scoped diffs per item; land caches before interval index to isolate perf regressions.  
-

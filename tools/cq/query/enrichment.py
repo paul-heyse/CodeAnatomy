@@ -364,7 +364,13 @@ class SymtableEnricher:
         self._cache: dict[Path, ScopeGraph] = {}
 
     def _get_scope_graph(self, file_path: Path) -> ScopeGraph | None:
-        """Get or create scope graph for a file."""
+        """Get or create scope graph for a file.
+
+        Returns
+        -------
+        ScopeGraph | None
+            Cached scope graph or None if the file cannot be read.
+        """
         if file_path in self._cache:
             return self._cache[file_path]
 
@@ -426,7 +432,13 @@ class SymtableEnricher:
 
 
 def _extract_def_name_from_record(record: SgRecord) -> str | None:
-    """Extract function/class name from an ast-grep record."""
+    """Extract function/class name from an ast-grep record.
+
+    Returns
+    -------
+    str | None
+        Definition name when it can be parsed.
+    """
     text = record.text
 
     # Match def name(...) or class name
@@ -526,19 +538,26 @@ def extract_decorators_from_function(source: str, lineno: int) -> list[str]:
         return decorators
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or isinstance(node, ast.ClassDef):
-            if node.lineno == lineno:
-                for decorator in node.decorator_list:
-                    dec_name = _extract_decorator_name(decorator)
-                    if dec_name:
-                        decorators.append(dec_name)
-                break
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
+            node.lineno == lineno
+        ):
+            for decorator in node.decorator_list:
+                dec_name = _extract_decorator_name(decorator)
+                if dec_name:
+                    decorators.append(dec_name)
+            break
 
     return decorators
 
 
 def _extract_decorator_name(decorator: ast.expr) -> str | None:
-    """Extract name from a decorator expression."""
+    """Extract name from a decorator expression.
+
+    Returns
+    -------
+    str | None
+        Decorator name when extractable.
+    """
     if isinstance(decorator, ast.Name):
         return decorator.id
     if isinstance(decorator, ast.Attribute):

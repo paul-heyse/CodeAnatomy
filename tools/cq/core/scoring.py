@@ -132,7 +132,7 @@ def impact_score(signals: ImpactSignals, severity: str | None = None) -> float:
     # Apply severity multiplier if provided
     if severity is not None:
         multiplier = _SEVERITY_MULTIPLIERS.get(severity, 1.0)
-        score = score * multiplier
+        score *= multiplier
 
     return min(max(score, 0.0), 1.0)
 

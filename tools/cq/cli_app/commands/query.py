@@ -15,47 +15,19 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def _is_plain_search(query_string: str) -> bool:
-    """Check if query is plain search (no key=value pairs).
-
-    Parameters
-    ----------
-    query_string
-        The query string to check.
+def _has_query_tokens(query_string: str) -> bool:
+    """Check whether a query string contains any key=value tokens.
 
     Returns
     -------
     bool
-        True if the query should route to smart search.
-
-    Notes
-    -----
-    A plain search is detected when:
-    - No '=' in the query at all, OR
-    - No valid query tokens (entity=, pattern=, pattern.context=)
-
-    This enables fallback to smart search for simple identifier queries
-    while preserving explicit q queries.
+        True if any tokenized query parts are present.
     """
-    if "=" not in query_string:
-        return True
-
-    # Check for valid query tokens using the tokenizer pattern
     token_pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
-    matches = list(re.finditer(token_pattern, query_string))
-
-    if not matches:
-        return True
-
-    # Check if any key is a valid query token
-    valid_keys = {"entity", "pattern", "pattern.context"}
-    keys_found = {m.group(1) for m in matches}
-
-    # If no entity or pattern token, it's a plain search
-    return not bool(keys_found & valid_keys)
+    return bool(list(re.finditer(token_pattern, query_string)))
 
 
-def q(  # noqa: PLR0913
+def q(
     query_string: Annotated[str, Parameter(help='Query string (e.g., "entity=function name=foo")')],
     *,
     explain_files: Annotated[
@@ -116,8 +88,8 @@ def q(  # noqa: PLR0913
         msg = "Context not injected"
         raise RuntimeError(msg)
 
-    # Check for plain search fallback
-    if _is_plain_search(query_string):
+    # Parse-first: fallback only if there are no query tokens
+    if not _has_query_tokens(query_string):
         from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
         # Build include globs from include patterns
@@ -171,7 +143,7 @@ def q(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(  # noqa: PLR0913, PLR0917
+def _build_filters(
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,

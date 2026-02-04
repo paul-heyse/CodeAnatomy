@@ -12,7 +12,7 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def search(  # noqa: PLR0913
+def search(
     query: Annotated[str, Parameter(help="Search query")],
     *,
     regex: Annotated[bool, Parameter(name="--regex", help="Treat query as regex")] = False,
@@ -90,7 +90,7 @@ def search(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(  # noqa: PLR0913, PLR0917
+def _build_filters(
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,

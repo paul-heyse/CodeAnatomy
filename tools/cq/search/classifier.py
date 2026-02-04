@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import re
 import symtable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 import msgspec
 from ast_grep_py import SgNode, SgRoot
+
+from tools.cq.astgrep.rules_py import get_rules_for_types
+from tools.cq.astgrep.sgpy_scanner import SgRecord, scan_files
+from tools.cq.utils.interval_index import IntervalIndex
 
 
 class QueryMode(Enum):
@@ -87,6 +92,49 @@ class NodeClassification(msgspec.Struct, frozen=True, omit_defaults=True):
     evidence_kind: str = "resolved_ast"
 
 
+@dataclass(frozen=True)
+class RecordContext:
+    """Cached ast-grep record context for a file."""
+
+    records: list[SgRecord]
+    record_index: IntervalIndex
+    def_index: IntervalIndex
+
+
+@dataclass(frozen=True)
+class NodeSpan:
+    """Cached AST node span for fast position lookup."""
+
+    start_line: int
+    end_line: int
+    start_col: int
+    end_col: int
+    node: SgNode
+
+
+@dataclass(frozen=True)
+class NodeIntervalIndex:
+    """Interval index for AST node spans."""
+
+    spans: list[NodeSpan]
+
+    def find_containing(self, line: int, col: int) -> SgNode | None:
+        """Find the innermost node containing a position.
+
+        Used by node-based classification to resolve a cursor location.
+
+        Returns
+        -------
+        SgNode | None
+            Innermost node containing the position, or None if not found.
+        """
+        candidates = [span for span in self.spans if _span_contains(span, line, col)]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda s: (s.end_line - s.start_line, s.end_col - s.start_col))
+        return best.node
+
+
 class SymtableEnrichment(msgspec.Struct, frozen=True, omit_defaults=True):
     """Additional binding information from symtable.
 
@@ -148,9 +196,73 @@ NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
 }
 
 
+def _record_to_category(record: SgRecord) -> MatchCategory | None:
+    """Map an ast-grep record to a match category.
+
+    Used by record-based classification to label search evidence.
+
+    Returns
+    -------
+    MatchCategory | None
+        Match category for the record, or None if not mapped.
+    """
+    if record.record == "def":
+        return "definition"
+    if record.record == "call":
+        return "callsite"
+    if record.record == "import":
+        return "from_import" if record.kind.startswith("from_import") else "import"
+    if record.record == "assign_ctor":
+        return "assignment"
+    return None
+
+
+def _record_contains(record: SgRecord, line: int, col: int) -> bool:
+    """Check whether a record contains the given (line, col) position.
+
+    Used by record classification to filter matches by cursor position.
+
+    Returns
+    -------
+    bool
+        True if the record span contains the provided position.
+    """
+    if record.start_line < line < record.end_line:
+        return True
+    if line == record.start_line and line == record.end_line:
+        return record.start_col <= col < record.end_col
+    if line == record.start_line:
+        return col >= record.start_col
+    if line == record.end_line:
+        return col < record.end_col
+    return False
+
+
+def _extract_def_name_from_record(record: SgRecord) -> str | None:
+    """Extract function/class name from a definition record.
+
+    Used by classifier utilities to label definition records.
+
+    Returns
+    -------
+    str | None
+        Extracted name, or None if not a definition.
+    """
+    if record.record != "def":
+        return None
+    match = re.match(r"(?:async\s+)?(?:def|class)\s+(\w+)", record.text)
+    if match:
+        return match.group(1)
+    return None
+
+
 # Per-file caches to avoid re-parsing
 _sg_cache: dict[str, SgRoot] = {}
 _source_cache: dict[str, str] = {}
+_def_lines_cache: dict[str, list[tuple[int, int]]] = {}
+_symtable_cache: dict[str, symtable.SymbolTable] = {}
+_record_context_cache: dict[str, RecordContext] = {}
+_node_index_cache: dict[str, NodeIntervalIndex] = {}
 
 
 def detect_query_mode(query: str, *, force_mode: QueryMode | None = None) -> QueryMode:
@@ -282,50 +394,128 @@ def classify_heuristic(line: str, col: int, match_text: str) -> HeuristicResult:
     )
 
 
-def _find_node_at_position(root: SgNode, line: int, col: int) -> SgNode | None:
+def get_record_context(file_path: Path, root: Path) -> RecordContext:
+    """Get or build ast-grep record context for a file.
+
+    Used by classification to cache parsed ast-grep records per file.
+
+    Returns
+    -------
+    RecordContext
+        Cached record context for the file.
+    """
+    key = str(file_path)
+    if key in _record_context_cache:
+        return _record_context_cache[key]
+
+    rules = get_rules_for_types(None)
+    records = scan_files([file_path], rules, root)
+    record_index = IntervalIndex.from_records(records)
+    def_records = [record for record in records if record.record == "def"]
+    def_index = IntervalIndex.from_records(def_records) if def_records else IntervalIndex([])
+
+    context = RecordContext(
+        records=records,
+        record_index=record_index,
+        def_index=def_index,
+    )
+    _record_context_cache[key] = context
+    return context
+
+
+def _build_node_spans(root: SgNode) -> list[NodeSpan]:
+    spans: list[NodeSpan] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.is_named():
+            rng = node.range()
+            spans.append(
+                NodeSpan(
+                    start_line=rng.start.line + 1,
+                    end_line=rng.end.line + 1,
+                    start_col=rng.start.column,
+                    end_col=rng.end.column,
+                    node=node,
+                )
+            )
+        stack.extend(node.children())
+    # Sort for deterministic lookup (outer to inner)
+    spans.sort(key=lambda s: (s.start_line, -s.end_line, s.start_col))
+    return spans
+
+
+def get_node_index(file_path: Path, sg_root: SgRoot) -> NodeIntervalIndex:
+    """Get or build cached node interval index for a file.
+
+    Used by node-based classification to avoid repeated AST walks.
+
+    Returns
+    -------
+    NodeIntervalIndex
+        Cached node interval index for the file.
+    """
+    key = str(file_path)
+    if key in _node_index_cache:
+        return _node_index_cache[key]
+    spans = _build_node_spans(sg_root.root())
+    index = NodeIntervalIndex(spans=spans)
+    _node_index_cache[key] = index
+    return index
+
+
+def _resolve_sg_root_path(sg_root: SgRoot) -> Path | None:
+    """Resolve cached file path for a given SgRoot.
+
+    Used by node classification to connect an in-memory tree to its file path.
+
+    Returns
+    -------
+    Path | None
+        Cached path if available.
+    """
+    for path_str, cached_root in _sg_cache.items():
+        if cached_root is sg_root:
+            return Path(path_str)
+    return None
+
+
+def _span_contains(span: NodeSpan, line: int, col: int) -> bool:
+    if span.start_line < line < span.end_line:
+        return True
+    if line == span.start_line and line == span.end_line:
+        return span.start_col <= col < span.end_col
+    if line == span.start_line:
+        return col >= span.start_col
+    if line == span.end_line:
+        return col < span.end_col
+    return False
+
+
+def _find_node_at_position(
+    sg_root: SgRoot,
+    line: int,
+    col: int,
+    *,
+    file_path: Path | None = None,
+) -> SgNode | None:
     """Find the most specific node containing position.
 
-    Parameters
-    ----------
-    root
-        AST root node.
-    line
-        1-indexed line number.
-    col
-        0-indexed column offset.
+    Uses a cached span index when possible to avoid full tree walks.
 
     Returns
     -------
     SgNode | None
-        Most specific node at position, or None.
-
-    Notes
-    -----
-    Uses ast-grep's traversal primitives to locate the node.
-    This naive traversal is O(n) in node count.
+        Most specific node containing the position, if any.
     """
-    candidates: list[SgNode] = []
+    resolved_path = file_path or _resolve_sg_root_path(sg_root)
+    if resolved_path is not None:
+        index = get_node_index(resolved_path, sg_root)
+        return index.find_containing(line, col)
 
-    def collect_at_position(node: SgNode) -> None:
-        rng = node.range()
-        # Check if position is within node range
-        # ast-grep uses 0-indexed lines
-        if rng.start.line <= line - 1 <= rng.end.line:
-            if rng.start.line == line - 1 and col < rng.start.column:
-                return
-            if rng.end.line == line - 1 and col >= rng.end.column:
-                return
-            candidates.append(node)
-            # Recurse into children
-            for child in node.children():
-                collect_at_position(child)
-
-    collect_at_position(root)
-
-    # Return most specific (deepest) node
-    if candidates:
-        return candidates[-1]  # Last added is deepest
-    return None
+    spans = _build_node_spans(sg_root.root())
+    index = NodeIntervalIndex(spans=spans)
+    return index.find_containing(line, col)
 
 
 def _find_containing_scope(node: SgNode) -> str | None:
@@ -405,7 +595,7 @@ def classify_from_node(
     NodeClassification | None
         Classification result, or None if no classifiable node found.
     """
-    node = _find_node_at_position(sg_root.root(), line, col)
+    node = _find_node_at_position(sg_root, line, col)
     if node is None:
         return None
 
@@ -449,6 +639,64 @@ def classify_from_node(
     return None
 
 
+def classify_from_records(
+    file_path: Path,
+    root: Path,
+    line: int,
+    col: int,
+) -> NodeClassification | None:
+    """Classify using cached ast-grep records.
+
+    Parameters
+    ----------
+    file_path
+        Source file path.
+    root
+        Repository root.
+    line
+        1-indexed line number.
+    col
+        0-indexed column offset.
+
+    Returns
+    -------
+    NodeClassification | None
+        Classification result, or None if no record matches.
+    """
+    context = get_record_context(file_path, root)
+    if not context.records:
+        return None
+
+    candidates = context.record_index.find_candidates(line)
+    if not candidates:
+        return None
+
+    # Filter by column when possible
+    scoped = [record for record in candidates if _record_contains(record, line, col)]
+    candidates = scoped if scoped else candidates
+
+    record = min(candidates, key=lambda r: r.end_line - r.start_line)
+    category = _record_to_category(record)
+    if category is None:
+        return None
+
+    containing_scope: str | None = None
+    if record.record == "def":
+        containing_scope = _extract_def_name_from_record(record)
+    else:
+        containing_def = context.def_index.find_containing(line)
+        if containing_def is not None:
+            containing_scope = _extract_def_name_from_record(containing_def)
+
+    return NodeClassification(
+        category=category,
+        confidence=0.95,
+        node_kind=record.kind,
+        containing_scope=containing_scope,
+        evidence_kind="resolved_ast_record",
+    )
+
+
 def enrich_with_symtable(
     source: str,
     filename: str,
@@ -478,11 +726,44 @@ def enrich_with_symtable(
     except SyntaxError:
         return None
 
+    return enrich_with_symtable_from_table(table, symbol_name, line)
+
+
+def enrich_with_symtable_from_table(
+    table: symtable.SymbolTable,
+    symbol_name: str,
+    line: int,
+) -> SymtableEnrichment | None:
+    """Add scope/binding info for a symbol using a cached symtable.
+
+    Parameters
+    ----------
+    table
+        Precomputed symtable for the file.
+    symbol_name
+        The symbol to look up.
+    line
+        Line number for scope resolution.
+
+    Returns
+    -------
+    SymtableEnrichment | None
+        Binding information, or None if lookup fails.
+    """
+
     def find_scope_for_line(
         st: symtable.SymbolTable,
         target_line: int,
     ) -> symtable.SymbolTable | None:
-        """Find the innermost scope containing the line."""
+        """Find the innermost scope containing the line.
+
+        Used by ``enrich_with_symtable_from_table`` to locate the closest scope.
+
+        Returns
+        -------
+        symtable.SymbolTable | None
+            Innermost scope containing ``target_line``.
+        """
         # Check if this scope starts at or before target line
         if st.get_lineno() <= target_line:
             # Check children first (deeper scopes)
@@ -509,6 +790,59 @@ def enrich_with_symtable(
         )
     except KeyError:
         return None
+
+
+def get_symtable_table(file_path: Path, source: str) -> symtable.SymbolTable | None:
+    """Get or create cached symtable for a file.
+
+    Used by symtable enrichment to reuse parsed symbol tables.
+
+    Returns
+    -------
+    symtable.SymbolTable | None
+        Cached or newly created symbol table, or None on syntax errors.
+    """
+    key = str(file_path)
+    if key in _symtable_cache:
+        return _symtable_cache[key]
+    try:
+        table = symtable.symtable(source, str(file_path), "exec")
+    except SyntaxError:
+        return None
+    _symtable_cache[key] = table
+    return table
+
+
+def get_def_lines_cached(file_path: Path) -> list[tuple[int, int]]:
+    """Get or compute def/async def lines with indentation.
+
+    Parameters
+    ----------
+    file_path
+        Path to the file.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        (line_number, indent) tuples for def/async def lines.
+    """
+    key = str(file_path)
+    if key in _def_lines_cache:
+        return _def_lines_cache[key]
+
+    source = get_cached_source(file_path)
+    if source is None:
+        _def_lines_cache[key] = []
+        return _def_lines_cache[key]
+
+    results: list[tuple[int, int]] = []
+    for i, line in enumerate(source.splitlines(), 1):
+        stripped = line.lstrip()
+        if stripped.startswith(("def ", "async def ")):
+            indent = len(line) - len(stripped)
+            results.append((i, indent))
+    _def_lines_cache[key] = results
+    return results
 
 
 def get_sg_root(file_path: Path) -> SgRoot | None:
@@ -555,16 +889,21 @@ def get_cached_source(file_path: Path) -> str | None:
         return _source_cache[key]
     try:
         source = file_path.read_text(encoding="utf-8")
-        _source_cache[key] = source
-        return source
     except (OSError, UnicodeDecodeError):
         return None
+    else:
+        _source_cache[key] = source
+        return source
 
 
 def clear_caches() -> None:
     """Clear per-file caches."""
     _sg_cache.clear()
     _source_cache.clear()
+    _def_lines_cache.clear()
+    _symtable_cache.clear()
+    _record_context_cache.clear()
+    _node_index_cache.clear()
 
 
 __all__ = [
@@ -575,10 +914,14 @@ __all__ = [
     "QueryMode",
     "SymtableEnrichment",
     "classify_from_node",
+    "classify_from_records",
     "classify_heuristic",
     "clear_caches",
     "detect_query_mode",
     "enrich_with_symtable",
+    "enrich_with_symtable_from_table",
     "get_cached_source",
+    "get_def_lines_cached",
     "get_sg_root",
+    "get_symtable_table",
 ]

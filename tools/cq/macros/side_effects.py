@@ -114,28 +114,31 @@ def _is_main_guard(node: ast.If) -> bool:
     """
     test = node.test
     # Check for `__name__ == "__main__"` or `"__main__" == __name__`
-    if isinstance(test, ast.Compare) and len(test.ops) == 1:
-        if isinstance(test.ops[0], ast.Eq):
-            left = test.left
-            comparators = test.comparators
-            if len(comparators) == 1:
-                right = comparators[0]
-                # __name__ == "__main__"
-                if (
-                    isinstance(left, ast.Name)
-                    and left.id == "__name__"
-                    and isinstance(right, ast.Constant)
-                    and right.value == "__main__"
-                ):
-                    return True
-                # "__main__" == __name__
-                if (
-                    isinstance(right, ast.Name)
-                    and right.id == "__name__"
-                    and isinstance(left, ast.Constant)
-                    and left.value == "__main__"
-                ):
-                    return True
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+    ):
+        return False
+
+    left = test.left
+    right = test.comparators[0]
+
+    if (
+        isinstance(left, ast.Name)
+        and left.id == "__name__"
+        and isinstance(right, ast.Constant)
+        and right.value == "__main__"
+    ):
+        return True
+    if (
+        isinstance(right, ast.Name)
+        and right.id == "__name__"
+        and isinstance(left, ast.Constant)
+        and left.value == "__main__"
+    ):
+        return True
     return False
 
 

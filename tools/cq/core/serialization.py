@@ -38,29 +38,59 @@ def dumps_json(result: CqResult, *, indent: int | None = 2) -> str:
 
 
 def loads_json(payload: bytes | str) -> CqResult:
-    """Deserialize a CqResult from JSON bytes or string."""
+    """Deserialize a CqResult from JSON bytes or string.
+
+    Returns
+    -------
+    CqResult
+        Parsed CQ result.
+    """
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
     return _JSON_DECODER.decode(payload)
 
 
 def dumps_msgpack(value: Any) -> bytes:
-    """Serialize an arbitrary value to msgpack bytes."""
+    """Serialize an arbitrary value to msgpack bytes.
+
+    Returns
+    -------
+    bytes
+        MessagePack-encoded bytes.
+    """
     return _MSGPACK_ENCODER.encode(value)
 
 
 def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
-    """Deserialize msgpack bytes to a Python value."""
+    """Deserialize msgpack bytes to a Python value.
+
+    Returns
+    -------
+    Any
+        Decoded Python value.
+    """
     return _GENERIC_MSGPACK_DECODER.decode(payload)
 
 
 def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
-    """Deserialize msgpack bytes into a CqResult."""
+    """Deserialize msgpack bytes into a CqResult.
+
+    Returns
+    -------
+    CqResult
+        Decoded CQ result.
+    """
     return _MSGPACK_DECODER.decode(payload)
 
 
 def to_builtins(value: Any) -> Any:
-    """Convert a value to builtins for generic JSON handling."""
+    """Convert a value to builtins for generic JSON handling.
+
+    Returns
+    -------
+    Any
+        Builtins-only representation.
+    """
     return msgspec.to_builtins(value)
 
 

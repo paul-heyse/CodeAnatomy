@@ -29,8 +29,8 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
     """
     lines: list[str] = [
         f'digraph "{_escape_dot_string(graph_name)}" {{',
-        '    rankdir=LR;',
-        '    node [shape=box, style=rounded];',
+        "    rankdir=LR;",
+        "    node [shape=box, style=rounded];",
     ]
 
     # Track nodes and edges
@@ -39,7 +39,7 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
 
     # Process key findings for definitions
     for finding in result.key_findings:
-        if finding.category in ("definition", "function", "class", "pattern_match"):
+        if finding.category in {"definition", "function", "class", "pattern_match"}:
             name = finding.details.get("name", "unknown")
             node_id = _sanitize_dot_id(name)
             kind = finding.details.get("kind", "")
@@ -73,7 +73,7 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
                     edge = (caller_id, callee_id, {})
                     if (caller_id, callee_id, {}) not in edges:
                         edges.append(edge)
-                        lines.append(f'    {caller_id} -> {callee_id};')
+                        lines.append(f"    {caller_id} -> {callee_id};")
 
     lines.append("}")
 
@@ -122,9 +122,7 @@ def _escape_dot_string(s: str) -> str:
     """
     # Escape quotes and backslashes
     escaped = s.replace("\\", "\\\\").replace('"', '\\"')
-    # Escape newlines
-    escaped = escaped.replace("\n", "\\n")
-    return escaped
+    return escaped.replace("\n", "\\n")
 
 
 def _kind_to_shape(kind: str) -> str:

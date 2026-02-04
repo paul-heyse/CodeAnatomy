@@ -23,7 +23,13 @@ def load_gitignore_spec(
     git_dir: Path | None,
     repo: pygit2.Repository | None,
 ) -> GitIgnoreSpec:
-    """Load GitIgnoreSpec from repository ignore sources."""
+    """Load GitIgnoreSpec from repository ignore sources.
+
+    Returns
+    -------
+    GitIgnoreSpec
+        Compiled ignore spec from repository sources.
+    """
     inputs = collect_gitignore_inputs(repo_root, git_dir, repo)
     return GitIgnoreSpec.from_lines(inputs.patterns)
 
@@ -33,7 +39,13 @@ def collect_gitignore_inputs(
     git_dir: Path | None,
     repo: pygit2.Repository | None,
 ) -> GitIgnoreInputs:
-    """Collect gitignore patterns with Git-like semantics."""
+    """Collect gitignore patterns with Git-like semantics.
+
+    Returns
+    -------
+    GitIgnoreInputs
+        Collected patterns and their sources.
+    """
     patterns: list[str] = []
     sources: list[str] = []
 
@@ -62,7 +74,13 @@ def collect_gitignore_inputs(
 
 
 def iter_gitignore_files(repo_root: Path) -> Iterable[Path]:
-    """Yield all .gitignore files under the repository root."""
+    """Yield all .gitignore files under the repository root.
+
+    Yields
+    ------
+    Path
+        Paths to .gitignore files.
+    """
     for path in repo_root.rglob(".gitignore"):
         if ".git" in path.parts:
             continue
@@ -70,6 +88,13 @@ def iter_gitignore_files(repo_root: Path) -> Iterable[Path]:
 
 
 def _read_ignore_lines(path: Path) -> list[str]:
+    """Read ignore file lines, returning empty list on I/O failure.
+
+    Returns
+    -------
+    list[str]
+        Lines from the ignore file.
+    """
     try:
         return path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -77,7 +102,13 @@ def _read_ignore_lines(path: Path) -> list[str]:
 
 
 def _prefix_pattern(line: str, rel_dir: str) -> str | None:
-    """Prefix gitignore patterns with their directory scope."""
+    """Prefix gitignore patterns with their directory scope.
+
+    Returns
+    -------
+    str | None
+        Normalized pattern or None if the line should be ignored.
+    """
     if not line.strip():
         return ""
     stripped = line.lstrip()

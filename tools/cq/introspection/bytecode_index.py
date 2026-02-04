@@ -267,19 +267,18 @@ def parse_exception_table(code: CodeType) -> list[ExceptionEntry]:
         # Use dis module to parse exception table if available
         try:
             # Python 3.13+ has _parse_exception_table
-            if hasattr(dis, "_parse_exception_table"):
-                # Access internal parser
-                parse_func = dis._parse_exception_table
-                for entry in parse_func(code):
-                    entries.append(
-                        ExceptionEntry(
-                            start=entry.start,
-                            end=entry.end,
-                            target=entry.target,
-                            depth=entry.depth,
-                            lasti=entry.lasti,
-                        )
+            parse_func = getattr(dis, "_parse_exception_table", None)
+            if parse_func is not None:
+                entries.extend(
+                    ExceptionEntry(
+                        start=entry.start,
+                        end=entry.end,
+                        target=entry.target,
+                        depth=entry.depth,
+                        lasti=entry.lasti,
                     )
+                    for entry in parse_func(code)
+                )
         except (AttributeError, TypeError):
             pass
 

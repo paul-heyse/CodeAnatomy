@@ -264,7 +264,13 @@ class ExceptionVisitor(ast.NodeVisitor):
 
 
 def _iter_python_files(root: Path) -> list[Path]:
-    """Collect Python files under root using gitignore semantics."""
+    """Collect Python files under root using gitignore semantics.
+
+    Returns
+    -------
+    list[Path]
+        Python files under the repository root.
+    """
     repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     result = tabulate_files(

@@ -42,7 +42,13 @@ class RepoFileIndex:
 
 
 def build_repo_file_index(repo_context: RepoContext) -> RepoFileIndex:
-    """Build repo file index with tracked set and ignore spec."""
+    """Build repo file index with tracked set and ignore spec.
+
+    Returns
+    -------
+    RepoFileIndex
+        Indexed repository metadata for filtering and tabulation.
+    """
     repo = open_repo(repo_context)
     tracked = _collect_tracked_paths(repo)
     ignore_spec = load_gitignore_spec(repo_context.repo_root, repo_context.git_dir, repo)
@@ -61,7 +67,13 @@ def tabulate_files(
     extensions: Sequence[str],
     explain: bool = False,
 ) -> FileTabulationResult:
-    """Tabulate repo files including tracked and likely-to-be-tracked untracked files."""
+    """Tabulate repo files including tracked and likely-to-be-tracked untracked files.
+
+    Returns
+    -------
+    FileTabulationResult
+        Tabulated files and optional filter decisions.
+    """
     if not scope_paths:
         return FileTabulationResult(files=[], decisions=[])
 
@@ -167,9 +179,10 @@ def _path_is_under(rel_path: str, scope_rel: Path) -> bool:
     rel = Path(rel_path)
     try:
         rel.relative_to(scope_rel)
-        return True
     except ValueError:
         return False
+    else:
+        return True
 
 
 def _collect_untracked_files(
@@ -248,15 +261,13 @@ def _matches_globs(rel_path: str, globs: Sequence[str]) -> bool:
 
 
 def _is_within_scope(path: Path, scope_roots: Sequence[Path]) -> bool:
-    for scope_root in scope_roots:
-        if _is_relative_to(path, scope_root):
-            return True
-    return False
+    return any(_is_relative_to(path, scope_root) for scope_root in scope_roots)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
-        return True
     except ValueError:
         return False
+    else:
+        return True

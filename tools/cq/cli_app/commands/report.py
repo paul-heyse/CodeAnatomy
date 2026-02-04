@@ -13,14 +13,27 @@ from cyclopts import Parameter
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 
 
-def report(  # noqa: PLR0913
-    preset: Annotated[str, Parameter(help="Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)")],
+def report(
+    preset: Annotated[
+        str,
+        Parameter(
+            help="Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)"
+        ),
+    ],
     *,
-    target: Annotated[str, Parameter(help="Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)")],
-    in_dir: Annotated[str | None, Parameter(name="--in", help="Restrict analysis to a directory")] = None,
+    target: Annotated[
+        str, Parameter(help="Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)")
+    ],
+    in_dir: Annotated[
+        str | None, Parameter(name="--in", help="Restrict analysis to a directory")
+    ] = None,
     param: Annotated[str | None, Parameter(help="Parameter name for impact analysis")] = None,
-    signature: Annotated[str | None, Parameter(name="--to", help="Proposed signature for sig-impact analysis")] = None,
-    bytecode_show: Annotated[str | None, Parameter(name="--bytecode-show", help="Bytecode surface fields")] = None,
+    signature: Annotated[
+        str | None, Parameter(name="--to", help="Proposed signature for sig-impact analysis")
+    ] = None,
+    bytecode_show: Annotated[
+        str | None, Parameter(name="--bytecode-show", help="Bytecode surface fields")
+    ] = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
     include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
     exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
@@ -50,7 +63,12 @@ def report(  # noqa: PLR0913
         raise RuntimeError(msg)
 
     # Validate preset
-    valid_presets = {"refactor-impact", "safety-reliability", "change-propagation", "dependency-health"}
+    valid_presets = {
+        "refactor-impact",
+        "safety-reliability",
+        "change-propagation",
+        "dependency-health",
+    }
     if preset not in valid_presets:
         started_ms = ms()
         run = mk_runmeta(
@@ -61,7 +79,9 @@ def report(  # noqa: PLR0913
             toolchain=ctx.toolchain.to_dict(),
         )
         result = mk_result(run)
-        result.summary["error"] = f"Invalid preset: {preset}. Must be one of: {', '.join(sorted(valid_presets))}"
+        result.summary["error"] = (
+            f"Invalid preset: {preset}. Must be one of: {', '.join(sorted(valid_presets))}"
+        )
         filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
         return CliResult(result=result, context=ctx, filters=filters)
 
@@ -99,7 +119,7 @@ def report(  # noqa: PLR0913
     return CliResult(result=result, context=ctx, filters=filters)
 
 
-def _build_filters(  # noqa: PLR0913, PLR0917
+def _build_filters(
     include: list[str] | None,
     exclude: list[str] | None,
     impact: str | None,

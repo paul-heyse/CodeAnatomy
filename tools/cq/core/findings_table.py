@@ -76,6 +76,21 @@ class FindingRecord:
     _section_idx: int | None
     _finding_idx: int | None
 
+    @property
+    def section_title(self) -> str | None:
+        """Return the section title for rehydration."""
+        return self._section_title
+
+    @property
+    def section_idx(self) -> int | None:
+        """Return the section index for rehydration."""
+        return self._section_idx
+
+    @property
+    def finding_idx(self) -> int | None:
+        """Return the finding index for rehydration."""
+        return self._finding_idx
+
 
 def _extract_scoring_from_details(details: dict[str, Any]) -> tuple[float, str, float, str, str]:
     """Extract scoring fields from finding details.
@@ -101,7 +116,13 @@ def _finding_to_record(
     section_idx: int | None,
     finding_idx: int,
 ) -> FindingRecord:
-    """Convert a Finding to a FindingRecord."""
+    """Convert a Finding to a FindingRecord.
+
+    Returns
+    -------
+    FindingRecord
+        Flattened record representation.
+    """
     file_path = finding.anchor.file if finding.anchor else None
     line = finding.anchor.line if finding.anchor else None
     col = finding.anchor.col if finding.anchor else None
@@ -256,9 +277,9 @@ def build_frame(records: list[FindingRecord]) -> pl.DataFrame:
         data["confidence_bucket"].append(r.confidence_bucket)
         data["evidence_kind"].append(r.evidence_kind)
         data["severity"].append(r.severity)
-        data["_section_title"].append(r._section_title)
-        data["_section_idx"].append(r._section_idx)
-        data["_finding_idx"].append(r._finding_idx)
+        data["_section_title"].append(r.section_title)
+        data["_section_idx"].append(r.section_idx)
+        data["_finding_idx"].append(r.finding_idx)
 
     return pl.DataFrame(data)
 
@@ -435,9 +456,11 @@ def rehydrate_result(original: CqResult, filtered_df: pl.DataFrame) -> CqResult:
     original_section_order = [s.title for s in original.sections]
 
     # First add sections in original order if they have findings
-    for title in original_section_order:
-        if title in sections_map:
-            sections.append(Section(title=title, findings=sections_map.pop(title)))
+    sections.extend(
+        Section(title=title, findings=sections_map.pop(title))
+        for title in original_section_order
+        if title in sections_map
+    )
 
     # Then add any new sections that weren't in original (shouldn't happen, but safety)
     for title, findings in sections_map.items():

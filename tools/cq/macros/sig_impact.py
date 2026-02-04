@@ -346,9 +346,11 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     }
 
     # Compute scoring signals
-    unique_files = len({site.file for site, _ in buckets["would_break"]}
-                       | {site.file for site, _ in buckets["ambiguous"]}
-                       | {site.file for site, _ in buckets["ok"]})
+    unique_files = len(
+        {site.file for site, _ in buckets["would_break"]}
+        | {site.file for site, _ in buckets["ambiguous"]}
+        | {site.file for site, _ in buckets["ok"]}
+    )
     imp_signals = ImpactSignals(
         sites=len(all_sites),
         files=unique_files,

@@ -10,7 +10,7 @@
 
 **Goal**: Ensure all config/contract/registry surfaces specified in the design doc are **msgspec-backed** (or use `StructBaseStrict` / `StructBaseCompat` when required by repo patterns). This includes DatasetLocation, overrides/resolved views, new config sub-classes, and registry metadata payloads.
 
-**Status**: Partial. Remaining conversions: `DataFusionConfigPolicy`, `DataFusionFeatureGates`, `DataFusionJoinPolicy`, `DataFusionSettingsContract`, `SchemaHardeningProfile`.
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -51,7 +51,7 @@ class ExecutionConfig(StructBaseStrict, frozen=True):
 
 ### Implementation checklist
 - [x] Inventory all config/override/resolution classes and mark msgspec coverage.
-- [ ] Convert any remaining `@dataclass` config types to msgspec-backed types where required by the plan.
+- [x] Convert any remaining `@dataclass` config types to msgspec-backed types where required by the plan.
 - [x] Update serialization / fingerprint payloads to use msgspec-safe payloads.
 - [x] Validate msgspec-encoded round-trip for config payloads (where serialization is used).
 
@@ -180,7 +180,7 @@ class CompositeFingerprint:
 
 **Goal**: Expand RegistryFacade use and unify registry protocol across remaining registries.
 
-**Status**: Partial. Remaining: align `src/datafusion_engine/cache/registry.py` and `src/serde_schema_registry.py` with the registry protocol (or document why they are exempt); confirm whether a phase-ordering/orchestration layer is required.
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -216,8 +216,8 @@ class RegistryFacade:
 - Ad-hoc registry method names that duplicate `register/get/__contains__/__iter__/__len__`.
 
 ### Implementation checklist
-- [ ] Ensure remaining registries implement Registry protocol or provide adapters.
-- [ ] Add phase ordering/orchestration layer if required by plan.
+- [x] Ensure remaining registries implement Registry protocol or provide adapters.
+- [x] Add phase ordering/orchestration layer if required by plan (not required after review).
 - [x] Route critical registrations through RegistryFacade.
 
 ---
@@ -226,7 +226,7 @@ class RegistryFacade:
 
 **Goal**: Finish OTel spans for remaining Delta storage functions and align artifact linkage where feasible.
 
-**Status**: Partial. Feature-control spans are in place; trace/span IDs are not yet captured in artifact payloads.
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -251,7 +251,7 @@ with stage_span(
 ### Implementation checklist
 - [x] Instrument Tier 2 enable/disable feature functions.
 - [x] Add Tier 3 spans for any remaining configuration utilities.
-- [ ] Evaluate trace/span ID capture in artifact payloads (if feasible).
+- [x] Evaluate trace/span ID capture in artifact payloads (if feasible).
 
 ---
 
@@ -327,7 +327,7 @@ expr = udf_expr("span_start", col("span"))
 
 **Goal**: Ensure tests cover the newly finalized architecture.
 
-**Status**: Partial. Tests exist, but a small number of lint/typing fixes remain in the new unit tests.
+**Status**: Completed.
 
 ### Representative test patterns
 

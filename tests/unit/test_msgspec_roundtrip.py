@@ -8,9 +8,14 @@ import pytest
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.session.runtime import (
     CatalogConfig,
+    DataFusionConfigPolicy,
+    DataFusionFeatureGates,
+    DataFusionJoinPolicy,
+    DataFusionSettingsContract,
     DataSourceConfig,
     ExecutionConfig,
     FeatureGatesConfig,
+    SchemaHardeningProfile,
 )
 from storage.deltalake.config import DeltaSchemaPolicy
 
@@ -24,6 +29,17 @@ from storage.deltalake.config import DeltaSchemaPolicy
             FeatureGatesConfig(enable_udfs=True, enable_tracing=True),
             FeatureGatesConfig,
         ),
+        (DataFusionConfigPolicy(settings={"datafusion.test": "true"}), DataFusionConfigPolicy),
+        (DataFusionFeatureGates(enable_dynamic_filter_pushdown=False), DataFusionFeatureGates),
+        (DataFusionJoinPolicy(enable_hash_join=False), DataFusionJoinPolicy),
+        (
+            DataFusionSettingsContract(
+                settings={"datafusion.test": "true"},
+                feature_gates=DataFusionFeatureGates(),
+            ),
+            DataFusionSettingsContract,
+        ),
+        (SchemaHardeningProfile(enable_view_types=True), SchemaHardeningProfile),
         (
             DatasetLocationOverrides(delta_schema_policy=DeltaSchemaPolicy(schema_mode="merge")),
             DatasetLocationOverrides,

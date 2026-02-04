@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -17,6 +17,7 @@ from datafusion_engine.cache.inventory import (
 )
 from datafusion_engine.delta.contracts import enforce_schema_evolution
 from storage.deltalake import DeltaSchemaRequest
+from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -56,6 +57,74 @@ class CacheHitRequest:
     allow_evolution: bool
     storage_options: Mapping[str, str] | None
     log_storage_options: Mapping[str, str] | None
+
+
+@dataclass
+class CacheInventoryRegistry(
+    Registry[str, CacheInventoryRecord],
+    SnapshotRegistry[str, CacheInventoryRecord],
+):
+    """Registry for cache inventory records keyed by view name."""
+
+    _entries: MutableRegistry[str, CacheInventoryRecord] = field(default_factory=MutableRegistry)
+
+    def register(self, key: str, value: CacheInventoryRecord) -> None:
+        """Register a cache inventory record by view name."""
+        self._entries.register(key, value, overwrite=True)
+
+    def get(self, key: str) -> CacheInventoryRecord | None:
+        """Return a cache inventory record by view name.
+
+        Returns
+        -------
+        CacheInventoryRecord | None
+            Cache inventory record when present.
+        """
+        return self._entries.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a view has a registered cache record.
+
+        Returns
+        -------
+        bool
+            ``True`` when the view has a cache record.
+        """
+        return key in self._entries
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered view names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator of registered view names.
+        """
+        return iter(self._entries)
+
+    def __len__(self) -> int:
+        """Return the count of registered cache inventory records.
+
+        Returns
+        -------
+        int
+            Number of registered cache inventory records.
+        """
+        return len(self._entries)
+
+    def snapshot(self) -> Mapping[str, CacheInventoryRecord]:
+        """Return a snapshot of the registry entries.
+
+        Returns
+        -------
+        Mapping[str, CacheInventoryRecord]
+            Snapshot of registry entries.
+        """
+        return self._entries.snapshot()
+
+    def restore(self, snapshot: Mapping[str, CacheInventoryRecord]) -> None:
+        """Restore registry entries from a snapshot."""
+        self._entries.restore(snapshot)
 
 
 def resolve_cache_hit(
@@ -252,6 +321,7 @@ def _coerce_str_tuple(value: object) -> tuple[str, ...]:
 __all__ = [
     "CacheHitRequest",
     "CacheInventoryRecord",
+    "CacheInventoryRegistry",
     "latest_cache_inventory_record",
     "record_cache_inventory",
     "register_cached_delta_table",

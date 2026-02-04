@@ -23,6 +23,7 @@ from datafusion_engine.udf.signature import (
     signature_inputs,
     signature_returns,
 )
+from utils.registry_protocol import Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.introspection import SchemaIntrospector
@@ -665,7 +666,7 @@ class UdfCatalog:
 
 
 @dataclass
-class UdfCatalogAdapter:
+class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, DataFusionUdfSpec]):
     """Registry adapter exposing custom UDF specs from a UdfCatalog."""
 
     catalog: UdfCatalog

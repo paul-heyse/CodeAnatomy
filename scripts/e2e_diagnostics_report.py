@@ -17,18 +17,20 @@ import pyarrow as pa
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 
 from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
-from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+_DEFAULT_DELTA_SERVICE = delta_service_for_profile(None)
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,7 @@ if TYPE_CHECKING:
 
 def _is_delta_table(path: Path) -> bool:
     try:
-        return delta_table_version(str(path)) is not None
+        return _DEFAULT_DELTA_SERVICE.table_version(path=str(path)) is not None
     except (RuntimeError, TypeError, ValueError):
         return False
 

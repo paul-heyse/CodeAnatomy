@@ -10,6 +10,8 @@
 
 **Goal**: Ensure all config/contract/registry surfaces specified in the design doc are **msgspec-backed** (or use `StructBaseStrict` / `StructBaseCompat` when required by repo patterns). This includes DatasetLocation, overrides/resolved views, new config sub-classes, and registry metadata payloads.
 
+**Status**: Partial. Remaining conversions: `DataFusionConfigPolicy`, `DataFusionFeatureGates`, `DataFusionJoinPolicy`, `DataFusionSettingsContract`, `SchemaHardeningProfile`.
+
 ### Representative code patterns
 
 ```python
@@ -48,16 +50,18 @@ class ExecutionConfig(StructBaseStrict, frozen=True):
 - Any remaining dataclass-based config/override types that are still used as config surfaces (convert rather than keep duplicates).
 
 ### Implementation checklist
-- [ ] Inventory all config/override/resolution classes and mark msgspec coverage.
+- [x] Inventory all config/override/resolution classes and mark msgspec coverage.
 - [ ] Convert any remaining `@dataclass` config types to msgspec-backed types where required by the plan.
-- [ ] Update serialization / fingerprint payloads to use msgspec-safe payloads.
-- [ ] Validate msgspec-encoded round-trip for config payloads (where serialization is used).
+- [x] Update serialization / fingerprint payloads to use msgspec-safe payloads.
+- [x] Validate msgspec-encoded round-trip for config payloads (where serialization is used).
 
 ---
 
 ## Scope 1 — Configuration Architecture Unification Completion
 
 **Goal**: Finish the hierarchical config model as described in section 1 of the deep-dive, and reconcile any residual flat or legacy patterns.
+
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -89,15 +93,17 @@ class RootConfig(StructBaseStrict, frozen=True):
 - Any remaining references to legacy flat config keys (if any resurface in config loading).
 
 ### Implementation checklist
-- [ ] Validate no call sites rely on removed flat RootConfig fields.
-- [ ] Align execution/catalog/data_sources/feature/diagnostics fields with doc expectations.
-- [ ] Ensure `fingerprint_payload()` uses settings/telemetry hashes as canonical inputs.
+- [x] Validate no call sites rely on removed flat RootConfig fields.
+- [x] Align execution/catalog/data_sources/feature/diagnostics fields with doc expectations.
+- [x] Ensure `fingerprint_payload()` uses settings/telemetry hashes as canonical inputs.
 
 ---
 
 ## Scope 2 — Schema Contract Consolidation (Completion)
 
 **Goal**: Continue consolidation of schema contract types and use ResolvedDatasetLocation as the authoritative resolved view.
+
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -124,15 +130,17 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
 - Any direct override fields left on DatasetLocation (all override access should go through `overrides` or `resolved`).
 
 ### Implementation checklist
-- [ ] Ensure all `resolve_*` helpers route through `ResolvedDatasetLocation`.
-- [ ] Create/update resolution precedence documentation.
-- [ ] Add tests covering override precedence + resolved schema behavior.
+- [x] Ensure all `resolve_*` helpers route through `ResolvedDatasetLocation`.
+- [x] Create/update resolution precedence documentation.
+- [x] Add tests covering override precedence + resolved schema behavior.
 
 ---
 
 ## Scope 3 — Fingerprinting Standardization (Completion)
 
 **Goal**: Finish CompositeFingerprint rollout and ensure remaining hashes are standardized and documented.
+
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -162,15 +170,17 @@ class CompositeFingerprint:
 - Legacy hash utilities that are no longer referenced (evaluate for removal once all call sites moved).
 
 ### Implementation checklist
-- [ ] Verify plan fingerprint truncation at 32 chars (128 bits).
-- [ ] Confirm dual-read cache compatibility for legacy plan cache keys.
-- [ ] Document fingerprint schema evolution (location TBD in docs).
+- [x] Verify plan fingerprint truncation at 32 chars (128 bits).
+- [x] Confirm dual-read cache compatibility for legacy plan cache keys.
+- [x] Document fingerprint schema evolution (location TBD in docs).
 
 ---
 
 ## Scope 4 — Registry Pattern Unification (Completion)
 
 **Goal**: Expand RegistryFacade use and unify registry protocol across remaining registries.
+
+**Status**: Partial. Remaining: align `src/datafusion_engine/cache/registry.py` and `src/serde_schema_registry.py` with the registry protocol (or document why they are exempt); confirm whether a phase-ordering/orchestration layer is required.
 
 ### Representative code patterns
 
@@ -208,13 +218,15 @@ class RegistryFacade:
 ### Implementation checklist
 - [ ] Ensure remaining registries implement Registry protocol or provide adapters.
 - [ ] Add phase ordering/orchestration layer if required by plan.
-- [ ] Route critical registrations through RegistryFacade.
+- [x] Route critical registrations through RegistryFacade.
 
 ---
 
 ## Scope 5 — Storage Observability (Tier 2/3 Completion)
 
 **Goal**: Finish OTel spans for remaining Delta storage functions and align artifact linkage where feasible.
+
+**Status**: Partial. Feature-control spans are in place; trace/span IDs are not yet captured in artifact payloads.
 
 ### Representative code patterns
 
@@ -237,8 +249,8 @@ with stage_span(
 - None; add spans without removing functionality.
 
 ### Implementation checklist
-- [ ] Instrument Tier 2 enable/disable feature functions.
-- [ ] Add Tier 3 spans for any remaining configuration utilities.
+- [x] Instrument Tier 2 enable/disable feature functions.
+- [x] Add Tier 3 spans for any remaining configuration utilities.
 - [ ] Evaluate trace/span ID capture in artifact payloads (if feasible).
 
 ---
@@ -246,6 +258,8 @@ with stage_span(
 ## Scope 6 — DataFusion + Delta Integration Unification (Completion)
 
 **Goal**: Route *all* Delta provider/read/mutation flows through DeltaService and remove direct storage calls where possible.
+
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -274,15 +288,17 @@ return delta_service.read_table(DeltaReadRequest(path=..., ...))
 - Direct call sites of `storage.deltalake.delta_*` in application code (retain storage module but route via service).
 
 ### Implementation checklist
-- [ ] Migrate read/provider flows to DeltaService.
-- [ ] Centralize storage option resolution in DeltaService.
-- [ ] Verify call sites no longer import storage delta functions directly.
+- [x] Migrate read/provider flows to DeltaService.
+- [x] Centralize storage option resolution in DeltaService.
+- [x] Verify call sites no longer import storage delta functions directly.
 
 ---
 
 ## Scope 7 — UDF/UDTF Surface and Doc Alignment
 
 **Goal**: Update docs and tests to reflect `udf_expr` as the canonical expression helper and the Rust-backed UDTF surfaces.
+
+**Status**: Completed.
 
 ### Representative code patterns
 
@@ -299,17 +315,19 @@ expr = udf_expr("span_start", col("span"))
 - `docs/plans/end_to_end_codebase_review_implementation_plan_v1.md`
 
 ### Deprecate/delete after completion
-- Any documentation referencing `datafusion_engine.udf.shims`.
+- Any documentation referencing legacy per-UDF shim helpers.
 
 ### Implementation checklist
-- [ ] Replace `udf.shims` references with `udf_expr` examples.
-- [ ] Verify test stubs (e.g., `src/test_support/datafusion_ext_stub.py`) align with new UDF surface.
+- [x] Replace legacy shim references with `udf_expr` examples.
+- [x] Verify test stubs (e.g., `src/test_support/datafusion_ext_stub.py`) align with new UDF surface.
 
 ---
 
 ## Scope 8 — Test + Validation Coverage
 
 **Goal**: Ensure tests cover the newly finalized architecture.
+
+**Status**: Partial. Tests exist, but a small number of lint/typing fixes remain in the new unit tests.
 
 ### Representative test patterns
 
@@ -329,10 +347,10 @@ assert resolve_dataset_location(location).delta_schema_policy == policy
 - Legacy tests that assert behavior from deprecated config/registry patterns.
 
 ### Implementation checklist
-- [ ] Add test coverage for DeltaService read/provider usage.
-- [ ] Add tests for RegistryFacade rollback semantics.
-- [ ] Add tests for CompositeFingerprint serialization/stability.
-- [ ] Add tests for msgspec round-trip for config classes.
+- [x] Add test coverage for DeltaService read/provider usage.
+- [x] Add tests for RegistryFacade rollback semantics.
+- [x] Add tests for CompositeFingerprint serialization/stability.
+- [x] Add tests for msgspec round-trip for config classes.
 
 ---
 
@@ -345,4 +363,3 @@ The plan is complete when:
 - Storage observability spans cover Tier 1–3 functions.
 - Docs reflect the new UDF surface and legacy references are removed.
 - Tests validate the new architecture surface and override resolution precedence.
-

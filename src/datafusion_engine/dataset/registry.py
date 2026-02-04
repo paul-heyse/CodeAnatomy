@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
-from functools import cached_property
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
+
+import msgspec
 
 from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
@@ -14,8 +15,8 @@ from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.identity import schema_identity_hash
 from schema_spec.specs import TableSchemaSpec
-from serde_msgspec import to_builtins
-from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
+from serde_msgspec import StructBaseStrict, to_builtins
+from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest
 from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
@@ -35,8 +36,7 @@ type DatasetFormat = str
 type DataFusionProvider = Literal["listing", "delta_cdf"]
 
 
-@dataclass(frozen=True)
-class DatasetLocationOverrides:
+class DatasetLocationOverrides(StructBaseStrict, frozen=True):
     """Override-only fields for dataset locations."""
 
     delta_scan: DeltaScanOptions | None = None
@@ -50,16 +50,15 @@ class DatasetLocationOverrides:
     table_spec: TableSchemaSpec | None = None
 
 
-@dataclass(frozen=True)
-class DatasetLocation:
+class DatasetLocation(StructBaseStrict, frozen=True):
     """Location metadata for a dataset."""
 
     path: PathLike
     format: DatasetFormat = "delta"
     partitioning: str | None = "hive"
-    read_options: Mapping[str, object] = field(default_factory=dict)
-    storage_options: Mapping[str, str] = field(default_factory=dict)
-    delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
+    read_options: Mapping[str, object] = msgspec.field(default_factory=dict)
+    storage_options: Mapping[str, str] = msgspec.field(default_factory=dict)
+    delta_log_storage_options: Mapping[str, str] = msgspec.field(default_factory=dict)
     delta_cdf_options: DeltaCdfOptions | None = None
     filesystem: object | None = None
     files: tuple[str, ...] | None = None
@@ -69,14 +68,13 @@ class DatasetLocation:
     delta_timestamp: str | None = None
     overrides: DatasetLocationOverrides | None = None
 
-    @cached_property
+    @property
     def resolved(self) -> ResolvedDatasetLocation:
         """Return a resolved view of this dataset location."""
         return resolve_dataset_location(self)
 
 
-@dataclass(frozen=True)
-class ResolvedDatasetLocation:
+class ResolvedDatasetLocation(StructBaseStrict, frozen=True):
     """Resolved view of dataset location overrides and defaults."""
 
     location: DatasetLocation
@@ -506,7 +504,9 @@ def _resolve_dataset_schema_internal(
     if location.dataset_spec is not None:
         return location.dataset_spec.schema()
     if location.format == "delta":
-        schema = delta_table_schema(
+        from datafusion_engine.delta.service import delta_service_for_profile
+
+        schema = delta_service_for_profile(None).table_schema(
             DeltaSchemaRequest(
                 path=str(location.path),
                 storage_options=location.storage_options or None,

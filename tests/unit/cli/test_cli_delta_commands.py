@@ -15,7 +15,7 @@ from cli.commands.delta import (
     clone_delta_snapshot,
     vacuum_command,
 )
-from storage.deltalake import delta_table_version
+from datafusion_engine.delta.service import delta_service_for_profile
 from tests.test_helpers.delta_seed import write_delta_table
 from tests.test_helpers.optional_deps import (
     require_datafusion,
@@ -27,6 +27,7 @@ require_datafusion()
 require_deltalake()
 require_delta_extension()
 
+_DELTA_SERVICE = delta_service_for_profile(None)
 
 EXPECTED_ROW_COUNT = 2
 
@@ -46,7 +47,7 @@ def test_clone_delta_snapshot_round_trip(tmp_path: Path) -> None:
 
     assert report.rows == EXPECTED_ROW_COUNT
     assert report.schema_identity_hash
-    assert delta_table_version(str(target)) is not None
+    assert _DELTA_SERVICE.table_version(path=str(target)) is not None
 
 
 def test_clone_delta_snapshot_rejects_conflicting_targets() -> None:

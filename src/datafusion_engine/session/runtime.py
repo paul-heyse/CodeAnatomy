@@ -4726,7 +4726,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             except KeyError:
                 spec = None
             if spec is not None:
-                location = replace(location, dataset_spec=spec)
+                location = msgspec.structs.replace(location, dataset_spec=spec)
         return location
 
     def dataset_location(self, name: str) -> DatasetLocation | None:

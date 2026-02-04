@@ -270,23 +270,29 @@ DataFusion provides everything we need for plan building:
 
 ### Rust UDF Integration
 
-The 47 Rust UDFs are accessed through `datafusion_engine.udf.shims`:
+The Rust UDFs are accessed through the generic expression helper
+`datafusion_engine.udf.expr.udf_expr`:
 
 ```python
-from datafusion_engine.udf.shims import span_make, stable_id_parts, span_overlaps
+from datafusion_engine.udf.expr import udf_expr
 
 def span_expr(self) -> Expr:
-    return span_make(self.span_start_col(), self.span_end_col())
+    return udf_expr("span_make", self.span_start_col(), self.span_end_col())
 
 def entity_id_expr(self, prefix: str) -> Expr:
-    return stable_id_parts(prefix, self.path_col(),
-                           self.span_start_col(), self.span_end_col())
+    return udf_expr(
+        "stable_id_parts",
+        prefix,
+        self.path_col(),
+        self.span_start_col(),
+        self.span_end_col(),
+    )
 ```
 
-The shims handle:
-- Unwrapping `Expr` arguments to raw values
-- Calling `datafusion._internal` functions
-- Wrapping results back into `Expr`
+The helper handles:
+- Normalizing `Expr` arguments and literal values
+- Resolving against the SessionContext function registry (when provided)
+- Returning a DataFusion `Expr` for planner integration
 
 ---
 
@@ -774,7 +780,7 @@ Modern UDF APIs improve correctness, typing, and optimization.
 | Action | File | Description |
 |--------|------|-------------|
 | Modify | `rust/` UDF implementations | Upgrade to ScalarUDFImpl patterns |
-| Modify | `src/datafusion_engine/udf/shims.py` | Match new arg signatures |
+| Modify | `src/datafusion_engine/udf/expr.py` | Match UDF registry signatures |
 
 ### Checklist
 - [x] Switch UDFs to ScalarUDFImpl

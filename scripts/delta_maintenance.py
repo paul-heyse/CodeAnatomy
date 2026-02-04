@@ -13,12 +13,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from storage.deltalake import (
-    DeltaVacuumOptions,
-    cleanup_delta_log,
-    create_delta_checkpoint,
-    vacuum_delta,
-)
+from datafusion_engine.delta.service import delta_service_for_profile
+from storage.deltalake import DeltaVacuumOptions
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -181,6 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     storage_opts = storage_options or None
+    service = delta_service_for_profile(None)
     vacuum_report: VacuumReport | None = None
     if args.vacuum:
         options = DeltaVacuumOptions(
@@ -191,7 +188,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep_versions=keep_versions,
             commit_metadata=commit_metadata or None,
         )
-        files = vacuum_delta(args.path, options=options, storage_options=storage_opts)
+        files = service.vacuum(
+            path=args.path,
+            options=options,
+            storage_options=storage_opts,
+        )
         vacuum_report = VacuumReport(
             retention_hours=args.retention_hours,
             dry_run=not args.apply,
@@ -204,12 +205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     checkpoint = False
     if args.checkpoint:
-        create_delta_checkpoint(args.path, storage_options=storage_opts)
+        service.create_checkpoint(path=args.path, storage_options=storage_opts)
         checkpoint = True
 
     cleanup_log = False
     if args.cleanup_log:
-        cleanup_delta_log(args.path, storage_options=storage_opts)
+        service.cleanup_log(path=args.path, storage_options=storage_opts)
         cleanup_log = True
 
     report = MaintenanceReport(

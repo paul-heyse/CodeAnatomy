@@ -592,7 +592,6 @@ def _cdf_changed_inputs(
     input_mapping: Mapping[str, str],
 ) -> set[str] | None:
     from semantics.incremental.cdf_cursors import CdfCursorStore
-    from storage.deltalake import delta_cdf_enabled, delta_table_version
 
     _ = ctx
     cursor_store = runtime_config.cdf_cursor_store or runtime_profile.data_sources.cdf_cursor_store
@@ -600,6 +599,7 @@ def _cdf_changed_inputs(
         return None
     if not isinstance(cursor_store, CdfCursorStore):
         return None
+    delta_service = runtime_profile.delta_service()
     changed: set[str] = set()
     for canonical, source in input_mapping.items():
         if canonical == "file_line_index_v1":
@@ -615,11 +615,11 @@ def _cdf_changed_inputs(
             location,
             storage_options=storage_options,
             log_storage_options=log_options,
-            cdf_enabled_fn=delta_cdf_enabled,
+            cdf_enabled_fn=delta_service.cdf_enabled,
         ):
             continue
-        latest_version = delta_table_version(
-            str(location.path),
+        latest_version = delta_service.table_version(
+            path=str(location.path),
             storage_options=storage_options,
             log_storage_options=log_options,
         )

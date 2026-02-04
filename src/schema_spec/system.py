@@ -51,7 +51,7 @@ from storage.dataset_sources import (
     PathLike,
     normalize_dataset_source,
 )
-from storage.deltalake import DeltaSchemaRequest, delta_table_schema
+from storage.deltalake import DeltaSchemaRequest
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
@@ -1310,7 +1310,9 @@ def dataset_spec_from_path(
     """
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":
-        schema = delta_table_schema(
+        from datafusion_engine.delta.service import delta_service_for_profile
+
+        schema = delta_service_for_profile(None).table_schema(
             DeltaSchemaRequest(
                 path=str(path),
                 storage_options=options.storage_options or None,

@@ -23,7 +23,6 @@ from semantics.incremental.write_helpers import (
 )
 from serde_artifacts import ViewArtifactPayload
 from serde_msgspec import convert, validation_error_payload
-from storage.deltalake import delta_table_version
 from storage.ipc_utils import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 2
@@ -139,8 +138,8 @@ def read_invalidation_snapshot(
     if not path.exists():
         return None
     resolved = context.resolve_storage(table_uri=str(path))
-    version = delta_table_version(
-        str(path),
+    version = context.runtime.profile.delta_service().table_version(
+        path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,
     )
@@ -278,8 +277,8 @@ def _incremental_plan_fingerprints(
     if not path.exists():
         return {}
     resolved = context.resolve_storage(table_uri=str(path))
-    version = delta_table_version(
-        str(path),
+    version = context.runtime.profile.delta_service().table_version(
+        path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,
     )

@@ -21,7 +21,6 @@ from semantics.incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
     write_delta_table_via_pipeline,
 )
-from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
     from semantics.incremental.delta_context import DeltaAccessContext
@@ -65,8 +64,8 @@ def read_dataset_fingerprints(
     if not path.exists():
         return {}
     resolved = context.resolve_storage(table_uri=str(path))
-    version = delta_table_version(
-        str(path),
+    version = context.runtime.profile.delta_service().table_version(
+        path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,
     )

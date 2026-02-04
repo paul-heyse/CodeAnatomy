@@ -10,17 +10,18 @@ Resolve all pytest failures, skips, and warnings discovered in `build/test-resul
 
 **Representative code snippet**
 ```python
-# src/datafusion_engine/udf/shims.py
-def stable_hash64(value: Expr) -> Expr:
-    try:
-        return _call_expr("stable_hash64", value)
-    except (RuntimeError, TypeError):
-        # Fallback to deterministic hash in Python
-        return f.hash(value)
+# src/datafusion_engine/udf/fallback.py
+def fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
+    if name != "stable_hash64":
+        return None
+    # Fallback to deterministic hash in Python
+    udf_obj = udf(_fallback_stable_hash64, [pa.string()], pa.int64(), "stable", name)
+    return udf_obj(*[_as_expr(arg) for arg in args])
 ```
 
 **Target files**
-- `src/datafusion_engine/udf/shims.py`
+- `src/datafusion_engine/udf/expr.py`
+- `src/datafusion_engine/udf/fallback.py`
 - `src/datafusion_engine/delta/control_plane.py`
 - `src/storage/deltalake/delta.py`
 

@@ -6,8 +6,8 @@ Status: design-phase breaking changes (implemented)
 
 1. **Per-UDF Python wrappers removed**
    - `datafusion_ext` no longer exposes per-UDF helpers (e.g., `map_entries`, `list_extract`).
-   - Use the generic helper `udf_expr(name, *args, ctx=None)` or the Python shims in
-     `src/datafusion_engine/udf/shims.py`.
+   - Use the generic helper `udf_expr(name, *args, ctx=None)` from
+     `datafusion_engine.udf.expr`.
 
 2. **`range_table` alias removed**
    - Use DataFusion built-ins: `range` or `generate_series`.
@@ -28,7 +28,7 @@ Status: design-phase breaking changes (implemented)
 
 - **UDF expressions**: replace direct `datafusion_ext.<udf_name>` calls with:
   - `datafusion_ext.udf_expr("<udf_name>", *args)`
-  - or `datafusion_engine.udf.shims.<udf_name>(...)` for the compatibility layer.
+  - or `datafusion_engine.udf.expr.udf_expr("<udf_name>", *args)`
 
 - **Table functions**: update any SQL that used `range_table(...)` to `range(...)` or
   `generate_series(...)`.

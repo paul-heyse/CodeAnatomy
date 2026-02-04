@@ -135,15 +135,15 @@ Make `span` (struct) canonical in semantic views while allowing CPG outputs to e
 ### Representative code patterns
 ```python
 # semantics/schema.py
-from datafusion_engine.udf.shims import span_make
+from datafusion_engine.udf.expr import udf_expr
 
-span_expr = span_make(col("bstart"), col("bend"))
+span_expr = udf_expr("span_make", col("bstart"), col("bend"))
 ```
 
 ```python
 # cpg/view_builders_df.py
 # CPG outputs still include bstart/bend but can also carry span if desired.
-result = result.with_column("span", span_make(col("bstart"), col("bend")))
+result = result.with_column("span", udf_expr("span_make", col("bstart"), col("bend")))
 ```
 
 ### Target files

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from serde_msgspec import StructBaseStrict
 from utils.registry_protocol import Registry, SnapshotRegistry
 from utils.uuid_factory import uuid7_str
 
@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
 
 
-@dataclass(frozen=True)
-class RegistrationResult:
+class RegistrationResult(StructBaseStrict, frozen=True):
     """Result of a registry registration operation."""
 
     success: bool

@@ -7,15 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
+from datafusion_engine.delta.service import delta_service_for_profile
 from engine.diagnostics import EngineEventRecorder
-from storage.deltalake import (
-    DeltaVacuumOptions,
-    StorageOptions,
-    delta_history_snapshot,
-    delta_protocol_snapshot,
-    delta_table_version,
-    vacuum_delta,
-)
+from storage.deltalake import DeltaVacuumOptions, StorageOptions
 
 _DELTA_MIN_RETENTION_HOURS = 168
 
@@ -91,19 +85,20 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
     DeltaHistorySnapshot
         History and protocol snapshots for the Delta table.
     """
-    history = delta_history_snapshot(
-        request.path,
+    service = delta_service_for_profile(request.runtime_profile)
+    history = service.history_snapshot(
+        path=request.path,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,
         limit=request.limit,
     )
-    protocol = delta_protocol_snapshot(
-        request.path,
+    protocol = service.protocol_snapshot(
+        path=request.path,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,
     )
-    version = delta_table_version(
-        request.path,
+    version = service.table_version(
+        path=request.path,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,
     )
@@ -154,8 +149,9 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
             f"{_DELTA_MIN_RETENTION_HOURS} when enforcement is enabled."
         )
         raise ValueError(msg)
-    removed = vacuum_delta(
-        request.path,
+    service = delta_service_for_profile(request.runtime_profile)
+    removed = service.vacuum(
+        path=request.path,
         options=resolved,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,

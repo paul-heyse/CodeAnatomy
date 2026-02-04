@@ -22,12 +22,8 @@ from datafusion_engine.delta.observability import (
     DeltaMaintenanceArtifact,
     record_delta_maintenance,
 )
-from storage.deltalake.delta import (
-    DeltaFeatureMutationOptions,
-    cleanup_delta_log,
-    enable_delta_deletion_vectors,
-    enable_delta_v2_checkpoints,
-)
+from datafusion_engine.delta.service import delta_service_for_profile
+from storage.deltalake.delta import DeltaFeatureMutationOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
@@ -113,9 +109,10 @@ def run_delta_maintenance(
         Sequence of maintenance reports emitted by the control plane.
     """
     policy = plan.policy
+    service = delta_service_for_profile(runtime_profile)
     reports: list[Mapping[str, object]] = []
     if plan.policy.enable_deletion_vectors:
-        report = enable_delta_deletion_vectors(
+        report = service.enable_deletion_vectors(
             _feature_mutation_options(
                 plan,
                 runtime_profile=runtime_profile,
@@ -135,7 +132,7 @@ def run_delta_maintenance(
             ),
         )
     if plan.policy.enable_v2_checkpoints:
-        report = enable_delta_v2_checkpoints(
+        report = service.enable_v2_checkpoints(
             _feature_mutation_options(
                 plan,
                 runtime_profile=runtime_profile,
@@ -197,11 +194,10 @@ def run_delta_maintenance(
             ),
         )
     if policy.enable_log_compaction:
-        report = cleanup_delta_log(
-            plan.table_uri,
+        report = service.cleanup_log(
+            path=plan.table_uri,
             storage_options=plan.storage_options,
             log_storage_options=plan.log_storage_options,
-            runtime_profile=runtime_profile,
             dataset_name=plan.dataset_name,
         )
         reports.append(report)
@@ -214,13 +210,13 @@ def _feature_mutation_options(
     runtime_profile: DataFusionRuntimeProfile | None,
     commit_metadata: Mapping[str, str] | None,
 ) -> DeltaFeatureMutationOptions:
-    return DeltaFeatureMutationOptions(
+    service = delta_service_for_profile(runtime_profile)
+    return service.feature_mutation_options(
         path=plan.table_uri,
         storage_options=plan.storage_options,
         log_storage_options=plan.log_storage_options,
-        commit_metadata=commit_metadata,
-        runtime_profile=runtime_profile,
         dataset_name=plan.dataset_name,
+        commit_metadata=commit_metadata,
         gate=plan.feature_gate,
     )
 

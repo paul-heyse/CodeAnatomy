@@ -15,20 +15,19 @@ from datafusion_engine.dataset.registration import (
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
+    resolve_dataset_location,
     resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
 )
 from datafusion_engine.delta.maintenance import (
     DeltaMaintenancePlanInput,
     resolve_delta_maintenance_plan,
     run_delta_maintenance,
 )
-from datafusion_engine.delta.scan_config import resolve_delta_scan_options
+from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import resolve_delta_store_policy
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
-from storage.deltalake.delta import delta_table_version
 
 
 @dataclass(frozen=True)
@@ -138,19 +137,17 @@ def register_delta_df(
     dataset_spec = None
     table_spec = None
     if profile_location is not None and profile_location.format == "delta":
+        resolved_location = resolve_dataset_location(profile_location)
         if profile_location.storage_options:
             resolved_storage = profile_location.storage_options
-        resolved_log_storage = (
-            resolve_delta_log_storage_options(profile_location) or resolved_log_storage
-        )
-        resolved_scan = resolve_delta_scan_options(profile_location)
+        resolved_log_storage = resolved_location.delta_log_storage_options or resolved_log_storage
+        resolved_scan = resolved_location.delta_scan
         if resolved_version is None:
             resolved_version = profile_location.delta_version
         if resolved_timestamp is None:
             resolved_timestamp = profile_location.delta_timestamp
-        dataset_spec = profile_location.dataset_spec
-        if dataset_spec is None and profile_location.overrides is not None:
-            table_spec = profile_location.overrides.table_spec
+        dataset_spec = resolved_location.dataset_spec
+        table_spec = resolved_location.table_spec
     overrides = None
     if resolved_scan is not None or table_spec is not None:
         overrides = DatasetLocationOverrides(
@@ -207,8 +204,8 @@ def run_delta_maintenance_if_configured(
             dataset_name=dataset_name,
             storage_options=storage_options,
             log_storage_options=log_storage_options,
-            delta_version=delta_table_version(
-                table_uri,
+            delta_version=delta_service_for_profile(runtime_profile).table_version(
+                path=table_uri,
                 storage_options=storage_options,
                 log_storage_options=log_storage_options,
             ),

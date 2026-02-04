@@ -88,31 +88,31 @@ def q(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
-    # Parse-first: fallback only if there are no query tokens
-    if not _has_query_tokens(query_string):
-        from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+    has_tokens = _has_query_tokens(query_string)
 
-        # Build include globs from include patterns
-        include_globs = list(include) if include else None
-
-        result = smart_search(
-            ctx.root,
-            query_string,
-            mode=None,  # Auto-detect
-            include_globs=include_globs,
-            exclude_globs=list(exclude) if exclude else None,
-            include_strings=False,
-            limits=SMART_SEARCH_LIMITS,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-        )
-        filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-        return CliResult(result=result, context=ctx, filters=filters)
-
-    # Parse the query string
+    # Parse the query string first; fallback only for plain searches.
     try:
         parsed_query = parse_query(query_string)
     except QueryParseError as e:
+        if not has_tokens:
+            from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+
+            # Build include globs from include patterns
+            include_globs = list(include) if include else None
+
+            result = smart_search(
+                ctx.root,
+                query_string,
+                mode=None,  # Auto-detect
+                include_globs=include_globs,
+                exclude_globs=list(exclude) if exclude else None,
+                include_strings=False,
+                limits=SMART_SEARCH_LIMITS,
+                tc=ctx.toolchain,
+                argv=ctx.argv,
+            )
+            filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
+            return CliResult(result=result, context=ctx, filters=filters)
         started_ms = ms()
         run = mk_runmeta(
             macro="q",

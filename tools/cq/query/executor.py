@@ -10,10 +10,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from ast_grep_py import SgRoot
+from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
-from tools.cq.core.schema import Anchor, CqResult, Finding, Section, mk_result, mk_runmeta, ms
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    DetailPayload,
+    Finding,
+    Section,
+    mk_result,
+    mk_runmeta,
+    ms,
+)
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
@@ -31,6 +40,7 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.query.ir import MetaVarCapture
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
@@ -42,7 +52,7 @@ class ScanContext:
 
     def_records: list[SgRecord]
     call_records: list[SgRecord]
-    interval_index: IntervalIndex
+    interval_index: IntervalIndex[SgRecord]
     file_index: FileIntervalIndex
     calls_by_def: dict[SgRecord, list[SgRecord]]
     all_records: list[SgRecord]
@@ -349,7 +359,7 @@ def _execute_ast_grep_rules(
     root: Path,
     query: Query | None = None,
     _globs: list[str] | None = None,
-) -> tuple[list[Finding], list[SgRecord], list[dict]]:
+) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
     """Execute ast-grep rules using ast-grep-py and return findings.
 
     Parameters
@@ -367,7 +377,7 @@ def _execute_ast_grep_rules(
 
     Returns
     -------
-    tuple[list[Finding], list[SgRecord], list[dict]]
+    tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
         Findings, underlying records, and raw match data.
     """
     from tools.cq.query.metavar import apply_metavar_filters
@@ -377,7 +387,7 @@ def _execute_ast_grep_rules(
 
     findings: list[Finding] = []
     records: list[SgRecord] = []
-    raw_matches: list[dict] = []
+    raw_matches: list[dict[str, object]] = []
 
     # Execute rules using ast-grep-py
     for file_path in paths:
@@ -407,7 +417,7 @@ def _execute_ast_grep_rules(
             for match in matches:
                 # Build match dict for compatibility
                 range_obj = match.range()
-                match_data = {
+                match_data: dict[str, object] = {
                     "ruleId": rule_id,
                     "file": rel_path,
                     "text": match.text(),
@@ -483,7 +493,7 @@ def _extract_match_metavars(match: SgNode) -> dict[str, str]:
     return metavars
 
 
-def _parse_sgpy_metavariables(match: SgNode) -> dict[str, object]:
+def _parse_sgpy_metavariables(match: SgNode) -> dict[str, MetaVarCapture]:
     """Parse metavariables from ast-grep-py match for filter application.
 
     Parameters
@@ -496,13 +506,9 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, object]:
     dict[str, object]
         Dictionary of metavariable info for filtering.
     """
-    from dataclasses import dataclass
+    from tools.cq.query.ir import MetaVarCapture
 
-    @dataclass
-    class MetavarCapture:
-        text: str
-
-    result: dict[str, object] = {}
+    result: dict[str, MetaVarCapture] = {}
     common_names = [
         "$FUNC",
         "$F",
@@ -531,11 +537,17 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, object]:
     for name in common_names:
         captured = match.get_match(name)
         if captured is not None:
-            result[name] = MetavarCapture(text=captured.text())
+            result[name] = MetaVarCapture(name=name, kind="single", text=captured.text())
     return result
 
 
-def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
+def _coerce_int(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    return 0
+
+
+def _match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord | None]:
     """Convert ast-grep match to Finding and SgRecord.
 
     Returns
@@ -547,38 +559,44 @@ def _match_to_finding(data: dict) -> tuple[Finding | None, SgRecord | None]:
         return None, None
 
     range_data = data["range"]
-    start = range_data.get("start", {})
-    end = range_data.get("end", {})
+    if not isinstance(range_data, dict):
+        return None, None
+    start = cast("dict[str, object]", range_data.get("start", {}))
+    end = cast("dict[str, object]", range_data.get("end", {}))
+    file_value = data.get("file", "")
+    file_name = str(file_value) if file_value is not None else ""
 
     anchor = Anchor(
-        file=data["file"],
-        line=start.get("line", 0) + 1,  # Convert to 1-indexed
-        col=start.get("column", 0),
-        end_line=end.get("line", 0) + 1,
-        end_col=end.get("column", 0),
+        file=file_name,
+        line=_coerce_int(start.get("line", 0)) + 1,  # Convert to 1-indexed
+        col=_coerce_int(start.get("column", 0)),
+        end_line=_coerce_int(end.get("line", 0)) + 1,
+        end_col=_coerce_int(end.get("column", 0)),
     )
 
     finding = Finding(
         category="pattern_match",
-        message=data.get("message", "Pattern match"),
+        message=str(data.get("message", "Pattern match")),
         anchor=anchor,
         severity="info",
-        details={
-            "text": data.get("text", ""),
-            "rule_id": data.get("ruleId", "pattern_query"),
-        },
+        details=DetailPayload.from_legacy(
+            {
+                "text": data.get("text", ""),
+                "rule_id": data.get("ruleId", "pattern_query"),
+            }
+        ),
     )
 
     record = SgRecord(
         record="def",  # Default, may not be accurate for all patterns
         kind="pattern_match",
-        file=data["file"],
-        start_line=start.get("line", 0) + 1,
-        start_col=start.get("column", 0),
-        end_line=end.get("line", 0) + 1,
-        end_col=end.get("column", 0),
-        text=data.get("text", ""),
-        rule_id=data.get("ruleId", "pattern_query"),
+        file=file_name,
+        start_line=_coerce_int(start.get("line", 0)) + 1,
+        start_col=_coerce_int(start.get("column", 0)),
+        end_line=_coerce_int(end.get("line", 0)) + 1,
+        end_col=_coerce_int(end.get("column", 0)),
+        text=str(data.get("text", "")),
+        rule_id=str(data.get("ruleId", "pattern_query")),
     )
 
     return finding, record
@@ -610,7 +628,7 @@ def _collect_match_spans(
     )
 
     spans: dict[str, list[tuple[int, int]]] = {}
-    all_matches: list[tuple[dict, SgNode]] = []
+    all_matches: list[tuple[dict[str, object], SgNode]] = []
 
     # Execute rules using ast-grep-py
     for file_path in file_result.files:
@@ -626,7 +644,7 @@ def _collect_match_spans(
         for rule in rules:
             rule_dict = rule.to_yaml_dict()
             if rule.requires_inline_rule():
-                rule_config = cast("dict[str, object]", {"rule": rule_dict})
+                rule_config: Config = {"rule": cast("Rule", rule_dict)}
                 matches = node.find_all(rule_config)
             elif "pattern" in rule_dict and rule_dict.get("pattern") in {
                 "$FUNC",
@@ -635,13 +653,13 @@ def _collect_match_spans(
             }:
                 kind = rule_dict.get("kind")
                 if kind:
-                    matches = node.find_all(kind=kind)
+                    matches = node.find_all(kind=cast("str", kind))
                 else:
-                    matches = node.find_all(pattern=rule_dict["pattern"])
+                    matches = node.find_all(pattern=cast("str", rule_dict["pattern"]))
             elif "pattern" in rule_dict:
-                matches = node.find_all(pattern=rule_dict["pattern"])
+                matches = node.find_all(pattern=cast("str", rule_dict["pattern"]))
             elif "kind" in rule_dict:
-                matches = node.find_all(kind=rule_dict["kind"])
+                matches = node.find_all(kind=cast("str", rule_dict["kind"]))
             else:
                 continue
 
@@ -652,7 +670,7 @@ def _collect_match_spans(
                 spans.setdefault(rel_path, []).append((start_line, end_line))
 
                 # Store match for filtering
-                match_data = {
+                match_data: dict[str, object] = {
                     "file": rel_path,
                     "range": {
                         "start": {"line": range_obj.start.line, "column": range_obj.start.column},
@@ -673,12 +691,16 @@ def _collect_match_spans(
         captures = _parse_sgpy_metavariables(sg_match)
         if not apply_metavar_filters(captures, query.metavar_filters):
             continue
-        range_data = match_data.get("range", {})
-        start = range_data.get("start", {})
-        end = range_data.get("end", {})
-        file_path = match_data.get("file", "")
-        start_line = start.get("line", 0) + 1
-        end_line = end.get("line", 0) + 1
+        range_data = match_data.get("range")
+        if not isinstance(range_data, dict):
+            continue
+        start = cast("dict[str, object]", range_data.get("start", {}))
+        end = cast("dict[str, object]", range_data.get("end", {}))
+        file_path = match_data.get("file")
+        if not isinstance(file_path, str):
+            continue
+        start_line = _coerce_int(start.get("line", 0)) + 1
+        end_line = _coerce_int(end.get("line", 0)) + 1
         filtered.setdefault(file_path, []).append((start_line, end_line))
 
     return filtered
@@ -1089,9 +1111,7 @@ def rg_files_with_matches(
     search_root = root / scope.in_dir if scope.in_dir else root
 
     # Build limits from scope or defaults
-    effective_limits = limits or SearchLimits(
-        max_depth=scope.max_depth or 50,
-    )
+    effective_limits = limits or SearchLimits(max_depth=50)
 
     return find_files_with_pattern(
         search_root,
@@ -1103,7 +1123,7 @@ def rg_files_with_matches(
 
 
 def assign_calls_to_defs(
-    index: IntervalIndex,
+    index: IntervalIndex[SgRecord],
     calls: list[SgRecord],
 ) -> dict[SgRecord, list[SgRecord]]:
     """Assign call records to their containing definitions.
@@ -1403,16 +1423,18 @@ def _def_to_finding(
         message=f"{def_record.kind}: {def_name}",
         anchor=anchor,
         severity="info",
-        details={
-            "kind": def_record.kind,
-            "name": def_name,
-            "calls_within": len(calls_within),
-            "impact_score": impact,
-            "impact_bucket": bucket(impact),
-            "confidence_score": confidence,
-            "confidence_bucket": bucket(confidence),
-            "evidence_kind": "resolved_ast",
-        },
+        details=DetailPayload.from_legacy(
+            {
+                "kind": def_record.kind,
+                "name": def_name,
+                "calls_within": len(calls_within),
+                "impact_score": impact,
+                "impact_bucket": bucket(impact),
+                "confidence_score": confidence,
+                "confidence_bucket": bucket(confidence),
+                "evidence_kind": "resolved_ast",
+            }
+        ),
     )
 
 
@@ -1450,11 +1472,13 @@ def _import_to_finding(import_record: SgRecord) -> Finding:
         message=f"{category}: {import_name}",
         anchor=anchor,
         severity="info",
-        details={
-            "kind": import_record.kind,
-            "name": import_name,
-            "text": import_record.text.strip(),
-        },
+        details=DetailPayload.from_legacy(
+            {
+                "kind": import_record.kind,
+                "name": import_name,
+                "text": import_record.text.strip(),
+            }
+        ),
     )
 
 
@@ -1543,7 +1567,7 @@ def _build_callers_section(
                 message=f"caller: {caller_name} calls {call_target}",
                 anchor=anchor,
                 severity="info",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
 
@@ -1591,7 +1615,7 @@ def _build_callees_section(
                     message=f"callee: {def_name} calls {call_target}",
                     anchor=anchor,
                     severity="info",
-                    details=details,
+                    details=DetailPayload.from_legacy(details),
                 )
             )
 
@@ -1661,9 +1685,11 @@ def _build_raises_section(
                 message=f"{category}: {record.text.strip()}",
                 anchor=anchor,
                 severity="info",
-                details={
-                    "context_def": _extract_def_name(containing) or "<module>",
-                },
+                details=DetailPayload.from_legacy(
+                    {
+                        "context_def": _extract_def_name(containing) or "<module>",
+                    }
+                ),
             )
         )
 
@@ -1708,7 +1734,7 @@ def _build_scope_section(
                 message=message,
                 anchor=base_finding.anchor,
                 severity="info",
-                details=scope_info,
+                details=DetailPayload.from_legacy(scope_info),
             )
         )
 
@@ -1761,7 +1787,7 @@ def _build_bytecode_surface_section(
                 message=message,
                 anchor=anchor,
                 severity="info",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
 
@@ -1791,7 +1817,7 @@ def _call_to_finding(
         end_line=record.end_line,
         end_col=record.end_col,
     )
-    details = {"text": record.text.strip()}
+    details: dict[str, object] = {"text": record.text.strip()}
     if extra_details:
         details.update(extra_details)
     return Finding(
@@ -1799,7 +1825,7 @@ def _call_to_finding(
         message=f"call: {call_target}",
         anchor=anchor,
         severity="info",
-        details=details,
+        details=DetailPayload.from_legacy(details),
     )
 
 

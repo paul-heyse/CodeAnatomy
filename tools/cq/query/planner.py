@@ -99,7 +99,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
             or self.nth_child is not None
         )
 
-    def to_yaml_dict(self) -> dict:
+    def to_yaml_dict(self) -> dict[str, object]:
         """Convert to ast-grep YAML rule format.
 
         Returns
@@ -115,12 +115,12 @@ class AstGrepRule(msgspec.Struct, frozen=True):
         """
         # Build pattern section - handle context for disambiguation
         if self.context:
-            pattern_obj: dict = {"context": self.context}
+            pattern_obj: dict[str, object] = {"context": self.context}
             if self.selector:
                 pattern_obj["selector"] = self.selector
             if self.strictness != "smart":
                 pattern_obj["strictness"] = self.strictness
-            rule: dict = {"pattern": pattern_obj}
+            rule: dict[str, object] = {"pattern": pattern_obj}
         else:
             rule = {"pattern": self.pattern}
             if self.strictness != "smart":
@@ -134,7 +134,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
 
         # Add relational constraints
         if self.inside:
-            inside_rule: dict = {"pattern": self.inside}
+            inside_rule: dict[str, object] = {"pattern": self.inside}
             if self.inside_stop_by:
                 inside_rule["stopBy"] = self.inside_stop_by
             if self.inside_field:
@@ -142,7 +142,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
             rule["inside"] = inside_rule
 
         if self.has:
-            has_rule: dict = {"pattern": self.has}
+            has_rule: dict[str, object] = {"pattern": self.has}
             if self.has_stop_by:
                 has_rule["stopBy"] = self.has_stop_by
             if self.has_field:
@@ -165,7 +165,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
             if self.nth_child.reverse:
                 nth["reverse"] = True
             if self.nth_child.of_rule:
-                nth["ofRule"] = {"kind": self.nth_child.of_rule}
+                nth["ofRule"] = self.nth_child.of_rule
             rule["nthChild"] = nth
 
         return rule

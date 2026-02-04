@@ -16,6 +16,7 @@ import msgspec
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -263,7 +264,7 @@ def _append_surface_section(
                 message=f"{surface.qualname}: {'; '.join(parts)}",
                 anchor=Anchor(file=surface.file, line=surface.line),
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -273,7 +274,7 @@ def _append_surface_section(
                 category="truncated",
                 message=f"... and {len(all_surfaces) - _MAX_SURFACES_DISPLAY} more",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(section)
@@ -317,7 +318,7 @@ def _append_global_summary(
                 category="global",
                 message=f"{name}: {count} code objects",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if len(all_globals) > _MAX_GLOBAL_SUMMARY:
@@ -326,7 +327,7 @@ def _append_global_summary(
                 category="truncated",
                 message=f"... and {len(all_globals) - _MAX_GLOBAL_SUMMARY} more",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(glob_section)
@@ -347,7 +348,7 @@ def _append_opcode_summary(
                 category="opcode",
                 message=f"{op}: {count}",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(op_section)
@@ -370,7 +371,7 @@ def _append_evidence(
                 category="bytecode",
                 message=f"{surface.file}::{surface.qualname}",
                 anchor=Anchor(file=surface.file, line=surface.line),
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
 
@@ -423,7 +424,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     conf_signals = ConfidenceSignals(evidence_kind="bytecode")
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,
@@ -438,7 +439,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="globals",
                 message=f"{len(all_globals)} unique global references",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if all_attrs:
@@ -447,7 +448,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="attrs",
                 message=f"{len(all_attrs)} unique attribute accesses",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if not all_surfaces:
@@ -456,7 +457,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="info",
                 message=f"No code objects found for '{request.target}'",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 

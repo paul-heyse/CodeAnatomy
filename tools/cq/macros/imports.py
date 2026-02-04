@@ -15,6 +15,7 @@ import msgspec
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -350,7 +351,7 @@ def _append_cycle_section(
                 category="info",
                 message="No import cycles detected",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
         return
@@ -359,7 +360,7 @@ def _append_cycle_section(
             category="cycle",
             message=f"Found {len(cycles)} import cycle(s)",
             severity="warning",
-            details=dict(scoring_details),
+            details=DetailPayload.from_legacy(dict(scoring_details)),
         )
     )
     cycle_section = Section(title="Import Cycles")
@@ -371,7 +372,7 @@ def _append_cycle_section(
                 category="cycle",
                 message=f"Cycle {index}: {cycle_str}",
                 severity="warning",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
     result.sections.append(cycle_section)
@@ -393,7 +394,7 @@ def _append_external_section(
                 category="external",
                 message=f"{dep}: {count} imports",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(ext_section)
@@ -415,7 +416,7 @@ def _append_relative_section(
                 message=f"from {dots}{imp_info.module or ''} import {', '.join(imp_info.names) or '*'}",
                 anchor=Anchor(file=imp_info.file, line=imp_info.line),
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(rel_section)
@@ -437,7 +438,7 @@ def _append_module_focus(
                         message=f"{'from ' if imp_info.is_from else 'import '}{imp_info.module}",
                         anchor=Anchor(file=imp_info.file, line=imp_info.line),
                         severity="info",
-                        details=dict(scoring_details),
+                        details=DetailPayload.from_legacy(dict(scoring_details)),
                     )
                 )
     result.sections.append(focus_section)
@@ -459,7 +460,7 @@ def _append_import_evidence(
                 category="import",
                 message=what,
                 anchor=Anchor(file=imp_info.file, line=imp_info.line),
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -541,7 +542,7 @@ def cmd_imports(request: ImportRequest) -> CqResult:
     conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,

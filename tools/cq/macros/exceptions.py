@@ -16,6 +16,7 @@ import msgspec
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -346,7 +347,7 @@ def _append_exception_sections(
                 category="raise",
                 message=f"{exc_type}: {count} sites",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(raise_section)
@@ -359,7 +360,7 @@ def _append_exception_sections(
                 category="catch",
                 message=f"{exc_type}: {count} handlers",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(catch_section)
@@ -401,7 +402,7 @@ def _append_uncaught_section(
                 message=f"{raised.exception_type} raised in {raised.in_function}",
                 anchor=Anchor(file=raised.file, line=raised.line),
                 severity="warning",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
     result.sections.append(uncaught_section)
@@ -424,7 +425,7 @@ def _append_bare_except_section(
                 message=f"in {caught.in_function}",
                 anchor=Anchor(file=caught.file, line=caught.line),
                 severity="warning",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
     result.sections.append(bare_section)
@@ -452,7 +453,7 @@ def _append_exception_evidence(
                 category="raise",
                 message=message,
                 anchor=Anchor(file=raised.file, line=raised.line),
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
     for caught in all_catches:
@@ -468,7 +469,7 @@ def _append_exception_evidence(
                 category="catch",
                 message=f"except {', '.join(caught.exception_types)}",
                 anchor=Anchor(file=caught.file, line=caught.line),
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
 
@@ -532,7 +533,7 @@ def cmd_exceptions(
     conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,
@@ -547,7 +548,7 @@ def cmd_exceptions(
                 category="warning",
                 message=f"Found {len(bare_excepts)} bare except: clauses",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -558,7 +559,7 @@ def cmd_exceptions(
                 category="warning",
                 message=f"Found {len(empty_handlers)} empty exception handlers",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 

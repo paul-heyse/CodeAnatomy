@@ -39,62 +39,40 @@ JoinType = Literal["used_by", "defines", "raises", "exports"]
 class QueryParseError(ValueError):
     """Raised when a query string cannot be parsed."""
 
-    @classmethod
-    def missing_entity(cls) -> QueryParseError:
-        """Create error for missing entity selector."""
-        return cls(
-            "Query must specify 'entity' (function, class, method, module, callsite, import, decorator)"
-        )
 
-    @classmethod
-    def missing_pattern(cls) -> QueryParseError:
-        """Create error for missing pattern selector."""
-        return cls("Pattern query must specify 'pattern'")
+_MISSING_ENTITY_MESSAGE = (
+    "Query must specify 'entity' (function, class, method, module, callsite, import, decorator)"
+)
+_MISSING_PATTERN_MESSAGE = "Pattern query must specify 'pattern'"
+_INVALID_COMPOSITE_MESSAGE = "'not' operator requires exactly one pattern"
 
-    @classmethod
-    def invalid_entity(cls, entity_str: str, valid: tuple[str, ...]) -> QueryParseError:
-        """Create error for invalid entity selectors."""
-        msg = f"Invalid entity type: {entity_str!r}. Valid types: {', '.join(valid)}"
-        return cls(msg)
 
-    @classmethod
-    def invalid_strictness(cls, strictness_str: str, valid: tuple[str, ...]) -> QueryParseError:
-        """Create error for invalid strictness modes."""
-        msg = f"Invalid strictness mode: {strictness_str!r}. Valid modes: {', '.join(valid)}"
-        return cls(msg)
+def _invalid_entity_message(entity_str: str, valid: tuple[str, ...]) -> str:
+    return f"Invalid entity type: {entity_str!r}. Valid types: {', '.join(valid)}"
 
-    @classmethod
-    def invalid_relational_op(cls, op_str: str, valid: tuple[str, ...]) -> QueryParseError:
-        """Create error for invalid relational operators."""
-        msg = f"Invalid relational operator: {op_str!r}. Valid operators: {', '.join(valid)}"
-        return cls(msg)
 
-    @classmethod
-    def invalid_expander_format(cls, part: str) -> QueryParseError:
-        """Create error for invalid expander syntax."""
-        return cls(f"Invalid expander format: {part!r}")
+def _invalid_strictness_message(strictness_str: str, valid: tuple[str, ...]) -> str:
+    return f"Invalid strictness mode: {strictness_str!r}. Valid modes: {', '.join(valid)}"
 
-    @classmethod
-    def invalid_expander_params(cls, params: str) -> QueryParseError:
-        """Create error for invalid expander params."""
-        return cls(f"Invalid expander params: {params!r}. Expected 'depth=N'")
 
-    @classmethod
-    def invalid_expander_kind(cls, kind: str, valid: tuple[str, ...]) -> QueryParseError:
-        """Create error for invalid expander kinds."""
-        msg = f"Invalid expander kind: {kind!r}. Valid kinds: {', '.join(valid)}"
-        return cls(msg)
+def _invalid_relational_op_message(op_str: str, valid: tuple[str, ...]) -> str:
+    return f"Invalid relational operator: {op_str!r}. Valid operators: {', '.join(valid)}"
 
-    @classmethod
-    def invalid_field(cls, field: str, valid: tuple[str, ...]) -> QueryParseError:
-        """Create error for invalid output fields."""
-        msg = f"Invalid field: {field!r}. Valid fields: {', '.join(valid)}"
-        return cls(msg)
 
-    @classmethod
-    def invalid_composite(cls) -> QueryParseError:
-        """Create error for invalid composite rule syntax."""
-        return cls("'not' operator requires exactly one pattern")
+def _invalid_expander_format_message(part: str) -> str:
+    return f"Invalid expander format: {part!r}"
+
+
+def _invalid_expander_params_message(params: str) -> str:
+    return f"Invalid expander params: {params!r}. Expected 'depth=N'"
+
+
+def _invalid_expander_kind_message(kind: str, valid: tuple[str, ...]) -> str:
+    return f"Invalid expander kind: {kind!r}. Valid kinds: {', '.join(valid)}"
+
+
+def _invalid_field_message(field: str, valid: tuple[str, ...]) -> str:
+    return f"Invalid field: {field!r}. Valid fields: {', '.join(valid)}"
 
 
 def parse_query(query_string: str) -> Query:
@@ -188,7 +166,7 @@ def _parse_entity_query(tokens: dict[str, str]) -> Query:
     # Parse entity (required for entity queries)
     entity_str = tokens.get("entity")
     if not entity_str:
-        raise QueryParseError.missing_entity()
+        raise QueryParseError(_MISSING_ENTITY_MESSAGE)
 
     entity = _parse_entity(entity_str)
 
@@ -348,7 +326,7 @@ def _parse_pattern_object(tokens: dict[str, str]) -> PatternSpec:
         )
 
     if not pattern_str:
-        raise QueryParseError.missing_pattern()
+        raise QueryParseError(_MISSING_PATTERN_MESSAGE)
 
     # Simple pattern string
     return PatternSpec(
@@ -385,7 +363,8 @@ def _parse_entity(entity_str: str) -> EntityType:
     )
     valid_entity_set = set(valid_entities)
     if entity_str not in valid_entity_set:
-        raise QueryParseError.invalid_entity(entity_str, valid_entities)
+        msg = _invalid_entity_message(entity_str, valid_entities)
+        raise QueryParseError(msg)
     return cast("EntityType", entity_str)
 
 
@@ -407,7 +386,8 @@ def _parse_strictness(strictness_str: str) -> StrictnessMode:
     valid_modes: tuple[StrictnessMode, ...] = ("cst", "smart", "ast", "relaxed", "signature")
     valid_mode_set = set(valid_modes)
     if strictness_str not in valid_mode_set:
-        raise QueryParseError.invalid_strictness(strictness_str, valid_modes)
+        msg = _invalid_strictness_message(strictness_str, valid_modes)
+        raise QueryParseError(msg)
     return cast("StrictnessMode", strictness_str)
 
 
@@ -429,7 +409,8 @@ def _parse_relational_op(op_str: str) -> RelationalOp:
     valid_ops: tuple[RelationalOp, ...] = ("inside", "has", "precedes", "follows")
     valid_op_set = set(valid_ops)
     if op_str not in valid_op_set:
-        raise QueryParseError.invalid_relational_op(op_str, valid_ops)
+        msg = _invalid_relational_op_message(op_str, valid_ops)
+        raise QueryParseError(msg)
     return cast("RelationalOp", op_str)
 
 
@@ -599,7 +580,8 @@ def _parse_expanders(expand_str: str) -> tuple[Expander, ...]:
         # Parse expander: kind(depth=N) or just kind
         match = re.match(r"(\w+)(?:\(([^)]*)\))?", part)
         if not match:
-            raise QueryParseError.invalid_expander_format(part)
+            msg = _invalid_expander_format_message(part)
+            raise QueryParseError(msg)
 
         kind_str = match.group(1)
         params_str = match.group(2) or ""
@@ -670,7 +652,8 @@ def _parse_expander_kind(kind_str: str) -> ExpanderKind:
     )
     valid_kind_set = set(valid_kinds)
     if kind_str not in valid_kind_set:
-        raise QueryParseError.invalid_expander_kind(kind_str, valid_kinds)
+        msg = _invalid_expander_kind_message(kind_str, valid_kinds)
+        raise QueryParseError(msg)
     return cast("ExpanderKind", kind_str)
 
 
@@ -697,7 +680,8 @@ def _parse_expander_params(params_str: str) -> int:
     if match:
         return int(match.group(1))
 
-    raise QueryParseError.invalid_expander_params(params_str)
+    msg = _invalid_expander_params_message(params_str)
+    raise QueryParseError(msg)
 
 
 def _parse_scope(tokens: dict[str, str]) -> Scope:
@@ -753,7 +737,8 @@ def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
         if not field_str:
             continue
         if field_str not in valid_field_set:
-            raise QueryParseError.invalid_field(field_str, valid_fields)
+            msg = _invalid_field_message(field_str, valid_fields)
+            raise QueryParseError(msg)
         fields.append(cast("FieldType", field_str))
 
     return tuple(fields) if fields else ("def",)
@@ -851,7 +836,7 @@ def _parse_composite_rule(tokens: dict[str, str]) -> CompositeRule | None:
         patterns = _split_composite_patterns(value)
 
         if op == "not" and len(patterns) != 1:
-            raise QueryParseError.invalid_composite()
+            raise QueryParseError(_INVALID_COMPOSITE_MESSAGE)
 
         return CompositeRule(
             operator=op,  # type: ignore[arg-type]

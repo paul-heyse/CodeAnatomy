@@ -35,14 +35,16 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
 
     # Track nodes and edges
     nodes: set[str] = set()
-    edges: list[tuple[str, str, dict]] = []
+    edges: list[tuple[str, str, dict[str, object]]] = []
 
     # Process key findings for definitions
     for finding in result.key_findings:
         if finding.category in {"definition", "function", "class", "pattern_match"}:
-            name = finding.details.get("name", "unknown")
+            raw_name = finding.details.get("name", "unknown")
+            name = str(raw_name) if raw_name is not None else "unknown"
             node_id = _sanitize_dot_id(name)
-            kind = finding.details.get("kind", "")
+            raw_kind = finding.details.get("kind", "")
+            kind = str(raw_kind) if raw_kind is not None else ""
 
             if node_id not in nodes:
                 nodes.add(node_id)
@@ -54,8 +56,10 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
     for section in result.sections:
         if section.title.lower() == "callers":
             for finding in section.findings:
-                caller = finding.details.get("caller", "")
-                callee = finding.details.get("callee", "")
+                raw_caller = finding.details.get("caller", "")
+                raw_callee = finding.details.get("callee", "")
+                caller = str(raw_caller) if raw_caller else ""
+                callee = str(raw_callee) if raw_callee else ""
                 if caller and callee:
                     caller_id = _sanitize_dot_id(caller)
                     callee_id = _sanitize_dot_id(callee)

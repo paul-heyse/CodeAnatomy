@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pygit2
 from pathspec import GitIgnoreSpec
@@ -31,7 +32,7 @@ def load_gitignore_spec(
         Compiled ignore spec from repository sources.
     """
     inputs = collect_gitignore_inputs(repo_root, git_dir, repo)
-    return GitIgnoreSpec.from_lines(inputs.patterns)
+    return GitIgnoreSpec.from_lines(cast("Iterable[str]", inputs.patterns))
 
 
 def collect_gitignore_inputs(

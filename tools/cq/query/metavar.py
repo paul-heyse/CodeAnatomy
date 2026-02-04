@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, MetaVarKind
 
 
-def parse_metavariables(match_result: dict) -> dict[str, MetaVarCapture]:
+def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCapture]:
     """Extract metavariable captures from ast-grep match result.
 
     Parameters
@@ -42,7 +42,9 @@ def parse_metavariables(match_result: dict) -> dict[str, MetaVarCapture]:
 
     captures: dict[str, MetaVarCapture] = {}
 
-    meta_vars = match_result.get("metaVariables", {})
+    meta_vars = match_result.get("metaVariables")
+    if not isinstance(meta_vars, dict):
+        return captures
 
     # Single captures ($NAME)
     for name, capture_info in meta_vars.get("single", {}).items():

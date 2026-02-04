@@ -26,7 +26,7 @@ def search_sync_with_timeout[T](
     ----------
     fn : Callable[..., T]
         Function to execute
-    timeout_seconds : float
+    timeout : float
         Timeout in seconds
     args : tuple[object, ...] | None, optional
         Positional arguments to pass to fn
@@ -72,7 +72,7 @@ async def search_async_with_timeout[T](
     ----------
     coro : Awaitable[T]
         Coroutine or awaitable to execute
-    timeout : float
+    timeout_seconds : float
         Timeout in seconds
 
     Returns

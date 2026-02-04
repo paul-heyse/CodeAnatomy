@@ -32,7 +32,7 @@ def query_schema() -> dict[str, Any]:
     return msgspec.json.schema(Query)
 
 
-def cq_schema_components() -> tuple[dict[str, Any], dict[str, Any]]:
+def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     """Return schema and components for CQ result + query IR.
 
     Returns

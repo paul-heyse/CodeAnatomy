@@ -291,7 +291,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
         """
         return self.context is not None or self.selector is not None or self.strictness != "smart"
 
-    def to_yaml_dict(self) -> dict:
+    def to_yaml_dict(self) -> dict[str, object]:
         """Convert to ast-grep YAML rule format.
 
         Returns
@@ -307,7 +307,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
         """
         if self.context:
             # Pattern object format with context for disambiguation
-            pattern_obj: dict = {"context": self.context}
+            pattern_obj: dict[str, object] = {"context": self.context}
             if self.selector:
                 pattern_obj["selector"] = self.selector
             if self.strictness != "smart":
@@ -315,7 +315,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
             return {"pattern": pattern_obj}
 
         # Simple pattern format
-        result: dict = {"pattern": self.pattern}
+        result: dict[str, object] = {"pattern": self.pattern}
         if self.strictness != "smart":
             result["strictness"] = self.strictness
         return result
@@ -373,7 +373,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
             msg = f"{self.operator!r} operator does not support 'field' constraint"
             raise ValueError(msg)
 
-    def to_ast_grep_dict(self) -> dict:
+    def to_ast_grep_dict(self) -> dict[str, object]:
         """Convert to ast-grep rule format.
 
         Returns
@@ -381,7 +381,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
         dict
             Dictionary suitable for ast-grep YAML rule.
         """
-        inner: dict = {"pattern": self.pattern}
+        inner: dict[str, object] = {"pattern": self.pattern}
 
         if self.stop_by != "neighbor":
             inner["stopBy"] = self.stop_by
@@ -435,7 +435,7 @@ class CompositeRule(msgspec.Struct, frozen=True):
     patterns: tuple[str, ...]
     metavar_order: tuple[str, ...] | None = None
 
-    def to_ast_grep_dict(self) -> dict:
+    def to_ast_grep_dict(self) -> dict[str, object]:
         """Convert to ast-grep rule format.
 
         Returns

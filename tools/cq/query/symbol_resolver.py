@@ -283,17 +283,17 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
             )
         else:
             # Plain import
-    for module_name in remainder.split(","):
-        cleaned_module = module_name.strip()
-        if cleaned_module:
-            bindings.append(
-                ImportBinding(
-                    local_name=cleaned_module.split(".")[-1],
-                    source_module=cleaned_module,
-                    source_name=None,
-                    is_from_import=False,
-                )
-            )
+            for module_name in remainder.split(","):
+                cleaned_module = module_name.strip()
+                if cleaned_module:
+                    bindings.append(
+                        ImportBinding(
+                            local_name=cleaned_module.split(".")[-1],
+                            source_module=cleaned_module,
+                            source_name=None,
+                            is_from_import=False,
+                        )
+                    )
 
     # Handle "from x import y" or "from x import y as z"
     elif text.startswith("from "):

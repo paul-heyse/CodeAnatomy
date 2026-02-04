@@ -242,10 +242,12 @@ def _get_impact_confidence_summary(findings: list[Finding]) -> tuple[str, str]:
     impact_buckets = []
     conf_buckets = []
     for f in findings:
-        if "impact_bucket" in f.details:
-            impact_buckets.append(f.details["impact_bucket"])
-        if "confidence_bucket" in f.details:
-            conf_buckets.append(f.details["confidence_bucket"])
+        impact_value = f.details.get("impact_bucket", None)
+        if impact_value is not None:
+            impact_buckets.append(str(impact_value))
+        conf_value = f.details.get("confidence_bucket", None)
+        if conf_value is not None:
+            conf_buckets.append(str(conf_value))
 
     # Use highest impact and confidence seen
     impact_order = {"high": 3, "med": 2, "low": 1}

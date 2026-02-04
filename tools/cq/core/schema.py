@@ -37,6 +37,22 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     score: ScoreDetails | None = None
     data: dict[str, object] = msgspec.field(default_factory=dict)
 
+    @staticmethod
+    def _coerce_float(value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    @staticmethod
+    def _coerce_str(value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return str(value)
+
     @classmethod
     def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
         """Convert legacy detail dicts into a structured payload.
@@ -61,11 +77,11 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         score = None
         if score_values:
             score = ScoreDetails(
-                impact_score=score_values.get("impact_score"),
-                impact_bucket=score_values.get("impact_bucket"),
-                confidence_score=score_values.get("confidence_score"),
-                confidence_bucket=score_values.get("confidence_bucket"),
-                evidence_kind=score_values.get("evidence_kind"),
+                impact_score=cls._coerce_float(score_values.get("impact_score")),
+                impact_bucket=cls._coerce_str(score_values.get("impact_bucket")),
+                confidence_score=cls._coerce_float(score_values.get("confidence_score")),
+                confidence_bucket=cls._coerce_str(score_values.get("confidence_bucket")),
+                evidence_kind=cls._coerce_str(score_values.get("evidence_kind")),
             )
         return cls(kind=kind, score=score, data=data)
 
@@ -128,6 +144,24 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
         if key in _SCORE_FIELDS:
             return self.score is not None and getattr(self.score, key) is not None
         return key in self.data
+
+    def to_legacy_dict(self) -> dict[str, object]:
+        """Convert structured details back to legacy dict format.
+
+        Returns
+        -------
+        dict[str, object]
+            Legacy detail mapping with score fields and data.
+        """
+        legacy = dict(self.data)
+        if self.kind is not None:
+            legacy["kind"] = self.kind
+        if self.score is not None:
+            for field in _SCORE_FIELDS:
+                value = getattr(self.score, field, None)
+                if value is not None:
+                    legacy[field] = value
+        return legacy
 
 
 class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):

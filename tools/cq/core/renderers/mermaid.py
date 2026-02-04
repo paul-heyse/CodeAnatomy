@@ -36,7 +36,8 @@ def render_mermaid_flowchart(result: CqResult) -> str:
     # Process key findings for definitions
     for finding in result.key_findings:
         if finding.category in {"definition", "function", "class"}:
-            name = finding.details.get("name", "unknown")
+            name_value = finding.details.get("name", "unknown")
+            name = str(name_value) if name_value is not None else "unknown"
             node_id = _sanitize_node_id(name)
             nodes.add(node_id)
             lines.append(f"    {node_id}[{name}]")
@@ -45,8 +46,10 @@ def render_mermaid_flowchart(result: CqResult) -> str:
     for section in result.sections:
         if section.title.lower() == "callers":
             for finding in section.findings:
-                caller = finding.details.get("caller", "")
-                callee = finding.details.get("callee", "")
+                caller_value = finding.details.get("caller", "")
+                callee_value = finding.details.get("callee", "")
+                caller = str(caller_value) if caller_value is not None else ""
+                callee = str(callee_value) if callee_value is not None else ""
                 if caller and callee:
                     caller_id = _sanitize_node_id(caller)
                     callee_id = _sanitize_node_id(callee)
@@ -91,10 +94,12 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
 
     # Process key findings for class/method definitions
     for finding in result.key_findings:
-        kind = finding.details.get("kind", "")
+        kind_value = finding.details.get("kind", "")
+        kind = str(kind_value) if kind_value is not None else ""
 
         if finding.category == "definition":
-            name = finding.details.get("name", "unknown")
+            name_value = finding.details.get("name", "unknown")
+            name = str(name_value) if name_value is not None else "unknown"
 
             if kind in {"class", "class_bases", "class_typeparams"}:
                 if name not in classes:
@@ -115,8 +120,10 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
     if not classes:
         for finding in result.key_findings:
             if finding.category == "definition":
-                name = finding.details.get("name", "unknown")
-                kind = finding.details.get("kind", "")
+                name_value = finding.details.get("name", "unknown")
+                kind_value = finding.details.get("kind", "")
+                name = str(name_value) if name_value is not None else "unknown"
+                kind = str(kind_value) if kind_value is not None else ""
                 func_id = _sanitize_node_id(name)
                 if kind in {"function", "async_function"}:
                     lines.append(f"    class {func_id} {{")

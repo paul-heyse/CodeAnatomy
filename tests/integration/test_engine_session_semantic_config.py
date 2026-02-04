@@ -25,4 +25,4 @@ def test_engine_session_applies_semantic_runtime_config() -> None:
     location = profile.dataset_location("cpg_nodes_v1")
     assert location is not None
     assert str(location.path) == "/tmp/semantic_cpg_nodes"
-    assert profile.semantic_cache_overrides["cpg_nodes_v1"] == "delta_output"
+    assert profile.data_sources.semantic_cache_overrides["cpg_nodes_v1"] == "delta_output"

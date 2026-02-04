@@ -5,19 +5,14 @@ Executes ToolPlans and returns CqResult objects.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from ast_grep_py import SgRoot
-import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
-from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
 from tools.cq.core.schema import Anchor, CqResult, Finding, Section, mk_result, mk_runmeta, ms
 from tools.cq.core.scoring import (
     ConfidenceSignals,
@@ -36,12 +31,8 @@ if TYPE_CHECKING:
 
     from tools.cq.core.toolchain import Toolchain
 from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.diskcache_query_cache import QueryCache
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.index.diskcache_index_cache import IndexCache
 from tools.cq.query.ir import Query, Scope
-
-QUERY_CACHE_VERSION = "10"
 
 
 @dataclass
@@ -124,9 +115,6 @@ def execute_plan(
     tc: Toolchain,
     root: Path,
     argv: list[str] | None = None,
-    index_cache: IndexCache | None = None,
-    query_cache: QueryCache | None = None,
-    use_cache: bool = True,
 ) -> CqResult:
     """Execute a ToolPlan and return results.
 
@@ -149,76 +137,28 @@ def execute_plan(
         Query results
     """
     started_ms = ms()
-    cache_key: str | None = None
-    cache_files: list[Path] | None = None
-    auto_stack: ExitStack | None = None
-    own_index_cache = False
-    own_query_cache = False
 
-    if use_cache and (index_cache is None or query_cache is None):
-        profile = default_cq_diskcache_profile()
-        if index_cache is None:
-            rule_version = tc.sgpy_version or "unknown"
-            index_cache = IndexCache(root, rule_version, profile=profile)
-            own_index_cache = True
-        if query_cache is None:
-            query_cache = QueryCache(root, profile=profile)
-            own_query_cache = True
-        if own_index_cache or own_query_cache:
-            auto_stack = ExitStack()
-            if own_index_cache:
-                auto_stack.enter_context(index_cache)
-            if own_query_cache:
-                auto_stack.enter_context(query_cache)
+    # Dispatch to pattern query executor if this is a pattern query
+    if plan.is_pattern_query:
+        result = _execute_pattern_query(
+            plan,
+            query,
+            tc,
+            root,
+            argv,
+            started_ms,
+        )
+    else:
+        result = _execute_entity_query(
+            plan,
+            query,
+            tc,
+            root,
+            argv,
+            started_ms,
+        )
 
-    try:
-        if use_cache and query_cache is not None:
-            cache_files = _collect_cache_files(plan, root)
-            if cache_files:
-                cache_key = _build_query_cache_key(query, plan, root, tc)
-                cached = query_cache.get(cache_key, cache_files)
-                if cached is not None:
-                    if isinstance(cached, CqResult):
-                        result = cached
-                    elif isinstance(cached, dict):
-                        result = msgspec.convert(cached, type=CqResult)
-                    else:
-                        result = cached
-                    result.summary["cache"] = {"status": "hit", "key": cache_key}
-                    result.summary["cache_stats"] = _cache_stats_dict(query_cache)
-                    return result
-
-        # Dispatch to pattern query executor if this is a pattern query
-        if plan.is_pattern_query:
-            result = _execute_pattern_query(
-                plan,
-                query,
-                tc,
-                root,
-                argv,
-                started_ms,
-                index_cache,
-            )
-        else:
-            result = _execute_entity_query(
-                plan,
-                query,
-                tc,
-                root,
-                argv,
-                started_ms,
-                index_cache,
-            )
-
-        if use_cache and query_cache is not None and cache_key and cache_files:
-            query_cache.set(cache_key, result, cache_files)
-            result.summary["cache"] = {"status": "miss", "key": cache_key}
-            result.summary["cache_stats"] = _cache_stats_dict(query_cache)
-
-        return result
-    finally:
-        if auto_stack is not None:
-            auto_stack.close()
+    return result
 
 
 def _execute_entity_query(
@@ -228,7 +168,6 @@ def _execute_entity_query(
     root: Path,
     argv: list[str] | None,
     started_ms: float,
-    index_cache: IndexCache | None,
 ) -> CqResult:
     """Execute an entity-based query."""
     # Get paths to scan
@@ -265,7 +204,6 @@ def _execute_entity_query(
         record_types=set(plan.sg_record_types),
         root=root,
         globs=scope_globs,
-        index_cache=index_cache,
     )
 
     # Phase 3: Build scan context
@@ -348,7 +286,6 @@ def _execute_pattern_query(
     root: Path,
     argv: list[str] | None,
     started_ms: float,
-    _index_cache: IndexCache | None,
 ) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules."""
     scope_globs = scope_to_globs(plan.scope)
@@ -878,53 +815,6 @@ def _apply_call_evidence(
             details["bytecode_has_target"] = call_target in bytecode_calls
 
 
-def _collect_cache_files(plan: ToolPlan, root: Path) -> list[Path]:
-    """Collect files relevant for caching."""
-    paths = scope_to_paths(plan.scope, root)
-    globs = scope_to_globs(plan.scope)
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        paths,
-        globs,
-        extensions=(".py",),
-    )
-    return result.files
-
-
-def _build_query_cache_key(
-    query: Query,
-    plan: ToolPlan,
-    root: Path,
-    tc: Toolchain,
-) -> str:
-    """Build a stable cache key for a query execution."""
-    plan_signature = {
-        "scope": msgspec.to_builtins(plan.scope),
-        "sg_record_types": sorted(plan.sg_record_types),
-        "need_symtable": plan.need_symtable,
-        "need_bytecode": plan.need_bytecode,
-        "expand_ops": [msgspec.to_builtins(exp) for exp in plan.expand_ops],
-        "is_pattern_query": plan.is_pattern_query,
-        "sg_rules": [rule.to_yaml_dict() for rule in plan.sg_rules],
-    }
-    payload = {
-        "query": msgspec.to_builtins(query),
-        "plan": plan_signature,
-        "root": str(root),
-        "toolchain": tc.to_dict(),
-        "cache_version": QUERY_CACHE_VERSION,
-    }
-    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _cache_stats_dict(query_cache: QueryCache) -> dict[str, object]:
-    stats = query_cache.stats()
-    return asdict(stats)
-
-
 def _process_import_query(
     import_records: list[SgRecord],
     query: Query,
@@ -1291,8 +1181,13 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
     if entity is None:
         return False
 
-    function_kinds = {"function", "async_function"}
-    class_kinds = {"class", "class_bases"}
+    function_kinds = {"function", "async_function", "function_typeparams"}
+    class_kinds = {
+        "class",
+        "class_bases",
+        "class_typeparams",
+        "class_typeparams_bases",
+    }
     import_kinds = {
         "import",
         "import_as",
@@ -1301,7 +1196,7 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
         "from_import_multi",
         "from_import_paren",
     }
-    decorator_kinds = function_kinds | {"class", "class_bases"}
+    decorator_kinds = function_kinds | class_kinds
 
     if entity == "function":
         return record.kind in function_kinds
@@ -1346,11 +1241,11 @@ def _matches_name(record: SgRecord, name: str) -> bool:
 
 def _extract_def_name(record: SgRecord) -> str | None:
     """Extract the name from a definition record."""
-    text = record.text
+    text = record.text.lstrip()
 
     # Match def name(...) or class name
     if record.record == "def":
-        match = re.match(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
+        match = re.search(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
         if match:
             return match.group(1)
 
@@ -1797,7 +1692,7 @@ def _call_to_finding(
 
 def _extract_call_target(call: SgRecord) -> str:
     """Extract the target name from a call record."""
-    text = call.text
+    text = call.text.lstrip()
 
     # For attribute calls (obj.method()), extract the method name
     if call.kind == "attr_call" or call.kind == "attr":
@@ -1806,7 +1701,7 @@ def _extract_call_target(call: SgRecord) -> str:
             return match.group(1)
 
     # For name calls (func()), extract the function name
-    match = re.match(r"(\w+)\s*\(", text)
+    match = re.search(r"\b(\w+)\s*\(", text)
     if match:
         return match.group(1)
 
@@ -1817,7 +1712,7 @@ def _extract_call_receiver(call: SgRecord) -> str | None:
     """Extract the receiver name for attribute calls."""
     if call.kind not in {"attr_call", "attr"}:
         return None
-    match = re.match(r"\s*(\w+)\s*\.", call.text)
+    match = re.search(r"(\w+)\s*\.", call.text.lstrip())
     if match:
         return match.group(1)
     return None

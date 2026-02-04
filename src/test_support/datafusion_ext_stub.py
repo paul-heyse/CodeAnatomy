@@ -140,6 +140,18 @@ def install_function_factory(ctx: SessionContext, payload: bytes) -> None:
     _ = (ctx, payload)
 
 
+def udf_expr(name: str, *args: object, ctx: SessionContext | None = None) -> Expr:
+    """Return a stub expression for udf_expr.
+
+    Returns
+    -------
+    Expr
+        Stub expression instance.
+    """
+    _ = (name, ctx)
+    return _stub_expr(*args)
+
+
 def install_expr_planners(ctx: SessionContext, planners: object) -> None:
     """Install stub ExprPlanner extensions.
 
@@ -151,6 +163,61 @@ def install_expr_planners(ctx: SessionContext, planners: object) -> None:
         Planner names or payload.
     """
     _ = (ctx, planners)
+
+
+def delta_scan_config_from_session(ctx: SessionContext, *_args: object) -> dict[str, object]:
+    """Return a stub Delta scan config payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Stub Delta scan config payload.
+    """
+    _ = ctx
+    return {
+        "scan_config_version": 1,
+        "file_column_name": None,
+        "enable_parquet_pushdown": False,
+        "schema_force_view_types": False,
+        "wrap_partition_values": False,
+        "has_schema": False,
+        "schema_ipc": None,
+    }
+
+
+def capabilities_snapshot() -> dict[str, object]:
+    """Return a stub capabilities snapshot payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Stub capabilities snapshot payload.
+    """
+    return {
+        "stub": True,
+        "datafusion_version": None,
+        "arrow_version": None,
+        "plugin_abi": {"major": None, "minor": None},
+        "udf_registry": {
+            "scalar": 0,
+            "aggregate": 0,
+            "window": 0,
+            "table": 0,
+            "custom": 0,
+            "hash": "",
+        },
+    }
+
+
+def arrow_stream_to_batches(obj: object) -> object:
+    """Return a stub Arrow stream conversion result.
+
+    Returns
+    -------
+    object
+        Stub conversion result.
+    """
+    return obj
 
 
 def install_delta_table_factory(ctx: SessionContext, name: str | None = None) -> None:
@@ -1007,12 +1074,15 @@ def col_to_byte(line_text: Expr, col_index: Expr, col_unit: Expr) -> Expr:
 
 __all__ = [
     "arrow_metadata",
+    "arrow_stream_to_batches",
+    "capabilities_snapshot",
     "cdf_change_rank",
     "cdf_is_delete",
     "cdf_is_upsert",
     "col_to_byte",
     "count_distinct_agg",
     "create_df_plugin_table_provider",
+    "delta_scan_config_from_session",
     "first_value_agg",
     "install_delta_table_factory",
     "install_expr_planners",
@@ -1055,6 +1125,7 @@ __all__ = [
     "string_agg",
     "struct_pick",
     "udf_docs_snapshot",
+    "udf_expr",
     "union_extract",
     "union_tag",
     "utf8_normalize",

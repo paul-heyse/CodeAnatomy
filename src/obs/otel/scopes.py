@@ -11,6 +11,7 @@ SCOPE_NORMALIZE = ScopeName.NORMALIZE
 SCOPE_PLANNING = ScopeName.PLANNING
 SCOPE_SCHEDULING = ScopeName.SCHEDULING
 SCOPE_DATAFUSION = ScopeName.DATAFUSION
+SCOPE_STORAGE = ScopeName.STORAGE
 SCOPE_HAMILTON = ScopeName.HAMILTON
 SCOPE_CPG = ScopeName.CPG
 SCOPE_OBS = ScopeName.OBS
@@ -21,6 +22,7 @@ _LAYER_SCOPE_MAP = {
     "inputs": SCOPE_EXTRACT,
     "plan": SCOPE_PLANNING,
     "execution": SCOPE_HAMILTON,
+    "storage": SCOPE_STORAGE,
     "outputs": SCOPE_PIPELINE,
     "quality": SCOPE_PIPELINE,
     "params": SCOPE_PIPELINE,
@@ -59,5 +61,6 @@ __all__ = [
     "SCOPE_ROOT",
     "SCOPE_SCHEDULING",
     "SCOPE_SEMANTICS",
+    "SCOPE_STORAGE",
     "scope_for_layer",
 ]

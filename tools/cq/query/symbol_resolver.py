@@ -168,11 +168,11 @@ def _build_symbol_key(record: SgRecord, root: Path) -> SymbolKey | None:
 
 def _extract_def_name(record: SgRecord) -> str | None:
     """Extract the name from a definition record."""
-    text = record.text
+    text = record.text.lstrip()
 
     # Match def name(...) or class name
     if record.record == "def":
-        match = re.match(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
+        match = re.search(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
         if match:
             return match.group(1)
 
@@ -313,7 +313,7 @@ def resolve_call_target(
 
 def _extract_call_target(call: SgRecord) -> str:
     """Extract the target name from a call record."""
-    text = call.text
+    text = call.text.lstrip()
 
     # For attribute calls (obj.method()), extract the method name
     if call.kind in ("attr_call", "attr"):
@@ -322,7 +322,7 @@ def _extract_call_target(call: SgRecord) -> str:
             return match.group(1)
 
     # For name calls (func()), extract the function name
-    match = re.match(r"(\w+)\s*\(", text)
+    match = re.search(r"\b(\w+)\s*\(", text)
     if match:
         return match.group(1)
 

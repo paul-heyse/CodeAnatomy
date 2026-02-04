@@ -24,7 +24,7 @@ use datafusion_ffi::udtf::{FFI_TableFunction, ForeignTableFunction};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyTuple};
 
-use crate::errors::{py_datafusion_err, to_datafusion_err};
+use crate::errors::{py_datafusion_err, pyerr_to_dferr};
 use crate::expr::PyExpr;
 use crate::table::PyTable;
 use crate::utils::validate_pycapsule;
@@ -100,7 +100,7 @@ fn call_python_table_function(
 
         Ok::<Arc<dyn TableProvider>, PyErr>(PyTable::new(provider)?.table)
     })
-    .map_err(to_datafusion_err)
+    .map_err(|err| pyerr_to_dferr("TableFunction call failed", err))
 }
 
 impl TableFunctionImpl for PyTableFunction {

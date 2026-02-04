@@ -6,9 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
-from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.index.diskcache_index_cache import IndexCache
 from tools.cq.query.executor import execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -36,24 +34,6 @@ def toolchain() -> Toolchain:
         Detected toolchain instance.
     """
     return Toolchain.detect()
-
-
-@pytest.fixture
-def index_cache(repo_root: Path) -> IndexCache:
-    """Build an IndexCache for performance testing.
-
-    Parameters
-    ----------
-    repo_root : Path
-        Repository root path.
-
-    Returns
-    -------
-    IndexCache
-        Configured cache instance.
-    """
-    profile = default_cq_diskcache_profile()
-    return IndexCache(repo_root=repo_root, rule_version="test", profile=profile)
 
 
 @pytest.mark.benchmark
@@ -120,8 +100,6 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
         Repository root path.
     """
     start = time.perf_counter()
-    profile = default_cq_diskcache_profile()
-    cache = IndexCache(repo_root=repo_root, rule_version="benchmark", profile=profile)
     # Trigger index build by executing a query
     query_text = "entity=class"
     query = parse_query(query_text)
@@ -129,7 +107,6 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
     _ = execute_plan(plan, query, toolchain, repo_root)
     elapsed = time.perf_counter() - start
 
-    assert cache is not None
     # Index build should be reasonable - adjust threshold based on repo size
     # For CodeAnatomy (~100k LOC), expect <60s on typical hardware
     assert elapsed < 60.0, f"Index build took {elapsed:.2f}s, expected <60s"

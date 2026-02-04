@@ -27,6 +27,7 @@ from datafusion_engine.delta.scan_config import (
     delta_scan_identity_hash,
 )
 from datafusion_engine.lineage.datafusion import ScanLineage
+from obs.otel.run_context import get_run_id
 from obs.otel.scopes import SCOPE_SCHEDULING
 from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaScanConfigSnapshot
@@ -596,6 +597,7 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
         DeltaScanPlanArtifact,
         record_delta_scan_plan,
     )
+    from datafusion_engine.lineage.diagnostics import record_artifact
 
     total_files = getattr(request.pruning, "total_files", 0)
     candidate_files = getattr(request.pruning, "candidate_count", 0)
@@ -614,6 +616,26 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
             projected_columns=request.lineage.projected_columns,
             delta_protocol=request.payload.delta_protocol,
         ),
+    )
+    compatibility = delta_protocol_compatibility(
+        request.payload.delta_protocol,
+        request.runtime_profile.delta_protocol_support,
+    )
+    protocol_compatible = compatibility.compatible
+    severity = "info" if protocol_compatible is not False else "warn"
+    record_artifact(
+        request.runtime_profile,
+        "scan_unit_pruning_v1",
+        {
+            "dataset": request.dataset_name,
+            "total_files": int(total_files),
+            "candidate_files": int(candidate_files),
+            "pruned_files": int(pruned_files),
+            "protocol_compatible": protocol_compatible,
+            "run_id": get_run_id(),
+            "diagnostic.severity": severity,
+            "diagnostic.category": "scan_pruning",
+        },
     )
 
 

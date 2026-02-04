@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -21,10 +22,11 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from obs.otel.run_context import reset_run_id, set_run_id
+from obs.otel.logs import emit_diagnostics_event
+from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
 from obs.otel.scopes import SCOPE_PIPELINE
 from obs.otel.tracing import record_exception, set_span_attributes, stage_span
-from semantics.incremental import IncrementalConfig
+from semantics.incremental import SemanticIncrementalConfig
 from utils.uuid_factory import uuid7_str
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
@@ -56,7 +58,7 @@ class PipelineExecutionOptions:
     work_dir: PathLike | None = None
     scip_index_config: ScipIndexConfig | None = None
     scip_identity_overrides: ScipIdentityOverrides | None = None
-    incremental_config: IncrementalConfig | None = None
+    incremental_config: SemanticIncrementalConfig | None = None
     incremental_impact_strategy: str | None = None
     execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
     executor_config: ExecutorConfig | None = None
@@ -227,7 +229,13 @@ def _record_cache_run_summary(
     profile = profile_spec.datafusion
     cache_root = _cache_output_root_for_options(options)
     if cache_root is not None and profile.cache_output_root is None:
-        profile = replace(profile, cache_output_root=cache_root)
+        profile = replace(
+            profile,
+            policies=replace(
+                profile.policies,
+                cache_output_root=cache_root,
+            ),
+        )
     summary = CacheRunSummary(
         run_id=stats.run_id,
         start_time_unix_ms=stats.start_time_unix_ms,
@@ -300,7 +308,9 @@ def execute_pipeline(
                 record_exception(span, exc)
                 raise
             set_span_attributes(span, {"codeanatomy.repo_root": str(repo_root_path)})
-            results_map = cast("Mapping[str, JsonDict | None]", results)
+            results_map = cast("Mapping[str, object]", results)
+            _emit_plan_execution_diff(results_map)
+            results_map = cast("Mapping[str, JsonDict | None]", results_map)
             return {name: results_map.get(name) for name in output_names}
     finally:
         try:
@@ -337,15 +347,111 @@ def _resolve_execution_outputs(
     list[str],
     tuple[str, ...],
 ]:
+    internal_outputs = ("execution_plan", "runtime_artifacts")
     output_nodes = cast(
         "list[PipelineFinalVar]",
         list(options.outputs or FULL_PIPELINE_OUTPUTS),
     )
     materializer_ids = [materializer.id for materializer in build_hamilton_materializers()]
     output_names = list(_output_names(output_nodes))
-    execution_outputs = list(output_nodes) + materializer_ids
+    execution_outputs = list(output_nodes) + materializer_ids + list(internal_outputs)
     materialized_outputs = tuple(dict.fromkeys((*output_names, *materializer_ids)))
     return output_names, execution_outputs, materializer_ids, materialized_outputs
+
+
+def _emit_plan_execution_diff(results: Mapping[str, object]) -> None:
+    plan = results.get("execution_plan")
+    runtime_artifacts = results.get("runtime_artifacts")
+    if plan is None or runtime_artifacts is None:
+        return
+    active_tasks = getattr(plan, "active_tasks", None)
+    execution_order = getattr(runtime_artifacts, "execution_order", None)
+    if not isinstance(active_tasks, frozenset) or not isinstance(execution_order, list):
+        return
+    expected = set(active_tasks)
+    executed = {_base_task_name(name) for name in execution_order if isinstance(name, str)}
+    missing = sorted(expected - executed)
+    unexpected = sorted(executed - expected)
+    missing_fingerprints = _extract_task_mapping(plan, "plan_fingerprints", missing)
+    missing_signatures = _extract_task_mapping(plan, "plan_task_signatures", missing)
+    blocked_datasets, blocked_scan_units = _blocked_scan_units(plan, missing)
+    emit_diagnostics_event(
+        "plan_execution_diff_v1",
+        payload={
+            "run_id": get_run_id(),
+            "timestamp_ns": time.time_ns(),
+            "plan_signature": _plan_signature_value(plan, "plan_signature"),
+            "task_dependency_signature": _plan_signature_value(plan, "task_dependency_signature"),
+            "reduced_task_dependency_signature": _plan_signature_value(
+                plan, "reduced_task_dependency_signature"
+            ),
+            "expected_task_count": len(expected),
+            "executed_task_count": len(executed),
+            "missing_task_count": len(missing),
+            "unexpected_task_count": len(unexpected),
+            "missing_tasks": missing,
+            "unexpected_tasks": unexpected,
+            "missing_task_fingerprints": missing_fingerprints,
+            "missing_task_signatures": missing_signatures,
+            "blocked_datasets": blocked_datasets,
+            "blocked_scan_units": blocked_scan_units,
+        },
+        event_kind="artifact",
+    )
+
+
+def _base_task_name(task_name: str) -> str:
+    if ":" not in task_name:
+        return task_name
+    return task_name.split(":", 1)[0]
+
+
+def _extract_task_mapping(
+    plan: object,
+    attribute: str,
+    tasks: Sequence[str],
+) -> dict[str, str]:
+    values = getattr(plan, attribute, None)
+    if not isinstance(values, Mapping):
+        return {}
+    result: dict[str, str] = {}
+    for task in tasks:
+        value = values.get(task)
+        if isinstance(value, str):
+            result[task] = value
+    return result
+
+
+def _blocked_scan_units(
+    plan: object,
+    tasks: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    scan_names_by_task = getattr(plan, "scan_task_names_by_task", None)
+    scan_units_by_name = getattr(plan, "scan_task_units_by_name", None)
+    if not isinstance(scan_names_by_task, Mapping) or not isinstance(scan_units_by_name, Mapping):
+        return [], []
+    blocked_datasets: set[str] = set()
+    blocked_scan_units: set[str] = set()
+    for task in tasks:
+        scan_names = scan_names_by_task.get(task)
+        if not isinstance(scan_names, Sequence) or isinstance(scan_names, (str, bytes, bytearray)):
+            continue
+        for scan_name in scan_names:
+            if not isinstance(scan_name, str):
+                continue
+            blocked_scan_units.add(scan_name)
+            scan_unit = scan_units_by_name.get(scan_name)
+            dataset_name = getattr(scan_unit, "dataset_name", None)
+            if isinstance(dataset_name, str):
+                blocked_datasets.add(dataset_name)
+    return sorted(blocked_datasets), sorted(blocked_scan_units)
+
+
+def _plan_signature_value(plan: object, attribute: str) -> str | None:
+    value = getattr(plan, attribute, None)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 __all__ = [

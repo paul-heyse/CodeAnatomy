@@ -89,3 +89,7 @@ pub fn py_datafusion_err(e: impl Debug) -> PyErr {
 pub fn py_unsupported_variant_err(e: impl Debug) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{e:?}"))
 }
+
+pub fn pyerr_to_dferr(context: &str, err: PyErr) -> InnerDataFusionError {
+    InnerDataFusionError::Execution(format!("{context}: {err}"))
+}

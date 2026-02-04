@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from core.fingerprinting import CompositeFingerprint
 from utils.hashing import hash_sha256_hex
 
 if TYPE_CHECKING:
@@ -59,8 +60,36 @@ class PlanFingerprint:
             and self.schema_hash == other.schema_hash
         )
 
+    def composite_fingerprint(self) -> CompositeFingerprint:
+        """Return a composite fingerprint for cache keys and diagnostics.
 
-def _hash_bytes(data: bytes, *, length: int = 16) -> str:
+        Returns
+        -------
+        CompositeFingerprint
+            Composite fingerprint for this plan.
+        """
+        components = {
+            "view_name": self.view_name,
+            "logical_plan_hash": self.logical_plan_hash,
+        }
+        if self.schema_hash:
+            components["schema_hash"] = self.schema_hash
+        if self.substrait_hash:
+            components["substrait_hash"] = self.substrait_hash
+        return CompositeFingerprint.from_components(1, **components)
+
+    def cache_key(self, *, prefix: str = "plan_fingerprint") -> str:
+        """Return a deterministic cache key derived from the composite fingerprint.
+
+        Returns
+        -------
+        str
+            Deterministic cache key.
+        """
+        return self.composite_fingerprint().as_cache_key(prefix=prefix)
+
+
+def _hash_bytes(data: bytes, *, length: int = 32) -> str:
     """Compute SHA256 hash of bytes, truncated for readability.
 
     Parameters
@@ -78,7 +107,7 @@ def _hash_bytes(data: bytes, *, length: int = 16) -> str:
     return hash_sha256_hex(data, length=length)
 
 
-def _hash_string(s: str, *, length: int = 16) -> str:
+def _hash_string(s: str, *, length: int = 32) -> str:
     """Compute SHA256 hash of a string.
 
     Parameters

@@ -33,25 +33,13 @@ static READ_CSV_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_TABLE,
         "Read CSV files into a table provider.",
-        "read_csv(path [, limit] [, schema_ipc] [, has_header] [, delimiter] [, compression])",
+        "read_csv(path [, limit] [, options_json])",
     )
     .with_argument("path", "Path or URL to CSV files.")
     .with_argument("limit", "Optional maximum rows to return.")
     .with_argument(
-        "schema_ipc",
-        "Optional Arrow schema IPC bytes (binary literal or hex string) to override inference.",
-    )
-    .with_argument(
-        "has_header",
-        "Optional boolean indicating CSV header presence.",
-    )
-    .with_argument(
-        "delimiter",
-        "Optional single-character delimiter (defaults to comma).",
-    )
-    .with_argument(
-        "compression",
-        "Optional compression codec name (e.g., gzip, bz2, zstd).",
+        "options_json",
+        "Optional JSON string for schema, partitioning, compression, and sort options.",
     )
     .build()
 });
@@ -60,25 +48,14 @@ static READ_PARQUET_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_TABLE,
         "Read Parquet files into a table provider.",
-        "read_parquet(path [, limit] [, schema_ipc])",
+        "read_parquet(path [, limit] [, options_json])",
     )
     .with_argument("path", "Path or URL to Parquet files.")
     .with_argument("limit", "Optional maximum rows to return.")
     .with_argument(
-        "schema_ipc",
-        "Optional Arrow schema IPC bytes (binary literal or hex string) to override inference.",
+        "options_json",
+        "Optional JSON string for schema, partitioning, pruning, and sort options.",
     )
-    .build()
-});
-
-static RANGE_TABLE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_TABLE,
-        "Return a range of integers as a table.",
-        "range_table(start, end)",
-    )
-    .with_argument("start", "Start of the range (inclusive).")
-    .with_argument("end", "End of the range (exclusive).")
     .build()
 });
 
@@ -124,7 +101,6 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
         ("udf_docs", &UDF_DOCS_DOC),
         ("read_csv", &READ_CSV_DOC),
         ("read_parquet", &READ_PARQUET_DOC),
-        ("range_table", &RANGE_TABLE_DOC),
         ("list_files_cache", &LIST_FILES_CACHE_DOC),
         ("metadata_cache", &METADATA_CACHE_DOC),
         ("predicate_cache", &PREDICATE_CACHE_DOC),

@@ -22,8 +22,6 @@ from tools.cq.query.ir import Scope
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.index.diskcache_query_cache import QueryCache
-    from tools.cq.index.diskcache_index_cache import IndexCache
 
 TargetKind = Literal["function", "class", "method", "module", "path"]
 
@@ -65,9 +63,6 @@ class BundleContext:
     param: str | None = None
     signature: str | None = None
     bytecode_show: str | None = None
-    use_cache: bool = True
-    index_cache: IndexCache | None = None
-    query_cache: QueryCache | None = None
 
 
 @dataclass(frozen=True)
@@ -140,9 +135,6 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
         ctx.tc,
         root,
         argv=ctx.argv,
-        index_cache=ctx.index_cache,
-        query_cache=ctx.query_cache,
-        use_cache=ctx.use_cache,
     )
     files = set()
     for finding in result.key_findings:

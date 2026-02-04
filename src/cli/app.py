@@ -17,7 +17,7 @@ from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from cli.context import RunContext
 from cli.groups import admin_group, observability_group, session_group
 from cli.result_action import cli_result_action
-from cli.telemetry import invoke_with_telemetry
+from cli.telemetry import apply_telemetry_config, invoke_with_telemetry
 from cli.validation import validate_config_mutual_exclusion
 from core_types import JsonValue
 from obs.otel import OtelBootstrapOptions
@@ -45,6 +45,11 @@ Tips:
 Documentation: https://github.com/codeanatomy/codeanatomy
 """
 
+
+def _telemetry_config_hook(*_args: object, **_kwargs: object) -> None:
+    apply_telemetry_config()
+
+
 app = App(
     name="codeanatomy",
     help="CodeAnatomy CPG Builder - Inference-driven Code Property Graph generation.",
@@ -65,6 +70,7 @@ app = App(
             must_exist=False,
             search_parents=True,
         ),
+        _telemetry_config_hook,
     ],
     exit_on_error=True,
     print_error=True,
@@ -539,7 +545,7 @@ def meta_launcher(
     config_resolution = resolve_config(session.config_file)
     config_contents = dict(config_resolution.contents)
     validate_config_mutual_exclusion(config_contents)
-    app.config = build_cyclopts_config(config_contents)
+    app.config = [*build_cyclopts_config(config_contents), _telemetry_config_hook]
 
     effective_config_contents = dict(config_contents)
     otel_cli_overrides = _build_otel_cli_overrides(observability)

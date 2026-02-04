@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import logging
 import re
 import time
@@ -75,6 +76,9 @@ from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
+from datafusion_engine.delta.protocol import (
+    delta_protocol_compatibility,
+)
 from datafusion_engine.delta.scan_config import (
     delta_scan_config_snapshot_from_options,
 )
@@ -108,6 +112,7 @@ from datafusion_engine.tables.metadata import (
     table_provider_metadata,
 )
 from datafusion_engine.views.graph import arrow_schema_from_df
+from obs.otel.run_context import get_run_id
 from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
@@ -121,6 +126,7 @@ from schema_spec.system import (
 from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
 from utils.validation import find_missing, validate_required_items
+from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -1127,6 +1133,19 @@ def register_dataset_df(
     )
 
     resolved = options or DatasetRegistrationOptions()
+    if resolved.runtime_profile is not None:
+        from datafusion_engine.registry_facade import registry_facade_for_context
+
+        facade = registry_facade_for_context(
+            ctx,
+            runtime_profile=resolved.runtime_profile,
+        )
+        return facade.register_dataset_df(
+            name=name,
+            location=location,
+            cache_policy=resolved.cache_policy,
+            overwrite=resolved.overwrite,
+        )
     existing = False
     if resolved.overwrite:
         from datafusion_engine.schema.introspection import table_names_snapshot
@@ -1265,7 +1284,8 @@ def _build_registration_context(
     # profile's physical expression adapter factory. When enabled, scan-time
     # adapters handle schema drift resolution at the TableProvider boundary.
     schema_adapter_enabled = (
-        runtime_profile is not None and runtime_profile.enable_schema_evolution_adapter
+        runtime_profile is not None
+        and runtime_profile.features.enable_schema_evolution_adapter
     )
     metadata = TableProviderMetadata(
         table_name=name,
@@ -1314,8 +1334,8 @@ def _prepare_runtime_profile(
     runtime_profile = _populate_schema_adapter_factories(runtime_profile)
     _ensure_catalog_schema(
         ctx,
-        catalog=runtime_profile.default_catalog,
-        schema=runtime_profile.default_schema,
+        catalog=runtime_profile.catalog.default_catalog,
+        schema=runtime_profile.catalog.default_schema,
     )
     return runtime_profile
 
@@ -1685,6 +1705,12 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             details=artifact_details,
         ),
     )
+    _record_delta_log_health(
+        context.runtime_profile,
+        name=context.name,
+        location=location,
+        resolution=resolution,
+    )
     _update_table_provider_scan_config(
         context.ctx,
         name=context.name,
@@ -1726,6 +1752,7 @@ def _delta_provider_artifact_payload(
     delta_scan_ignored = context.registration_path == "ddl" and context.delta_scan is not None
     return {
         "path": str(location.path),
+        "format": location.format,
         "registration_path": context.registration_path,
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
@@ -1746,6 +1773,130 @@ def _delta_provider_artifact_payload(
         "delta_pruning_applied": pruning_applied,
         "delta_pruned_files": pruned_files_count,
     }
+
+
+def _record_delta_log_health(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    name: str,
+    location: DatasetLocation,
+    resolution: DatasetResolution,
+) -> None:
+    if runtime_profile is None:
+        return
+    if location.format != "delta":
+        return
+    payload = _delta_log_health_payload(
+        name=name,
+        location=location,
+        resolution=resolution,
+        runtime_profile=runtime_profile,
+    )
+    record_artifact(runtime_profile, "delta_log_health_v1", payload)
+
+
+def _delta_log_health_payload(
+    *,
+    name: str,
+    location: DatasetLocation,
+    resolution: DatasetResolution,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> dict[str, object]:
+    delta_log_present, checkpoint_version, log_reason, log_count = _delta_log_status(location)
+    snapshot = resolution.delta_snapshot
+    min_reader = _snapshot_int(snapshot, "min_reader_version")
+    min_writer = _snapshot_int(snapshot, "min_writer_version")
+    reader_features = _snapshot_features(snapshot, "reader_features")
+    writer_features = _snapshot_features(snapshot, "writer_features")
+    table_features = sorted(set(reader_features) | set(writer_features))
+    compatibility = delta_protocol_compatibility(snapshot, runtime_profile.delta_protocol_support)
+    protocol_compatible = compatibility.compatible
+    severity = _delta_health_severity(
+        delta_log_present=delta_log_present,
+        protocol_compatible=protocol_compatible,
+    )
+    return {
+        "dataset": name,
+        "path": str(location.path),
+        "delta_log_present": delta_log_present,
+        "delta_log_reason": log_reason,
+        "delta_log_file_count": log_count,
+        "last_checkpoint_version": checkpoint_version,
+        "min_reader_version": min_reader,
+        "min_writer_version": min_writer,
+        "reader_features": reader_features,
+        "writer_features": writer_features,
+        "table_features": table_features,
+        "protocol_compatible": protocol_compatible,
+        "protocol_reason": compatibility.reason,
+        "missing_reader_features": list(compatibility.missing_reader_features),
+        "missing_writer_features": list(compatibility.missing_writer_features),
+        "run_id": get_run_id(),
+        "diagnostic.severity": severity,
+        "diagnostic.category": "delta_protocol",
+    }
+
+
+def _delta_log_status(
+    location: DatasetLocation,
+) -> tuple[bool | None, int | None, str | None, int | None]:
+    path_text = str(location.path)
+    parsed = urlparse(path_text)
+    if parsed.scheme and parsed.scheme != "file":
+        return None, None, "remote_path", None
+    path = Path(parsed.path if parsed.scheme == "file" and parsed.path else path_text)
+    delta_log = path / "_delta_log"
+    if not delta_log.exists():
+        return False, None, "delta_log_missing", None
+    try:
+        json_files = list(delta_log.glob("*.json"))
+    except OSError:
+        return False, None, "delta_log_unreadable", None
+    if not json_files:
+        return False, None, "delta_log_empty", 0
+    checkpoint_version = _read_last_checkpoint_version(delta_log)
+    return True, checkpoint_version, None, len(json_files)
+
+
+def _read_last_checkpoint_version(delta_log: Path) -> int | None:
+    checkpoint = delta_log / "_last_checkpoint"
+    if not checkpoint.exists():
+        return None
+    try:
+        with checkpoint.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(payload, Mapping):
+        return coerce_int(payload.get("version"))
+    return None
+
+
+def _delta_health_severity(
+    *,
+    delta_log_present: bool | None,
+    protocol_compatible: bool | None,
+) -> str:
+    if protocol_compatible is False:
+        return "error"
+    if delta_log_present is False:
+        return "warn"
+    return "info"
+
+
+def _snapshot_int(snapshot: Mapping[str, object] | None, key: str) -> int | None:
+    if snapshot is None:
+        return None
+    return coerce_int(snapshot.get(key))
+
+
+def _snapshot_features(snapshot: Mapping[str, object] | None, key: str) -> list[str]:
+    if snapshot is None:
+        return []
+    values = snapshot.get(key)
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        return [str(item) for item in values if str(item)]
+    return []
 
 
 def _delta_cdf_artifact_payload(
@@ -1879,12 +2030,31 @@ class _TableProviderArtifact:
     details: Mapping[str, object] | None = None
 
 
+@dataclass(frozen=True)
+class _ProviderModeContext:
+    name: str
+    provider_kind: str
+    provider: object | None
+    capsule_id: str | None
+    details: Mapping[str, object] | None
+
+
 def _record_table_provider_artifact(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
     artifact: _TableProviderArtifact,
 ) -> None:
     capsule_id = _provider_capsule_id(artifact.provider, source=artifact.source)
+    _record_provider_mode_diagnostics(
+        runtime_profile=runtime_profile,
+        context=_ProviderModeContext(
+            name=artifact.name,
+            provider_kind=artifact.provider_kind,
+            provider=artifact.provider,
+            capsule_id=capsule_id,
+            details=artifact.details,
+        ),
+    )
     payload: dict[str, object] = {
         "name": artifact.name,
         "provider": artifact.provider_kind,
@@ -1898,6 +2068,43 @@ def _record_table_provider_artifact(
     if artifact.details:
         payload.update(artifact.details)
     record_artifact(runtime_profile, "datafusion_table_providers_v1", payload)
+
+
+def _record_provider_mode_diagnostics(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    context: _ProviderModeContext,
+) -> None:
+    if runtime_profile is None:
+        return
+    format_name = None
+    if context.details is not None:
+        format_value = context.details.get("format")
+        if isinstance(format_value, str):
+            format_name = format_value
+    provider_class = type(context.provider).__name__ if context.provider is not None else None
+    ffi_table_provider = context.capsule_id is not None
+    severity = _provider_mode_severity(format_name, context.provider_kind)
+    payload = {
+        "dataset": context.name,
+        "provider_mode": context.provider_kind,
+        "provider_class": provider_class,
+        "ffi_table_provider": ffi_table_provider,
+        "capsule_id": context.capsule_id,
+        "run_id": get_run_id(),
+        "diagnostic.severity": severity,
+        "diagnostic.category": "datafusion_provider",
+    }
+    record_artifact(runtime_profile, "dataset_provider_mode_v1", payload)
+
+
+def _provider_mode_severity(format_name: str | None, provider_kind: str) -> str:
+    if format_name == "delta" and provider_kind not in {
+        "delta_table_provider",
+        "cdf_table_provider",
+    }:
+        return "warn"
+    return "info"
 
 
 def _update_table_provider_capabilities(
@@ -2322,13 +2529,16 @@ def _validate_ordering_contract(
 def _populate_schema_adapter_factories(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> DataFusionRuntimeProfile:
-    if not runtime_profile.enable_schema_evolution_adapter:
+    if not runtime_profile.features.enable_schema_evolution_adapter:
         return runtime_profile
-    if runtime_profile.schema_adapter_factories or not runtime_profile.registry_catalogs:
+    if (
+        runtime_profile.policies.schema_adapter_factories
+        or not runtime_profile.catalog.registry_catalogs
+    ):
         return runtime_profile
     factories: dict[str, object] = {}
     adapter_factory: object | None = None
-    for catalog in runtime_profile.registry_catalogs.values():
+    for catalog in runtime_profile.catalog.registry_catalogs.values():
         for name in catalog.names():
             location = catalog.get(name)
             spec = _resolve_dataset_spec(name, location)
@@ -2341,10 +2551,16 @@ def _populate_schema_adapter_factories(
             factories.setdefault(name, adapter_factory)
     if not factories:
         return runtime_profile
-    merged = dict(runtime_profile.schema_adapter_factories)
+    merged = dict(runtime_profile.policies.schema_adapter_factories)
     for name, factory in factories.items():
         merged.setdefault(name, factory)
-    return replace(runtime_profile, schema_adapter_factories=merged)
+    return replace(
+        runtime_profile,
+        policies=replace(
+            runtime_profile.policies,
+            schema_adapter_factories=merged,
+        ),
+    )
 
 
 def _resolve_expr_adapter_factory(
@@ -2357,14 +2573,17 @@ def _resolve_expr_adapter_factory(
     if scan is not None and scan.expr_adapter_factory is not None:
         return scan.expr_adapter_factory
     if runtime_profile is not None:
-        factory = runtime_profile.schema_adapter_factories.get(dataset_name)
+        factory = runtime_profile.policies.schema_adapter_factories.get(dataset_name)
         if factory is not None:
             return factory
     spec = _resolve_dataset_spec(dataset_name, location)
     if spec is not None and _requires_schema_evolution_adapter(spec.evolution_spec):
         return _schema_evolution_adapter_factory()
-    if runtime_profile is not None and runtime_profile.physical_expr_adapter_factory is not None:
-        return runtime_profile.physical_expr_adapter_factory
+    if (
+        runtime_profile is not None
+        and runtime_profile.policies.physical_expr_adapter_factory is not None
+    ):
+        return runtime_profile.policies.physical_expr_adapter_factory
     return None
 
 

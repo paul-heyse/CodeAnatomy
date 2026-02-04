@@ -6,7 +6,12 @@ import importlib.util
 
 import pytest
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DiagnosticsConfig,
+    FeatureGatesConfig,
+    PolicyBundleConfig,
+)
 from datafusion_engine.sql.guard import safe_sql
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.diagnostics import diagnostic_profile
@@ -20,9 +25,9 @@ def test_expr_planner_install_records_event() -> None:
     """Record ExprPlanner installation attempts."""
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
-            diagnostics_sink=diagnostics,
-            enable_expr_planners=True,
-            expr_planner_names=("codeintel_ops",),
+            diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+            features=FeatureGatesConfig(enable_expr_planners=True),
+            policies=PolicyBundleConfig(expr_planner_names=("codeintel_ops",)),
         )
     )
     has_extension = importlib.util.find_spec("datafusion_ext") is not None

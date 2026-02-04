@@ -21,8 +21,11 @@ use std::time::Duration;
 
 use datafusion::common::ScalarValue;
 use datafusion::datasource::TableProvider;
+use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Volatility;
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::pyarrow::ToPyArrow;
 use datafusion_ffi::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -192,4 +195,12 @@ pub fn py_obj_to_scalar_value(py: Python, obj: Py<PyAny>) -> PyResult<ScalarValu
 
     // Convert PyScalarValue to ScalarValue
     Ok(py_scalar.into())
+}
+
+pub fn to_pyarrow_array(py: Python<'_>, array: &ArrayRef) -> Result<Py<PyAny>, DataFusionError> {
+    array
+        .to_data()
+        .to_pyarrow(py)
+        .map(|obj| obj.unbind())
+        .map_err(|err| DataFusionError::Execution(format!("PyArrow export failed: {err}")))
 }

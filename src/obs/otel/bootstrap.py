@@ -564,9 +564,13 @@ def _build_logger_provider(
     log_correlation: bool,
 ) -> LoggerProvider:
     logger_provider = LoggerProvider(resource=resource)
-    from obs.otel.processors import RunIdLogRecordProcessor
+    from obs.otel.processors import (
+        LogRecordAttributeLimitProcessor,
+        RunIdLogRecordProcessor,
+    )
 
     logger_provider.add_log_record_processor(RunIdLogRecordProcessor())
+    logger_provider.add_log_record_processor(LogRecordAttributeLimitProcessor())
     use_in_memory = use_test_mode or (
         diagnostics_bundle_enabled() and not _otlp_endpoint_available("logs")
     )

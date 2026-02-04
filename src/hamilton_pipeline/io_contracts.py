@@ -36,7 +36,7 @@ from extract.scanning.repo_scope import RepoScopeOptions
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag, tag_outputs_by_name
 from hamilton_pipeline.types import OutputConfig, RepoScanConfig
 from schema_spec.system import DeltaMaintenancePolicy
-from semantics.incremental import IncrementalConfig
+from semantics.incremental import SemanticIncrementalConfig
 from serde_artifacts import (
     ExtractErrorsArtifact,
     NormalizeOutputsArtifact,
@@ -238,7 +238,7 @@ def _rows(table: TableLike | RecordBatchReaderLike) -> int:
 def _repo_scan_options(
     config: RepoScanConfig,
     *,
-    incremental: IncrementalConfig | None,
+    incremental: SemanticIncrementalConfig | None,
     cache_salt: str,
 ) -> RepoScanOptions:
     repo_id = incremental.repo_id if incremental is not None else None
@@ -273,7 +273,7 @@ def repo_files(
     repo_scan_config: RepoScanConfig,
     runtime_profile_spec: RuntimeProfileSpec,
     cache_salt: str,
-    incremental_config: IncrementalConfig | None = None,
+    incremental_config: SemanticIncrementalConfig | None = None,
 ) -> tuple[TableLike, dict[str, object]]:
     """Load repo scan outputs as a TableLike plus metadata.
 

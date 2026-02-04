@@ -52,23 +52,23 @@ def semantic_runtime_from_profile(
 
     # Extract cache policy overrides
     cache_overrides: dict[str, CachePolicy] = {}
-    semantic_cache = profile.semantic_cache_overrides
+    semantic_cache = profile.data_sources.semantic_cache_overrides
     cache_overrides.update(
         {name: policy for name, policy in semantic_cache.items() if _is_cache_policy(policy)}
     )
 
     # Extract CDF configuration
-    cdf_enabled = getattr(profile, "cdf_enabled", False)
-    cdf_cursor_store = getattr(profile, "cdf_cursor_store", None)
+    cdf_enabled = profile.data_sources.cdf_enabled
+    cdf_cursor_store = profile.data_sources.cdf_cursor_store
 
     # Extract storage options (prefer delta store policy settings)
     storage_options = None
-    store_policy = getattr(profile, "delta_store_policy", None)
+    store_policy = profile.policies.delta_store_policy
     if store_policy is not None:
         storage_options = dict(store_policy.storage_options)
 
     # Extract schema evolution setting
-    schema_evolution_enabled = getattr(profile, "enable_schema_evolution_adapter", True)
+    schema_evolution_enabled = profile.features.enable_schema_evolution_adapter
 
     return SemanticRuntimeConfig(
         output_locations=output_locations,
@@ -106,7 +106,9 @@ def apply_semantic_runtime_config(
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
 
     # Build updated semantic output locations from config
-    semantic_output_locations: dict[str, DatasetLocation] = dict(profile.semantic_output_locations)
+    semantic_output_locations: dict[str, DatasetLocation] = dict(
+        profile.data_sources.semantic_output_locations
+    )
     for name, path in semantic_config.output_locations.items():
         if name not in semantic_output_locations:
             semantic_output_locations[name] = DatasetLocation(
@@ -116,9 +118,9 @@ def apply_semantic_runtime_config(
             )
 
     # Update registry catalog if semantic_output_catalog_name is set
-    registry_catalogs = dict(profile.registry_catalogs)
-    if profile.semantic_output_catalog_name:
-        catalog_name = profile.semantic_output_catalog_name
+    registry_catalogs = dict(profile.catalog.registry_catalogs)
+    if profile.data_sources.semantic_output_catalog_name:
+        catalog_name = profile.data_sources.semantic_output_catalog_name
         existing_catalog = registry_catalogs.get(catalog_name)
         if existing_catalog is None:
             existing_catalog = DatasetCatalog()
@@ -135,17 +137,26 @@ def apply_semantic_runtime_config(
         registry_catalogs[catalog_name] = existing_catalog
 
     # Apply cache policy overrides - semantic config is authoritative
-    semantic_cache_overrides = dict(getattr(profile, "semantic_cache_overrides", {}) or {})
+    semantic_cache_overrides = dict(profile.data_sources.semantic_cache_overrides or {})
     semantic_cache_overrides.update(semantic_config.cache_policy_overrides)
 
     return replace(
         profile,
-        semantic_output_locations=semantic_output_locations,
-        registry_catalogs=registry_catalogs,
-        semantic_cache_overrides=semantic_cache_overrides,
-        cdf_enabled=semantic_config.cdf_enabled,
-        cdf_cursor_store=semantic_config.cdf_cursor_store,
-        enable_schema_evolution_adapter=semantic_config.schema_evolution_enabled,
+        data_sources=replace(
+            profile.data_sources,
+            semantic_output_locations=semantic_output_locations,
+            semantic_cache_overrides=semantic_cache_overrides,
+            cdf_enabled=semantic_config.cdf_enabled,
+            cdf_cursor_store=semantic_config.cdf_cursor_store,
+        ),
+        catalog=replace(
+            profile.catalog,
+            registry_catalogs=registry_catalogs,
+        ),
+        features=replace(
+            profile.features,
+            enable_schema_evolution_adapter=semantic_config.schema_evolution_enabled,
+        ),
     )
 
 

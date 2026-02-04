@@ -609,7 +609,7 @@ The Rust UDF system integrates with DataFusion through a multi-layer architectur
 4. Python captures UDF snapshot via `rust_udf_snapshot()` for fingerprinting
 
 **Key Integration Points**:
-- **datafusion_ext crate** (`rust/datafusion_ext/src/udf_custom.rs`): Implements 40+ custom UDFs with `ScalarUDFImpl` trait
+- **datafusion_ext crate** (`rust/datafusion_ext/src/udf/`): Implements 28 custom scalar UDFs with `ScalarUDFImpl` trait
 - **datafusion_ext_py wrapper** (`rust/datafusion_ext_py/`): Thin PyO3 cdylib exposing Rust functions to Python
 - **UDF catalog** (`src/datafusion_engine/udf_catalog.py`): Python-side UDF spec definitions and metadata extraction
 - **UDF runtime** (`src/datafusion_engine/udf_runtime.py`): Snapshot caching, validation, and hash computation

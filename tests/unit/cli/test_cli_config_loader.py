@@ -31,6 +31,17 @@ def test_normalize_config_contents_flattens_sections() -> None:
             "repo_id": "repo-123",
             "impact_strategy": "hybrid",
         },
+        "otel": {
+            "enable_node_tracing": True,
+            "endpoint": "http://localhost:4317",
+        },
+        "hamilton": {
+            "enable_tracker": True,
+            "graph_adapter_kind": "local",
+            "graph_adapter_options": {"sync": True},
+            "cache_path": "/tmp/hamilton-cache",
+            "tags": {"team": "infra"},
+        },
     }
 
     normalized = normalize_config_contents(config)
@@ -49,3 +60,10 @@ def test_normalize_config_contents_flattens_sections() -> None:
     assert normalized["incremental_state_dir"] == "build/state"
     assert normalized["incremental_repo_id"] == "repo-123"
     assert normalized["incremental_impact_strategy"] == "hybrid"
+    assert normalized["enable_otel_node_tracing"] is True
+    assert normalized["otel_endpoint"] == "http://localhost:4317"
+    assert normalized["enable_hamilton_tracker"] is True
+    assert normalized["hamilton_graph_adapter_kind"] == "local"
+    assert normalized["hamilton_graph_adapter_options"] == {"sync": True}
+    assert normalized["hamilton_cache_path"] == "/tmp/hamilton-cache"
+    assert normalized["hamilton_tags"] == {"team": "infra"}

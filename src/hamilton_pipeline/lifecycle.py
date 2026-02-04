@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from hamilton.lifecycle import api as lifecycle_api
 
 from obs.diagnostics import DiagnosticsCollector
-from obs.otel.heartbeat import set_active_task_count
+from obs.otel.heartbeat import set_active_task_count, set_total_task_count
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -123,12 +123,23 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         """Record plan diagnostics before graph execution."""
         _ = kwargs
         set_active_task_count(len(self.plan.active_tasks))
+        set_total_task_count(len(self.plan.active_tasks))
         from datafusion_engine.lineage.diagnostics import record_artifact
         from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
         from serde_msgspec import to_builtins
 
         bundle = build_plan_artifact_bundle(plan=self.plan, run_id=run_id)
         self.plan_artifact_bundle = bundle
+        record_artifact(
+            self.profile,
+            "plan_expected_tasks_v1",
+            {
+                "run_id": run_id,
+                "plan_signature": self.plan.plan_signature,
+                "task_count": len(self.plan.active_tasks),
+                "tasks": sorted(self.plan.active_tasks),
+            },
+        )
         record_artifact(
             self.profile,
             "plan_schedule_v1",
@@ -149,6 +160,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         """Record scheduling diagnostics after graph execution."""
         _ = kwargs
         set_active_task_count(None)
+        set_total_task_count(None)
         _flush_plan_events(
             self.plan,
             profile=self.profile,

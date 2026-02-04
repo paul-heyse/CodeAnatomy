@@ -7,6 +7,7 @@ and scheduling paths use.
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
@@ -24,6 +25,7 @@ from datafusion_engine.delta.store_policy import (
 )
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan.cache import PlanProtoCacheEntry
+from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan_phase_diagnostics
 from datafusion_engine.plan.normalization import normalize_substrait_plan
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema.introspection import SchemaIntrospector
@@ -423,6 +425,10 @@ class _PlanCoreComponents:
     optimized: DataFusionLogicalPlan | None
     execution: object | None
     substrait_bytes: bytes
+    logical_ms: float | None
+    optimized_ms: float | None
+    execution_ms: float | None
+    substrait_ms: float | None
 
 
 @dataclass(frozen=True)
@@ -480,19 +486,64 @@ def _plan_core_components(
     ValueError
         Raised when Substrait computation is disabled.
     """
+    t0 = time.perf_counter()
     logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
+    logical_ms = (time.perf_counter() - t0) * 1000.0
+    t1 = time.perf_counter()
     optimized = cast("DataFusionLogicalPlan | None", _safe_optimized_logical_plan(df))
-    execution = _safe_execution_plan(df) if options.compute_execution_plan else None
+    optimized_ms = (time.perf_counter() - t1) * 1000.0
+    execution = None
+    execution_ms = None
+    if options.compute_execution_plan:
+        t2 = time.perf_counter()
+        execution = _safe_execution_plan(df)
+        execution_ms = (time.perf_counter() - t2) * 1000.0
     if not options.compute_substrait:
         msg = "Substrait bytes are required for plan bundle construction."
         raise ValueError(msg)
+    t3 = time.perf_counter()
     substrait_bytes = _to_substrait_bytes(ctx, optimized)
+    substrait_ms = (time.perf_counter() - t3) * 1000.0
     return _PlanCoreComponents(
         logical=logical,
         optimized=optimized,
         execution=execution,
         substrait_bytes=substrait_bytes,
+        logical_ms=logical_ms,
+        optimized_ms=optimized_ms,
+        execution_ms=execution_ms,
+        substrait_ms=substrait_ms,
     )
+
+
+def _record_plan_phase_telemetry(
+    plan_core: _PlanCoreComponents,
+    *,
+    plan_hash: str,
+    plan_identity_hash: str | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    if runtime_profile is None:
+        return
+
+    def _emit_phase(phase: str, duration_ms: float | None) -> None:
+        if duration_ms is None:
+            return
+        record_plan_phase_diagnostics(
+            request=PlanPhaseDiagnostics(
+                runtime_profile=runtime_profile,
+                plan_hash=plan_hash,
+                plan_identity_hash=plan_identity_hash,
+                phase=phase,
+                duration_ms=duration_ms,
+            )
+        )
+
+    _emit_phase("logical", plan_core.logical_ms)
+    if plan_core.optimized is not None:
+        _emit_phase("optimized", plan_core.optimized_ms)
+    if plan_core.execution is not None:
+        _emit_phase("physical", plan_core.execution_ms)
 
 
 def _capture_explain_artifacts(
@@ -510,7 +561,7 @@ def _capture_explain_artifacts(
     if _is_explain_plan(_safe_logical_plan(df)):
         return _ExplainArtifacts(tree=None, verbose=None, analyze=None)
     verbose = None
-    if session_runtime is not None and session_runtime.profile.explain_verbose:
+    if session_runtime is not None and session_runtime.profile.diagnostics.explain_verbose:
         verbose = capture_explain(df, verbose=True, analyze=False)
     return _ExplainArtifacts(
         tree=capture_explain(df, verbose=False, analyze=False),
@@ -554,7 +605,9 @@ def _environment_artifacts(
     cdf_windows = _cdf_window_snapshot(session_runtime)
     store_policy_hash = None
     if session_runtime is not None:
-        store_policy_hash = delta_store_policy_hash(session_runtime.profile.delta_store_policy)
+        store_policy_hash = delta_store_policy_hash(
+            session_runtime.profile.policies.delta_store_policy
+        )
     return _EnvironmentArtifacts(
         df_settings=df_settings,
         planning_env_snapshot=planning_env_snapshot,
@@ -608,48 +661,48 @@ def _planning_env_snapshot(
     profile = session_runtime.profile
     session_config = _session_config_snapshot(session_runtime.ctx)
     sql_policy_payload = None
-    if profile.sql_policy is not None:
+    if profile.policies.sql_policy is not None:
         sql_policy_payload = {
-            "allow_ddl": profile.sql_policy.allow_ddl,
-            "allow_dml": profile.sql_policy.allow_dml,
-            "allow_statements": profile.sql_policy.allow_statements,
+            "allow_ddl": profile.policies.sql_policy.allow_ddl,
+            "allow_dml": profile.policies.sql_policy.allow_dml,
+            "allow_statements": profile.policies.sql_policy.allow_statements,
         }
-    schema_hardening = profile.schema_hardening
+    schema_hardening = profile.policies.schema_hardening
     return {
         "datafusion_version": getattr(profile, "datafusion_version", None),
         "session_config": session_config,
         "settings_payload": profile.settings_payload(),
         "settings_hash": profile.settings_hash(),
-        "sql_policy_name": profile.sql_policy_name,
+        "sql_policy_name": profile.policies.sql_policy_name,
         "sql_policy": sql_policy_payload,
         "explain_controls": {
-            "capture_explain": profile.capture_explain,
-            "explain_verbose": profile.explain_verbose,
-            "explain_analyze": profile.explain_analyze,
-            "explain_analyze_level": profile.explain_analyze_level,
+            "capture_explain": profile.diagnostics.capture_explain,
+            "explain_verbose": profile.diagnostics.explain_verbose,
+            "explain_analyze": profile.diagnostics.explain_analyze,
+            "explain_analyze_level": profile.diagnostics.explain_analyze_level,
         },
         "execution": {
-            "target_partitions": profile.target_partitions,
-            "batch_size": profile.batch_size,
-            "repartition_aggregations": profile.repartition_aggregations,
-            "repartition_windows": profile.repartition_windows,
-            "repartition_file_scans": profile.repartition_file_scans,
-            "repartition_file_min_size": profile.repartition_file_min_size,
+            "target_partitions": profile.execution.target_partitions,
+            "batch_size": profile.execution.batch_size,
+            "repartition_aggregations": profile.execution.repartition_aggregations,
+            "repartition_windows": profile.execution.repartition_windows,
+            "repartition_file_scans": profile.execution.repartition_file_scans,
+            "repartition_file_min_size": profile.execution.repartition_file_min_size,
         },
         "runtime_env": {
-            "spill_dir": profile.spill_dir,
-            "memory_pool": profile.memory_pool,
-            "memory_limit_bytes": profile.memory_limit_bytes,
-            "enable_cache_manager": profile.enable_cache_manager,
+            "spill_dir": profile.execution.spill_dir,
+            "memory_pool": profile.execution.memory_pool,
+            "memory_limit_bytes": profile.execution.memory_limit_bytes,
+            "enable_cache_manager": profile.features.enable_cache_manager,
         },
         "async_udf": {
-            "enable_async_udfs": profile.enable_async_udfs,
-            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
-            "async_udf_batch_size": profile.async_udf_batch_size,
+            "enable_async_udfs": profile.features.enable_async_udfs,
+            "async_udf_timeout_ms": profile.policies.async_udf_timeout_ms,
+            "async_udf_batch_size": profile.policies.async_udf_batch_size,
         },
         "delta_protocol": {
-            "mode": profile.delta_protocol_mode,
-            "support": _delta_protocol_support_payload(profile.delta_protocol_support),
+            "mode": profile.policies.delta_protocol_mode,
+            "support": _delta_protocol_support_payload(profile.policies.delta_protocol_support),
         },
         "schema_hardening": {
             "explain_format": schema_hardening.explain_format if schema_hardening else None,
@@ -858,7 +911,7 @@ def _proto_serialization_context(
     if session_runtime is None:
         return enabled, None
     profile = session_runtime.profile
-    if not profile.enable_delta_plan_codecs:
+    if not profile.features.enable_delta_plan_codecs:
         return False, PlanProtoStatus(
             enabled=False,
             installed=None,
@@ -1031,7 +1084,10 @@ def _bundle_components(
             validate_required_udfs(udf_artifacts.snapshot, required=required.required_udfs)
 
     substrait_validation = None
-    if options.session_runtime is not None and options.session_runtime.profile.substrait_validation:
+    if (
+        options.session_runtime is not None
+        and options.session_runtime.profile.diagnostics.substrait_validation
+    ):
         substrait_validation = _substrait_validation_payload(plan_core.substrait_bytes, df=df)
 
     merged_delta_inputs = _merged_delta_inputs_for_bundle(
@@ -1079,6 +1135,12 @@ def _bundle_components(
             )
         )
         plan_identity_hash = hash_json_default(plan_identity_payload, str_keys=True)
+    _record_plan_phase_telemetry(
+        plan_core,
+        plan_hash=fingerprint,
+        plan_identity_hash=plan_identity_hash,
+        runtime_profile=options.session_runtime.profile if options.session_runtime else None,
+    )
     detail_inputs = PlanDetailInputs(
         artifacts=artifacts,
         plan_fingerprint=fingerprint,
@@ -1386,7 +1448,7 @@ def _capture_explain_analyze(
     """
     if session_runtime is None:
         return None
-    if not session_runtime.profile.explain_analyze:
+    if not session_runtime.profile.diagnostics.explain_analyze:
         return None
     return capture_explain(df, verbose=True, analyze=True)
 
@@ -1646,15 +1708,15 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
             name,
             apply_delta_store_policy(
                 location,
-                policy=runtime_profile.delta_store_policy,
+                policy=runtime_profile.policies.delta_store_policy,
             ),
         )
-    for name, location in runtime_profile.scip_dataset_locations.items():
+    for name, location in runtime_profile.data_sources.scip_dataset_locations.items():
         locations.setdefault(
             name,
             apply_delta_store_policy(
                 location,
-                policy=runtime_profile.delta_store_policy,
+                policy=runtime_profile.policies.delta_store_policy,
             ),
         )
     for name, location in normalize_dataset_locations_for_profile(runtime_profile).items():
@@ -1662,7 +1724,7 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
             name,
             apply_delta_store_policy(
                 location,
-                policy=runtime_profile.delta_store_policy,
+                policy=runtime_profile.policies.delta_store_policy,
             ),
         )
     for name, location in semantic_output_locations_for_profile(runtime_profile).items():
@@ -1670,17 +1732,17 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
             name,
             apply_delta_store_policy(
                 location,
-                policy=runtime_profile.delta_store_policy,
+                policy=runtime_profile.policies.delta_store_policy,
             ),
         )
-    for catalog in runtime_profile.registry_catalogs.values():
+    for catalog in runtime_profile.catalog.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
                 continue
             try:
                 locations[name] = apply_delta_store_policy(
                     cast("DatasetLocation", catalog.get(name)),
-                    policy=runtime_profile.delta_store_policy,
+                    policy=runtime_profile.policies.delta_store_policy,
                 )
             except KeyError:
                 continue

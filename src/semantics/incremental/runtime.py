@@ -11,7 +11,11 @@ import pyarrow as pa
 from core_types import DeterminismTier
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    PolicyBundleConfig,
+    SessionRuntime,
+)
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -41,7 +45,9 @@ class IncrementalRuntime:
         IncrementalRuntime
             Newly constructed runtime instance.
         """
-        runtime_profile = profile or DataFusionRuntimeProfile(config_policy_name=profile_name)
+        runtime_profile = profile or DataFusionRuntimeProfile(
+            policies=PolicyBundleConfig(config_policy_name=profile_name),
+        )
         return cls(
             profile=runtime_profile,
             _session_runtime=runtime_profile.session_runtime(),

@@ -91,12 +91,15 @@ def build_engine_session(
     input_plugin_names: list[str] = []
     if df_profile is not None:
         plugin = dataset_input_plugin(datasets, runtime_profile=df_profile)
-        registry_catalogs = dict(df_profile.registry_catalogs)
-        registry_catalogs.setdefault(df_profile.default_schema, datasets)
+        registry_catalogs = dict(df_profile.catalog.registry_catalogs)
+        registry_catalogs.setdefault(df_profile.catalog.default_schema, datasets)
         df_profile = replace(
             df_profile,
-            input_plugins=(*df_profile.input_plugins, plugin),
-            registry_catalogs=registry_catalogs,
+            policies=replace(
+                df_profile.policies,
+                input_plugins=(*df_profile.policies.input_plugins, plugin),
+            ),
+            catalog=replace(df_profile.catalog, registry_catalogs=registry_catalogs),
         )
         engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
         input_plugin_names = [plugin.__name__]

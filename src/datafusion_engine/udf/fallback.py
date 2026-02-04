@@ -180,16 +180,17 @@ def fallback_udf_snapshot() -> dict[str, object]:
     dict[str, object]
         Snapshot payload mirroring the Rust UDF registry keys.
     """
+    names = _registered_fallback_names()
     param_names: dict[str, tuple[str, ...]] = {}
     volatility: dict[str, str] = {}
     signature_inputs: dict[str, tuple[tuple[str, ...], ...]] = {}
     return_types: dict[str, tuple[str, ...]] = {}
-    for name, spec in _FALLBACK_UDF_SPECS.items():
+    for name in names:
+        spec = _FALLBACK_UDF_SPECS[name]
         param_names[name] = spec.arg_names
         volatility[name] = spec.volatility
         signature_inputs[name] = (tuple(str(dtype) for dtype in spec.input_types),)
         return_types[name] = (str(spec.return_type),)
-    names = tuple(sorted(_FALLBACK_UDF_SPECS))
     return {
         "scalar": list(names),
         "aggregate": [],
@@ -210,13 +211,23 @@ def fallback_udf_snapshot() -> dict[str, object]:
     }
 
 
+def fallback_udf_names() -> tuple[str, ...]:
+    """Return the registered fallback UDF names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Registered fallback UDF names.
+    """
+    return _registered_fallback_names()
+
+
 def register_fallback_udfs(ctx: SessionContext) -> None:
     """Register fallback UDFs on the provided session context."""
     if ctx in _FALLBACK_UDF_CONTEXTS:
         return
-    for name, spec in _FALLBACK_UDF_SPECS.items():
-        if name not in _REGISTERABLE_UDFS:
-            continue
+    for name in _registered_fallback_names():
+        spec = _FALLBACK_UDF_SPECS[name]
         func = _fallback_udf_function(name)
         if func is None:
             continue
@@ -224,6 +235,15 @@ def register_fallback_udfs(ctx: SessionContext) -> None:
         ctx.register_udf(udf_obj)
         _FALLBACK_UDF_OBJECTS[name] = udf_obj
     _FALLBACK_UDF_CONTEXTS.add(ctx)
+
+
+def _registered_fallback_names() -> tuple[str, ...]:
+    names = [
+        name
+        for name in _REGISTERABLE_UDFS
+        if name in _FALLBACK_UDF_SPECS and _fallback_udf_function(name) is not None
+    ]
+    return tuple(sorted(names))
 
 
 def fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:

@@ -7,9 +7,11 @@ managing UDF dependencies, and tracking registration metadata.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+import pyarrow as pa
 
 from utils.hashing import hash_json_canonical
 from utils.registry_protocol import MutableRegistry
@@ -192,6 +194,90 @@ class ProviderRegistry:
         self._registrations.register(spec.name, metadata, overwrite=overwrite)
         self._emit_registration_diagnostic(metadata)
         return df
+
+    def register_location(
+        self,
+        *,
+        name: str,
+        location: DatasetLocation,
+        overwrite: bool = False,
+        cache_policy: DataFusionCachePolicy | None = None,
+    ) -> DataFrame:
+        """Register a dataset location via a derived TableSpec.
+
+        Returns
+        -------
+        DataFrame
+            DataFrame for the registered table.
+
+        Raises
+        ------
+        ValueError
+            Raised when schema resolution fails for the dataset location.
+        """
+        from datafusion_engine.dataset.registry import resolve_dataset_schema
+        from datafusion_engine.tables.spec import table_spec_from_location
+
+        schema = resolve_dataset_schema(location)
+        if schema is None:
+            msg = f"Schema unavailable for dataset location {name!r}."
+            raise ValueError(msg)
+        spec = table_spec_from_location(name, location, schema=pa.schema(schema))
+        return self.register_df(spec, overwrite=overwrite, cache_policy=cache_policy)
+
+    def get(self, key: str) -> RegistrationMetadata | None:
+        """Return registration metadata for a table name when present.
+
+        Returns
+        -------
+        RegistrationMetadata | None
+            Registration metadata when available.
+        """
+        return self._registrations.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a table name is registered.
+
+        Returns
+        -------
+        bool
+            True when the table name is registered.
+        """
+        return key in self._registrations
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered table names.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator over registered table names.
+        """
+        return iter(self._registrations)
+
+    def __len__(self) -> int:
+        """Return the count of registered tables.
+
+        Returns
+        -------
+        int
+            Count of registered tables.
+        """
+        return len(self._registrations)
+
+    def snapshot(self) -> Mapping[str, RegistrationMetadata]:
+        """Return a snapshot of registration metadata.
+
+        Returns
+        -------
+        Mapping[str, RegistrationMetadata]
+            Snapshot of registration metadata.
+        """
+        return self._registrations.snapshot()
+
+    def restore(self, snapshot: Mapping[str, RegistrationMetadata]) -> None:
+        """Restore registration metadata from a snapshot."""
+        self._registrations.restore(snapshot)
 
     def udf_registry_hash(self) -> str | None:
         """Return the current UDF registry snapshot hash.

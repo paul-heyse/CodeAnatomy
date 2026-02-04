@@ -183,9 +183,12 @@ All `/cq` commands support global options:
 | `--format` | `CQ_FORMAT` | Output format (md, json, mermaid, mermaid-class, mermaid-cfg, dot) |
 | `--root` | `CQ_ROOT` | Repository root path |
 | `--verbose` | `CQ_VERBOSE` | Verbosity level (0-3) |
-| `--no-cache` | - | Bypass query cache |
 
 Config file: `.cq.toml` in repo root. See `/cq --help` for full options.
+
+### Deprecated Commands
+
+The `cq index` and `cq cache` admin commands are deprecated stubs that print deprecation notices. Caching infrastructure has been removed.
 
 ### Why This Matters
 

@@ -448,6 +448,35 @@ class RuntimeArtifacts:
             Name of the executed task.
         """
         self.execution_order.append(task_name)
+        from obs.otel.heartbeat import increment_completed_task_count, mark_progress
+
+        increment_completed_task_count()
+        mark_progress()
+        self._record_execution_event(task_name)
+
+    def _record_execution_event(self, task_name: str) -> None:
+        profile = self._runtime_profile()
+        if profile is None:
+            return
+        from datafusion_engine.lineage.diagnostics import record_events
+
+        base_name, status = _split_task_execution_name(task_name)
+        record_events(
+            profile,
+            "task_execution_v1",
+            [
+                {
+                    "task_name": base_name,
+                    "status": status,
+                    "raw_task_name": task_name,
+                }
+            ],
+        )
+
+    def _runtime_profile(self) -> DataFusionRuntimeProfile | None:
+        if self.execution is None:
+            return None
+        return self.execution.profile
 
     def has_artifact(self, name: str) -> bool:
         """Check if an artifact exists (view or materialized).
@@ -571,6 +600,14 @@ def _schema_for_execution_result(result: ExecutionResult) -> SchemaLike | None:
         if callable(schema):
             return cast("SchemaLike", schema())
     return None
+
+
+def _split_task_execution_name(task_name: str) -> tuple[str, str]:
+    if ":" not in task_name:
+        return task_name, "ok"
+    base, suffix = task_name.split(":", 1)
+    status = suffix.strip() or "ok"
+    return base, status
 
 
 def _persist_execution_result(

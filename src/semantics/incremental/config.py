@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class IncrementalConfig:
+class SemanticIncrementalConfig:
     """Configuration for incremental semantic processing.
 
     This configuration controls CDF-based incremental relationship recomputation
@@ -58,14 +58,14 @@ class IncrementalConfig:
     --------
     Create a basic incremental config:
 
-    >>> config = IncrementalConfig(
+    >>> config = SemanticIncrementalConfig(
     ...     enabled=True,
     ...     state_dir=Path("/tmp/incremental_state"),
     ... )
 
     Create a CDF-enabled config using the factory method:
 
-    >>> config = IncrementalConfig.with_cdf_enabled(
+    >>> config = SemanticIncrementalConfig.with_cdf_enabled(
     ...     state_dir=Path("/tmp/incremental_state"),
     ... )
 
@@ -111,7 +111,7 @@ class IncrementalConfig:
         cdf_filter_policy: CdfFilterPolicy | None = None,
         default_merge_strategy: CDFMergeStrategy = CDFMergeStrategy.UPSERT,
         impact_strategy: Literal["hybrid", "symbol_closure", "import_closure"] = "hybrid",
-    ) -> IncrementalConfig:
+    ) -> SemanticIncrementalConfig:
         """Create an incremental config with CDF processing enabled.
 
         Factory method for creating a properly configured incremental config
@@ -136,12 +136,12 @@ class IncrementalConfig:
 
         Returns
         -------
-        IncrementalConfig
+        SemanticIncrementalConfig
             Configured incremental config with CDF enabled.
 
         Examples
         --------
-        >>> config = IncrementalConfig.with_cdf_enabled(
+        >>> config = SemanticIncrementalConfig.with_cdf_enabled(
         ...     state_dir=Path("/tmp/state"),
         ...     cdf_filter_policy=CdfFilterPolicy.include_all(),
         ... )
@@ -192,4 +192,4 @@ class IncrementalConfig:
         )
 
 
-__all__ = ["IncrementalConfig"]
+__all__ = ["SemanticIncrementalConfig"]

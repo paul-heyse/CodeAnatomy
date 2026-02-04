@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -465,6 +465,16 @@ class UdfCatalog:
         """
         self._udf_specs[spec.func_id] = spec
 
+    def adapter(self) -> UdfCatalogAdapter:
+        """Return a Registry-compatible adapter for custom UDF specs.
+
+        Returns
+        -------
+        UdfCatalogAdapter
+            Adapter for registry interfaces.
+        """
+        return UdfCatalogAdapter(self)
+
     def refresh_from_session(self, introspector: SchemaIntrospector) -> None:
         """Refresh builtin knowledge from session information_schema.
 
@@ -638,6 +648,80 @@ class UdfCatalog:
         """
         catalog = self._require_runtime_catalog()
         return {"builtin": len(catalog.function_names)}
+
+
+@dataclass
+class UdfCatalogAdapter:
+    """Registry adapter exposing custom UDF specs from a UdfCatalog."""
+
+    catalog: UdfCatalog
+
+    def register(self, key: str, value: DataFusionUdfSpec) -> None:
+        """Register a custom UDF spec by key.
+
+        Raises
+        ------
+        ValueError
+            Raised when the key does not match the spec function ID.
+        """
+        if key != value.func_id:
+            msg = f"UdfCatalogAdapter: key {key!r} must match spec.func_id {value.func_id!r}."
+            raise ValueError(msg)
+        self.catalog.register_udf(value)
+
+    def get(self, key: str) -> DataFusionUdfSpec | None:
+        """Return a custom UDF spec when present.
+
+        Returns
+        -------
+        DataFusionUdfSpec | None
+            Custom UDF spec when available.
+        """
+        return self.catalog._udf_specs.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when a custom UDF spec is registered.
+
+        Returns
+        -------
+        bool
+            True when a custom UDF spec is registered.
+        """
+        return key in self.catalog._udf_specs
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over custom UDF identifiers.
+
+        Returns
+        -------
+        Iterator[str]
+            Iterator over custom UDF identifiers.
+        """
+        return iter(self.catalog._udf_specs)
+
+    def __len__(self) -> int:
+        """Return the number of registered custom UDF specs.
+
+        Returns
+        -------
+        int
+            Number of registered custom UDF specs.
+        """
+        return len(self.catalog._udf_specs)
+
+    def snapshot(self) -> Mapping[str, DataFusionUdfSpec]:
+        """Return a snapshot of custom UDF specs.
+
+        Returns
+        -------
+        Mapping[str, DataFusionUdfSpec]
+            Snapshot of custom UDF specifications.
+        """
+        return dict(self.catalog._udf_specs)
+
+    def restore(self, snapshot: Mapping[str, DataFusionUdfSpec]) -> None:
+        """Restore custom UDF specs from a snapshot."""
+        self.catalog._udf_specs = dict(snapshot)
 
 
 def create_default_catalog(
@@ -961,6 +1045,7 @@ __all__ = [
     "FunctionSignature",
     "ResolvedFunction",
     "UdfCatalog",
+    "UdfCatalogAdapter",
     "UdfTier",
     "create_default_catalog",
     "create_strict_catalog",

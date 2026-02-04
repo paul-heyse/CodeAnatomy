@@ -25,11 +25,6 @@ All commands support these global options:
 | `--format` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact output directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip artifact saving |
-| `--cache-dir` | `CQ_DISKCACHE_DIR` | `~/.cache/codeanatomy/cq` | DiskCache root directory |
-| `--cache-query-ttl` | `CQ_DISKCACHE_QUERY_TTL_SECONDS` | unset | Query cache TTL in seconds |
-| `--cache-query-size` | `CQ_DISKCACHE_QUERY_SIZE_LIMIT` | 536870912 | Query cache size limit (bytes) |
-| `--cache-index-size` | `CQ_DISKCACHE_INDEX_SIZE_LIMIT` | 268435456 | Index cache size limit (bytes) |
-| `--cache-query-shards` | `CQ_DISKCACHE_QUERY_SHARDS` | 4 | Query cache shard count |
 
 ### Output Formats
 
@@ -85,12 +80,28 @@ save_artifact = true
 
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `index` | Manage ast-grep scan index cache | `/cq index --rebuild` |
-| `cache` | Manage query result cache | `/cq cache --stats` |
+| `index` | *Deprecated* - Index management removed | - |
+| `cache` | *Deprecated* - Cache management removed | - |
+| `schema` | Show JSON schema for artifacts | `/cq schema` |
 
-## Caching
+### Calls Output Enrichment
 
-Query and report runs use DiskCache-backed caching by default. Disable with `--no-cache`.
+The `calls` command provides enrichment data for each call site:
+
+| Field | Description |
+|-------|-------------|
+| `context_window` | Line range (`start_line`, `end_line`) of containing function |
+| `context_snippet` | Source code snippet of the containing function (truncated if >30 lines) |
+| `symtable_info` | Symbol table analysis: `is_closure`, `free_vars`, `globals_used`, `nested_scopes` |
+| `bytecode_info` | Bytecode analysis: `load_globals`, `load_attrs`, `call_functions` |
+
+**Context Window & Snippet:**
+
+The context window identifies the line range of the function containing each call site. The context snippet provides the actual source code, making it easy to understand how the function is called without opening the file. Long snippets (>30 lines) are truncated to show the first 15 and last 5 lines with a marker.
+
+**Performance:**
+
+The `calls` command uses on-demand signature lookup, parsing only the file containing the function definition rather than building a full repository index. This significantly improves performance for large codebases.
 
 ## Artifacts
 

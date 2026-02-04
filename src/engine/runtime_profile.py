@@ -13,7 +13,7 @@ import pyarrow as pa
 
 from core_types import DeterminismTier
 from datafusion_engine.arrow.schema import version_field
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
 from engine.telemetry.hamilton import HamiltonTelemetryProfile, HamiltonTrackerConfig
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
@@ -210,7 +210,7 @@ def runtime_profile_snapshot(
     RuntimeProfileSnapshot
         Snapshot describing DataFusion runtime settings.
     """
-    profile_name = name or profile.config_policy_name or "default"
+    profile_name = name or profile.policies.config_policy_name or "default"
     telemetry_payload = profile.telemetry_payload_v1()
     telemetry_hash = profile.telemetry_payload_hash()
     profile_hash = _runtime_profile_hash(
@@ -248,7 +248,7 @@ def engine_runtime_artifact(
         determinism_tier=determinism_tier,
     )
     registry_snapshot: RustUdfSnapshot | None = None
-    if profile.enable_information_schema:
+    if profile.catalog.enable_information_schema:
         try:
             session = profile.session_runtime().ctx
         except (RuntimeError, TypeError, ValueError):
@@ -283,33 +283,48 @@ def _apply_named_profile_overrides(
     if name == "dev_debug":
         return replace(
             profile,
-            config_policy_name="dev",
-            target_partitions=min(cpu_count, 8),
-            batch_size=4096,
-            capture_explain=True,
-            explain_verbose=True,
-            explain_analyze=True,
-            explain_analyze_level="dev",
+            policies=replace(profile.policies, config_policy_name="dev"),
+            execution=replace(
+                profile.execution,
+                target_partitions=min(cpu_count, 8),
+                batch_size=4096,
+            ),
+            diagnostics=replace(
+                profile.diagnostics,
+                capture_explain=True,
+                explain_verbose=True,
+                explain_analyze=True,
+                explain_analyze_level="dev",
+            ),
         )
     if name == "prod_fast":
         return replace(
             profile,
-            config_policy_name="prod",
-            capture_explain=False,
-            explain_verbose=False,
-            explain_analyze=False,
-            explain_analyze_level=None,
+            policies=replace(profile.policies, config_policy_name="prod"),
+            diagnostics=replace(
+                profile.diagnostics,
+                capture_explain=False,
+                explain_verbose=False,
+                explain_analyze=False,
+                explain_analyze_level=None,
+            ),
         )
     if name == "memory_tight":
         return replace(
             profile,
-            config_policy_name="symtable",
-            target_partitions=min(cpu_count, 4),
-            batch_size=4096,
-            capture_explain=False,
-            explain_verbose=False,
-            explain_analyze=False,
-            explain_analyze_level="summary",
+            policies=replace(profile.policies, config_policy_name="symtable"),
+            execution=replace(
+                profile.execution,
+                target_partitions=min(cpu_count, 4),
+                batch_size=4096,
+            ),
+            diagnostics=replace(
+                profile.diagnostics,
+                capture_explain=False,
+                explain_verbose=False,
+                explain_analyze=False,
+                explain_analyze_level="summary",
+            ),
         )
     return profile
 
@@ -321,18 +336,21 @@ def _apply_memory_overrides(
 ) -> DataFusionRuntimeProfile:
     if name == "dev_debug":
         return profile
-    spill_dir = profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
-    memory_limit = profile.memory_limit_bytes or _settings_int(
+    spill_dir = profile.execution.spill_dir or settings.get("datafusion.runtime.temp_directory")
+    memory_limit = profile.execution.memory_limit_bytes or _settings_int(
         settings.get("datafusion.runtime.memory_limit")
     )
-    memory_pool = profile.memory_pool
+    memory_pool = profile.execution.memory_pool
     if memory_limit is not None and memory_pool == "greedy":
         memory_pool = "fair"
     return replace(
         profile,
-        spill_dir=spill_dir,
-        memory_limit_bytes=memory_limit,
-        memory_pool=memory_pool,
+        execution=replace(
+            profile.execution,
+            spill_dir=spill_dir,
+            memory_limit_bytes=memory_limit,
+            memory_pool=memory_pool,
+        ),
     )
 
 
@@ -340,30 +358,46 @@ def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntime
     patch = _runtime_profile_env_patch()
     return replace(
         profile,
-        config_policy_name=coalesce_unset(patch.config_policy_name, profile.config_policy_name),
-        catalog_auto_load_location=coalesce_unset(
-            patch.catalog_auto_load_location,
-            profile.catalog_auto_load_location,
+        policies=replace(
+            profile.policies,
+            config_policy_name=coalesce_unset(
+                patch.config_policy_name,
+                profile.policies.config_policy_name,
+            ),
+            cache_output_root=coalesce_unset(
+                patch.cache_output_root,
+                profile.policies.cache_output_root,
+            ),
+            runtime_artifact_cache_root=coalesce_unset(
+                patch.runtime_artifact_cache_root,
+                profile.policies.runtime_artifact_cache_root,
+            ),
+            runtime_artifact_cache_enabled=coalesce_unset(
+                patch.runtime_artifact_cache_enabled,
+                profile.policies.runtime_artifact_cache_enabled,
+            ),
+            metadata_cache_snapshot_enabled=coalesce_unset(
+                patch.metadata_cache_snapshot_enabled,
+                profile.policies.metadata_cache_snapshot_enabled,
+            ),
         ),
-        catalog_auto_load_format=coalesce_unset(
-            patch.catalog_auto_load_format,
-            profile.catalog_auto_load_format,
+        catalog=replace(
+            profile.catalog,
+            catalog_auto_load_location=coalesce_unset(
+                patch.catalog_auto_load_location,
+                profile.catalog.catalog_auto_load_location,
+            ),
+            catalog_auto_load_format=coalesce_unset(
+                patch.catalog_auto_load_format,
+                profile.catalog.catalog_auto_load_format,
+            ),
         ),
-        cache_output_root=coalesce_unset(patch.cache_output_root, profile.cache_output_root),
-        runtime_artifact_cache_root=coalesce_unset(
-            patch.runtime_artifact_cache_root,
-            profile.runtime_artifact_cache_root,
-        ),
-        runtime_artifact_cache_enabled=coalesce_unset(
-            patch.runtime_artifact_cache_enabled,
-            profile.runtime_artifact_cache_enabled,
-        ),
-        metadata_cache_snapshot_enabled=coalesce_unset(
-            patch.metadata_cache_snapshot_enabled,
-            profile.metadata_cache_snapshot_enabled,
-        ),
-        diagnostics_sink=_coalesce_diagnostics_sink(
-            patch.diagnostics_sink, profile.diagnostics_sink
+        diagnostics=replace(
+            profile.diagnostics,
+            diagnostics_sink=_coalesce_diagnostics_sink(
+                patch.diagnostics_sink,
+                profile.diagnostics.diagnostics_sink,
+            ),
         ),
     )
 
@@ -396,7 +430,9 @@ def resolve_runtime_profile(
     RuntimeProfileSpec
         Resolved runtime profile spec.
     """
-    df_profile = DataFusionRuntimeProfile(config_policy_name=profile)
+    df_profile = DataFusionRuntimeProfile(
+        policies=PolicyBundleConfig(config_policy_name=profile),
+    )
     df_profile = _apply_named_profile_overrides(profile, df_profile)
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
@@ -422,10 +458,10 @@ def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[
     try:
         payload = to_builtins(profile.telemetry_payload_v1())
     except (msgspec.EncodeError, TypeError):
-        return {"profile_name": profile.config_policy_name}
+        return {"profile_name": profile.policies.config_policy_name}
     if isinstance(payload, dict):
         return cast("dict[str, object]", payload)
-    return {"profile_name": profile.config_policy_name}
+    return {"profile_name": profile.policies.config_policy_name}
 
 
 __all__ = [

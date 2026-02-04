@@ -15,8 +15,12 @@ from obs.otel.attributes import normalize_attributes, normalize_log_attributes
 from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_DIAGNOSTICS
 from serde_msgspec import JSON_ENCODER
+from utils.env_utils import env_int
 
 _LOGGER = logging.getLogger(SCOPE_DIAGNOSTICS)
+
+_MAX_LIST_LENGTH = env_int("CODEANATOMY_OTEL_MAX_LIST_LENGTH", default=50)
+_MAX_DICT_LENGTH = env_int("CODEANATOMY_OTEL_MAX_DICT_LENGTH", default=50)
 
 
 class OtelDiagnosticsSink:
@@ -97,15 +101,38 @@ def _flatten_attributes(payload: Mapping[str, object]) -> dict[str, object]:
         if value is None:
             continue
         if isinstance(value, Mapping):
-            flattened[key] = _serialize_payload(value)
+            flattened[key] = _serialize_payload(_limit_mapping(value))
             continue
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray, memoryview)
         ):
-            flattened[key] = _serialize_payload(list(value))
+            flattened[key] = _serialize_payload(_limit_sequence(value))
             continue
         flattened[key] = value
     return flattened
+
+
+def _limit_sequence(values: Sequence[object]) -> list[object]:
+    limit = _MAX_LIST_LENGTH
+    if limit is None:
+        return list(values)
+    if limit <= 0:
+        return []
+    return list(values)[:limit]
+
+
+def _limit_mapping(values: Mapping[object, object]) -> dict[object, object]:
+    limit = _MAX_DICT_LENGTH
+    if limit is None:
+        return dict(values)
+    if limit <= 0:
+        return {}
+    if len(values) <= limit:
+        return dict(values)
+    limited: dict[object, object] = {}
+    for key in sorted(values.keys(), key=str)[:limit]:
+        limited[key] = values[key]
+    return limited
 
 
 def emit_diagnostics_event(

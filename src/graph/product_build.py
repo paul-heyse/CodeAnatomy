@@ -29,13 +29,14 @@ from obs.diagnostics_report import write_run_diagnostics_report
 from obs.otel import (
     OtelBootstrapOptions,
     configure_otel,
+    emit_diagnostics_event,
     snapshot_diagnostics,
     start_build_heartbeat,
     write_run_diagnostics_bundle,
 )
-from obs.otel.run_context import reset_run_id, set_run_id
+from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
-from semantics.incremental import IncrementalConfig
+from semantics.incremental import SemanticIncrementalConfig
 from utils.uuid_factory import uuid7_str
 
 GraphProduct = Literal["cpg"]
@@ -114,7 +115,7 @@ class GraphProductBuildRequest:
 
     writer_strategy: WriterStrategy | None = None
 
-    incremental_config: IncrementalConfig | None = None
+    incremental_config: SemanticIncrementalConfig | None = None
     incremental_impact_strategy: ImpactStrategy | None = None
 
     include_extract_errors: bool = True
@@ -143,6 +144,18 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     _configure_otel(request, repo_root_path)
 
     run_token = set_run_id(run_id)
+    emit_diagnostics_event(
+        "build.start",
+        payload={
+            "run_id": run_id,
+            "repo_root": str(repo_root_path),
+            "output_dir": str(resolved_output_dir),
+            "product": request.product,
+            "execution_mode": request.execution_mode.value,
+            "outputs": list(outputs),
+        },
+        event_kind="event",
+    )
     heartbeat = start_build_heartbeat(run_id=run_id, interval_s=5.0)
     result: GraphProductBuildResult | None = None
     fallback_bundle_dir = resolved_output_dir / "run_bundle" / run_id
@@ -151,7 +164,28 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     previous_sigterm, previous_sigint = _install_signal_handlers(handler)
     try:
         result = _execute_build(request, repo_root_path, outputs, options)
+    except Exception as exc:
+        emit_diagnostics_event(
+            "build.failure",
+            payload={
+                "run_id": run_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+            event_kind="event",
+        )
+        raise
+    else:
         _record_build_output_locations(result)
+        emit_diagnostics_event(
+            "build.success",
+            payload={
+                "run_id": run_id,
+                "output_dir": str(result.output_dir),
+                "run_bundle_dir": str(result.run_bundle_dir) if result.run_bundle_dir else None,
+            },
+            event_kind="event",
+        )
         return result
     finally:
         _restore_signal_handlers(previous_sigterm, previous_sigint)
@@ -259,15 +293,44 @@ def _execute_build(
             "codeanatomy.outputs": list(outputs),
         },
     ) as span:
+        emit_diagnostics_event(
+            "build.phase.start",
+            payload={
+                "phase": "pipeline.execute",
+                "outputs": list(outputs),
+                "run_id": get_run_id(),
+            },
+            event_kind="event",
+        )
         try:
             raw = execute_pipeline(repo_root=repo_root, options=options)
         except Exception as exc:
             record_exception(span, exc)
+            emit_diagnostics_event(
+                "build.phase.end",
+                payload={
+                    "phase": "pipeline.execute",
+                    "status": "error",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "run_id": get_run_id(),
+                },
+                event_kind="event",
+            )
             raise
         result = _parse_result(
             request=request,
             repo_root=repo_root,
             pipeline_outputs=raw,
+        )
+        emit_diagnostics_event(
+            "build.phase.end",
+            payload={
+                "phase": "pipeline.execute",
+                "status": "ok",
+                "run_id": get_run_id(),
+            },
+            event_kind="event",
         )
         set_span_attributes(
             span,

@@ -231,10 +231,25 @@ def dataset_query(
     """
     _ = repo_id
     row = extract_metadata(name)
-    columns = [*row.fields, *row.row_fields, *row.row_extras]
+    columns: list[str] = []
+    seen: set[str] = set()
+
+    def _append_column(column: str) -> None:
+        if column in seen:
+            return
+        columns.append(column)
+        seen.add(column)
+
+    if row.bundles:
+        from datafusion_engine.extract.bundles import bundle as _bundle
+
+        for bundle_name in row.bundles:
+            for field in _bundle(bundle_name).fields:
+                _append_column(field.name)
+    for field_name in (*row.fields, *row.row_fields, *row.row_extras):
+        _append_column(field_name)
     for derived in row.derived:
-        if derived.name not in columns:
-            columns.append(derived.name)
+        _append_column(derived.name)
     if projection:
         projection_set = set(projection)
         schema = dataset_schema(name)

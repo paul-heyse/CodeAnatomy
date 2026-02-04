@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, cast
+from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
 import datafusion
@@ -115,6 +116,8 @@ from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
 from utils.uuid_factory import uuid7_str
 from utils.validation import find_missing
+
+_MISSING = object()
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -456,7 +459,10 @@ def delta_runtime_env_options(
     TypeError
         Raised when delta runtime env options are unavailable.
     """
-    if profile.delta_max_spill_size is None and profile.delta_max_temp_directory_size is None:
+    if (
+        profile.execution.delta_max_spill_size is None
+        and profile.execution.delta_max_temp_directory_size is None
+    ):
         return None
     module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
     if module is None:
@@ -467,10 +473,10 @@ def delta_runtime_env_options(
         msg = "Delta runtime env options type is unavailable in the extension module."
         raise TypeError(msg)
     options = cast("_DeltaRuntimeEnvOptions", options_cls())
-    if profile.delta_max_spill_size is not None:
-        options.max_spill_size = int(profile.delta_max_spill_size)
-    if profile.delta_max_temp_directory_size is not None:
-        options.max_temp_directory_size = int(profile.delta_max_temp_directory_size)
+    if profile.execution.delta_max_spill_size is not None:
+        options.max_spill_size = int(profile.execution.delta_max_spill_size)
+    if profile.execution.delta_max_temp_directory_size is not None:
+        options.max_temp_directory_size = int(profile.execution.delta_max_temp_directory_size)
     return options
 
 
@@ -482,12 +488,12 @@ def record_delta_session_defaults(
     error: str | None,
 ) -> None:
     """Record delta session defaults metadata for a profile."""
-    if profile.diagnostics_sink is None:
+    if profile.diagnostics.diagnostics_sink is None:
         return
     profile.record_artifact(
         "datafusion_delta_session_defaults_v1",
         {
-            "enabled": profile.enable_delta_session_defaults,
+            "enabled": profile.features.enable_delta_session_defaults,
             "available": available,
             "installed": installed,
             "error": error,
@@ -497,9 +503,9 @@ def record_delta_session_defaults(
 
 def record_schema_snapshots_for_profile(profile: DataFusionRuntimeProfile) -> None:
     """Record information_schema snapshots to diagnostics when enabled."""
-    if profile.diagnostics_sink is None:
+    if profile.diagnostics.diagnostics_sink is None:
         return
-    if not profile.enable_information_schema:
+    if not profile.catalog.enable_information_schema:
         return
     ctx = profile.session_context()
     introspector = schema_introspector_for_profile(profile, ctx)
@@ -523,7 +529,7 @@ def record_schema_snapshots_for_profile(profile: DataFusionRuntimeProfile) -> No
                 "functions": function_catalog_snapshot_for_profile(
                     profile,
                     ctx,
-                    include_routines=profile.enable_information_schema,
+                    include_routines=profile.catalog.enable_information_schema,
                 ),
             }
         )
@@ -546,9 +552,9 @@ def normalize_dataset_locations_for_profile(
         Mapping of normalize dataset names to locations, or empty mapping
         when normalize output root is not configured.
     """
-    if profile.normalize_output_root is None:
+    if profile.data_sources.normalize_output_root is None:
         return {}
-    root = Path(profile.normalize_output_root)
+    root = Path(profile.data_sources.normalize_output_root)
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
@@ -572,18 +578,20 @@ def extract_output_locations_for_profile(
         Mapping of extract dataset names to locations, or empty mapping
         when extract output root/catalog is not configured.
     """
-    if profile.extract_dataset_locations:
-        return profile.extract_dataset_locations
-    if profile.extract_output_catalog_name is not None:
-        catalog = profile.registry_catalogs.get(profile.extract_output_catalog_name)
+    if profile.data_sources.extract_dataset_locations:
+        return profile.data_sources.extract_dataset_locations
+    if profile.data_sources.extract_output_catalog_name is not None:
+        catalog = profile.catalog.registry_catalogs.get(
+            profile.data_sources.extract_output_catalog_name
+        )
         if catalog is None:
             return {}
         return {name: catalog.get(name) for name in catalog.names()}
-    if profile.extract_output_root is None:
+    if profile.data_sources.extract_output_root is None:
         return {}
     from datafusion_engine.extract.output_catalog import build_extract_output_catalog
 
-    catalog = build_extract_output_catalog(output_root=profile.extract_output_root)
+    catalog = build_extract_output_catalog(output_root=profile.data_sources.extract_output_root)
     return {name: catalog.get(name) for name in catalog.names()}
 
 
@@ -602,10 +610,12 @@ def semantic_output_locations_for_profile(
     from semantics.registry import SEMANTIC_MODEL
 
     view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
-    if profile.semantic_output_locations:
-        return profile.semantic_output_locations
-    if profile.semantic_output_catalog_name is not None:
-        catalog = profile.registry_catalogs.get(profile.semantic_output_catalog_name)
+    if profile.data_sources.semantic_output_locations:
+        return profile.data_sources.semantic_output_locations
+    if profile.data_sources.semantic_output_catalog_name is not None:
+        catalog = profile.catalog.registry_catalogs.get(
+            profile.data_sources.semantic_output_catalog_name
+        )
         if catalog is None:
             return {}
         locations: dict[str, DatasetLocation] = {}
@@ -613,9 +623,9 @@ def semantic_output_locations_for_profile(
             if catalog.has(name):
                 locations[name] = catalog.get(name)
         return locations
-    if profile.semantic_output_root is None:
+    if profile.data_sources.semantic_output_root is None:
         return {}
-    root = Path(profile.semantic_output_root)
+    root = Path(profile.data_sources.semantic_output_root)
     locations: dict[str, DatasetLocation] = {}
     for name in view_names:
         locations[name] = DatasetLocation(
@@ -959,14 +969,14 @@ def feature_state_snapshot(
             spill_enabled=False,
             named_args_supported=False,
         )
-    gates = runtime_profile.feature_gates
+    gates = runtime_profile.policies.feature_gates
     dynamic_filters_enabled = (
         gates.enable_dynamic_filter_pushdown
         and gates.enable_join_dynamic_filter_pushdown
         and gates.enable_aggregate_dynamic_filter_pushdown
         and gates.enable_topk_dynamic_filter_pushdown
     )
-    spill_enabled = runtime_profile.spill_dir is not None
+    spill_enabled = runtime_profile.execution.spill_dir is not None
     return FeatureStateSnapshot(
         profile_name=profile_name,
         determinism_tier=determinism_tier,
@@ -989,11 +999,11 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
     bool
         ``True`` when named arguments should be supported.
     """
-    if not profile.enable_expr_planners:
+    if not profile.features.enable_expr_planners:
         return False
-    if profile.expr_planner_hook is not None:
+    if profile.policies.expr_planner_hook is not None:
         return True
-    if not profile.expr_planner_names:
+    if not profile.policies.expr_planner_names:
         return False
     from datafusion_engine.udf.platform import native_udf_platform_available
 
@@ -2245,22 +2255,25 @@ def _resolve_prepared_statement_options(
 def _resolved_config_policy_for_profile(
     profile: DataFusionRuntimeProfile,
 ) -> DataFusionConfigPolicy | None:
-    if profile.config_policy is not None:
-        return profile.config_policy
-    if profile.config_policy_name is None:
+    if profile.policies.config_policy is not None:
+        return profile.policies.config_policy
+    if profile.policies.config_policy_name is None:
         return DEFAULT_DF_POLICY
-    return DATAFUSION_POLICY_PRESETS.get(profile.config_policy_name, DEFAULT_DF_POLICY)
+    return DATAFUSION_POLICY_PRESETS.get(
+        profile.policies.config_policy_name,
+        DEFAULT_DF_POLICY,
+    )
 
 
 def _resolved_schema_hardening_for_profile(
     profile: DataFusionRuntimeProfile,
 ) -> SchemaHardeningProfile | None:
-    if profile.schema_hardening is not None:
-        return profile.schema_hardening
-    if profile.schema_hardening_name is None:
+    if profile.policies.schema_hardening is not None:
+        return profile.policies.schema_hardening
+    if profile.policies.schema_hardening_name is None:
         return None
     return SCHEMA_HARDENING_PRESETS.get(
-        profile.schema_hardening_name,
+        profile.policies.schema_hardening_name,
         SCHEMA_HARDENING_PRESETS["schema_hardening"],
     )
 
@@ -2268,15 +2281,30 @@ def _resolved_schema_hardening_for_profile(
 def _effective_catalog_autoload_for_profile(
     profile: DataFusionRuntimeProfile,
 ) -> tuple[str | None, str | None]:
-    if profile.ast_catalog_location is not None or profile.ast_catalog_format is not None:
-        return profile.ast_catalog_location, profile.ast_catalog_format
-    if profile.bytecode_catalog_location is not None or profile.bytecode_catalog_format is not None:
-        return profile.bytecode_catalog_location, profile.bytecode_catalog_format
     if (
-        profile.catalog_auto_load_location is not None
-        or profile.catalog_auto_load_format is not None
+        profile.data_sources.ast.catalog_location is not None
+        or profile.data_sources.ast.catalog_format is not None
     ):
-        return profile.catalog_auto_load_location, profile.catalog_auto_load_format
+        return (
+            profile.data_sources.ast.catalog_location,
+            profile.data_sources.ast.catalog_format,
+        )
+    if (
+        profile.data_sources.bytecode.catalog_location is not None
+        or profile.data_sources.bytecode.catalog_format is not None
+    ):
+        return (
+            profile.data_sources.bytecode.catalog_location,
+            profile.data_sources.bytecode.catalog_format,
+        )
+    if (
+        profile.catalog.catalog_auto_load_location is not None
+        or profile.catalog.catalog_auto_load_format is not None
+    ):
+        return (
+            profile.catalog.catalog_auto_load_location,
+            profile.catalog.catalog_auto_load_format,
+        )
     env_settings = _catalog_autoload_settings()
     return (
         env_settings.get("datafusion.catalog.location"),
@@ -2287,7 +2315,7 @@ def _effective_catalog_autoload_for_profile(
 def _delta_protocol_support_payload(
     profile: DataFusionRuntimeProfile,
 ) -> Mapping[str, object] | None:
-    support = profile.delta_protocol_support
+    support = profile.policies.delta_protocol_support
     if support is None:
         return None
     return {
@@ -2301,92 +2329,102 @@ def _delta_protocol_support_payload(
 def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str, object]:
     settings = profile.settings_payload()
     sql_policy_payload = None
-    if profile.sql_policy is not None:
+    if profile.policies.sql_policy is not None:
         sql_policy_payload = {
-            "allow_ddl": profile.sql_policy.allow_ddl,
-            "allow_dml": profile.sql_policy.allow_dml,
-            "allow_statements": profile.sql_policy.allow_statements,
+            "allow_ddl": profile.policies.sql_policy.allow_ddl,
+            "allow_dml": profile.policies.sql_policy.allow_dml,
+            "allow_statements": profile.policies.sql_policy.allow_statements,
         }
-    write_policy_payload = _datafusion_write_policy_payload(profile.write_policy)
+    write_policy_payload = _datafusion_write_policy_payload(profile.policies.write_policy)
     parquet_read = _settings_by_prefix(settings, "datafusion.execution.parquet.")
     listing_table = _settings_by_prefix(settings, "datafusion.runtime.list_files_")
     parser_dialect = settings.get("datafusion.sql_parser.dialect")
     ansi_mode = _ansi_mode(settings)
     return {
         "version": TELEMETRY_PAYLOAD_VERSION,
-        "profile_name": profile.config_policy_name,
+        "profile_name": profile.policies.config_policy_name,
         "datafusion_version": datafusion.__version__,
         "architecture_version": profile.architecture_version,
-        "sql_policy_name": profile.sql_policy_name,
+        "sql_policy_name": profile.policies.sql_policy_name,
         "session_config": _map_entries(settings),
         "settings_hash": profile.settings_hash(),
         "external_table_options": (
-            _map_entries(profile.external_table_options) if profile.external_table_options else None
+            _map_entries(profile.policies.external_table_options)
+            if profile.policies.external_table_options
+            else None
         ),
-        "delta_store_policy_hash": delta_store_policy_hash(profile.delta_store_policy),
-        "delta_store_policy": _delta_store_policy_payload(profile.delta_store_policy),
+        "delta_store_policy_hash": delta_store_policy_hash(profile.policies.delta_store_policy),
+        "delta_store_policy": _delta_store_policy_payload(profile.policies.delta_store_policy),
         "sql_policy": sql_policy_payload,
         "param_identifier_allowlist": (
-            list(profile.param_identifier_allowlist) if profile.param_identifier_allowlist else None
+            list(profile.policies.param_identifier_allowlist)
+            if profile.policies.param_identifier_allowlist
+            else None
         ),
         "write_policy": write_policy_payload,
-        "feature_gates": _map_entries(profile.feature_gates.settings()),
+        "feature_gates": _map_entries(profile.policies.feature_gates.settings()),
         "join_policy": (
-            _map_entries(profile.join_policy.settings())
-            if profile.join_policy is not None
+            _map_entries(profile.policies.join_policy.settings())
+            if profile.policies.join_policy is not None
             else None
         ),
         "parquet_read": _map_entries(parquet_read),
         "listing_table": _map_entries(listing_table),
         "spill": {
-            "spill_dir": profile.spill_dir,
-            "memory_pool": profile.memory_pool,
-            "memory_limit_bytes": profile.memory_limit_bytes,
+            "spill_dir": profile.execution.spill_dir,
+            "memory_pool": profile.execution.memory_pool,
+            "memory_limit_bytes": profile.execution.memory_limit_bytes,
         },
         "execution": {
-            "target_partitions": profile.target_partitions,
-            "batch_size": profile.batch_size,
-            "repartition_aggregations": profile.repartition_aggregations,
-            "repartition_windows": profile.repartition_windows,
-            "repartition_file_scans": profile.repartition_file_scans,
-            "repartition_file_min_size": profile.repartition_file_min_size,
+            "target_partitions": profile.execution.target_partitions,
+            "batch_size": profile.execution.batch_size,
+            "repartition_aggregations": profile.execution.repartition_aggregations,
+            "repartition_windows": profile.execution.repartition_windows,
+            "repartition_file_scans": profile.execution.repartition_file_scans,
+            "repartition_file_min_size": profile.execution.repartition_file_min_size,
         },
         "sql_surfaces": {
-            "enable_information_schema": profile.enable_information_schema,
+            "enable_information_schema": profile.catalog.enable_information_schema,
             "enable_ident_normalization": _effective_ident_normalization(profile),
-            "force_disable_ident_normalization": profile.force_disable_ident_normalization,
-            "enable_url_table": profile.enable_url_table,
+            "force_disable_ident_normalization": (
+                profile.features.force_disable_ident_normalization
+            ),
+            "enable_url_table": profile.features.enable_url_table,
             "sql_parser_dialect": parser_dialect,
             "ansi_mode": ansi_mode,
         },
         "extensions": {
-            "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+            "delta_session_defaults_enabled": profile.features.enable_delta_session_defaults,
             "delta_runtime_env": {
-                "max_spill_size": profile.delta_max_spill_size,
-                "max_temp_directory_size": profile.delta_max_temp_directory_size,
+                "max_spill_size": profile.execution.delta_max_spill_size,
+                "max_temp_directory_size": profile.execution.delta_max_temp_directory_size,
             },
-            "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
-            "delta_data_checker_enabled": profile.enable_delta_data_checker,
-            "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
-            "delta_plan_codec_physical": profile.delta_plan_codec_physical,
-            "delta_plan_codec_logical": profile.delta_plan_codec_logical,
-            "expr_planners_enabled": profile.enable_expr_planners,
-            "expr_planner_names": list(profile.expr_planner_names),
-            "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
-            "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
+            "delta_querybuilder_enabled": profile.features.enable_delta_querybuilder,
+            "delta_data_checker_enabled": profile.features.enable_delta_data_checker,
+            "delta_plan_codecs_enabled": profile.features.enable_delta_plan_codecs,
+            "delta_plan_codec_physical": profile.policies.delta_plan_codec_physical,
+            "delta_plan_codec_logical": profile.policies.delta_plan_codec_logical,
+            "expr_planners_enabled": profile.features.enable_expr_planners,
+            "expr_planner_names": list(profile.policies.expr_planner_names),
+            "physical_expr_adapter_factory": bool(
+                profile.policies.physical_expr_adapter_factory
+            ),
+            "schema_evolution_adapter_enabled": (
+                profile.features.enable_schema_evolution_adapter
+            ),
             "named_args_supported": named_args_supported(profile),
-            "async_udfs_enabled": profile.enable_async_udfs,
-            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
-            "async_udf_batch_size": profile.async_udf_batch_size,
+            "async_udfs_enabled": profile.features.enable_async_udfs,
+            "async_udf_timeout_ms": profile.policies.async_udf_timeout_ms,
+            "async_udf_batch_size": profile.policies.async_udf_batch_size,
         },
-        "substrait_validation": profile.substrait_validation,
+        "substrait_validation": profile.diagnostics.substrait_validation,
         "output_writes": {
-            "cache_enabled": profile.cache_enabled,
-            "cache_max_columns": profile.cache_max_columns,
-            "minimum_parallel_output_files": profile.minimum_parallel_output_files,
-            "soft_max_rows_per_output_file": profile.soft_max_rows_per_output_file,
-            "maximum_parallel_row_group_writers": profile.maximum_parallel_row_group_writers,
-            "objectstore_writer_buffer_size": profile.objectstore_writer_buffer_size,
+            "cache_enabled": profile.features.cache_enabled,
+            "cache_max_columns": profile.policies.cache_max_columns,
+            "minimum_parallel_output_files": profile.execution.minimum_parallel_output_files,
+            "soft_max_rows_per_output_file": profile.execution.soft_max_rows_per_output_file,
+            "maximum_parallel_row_group_writers": profile.execution.maximum_parallel_row_group_writers,
+            "objectstore_writer_buffer_size": profile.execution.objectstore_writer_buffer_size,
             "datafusion_write_policy": write_policy_payload,
         },
     }
@@ -2398,16 +2436,28 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
         "datafusion.sql_parser.enable_ident_normalization": str(enable_ident_normalization).lower()
     }
     optional_values = {
-        "datafusion.optimizer.repartition_aggregations": profile.repartition_aggregations,
-        "datafusion.optimizer.repartition_windows": profile.repartition_windows,
-        "datafusion.execution.repartition_file_scans": profile.repartition_file_scans,
-        "datafusion.execution.repartition_file_min_size": profile.repartition_file_min_size,
-        "datafusion.execution.minimum_parallel_output_files": profile.minimum_parallel_output_files,
-        "datafusion.execution.soft_max_rows_per_output_file": profile.soft_max_rows_per_output_file,
-        "datafusion.execution.maximum_parallel_row_group_writers": (
-            profile.maximum_parallel_row_group_writers
+        "datafusion.optimizer.repartition_aggregations": (
+            profile.execution.repartition_aggregations
         ),
-        "datafusion.execution.objectstore_writer_buffer_size": profile.objectstore_writer_buffer_size,
+        "datafusion.optimizer.repartition_windows": profile.execution.repartition_windows,
+        "datafusion.execution.repartition_file_scans": (
+            profile.execution.repartition_file_scans
+        ),
+        "datafusion.execution.repartition_file_min_size": (
+            profile.execution.repartition_file_min_size
+        ),
+        "datafusion.execution.minimum_parallel_output_files": (
+            profile.execution.minimum_parallel_output_files
+        ),
+        "datafusion.execution.soft_max_rows_per_output_file": (
+            profile.execution.soft_max_rows_per_output_file
+        ),
+        "datafusion.execution.maximum_parallel_row_group_writers": (
+            profile.execution.maximum_parallel_row_group_writers
+        ),
+        "datafusion.execution.objectstore_writer_buffer_size": (
+            profile.execution.objectstore_writer_buffer_size
+        ),
     }
     for key, value in optional_values.items():
         if value is None:
@@ -2420,11 +2470,11 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
 
 
 def _effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
-    if profile.force_disable_ident_normalization:
+    if profile.features.force_disable_ident_normalization:
         return False
-    if profile.enable_delta_session_defaults:
+    if profile.features.enable_delta_session_defaults:
         return False
-    return profile.enable_ident_normalization
+    return profile.features.enable_ident_normalization
 
 
 def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]:
@@ -2434,11 +2484,14 @@ def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]
         payload["datafusion.catalog.location"] = catalog_location
     if catalog_format is not None:
         payload["datafusion.catalog.format"] = catalog_format
-    payload.update(profile.feature_gates.settings())
-    if profile.join_policy is not None:
-        payload.update(profile.join_policy.settings())
-    if profile.explain_analyze_level is not None and _supports_explain_analyze_level():
-        payload["datafusion.explain.analyze_level"] = profile.explain_analyze_level
+    payload.update(profile.policies.feature_gates.settings())
+    if profile.policies.join_policy is not None:
+        payload.update(profile.policies.join_policy.settings())
+    if (
+        profile.diagnostics.explain_analyze_level is not None
+        and _supports_explain_analyze_level()
+    ):
+        payload["datafusion.explain.analyze_level"] = profile.diagnostics.explain_analyze_level
     return payload
 
 
@@ -2479,15 +2532,18 @@ class _RuntimeDiagnosticsMixin:
         payload: dict[str, str] = (
             dict(resolved_policy.settings) if resolved_policy is not None else {}
         )
-        if profile.cache_policy is not None:
-            payload.update(cache_policy_settings(profile.cache_policy))
+        if profile.policies.cache_policy is not None:
+            payload.update(cache_policy_settings(profile.policies.cache_policy))
         resolved_schema_hardening = _resolved_schema_hardening_for_profile(profile)
         if resolved_schema_hardening is not None:
             payload.update(resolved_schema_hardening.settings())
         payload.update(_runtime_settings_payload(profile))
-        if profile.settings_overrides:
+        if profile.policies.settings_overrides:
             payload.update(
-                {str(key): str(value) for key, value in profile.settings_overrides.items()}
+                {
+                    str(key): str(value)
+                    for key, value in profile.policies.settings_overrides.items()
+                }
             )
         payload.update(_extra_settings_payload(profile))
         return payload
@@ -2507,6 +2563,35 @@ class _RuntimeDiagnosticsMixin:
         }
         return payload_hash(payload, _SETTINGS_HASH_SCHEMA)
 
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return a canonical fingerprint payload for the runtime profile.
+
+        Uses existing settings and telemetry hashes to avoid re-serializing
+        the full runtime profile surface.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing the runtime profile fingerprint inputs.
+        """
+        profile = cast("DataFusionRuntimeProfile", self)
+        return {
+            "version": 1,
+            "architecture_version": profile.architecture_version,
+            "settings_hash": profile.settings_hash(),
+            "telemetry_hash": profile.telemetry_payload_hash(),
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the runtime profile.
+
+        Returns
+        -------
+        str
+            Stable fingerprint for the runtime profile.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
     def telemetry_payload(self) -> dict[str, object]:
         """Return a diagnostics-friendly payload for the runtime profile.
 
@@ -2517,166 +2602,174 @@ class _RuntimeDiagnosticsMixin:
         """
         profile = cast("DataFusionRuntimeProfile", self)
         resolved_policy = _resolved_config_policy_for_profile(profile)
+        execution = profile.execution
+        catalog = profile.catalog
+        data_sources = profile.data_sources
+        features = profile.features
+        diagnostics = profile.diagnostics
+        policies = profile.policies
+        ast = data_sources.ast
+        bytecode = data_sources.bytecode
         ast_partitions = [
             {"name": name, "dtype": str(dtype)}
-            for name, dtype in profile.ast_external_partition_cols
+            for name, dtype in ast.external_partition_cols
         ]
         bytecode_partitions = [
             {"name": name, "dtype": str(dtype)}
-            for name, dtype in profile.bytecode_external_partition_cols
+            for name, dtype in bytecode.external_partition_cols
         ]
         return {
             "datafusion_version": datafusion.__version__,
-            "target_partitions": profile.target_partitions,
-            "batch_size": profile.batch_size,
-            "spill_dir": profile.spill_dir,
-            "memory_pool": profile.memory_pool,
-            "memory_limit_bytes": profile.memory_limit_bytes,
-            "default_catalog": profile.default_catalog,
-            "default_schema": profile.default_schema,
+            "target_partitions": execution.target_partitions,
+            "batch_size": execution.batch_size,
+            "spill_dir": execution.spill_dir,
+            "memory_pool": execution.memory_pool,
+            "memory_limit_bytes": execution.memory_limit_bytes,
+            "default_catalog": catalog.default_catalog,
+            "default_schema": catalog.default_schema,
             "view_catalog": (
-                profile.view_catalog_name or profile.default_catalog
-                if profile.view_schema_name is not None
+                catalog.view_catalog_name or catalog.default_catalog
+                if catalog.view_schema_name is not None
                 else None
             ),
-            "view_schema": profile.view_schema_name,
+            "view_schema": catalog.view_schema_name,
             "enable_ident_normalization": _effective_ident_normalization(profile),
-            "catalog_auto_load_location": profile.catalog_auto_load_location,
-            "catalog_auto_load_format": profile.catalog_auto_load_format,
-            "delta_store_policy_hash": delta_store_policy_hash(profile.delta_store_policy),
-            "delta_store_policy": _delta_store_policy_payload(profile.delta_store_policy),
-            "ast_catalog_location": profile.ast_catalog_location,
-            "ast_catalog_format": profile.ast_catalog_format,
-            "ast_external_location": profile.ast_external_location,
-            "ast_external_format": profile.ast_external_format,
-            "ast_external_provider": profile.ast_external_provider,
-            "ast_external_ordering": [list(key) for key in profile.ast_external_ordering],
+            "catalog_auto_load_location": catalog.catalog_auto_load_location,
+            "catalog_auto_load_format": catalog.catalog_auto_load_format,
+            "delta_store_policy_hash": delta_store_policy_hash(policies.delta_store_policy),
+            "delta_store_policy": _delta_store_policy_payload(policies.delta_store_policy),
+            "ast_catalog_location": ast.catalog_location,
+            "ast_catalog_format": ast.catalog_format,
+            "ast_external_location": ast.external_location,
+            "ast_external_format": ast.external_format,
+            "ast_external_provider": ast.external_provider,
+            "ast_external_ordering": [list(key) for key in ast.external_ordering],
             "ast_external_partitions": ast_partitions or None,
-            "ast_external_schema_force_view_types": profile.ast_external_schema_force_view_types,
-            "ast_external_skip_arrow_metadata": profile.ast_external_skip_arrow_metadata,
+            "ast_external_schema_force_view_types": ast.external_schema_force_view_types,
+            "ast_external_skip_arrow_metadata": ast.external_skip_arrow_metadata,
             "ast_external_listing_table_factory_infer_partitions": (
-                profile.ast_external_listing_table_factory_infer_partitions
+                ast.external_listing_table_factory_infer_partitions
             ),
             "ast_external_listing_table_ignore_subdirectory": (
-                profile.ast_external_listing_table_ignore_subdirectory
+                ast.external_listing_table_ignore_subdirectory
             ),
-            "ast_external_collect_statistics": profile.ast_external_collect_statistics,
-            "ast_external_meta_fetch_concurrency": profile.ast_external_meta_fetch_concurrency,
-            "ast_external_list_files_cache_ttl": profile.ast_external_list_files_cache_ttl,
-            "ast_external_list_files_cache_limit": profile.ast_external_list_files_cache_limit,
-            "ast_delta_location": profile.ast_delta_location,
-            "ast_delta_version": profile.ast_delta_version,
-            "ast_delta_timestamp": profile.ast_delta_timestamp,
-            "ast_delta_constraints": list(profile.ast_delta_constraints),
-            "ast_delta_scan": bool(profile.ast_delta_scan),
-            "bytecode_catalog_location": profile.bytecode_catalog_location,
-            "bytecode_catalog_format": profile.bytecode_catalog_format,
-            "bytecode_external_location": profile.bytecode_external_location,
-            "bytecode_external_format": profile.bytecode_external_format,
-            "bytecode_external_provider": profile.bytecode_external_provider,
-            "bytecode_external_ordering": [list(key) for key in profile.bytecode_external_ordering],
+            "ast_external_collect_statistics": ast.external_collect_statistics,
+            "ast_external_meta_fetch_concurrency": ast.external_meta_fetch_concurrency,
+            "ast_external_list_files_cache_ttl": ast.external_list_files_cache_ttl,
+            "ast_external_list_files_cache_limit": ast.external_list_files_cache_limit,
+            "ast_delta_location": ast.delta_location,
+            "ast_delta_version": ast.delta_version,
+            "ast_delta_timestamp": ast.delta_timestamp,
+            "ast_delta_constraints": list(ast.delta_constraints),
+            "ast_delta_scan": bool(ast.delta_scan),
+            "bytecode_catalog_location": bytecode.catalog_location,
+            "bytecode_catalog_format": bytecode.catalog_format,
+            "bytecode_external_location": bytecode.external_location,
+            "bytecode_external_format": bytecode.external_format,
+            "bytecode_external_provider": bytecode.external_provider,
+            "bytecode_external_ordering": [list(key) for key in bytecode.external_ordering],
             "bytecode_external_partitions": bytecode_partitions or None,
             "bytecode_external_schema_force_view_types": (
-                profile.bytecode_external_schema_force_view_types
+                bytecode.external_schema_force_view_types
             ),
-            "bytecode_external_skip_arrow_metadata": profile.bytecode_external_skip_arrow_metadata,
+            "bytecode_external_skip_arrow_metadata": bytecode.external_skip_arrow_metadata,
             "bytecode_external_listing_table_factory_infer_partitions": (
-                profile.bytecode_external_listing_table_factory_infer_partitions
+                bytecode.external_listing_table_factory_infer_partitions
             ),
             "bytecode_external_listing_table_ignore_subdirectory": (
-                profile.bytecode_external_listing_table_ignore_subdirectory
+                bytecode.external_listing_table_ignore_subdirectory
             ),
-            "bytecode_external_collect_statistics": profile.bytecode_external_collect_statistics,
+            "bytecode_external_collect_statistics": bytecode.external_collect_statistics,
             "bytecode_external_meta_fetch_concurrency": (
-                profile.bytecode_external_meta_fetch_concurrency
+                bytecode.external_meta_fetch_concurrency
             ),
-            "bytecode_external_list_files_cache_ttl": profile.bytecode_external_list_files_cache_ttl,
+            "bytecode_external_list_files_cache_ttl": bytecode.external_list_files_cache_ttl,
             "bytecode_external_list_files_cache_limit": (
-                profile.bytecode_external_list_files_cache_limit
+                bytecode.external_list_files_cache_limit
             ),
-            "bytecode_delta_location": profile.bytecode_delta_location,
-            "bytecode_delta_version": profile.bytecode_delta_version,
-            "bytecode_delta_timestamp": profile.bytecode_delta_timestamp,
-            "bytecode_delta_constraints": list(profile.bytecode_delta_constraints),
-            "bytecode_delta_scan": bool(profile.bytecode_delta_scan),
-            "enable_information_schema": profile.enable_information_schema,
-            "enable_url_table": profile.enable_url_table,
-            "cache_enabled": profile.cache_enabled,
-            "cache_max_columns": profile.cache_max_columns,
-            "minimum_parallel_output_files": profile.minimum_parallel_output_files,
-            "soft_max_rows_per_output_file": profile.soft_max_rows_per_output_file,
-            "maximum_parallel_row_group_writers": profile.maximum_parallel_row_group_writers,
-            "cache_manager_enabled": profile.enable_cache_manager,
-            "cache_manager_factory": bool(profile.cache_manager_factory),
-            "function_factory_enabled": profile.enable_function_factory,
-            "function_factory_hook": bool(profile.function_factory_hook),
-            "expr_planners_enabled": profile.enable_expr_planners,
-            "expr_planner_hook": bool(profile.expr_planner_hook),
-            "expr_planner_names": list(profile.expr_planner_names),
-            "enable_udfs": profile.enable_udfs,
-            "enable_async_udfs": profile.enable_async_udfs,
-            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
-            "async_udf_batch_size": profile.async_udf_batch_size,
-            "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
-            "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
-            "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
-            "delta_data_checker_enabled": profile.enable_delta_data_checker,
-            "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
-            "delta_plan_codec_physical": profile.delta_plan_codec_physical,
-            "delta_plan_codec_logical": profile.delta_plan_codec_logical,
-            "metrics_enabled": profile.enable_metrics,
-            "metrics_collector": bool(profile.metrics_collector),
-            "tracing_enabled": profile.enable_tracing,
-            "tracing_hook": bool(profile.tracing_hook),
-            "tracing_collector": bool(profile.tracing_collector),
-            "capture_explain": profile.capture_explain,
-            "explain_verbose": profile.explain_verbose,
-            "explain_analyze": profile.explain_analyze,
-            "explain_analyze_threshold_ms": profile.explain_analyze_threshold_ms,
-            "explain_analyze_level": profile.explain_analyze_level,
-            "explain_collector": bool(profile.explain_collector),
-            "capture_plan_artifacts": profile.capture_plan_artifacts,
-            "capture_semantic_diff": profile.capture_semantic_diff,
-            "plan_collector": bool(profile.plan_collector),
-            "substrait_validation": profile.substrait_validation,
-            "diagnostics_sink": bool(profile.diagnostics_sink),
-            "local_filesystem_root": profile.local_filesystem_root,
-            "plan_artifacts_root": profile.plan_artifacts_root,
-            "input_plugins": len(profile.input_plugins),
-            "prepared_statements": [stmt.name for stmt in profile.prepared_statements],
-            "runtime_env_hook": bool(profile.runtime_env_hook),
-            "config_policy_name": profile.config_policy_name,
-            "schema_hardening_name": profile.schema_hardening_name,
+            "bytecode_delta_location": bytecode.delta_location,
+            "bytecode_delta_version": bytecode.delta_version,
+            "bytecode_delta_timestamp": bytecode.delta_timestamp,
+            "bytecode_delta_constraints": list(bytecode.delta_constraints),
+            "bytecode_delta_scan": bool(bytecode.delta_scan),
+            "enable_information_schema": catalog.enable_information_schema,
+            "enable_url_table": features.enable_url_table,
+            "cache_enabled": features.cache_enabled,
+            "cache_max_columns": policies.cache_max_columns,
+            "minimum_parallel_output_files": execution.minimum_parallel_output_files,
+            "soft_max_rows_per_output_file": execution.soft_max_rows_per_output_file,
+            "maximum_parallel_row_group_writers": execution.maximum_parallel_row_group_writers,
+            "cache_manager_enabled": features.enable_cache_manager,
+            "cache_manager_factory": bool(policies.cache_manager_factory),
+            "function_factory_enabled": features.enable_function_factory,
+            "function_factory_hook": bool(policies.function_factory_hook),
+            "expr_planners_enabled": features.enable_expr_planners,
+            "expr_planner_hook": bool(policies.expr_planner_hook),
+            "expr_planner_names": list(policies.expr_planner_names),
+            "enable_udfs": features.enable_udfs,
+            "enable_async_udfs": features.enable_async_udfs,
+            "async_udf_timeout_ms": policies.async_udf_timeout_ms,
+            "async_udf_batch_size": policies.async_udf_batch_size,
+            "physical_expr_adapter_factory": bool(policies.physical_expr_adapter_factory),
+            "delta_session_defaults_enabled": features.enable_delta_session_defaults,
+            "delta_querybuilder_enabled": features.enable_delta_querybuilder,
+            "delta_data_checker_enabled": features.enable_delta_data_checker,
+            "delta_plan_codecs_enabled": features.enable_delta_plan_codecs,
+            "delta_plan_codec_physical": policies.delta_plan_codec_physical,
+            "delta_plan_codec_logical": policies.delta_plan_codec_logical,
+            "metrics_enabled": diagnostics.enable_metrics,
+            "metrics_collector": bool(diagnostics.metrics_collector),
+            "tracing_enabled": diagnostics.enable_tracing,
+            "tracing_hook": bool(diagnostics.tracing_hook),
+            "tracing_collector": bool(diagnostics.tracing_collector),
+            "capture_explain": diagnostics.capture_explain,
+            "explain_verbose": diagnostics.explain_verbose,
+            "explain_analyze": diagnostics.explain_analyze,
+            "explain_analyze_threshold_ms": diagnostics.explain_analyze_threshold_ms,
+            "explain_analyze_level": diagnostics.explain_analyze_level,
+            "explain_collector": bool(diagnostics.explain_collector),
+            "capture_plan_artifacts": diagnostics.capture_plan_artifacts,
+            "capture_semantic_diff": diagnostics.capture_semantic_diff,
+            "plan_collector": bool(diagnostics.plan_collector),
+            "substrait_validation": diagnostics.substrait_validation,
+            "diagnostics_sink": bool(diagnostics.diagnostics_sink),
+            "local_filesystem_root": policies.local_filesystem_root,
+            "plan_artifacts_root": policies.plan_artifacts_root,
+            "input_plugins": len(policies.input_plugins),
+            "prepared_statements": [stmt.name for stmt in policies.prepared_statements],
+            "runtime_env_hook": bool(policies.runtime_env_hook),
+            "config_policy_name": policies.config_policy_name,
+            "schema_hardening_name": policies.schema_hardening_name,
             "config_policy": dict(resolved_policy.settings)
             if resolved_policy is not None
             else None,
-            "sql_policy_name": profile.sql_policy_name,
+            "sql_policy_name": policies.sql_policy_name,
             "sql_policy": (
                 {
-                    "allow_ddl": profile.sql_policy.allow_ddl,
-                    "allow_dml": profile.sql_policy.allow_dml,
-                    "allow_statements": profile.sql_policy.allow_statements,
+                    "allow_ddl": policies.sql_policy.allow_ddl,
+                    "allow_dml": policies.sql_policy.allow_dml,
+                    "allow_statements": policies.sql_policy.allow_statements,
                 }
-                if profile.sql_policy is not None
+                if policies.sql_policy is not None
                 else None
             ),
             "param_identifier_allowlist": (
-                list(profile.param_identifier_allowlist)
-                if profile.param_identifier_allowlist
+                list(policies.param_identifier_allowlist)
+                if policies.param_identifier_allowlist
                 else None
             ),
-            "external_table_options": dict(profile.external_table_options)
-            if profile.external_table_options
+            "external_table_options": dict(policies.external_table_options)
+            if policies.external_table_options
             else None,
-            "write_policy": _datafusion_write_policy_payload(profile.write_policy),
-            "settings_overrides": dict(profile.settings_overrides),
-            "feature_gates": profile.feature_gates.settings(),
+            "write_policy": _datafusion_write_policy_payload(policies.write_policy),
+            "settings_overrides": dict(policies.settings_overrides),
+            "feature_gates": policies.feature_gates.settings(),
             "join_policy": (
-                profile.join_policy.settings() if profile.join_policy is not None else None
+                policies.join_policy.settings() if policies.join_policy is not None else None
             ),
             "settings_hash": profile.settings_hash(),
-            "share_context": profile.share_context,
-            "session_context_key": profile.session_context_key,
+            "share_context": execution.share_context,
+            "session_context_key": execution.session_context_key,
         }
 
     def telemetry_payload_v1(self) -> dict[str, object]:
@@ -2691,89 +2784,98 @@ class _RuntimeDiagnosticsMixin:
         settings = profile.settings_payload()
         ansi_mode = _ansi_mode(settings)
         parser_dialect = settings.get("datafusion.sql_parser.dialect")
+        execution = profile.execution
+        catalog = profile.catalog
+        features = profile.features
+        diagnostics = profile.diagnostics
+        policies = profile.policies
         return {
             "version": 2,
-            "profile_name": profile.config_policy_name,
+            "profile_name": policies.config_policy_name,
             "datafusion_version": datafusion.__version__,
-            "schema_hardening_name": profile.schema_hardening_name,
-            "sql_policy_name": profile.sql_policy_name,
+            "schema_hardening_name": policies.schema_hardening_name,
+            "sql_policy_name": policies.sql_policy_name,
             "session_config": dict(settings),
             "settings_hash": profile.settings_hash(),
-            "external_table_options": dict(profile.external_table_options)
-            if profile.external_table_options
+            "external_table_options": dict(policies.external_table_options)
+            if policies.external_table_options
             else None,
             "sql_policy": (
                 {
-                    "allow_ddl": profile.sql_policy.allow_ddl,
-                    "allow_dml": profile.sql_policy.allow_dml,
-                    "allow_statements": profile.sql_policy.allow_statements,
+                    "allow_ddl": policies.sql_policy.allow_ddl,
+                    "allow_dml": policies.sql_policy.allow_dml,
+                    "allow_statements": policies.sql_policy.allow_statements,
                 }
-                if profile.sql_policy is not None
+                if policies.sql_policy is not None
                 else None
             ),
             "param_identifier_allowlist": (
-                list(profile.param_identifier_allowlist)
-                if profile.param_identifier_allowlist
+                list(policies.param_identifier_allowlist)
+                if policies.param_identifier_allowlist
                 else None
             ),
-            "write_policy": _datafusion_write_policy_payload(profile.write_policy),
-            "feature_gates": dict(profile.feature_gates.settings()),
-            "join_policy": profile.join_policy.settings()
-            if profile.join_policy is not None
+            "write_policy": _datafusion_write_policy_payload(policies.write_policy),
+            "feature_gates": dict(policies.feature_gates.settings()),
+            "join_policy": policies.join_policy.settings()
+            if policies.join_policy is not None
             else None,
             "parquet_read": _settings_by_prefix(settings, "datafusion.execution.parquet."),
             "listing_table": _settings_by_prefix(settings, "datafusion.runtime.list_files_"),
             "spill": {
-                "spill_dir": profile.spill_dir,
-                "memory_pool": profile.memory_pool,
-                "memory_limit_bytes": profile.memory_limit_bytes,
+                "spill_dir": execution.spill_dir,
+                "memory_pool": execution.memory_pool,
+                "memory_limit_bytes": execution.memory_limit_bytes,
             },
             "execution": {
-                "target_partitions": profile.target_partitions,
-                "batch_size": profile.batch_size,
-                "repartition_aggregations": profile.repartition_aggregations,
-                "repartition_windows": profile.repartition_windows,
-                "repartition_file_scans": profile.repartition_file_scans,
-                "repartition_file_min_size": profile.repartition_file_min_size,
+                "target_partitions": execution.target_partitions,
+                "batch_size": execution.batch_size,
+                "repartition_aggregations": execution.repartition_aggregations,
+                "repartition_windows": execution.repartition_windows,
+                "repartition_file_scans": execution.repartition_file_scans,
+                "repartition_file_min_size": execution.repartition_file_min_size,
             },
             "sql_surfaces": {
-                "enable_information_schema": profile.enable_information_schema,
+                "enable_information_schema": catalog.enable_information_schema,
                 "enable_ident_normalization": _effective_ident_normalization(profile),
-                "enable_url_table": profile.enable_url_table,
+                "enable_url_table": features.enable_url_table,
                 "sql_parser_dialect": parser_dialect,
                 "ansi_mode": ansi_mode,
             },
             "extensions": {
-                "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+                "delta_session_defaults_enabled": features.enable_delta_session_defaults,
                 "delta_runtime_env": {
-                    "max_spill_size": profile.delta_max_spill_size,
-                    "max_temp_directory_size": profile.delta_max_temp_directory_size,
+                    "max_spill_size": execution.delta_max_spill_size,
+                    "max_temp_directory_size": execution.delta_max_temp_directory_size,
                 },
-                "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
-                "delta_data_checker_enabled": profile.enable_delta_data_checker,
-                "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
-                "delta_plan_codec_physical": profile.delta_plan_codec_physical,
-                "delta_plan_codec_logical": profile.delta_plan_codec_logical,
-                "delta_protocol_mode": profile.delta_protocol_mode,
+                "delta_querybuilder_enabled": features.enable_delta_querybuilder,
+                "delta_data_checker_enabled": features.enable_delta_data_checker,
+                "delta_plan_codecs_enabled": features.enable_delta_plan_codecs,
+                "delta_plan_codec_physical": policies.delta_plan_codec_physical,
+                "delta_plan_codec_logical": policies.delta_plan_codec_logical,
+                "delta_protocol_mode": policies.delta_protocol_mode,
                 "delta_protocol_support": _delta_protocol_support_payload(profile),
-                "expr_planners_enabled": profile.enable_expr_planners,
-                "expr_planner_names": list(profile.expr_planner_names),
-                "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
-                "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
+                "expr_planners_enabled": features.enable_expr_planners,
+                "expr_planner_names": list(policies.expr_planner_names),
+                "physical_expr_adapter_factory": bool(policies.physical_expr_adapter_factory),
+                "schema_evolution_adapter_enabled": features.enable_schema_evolution_adapter,
                 "named_args_supported": named_args_supported(profile),
-                "async_udfs_enabled": profile.enable_async_udfs,
-                "async_udf_timeout_ms": profile.async_udf_timeout_ms,
-                "async_udf_batch_size": profile.async_udf_batch_size,
+                "async_udfs_enabled": features.enable_async_udfs,
+                "async_udf_timeout_ms": policies.async_udf_timeout_ms,
+                "async_udf_batch_size": policies.async_udf_batch_size,
             },
-            "substrait_validation": profile.substrait_validation,
+            "substrait_validation": diagnostics.substrait_validation,
             "output_writes": {
-                "cache_enabled": profile.cache_enabled,
-                "cache_max_columns": profile.cache_max_columns,
-                "minimum_parallel_output_files": profile.minimum_parallel_output_files,
-                "soft_max_rows_per_output_file": profile.soft_max_rows_per_output_file,
-                "maximum_parallel_row_group_writers": profile.maximum_parallel_row_group_writers,
-                "objectstore_writer_buffer_size": profile.objectstore_writer_buffer_size,
-                "datafusion_write_policy": _datafusion_write_policy_payload(profile.write_policy),
+                "cache_enabled": features.cache_enabled,
+                "cache_max_columns": policies.cache_max_columns,
+                "minimum_parallel_output_files": execution.minimum_parallel_output_files,
+                "soft_max_rows_per_output_file": execution.soft_max_rows_per_output_file,
+                "maximum_parallel_row_group_writers": (
+                    execution.maximum_parallel_row_group_writers
+                ),
+                "objectstore_writer_buffer_size": execution.objectstore_writer_buffer_size,
+                "datafusion_write_policy": _datafusion_write_policy_payload(
+                    policies.write_policy
+                ),
             },
         }
 
@@ -3135,15 +3237,9 @@ def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
 
 
 @dataclass(frozen=True)
-class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
-    """DataFusion runtime configuration.
+class ExecutionConfig:
+    """Execution-level DataFusion settings."""
 
-    Identifier normalization is disabled by default to preserve case-sensitive
-    identifiers, and URL-table support is disabled unless explicitly enabled
-    for development or controlled file-path queries.
-    """
-
-    architecture_version: str = "v2"
     target_partitions: int | None = None
     batch_size: int | None = None
     repartition_aggregations: bool | None = None
@@ -3159,6 +3255,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     memory_limit_bytes: int | None = None
     delta_max_spill_size: int | None = None
     delta_max_temp_directory_size: int | None = None
+    share_context: bool = True
+    session_context_key: str | None = None
+
+
+@dataclass(frozen=True)
+class CatalogConfig:
+    """Catalog and schema configuration."""
+
     default_catalog: str = "datafusion"
     default_schema: str = "public"
     view_catalog_name: str | None = None
@@ -3167,55 +3271,59 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     registry_catalog_name: str | None = None
     catalog_auto_load_location: str | None = None
     catalog_auto_load_format: str | None = None
-    ast_catalog_location: str | None = None
-    ast_catalog_format: str | None = None
-    ast_external_location: str | None = None
-    ast_external_format: str = "delta"
-    ast_external_provider: Literal["listing"] | None = None
-    ast_external_ordering: tuple[tuple[str, str], ...] = (
-        ("repo", "ascending"),
-        ("path", "ascending"),
+    enable_information_schema: bool = True
+
+
+@dataclass(frozen=True)
+class TableSourceConfig:
+    """Reusable table source configuration."""
+
+    catalog_location: str | None = None
+    catalog_format: str | None = None
+    external_location: str | None = None
+    external_format: str = "delta"
+    external_provider: Literal["listing"] | None = None
+    external_ordering: tuple[tuple[str, str], ...] = ()
+    external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+    external_schema_force_view_types: bool | None = False
+    external_skip_arrow_metadata: bool | None = False
+    external_listing_table_factory_infer_partitions: bool | None = True
+    external_listing_table_ignore_subdirectory: bool | None = False
+    external_collect_statistics: bool | None = False
+    external_meta_fetch_concurrency: int | None = 64
+    external_list_files_cache_ttl: str | None = None
+    external_list_files_cache_limit: str | None = None
+    delta_location: str | None = None
+    delta_version: int | None = None
+    delta_timestamp: str | None = None
+    delta_constraints: tuple[str, ...] = ()
+    delta_scan: DeltaScanOptions | None = None
+
+
+def _default_ast_source_config() -> TableSourceConfig:
+    return TableSourceConfig(
+        external_ordering=(("repo", "ascending"), ("path", "ascending")),
+        external_partition_cols=(("repo", pa.string()), ("path", pa.string())),
+        external_list_files_cache_ttl="2m",
+        external_list_files_cache_limit=str(64 * 1024 * 1024),
     )
-    ast_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = (
-        ("repo", pa.string()),
-        ("path", pa.string()),
+
+
+def _default_bytecode_source_config() -> TableSourceConfig:
+    return TableSourceConfig(
+        external_ordering=(("path", "ascending"), ("file_id", "ascending")),
+        external_partition_cols=(),
+        external_list_files_cache_ttl="5m",
+        external_list_files_cache_limit="10000",
     )
-    ast_external_schema_force_view_types: bool | None = False
-    ast_external_skip_arrow_metadata: bool | None = False
-    ast_external_listing_table_factory_infer_partitions: bool | None = True
-    ast_external_listing_table_ignore_subdirectory: bool | None = False
-    ast_external_collect_statistics: bool | None = False
-    ast_external_meta_fetch_concurrency: int | None = 64
-    ast_external_list_files_cache_ttl: str | None = "2m"
-    ast_external_list_files_cache_limit: str | None = str(64 * 1024 * 1024)
-    ast_delta_location: str | None = None
-    ast_delta_version: int | None = None
-    ast_delta_timestamp: str | None = None
-    ast_delta_constraints: tuple[str, ...] = ()
-    ast_delta_scan: DeltaScanOptions | None = None
-    bytecode_catalog_location: str | None = None
-    bytecode_catalog_format: str | None = None
-    bytecode_external_location: str | None = None
-    bytecode_external_format: str = "delta"
-    bytecode_external_provider: Literal["listing"] | None = None
-    bytecode_external_ordering: tuple[tuple[str, str], ...] = (
-        ("path", "ascending"),
-        ("file_id", "ascending"),
-    )
-    bytecode_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
-    bytecode_external_schema_force_view_types: bool | None = False
-    bytecode_external_skip_arrow_metadata: bool | None = False
-    bytecode_external_listing_table_factory_infer_partitions: bool | None = True
-    bytecode_external_listing_table_ignore_subdirectory: bool | None = False
-    bytecode_external_collect_statistics: bool | None = False
-    bytecode_external_meta_fetch_concurrency: int | None = 64
-    bytecode_external_list_files_cache_ttl: str | None = "5m"
-    bytecode_external_list_files_cache_limit: str | None = "10000"
-    bytecode_delta_location: str | None = None
-    bytecode_delta_version: int | None = None
-    bytecode_delta_timestamp: str | None = None
-    bytecode_delta_constraints: tuple[str, ...] = ()
-    bytecode_delta_scan: DeltaScanOptions | None = None
+
+
+@dataclass(frozen=True)
+class DataSourceConfig:
+    """Dataset location and output configuration."""
+
+    ast: TableSourceConfig = field(default_factory=_default_ast_source_config)
+    bytecode: TableSourceConfig = field(default_factory=_default_bytecode_source_config)
     extract_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     extract_output_catalog_name: str | None = None
     extract_output_root: str | None = None
@@ -3227,43 +3335,35 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     semantic_cache_overrides: Mapping[str, CachePolicy] = field(default_factory=dict)
     cdf_enabled: bool = False
     cdf_cursor_store: CdfCursorStore | None = None
-    enable_information_schema: bool = True
+    dataset_templates: Mapping[str, DatasetLocation] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FeatureGatesConfig:
+    """Feature toggle configuration."""
+
     enable_ident_normalization: bool = False
     force_disable_ident_normalization: bool = False
-    enable_url_table: bool = False  # Dev-only convenience for file-path queries.
+    enable_url_table: bool = False
     cache_enabled: bool = False
-    cache_max_columns: int | None = 64
     enable_cache_manager: bool = False
-    cache_manager_factory: Callable[[], object] | None = None
     enable_function_factory: bool = True
-    function_factory_hook: Callable[[SessionContext], None] | None = None
     enable_schema_registry: bool = True
     enable_expr_planners: bool = True
-    expr_planner_names: tuple[str, ...] = ("codeanatomy_domain",)
-    expr_planner_hook: Callable[[SessionContext], None] | None = None
-    physical_expr_adapter_factory: object | None = None
-    schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
     enable_async_udfs: bool = False
-    async_udf_timeout_ms: int | None = None
-    async_udf_batch_size: int | None = None
-    udf_catalog_policy: Literal["default", "strict"] = "default"
     enable_delta_session_defaults: bool = False
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
-    delta_plan_codec_physical: str = "delta_physical"
-    delta_plan_codec_logical: str = "delta_logical"
-    delta_store_policy: DeltaStorePolicy | None = None
-    delta_protocol_support: DeltaProtocolSupport | None = None
-    delta_protocol_mode: Literal["error", "warn", "ignore"] = "error"
-    enable_metrics: bool = False
-    metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
-    enable_tracing: bool = False
-    tracing_hook: Callable[[SessionContext], None] | None = None
-    tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     enforce_preflight: bool = True
+
+
+@dataclass(frozen=True)
+class DiagnosticsConfig:
+    """Diagnostics, explain, and observability settings."""
+
     capture_explain: bool = True
     explain_verbose: bool = False
     explain_analyze: bool = True
@@ -3278,25 +3378,22 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     plan_collector: _DataFusionPlanCollector | None = field(
         default_factory=_DataFusionPlanCollector
     )
-    view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
+    diagnostics_sink: DiagnosticsSink | None = None
+    labeled_explains: list[dict[str, object]] = field(default_factory=list)
+    enable_metrics: bool = False
+    metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
+    enable_tracing: bool = False
+    tracing_hook: Callable[[SessionContext], None] | None = None
+    tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     substrait_validation: bool = False
     validate_plan_determinism: bool = False
     strict_determinism: bool = False
-    diagnostics_sink: DiagnosticsSink | None = None
-    labeled_explains: list[dict[str, object]] = field(default_factory=list)
-    diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
-    cache_output_root: str | None = None
-    runtime_artifact_cache_enabled: bool = False
-    runtime_artifact_cache_root: str | None = None
-    metadata_cache_snapshot_enabled: bool = False
-    plan_cache: PlanCache | None = None
-    plan_proto_cache: PlanProtoCache | None = None
-    udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
-    delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
-    local_filesystem_root: str | None = None
-    plan_artifacts_root: str | None = None
-    input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
-    prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
+
+
+@dataclass(frozen=True)
+class PolicyBundleConfig:
+    """Policy, hook, and cache configuration."""
+
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     cache_policy: CachePolicyConfig | None = None
@@ -3311,26 +3408,111 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
     physical_rulepack_enabled: bool = True
     join_policy: DataFusionJoinPolicy | None = None
-    share_context: bool = True
-    session_context_key: str | None = None
+    cache_max_columns: int | None = 64
+    cache_manager_factory: Callable[[], object] | None = None
+    function_factory_hook: Callable[[SessionContext], None] | None = None
+    expr_planner_names: tuple[str, ...] = ("codeanatomy_domain",)
+    expr_planner_hook: Callable[[SessionContext], None] | None = None
+    physical_expr_adapter_factory: object | None = None
+    schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
+    udf_catalog_policy: Literal["default", "strict"] = "default"
+    async_udf_timeout_ms: int | None = None
+    async_udf_batch_size: int | None = None
+    delta_plan_codec_physical: str = "delta_physical"
+    delta_plan_codec_logical: str = "delta_logical"
+    delta_store_policy: DeltaStorePolicy | None = None
+    delta_protocol_support: DeltaProtocolSupport | None = None
+    delta_protocol_mode: Literal["error", "warn", "ignore"] = "error"
+    diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    cache_output_root: str | None = None
+    runtime_artifact_cache_enabled: bool = False
+    runtime_artifact_cache_root: str | None = None
+    metadata_cache_snapshot_enabled: bool = False
+    local_filesystem_root: str | None = None
+    plan_artifacts_root: str | None = None
+    input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
+    prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
 
+
+@dataclass(frozen=True)
+class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
+    """DataFusion runtime configuration.
+
+    Identifier normalization is disabled by default to preserve case-sensitive
+    identifiers, and URL-table support is disabled unless explicitly enabled
+    for development or controlled file-path queries.
+    """
+
+    architecture_version: str = "v2"
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    catalog: CatalogConfig = field(default_factory=CatalogConfig)
+    data_sources: DataSourceConfig = field(default_factory=DataSourceConfig)
+    features: FeatureGatesConfig = field(default_factory=FeatureGatesConfig)
+    diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
+    policies: PolicyBundleConfig = field(default_factory=PolicyBundleConfig)
+    view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
+    plan_cache: PlanCache | None = None
+    plan_proto_cache: PlanProtoCache | None = None
+    udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
+    delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
+
+    def __getattr__(self, name: str) -> object:
+        """Resolve configuration attributes from composed profile sections.
+
+        Returns
+        -------
+        object
+            Attribute value when found on a profile section.
+
+        Raises
+        ------
+        AttributeError
+            Raised when the attribute is not present on any profile section.
+        """
+        for section in (
+            self.execution,
+            self.catalog,
+            self.data_sources,
+            self.features,
+            self.diagnostics,
+            self.policies,
+        ):
+            value = getattr(section, name, _MISSING)
+            if value is not _MISSING:
+                return value
+        for prefix, source in (
+            ("ast_", self.data_sources.ast),
+            ("bytecode_", self.data_sources.bytecode),
+        ):
+            if not name.startswith(prefix):
+                continue
+            suffix = name[len(prefix) :]
+            value = getattr(source, suffix, _MISSING)
+            if value is not _MISSING:
+                return value
+        msg = f"{type(self).__name__!s} has no attribute {name!r}"
+        raise AttributeError(msg)
+
     def _validate_information_schema(self) -> None:
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             msg = "information_schema must be enabled for DataFusion sessions."
             raise ValueError(msg)
 
     def _validate_catalog_names(self) -> None:
         if (
-            self.registry_catalog_name is not None
-            and self.registry_catalog_name != self.default_catalog
+            self.catalog.registry_catalog_name is not None
+            and self.catalog.registry_catalog_name != self.catalog.default_catalog
         ):
             msg = (
                 "registry_catalog_name must match default_catalog; "
                 "custom catalog inference is not supported."
             )
             raise ValueError(msg)
-        if self.view_catalog_name is not None and self.view_catalog_name != self.default_catalog:
+        if (
+            self.catalog.view_catalog_name is not None
+            and self.catalog.view_catalog_name != self.catalog.default_catalog
+        ):
             msg = (
                 "view_catalog_name must match default_catalog; "
                 "custom catalog inference is not supported."
@@ -3340,18 +3522,18 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _resolve_plan_cache(self) -> PlanCache:
         if self.plan_cache is not None:
             return self.plan_cache
-        return PlanCache(cache_profile=self.diskcache_profile)
+        return PlanCache(cache_profile=self.policies.diskcache_profile)
 
     def _resolve_plan_proto_cache(self) -> PlanProtoCache:
         if self.plan_proto_cache is not None:
             return self.plan_proto_cache
-        return PlanProtoCache(cache_profile=self.diskcache_profile)
+        return PlanProtoCache(cache_profile=self.policies.diskcache_profile)
 
     def _resolve_diagnostics_sink(self) -> DiagnosticsSink | None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return None
         return ensure_recorder_sink(
-            self.diagnostics_sink,
+            self.diagnostics.diagnostics_sink,
             session_id=self.context_cache_key(),
         )
 
@@ -3373,7 +3555,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             object.__setattr__(self, "plan_proto_cache", plan_proto_cache)
         diagnostics_sink = self._resolve_diagnostics_sink()
         if diagnostics_sink is not None:
-            object.__setattr__(self, "diagnostics_sink", diagnostics_sink)
+            object.__setattr__(
+                self,
+                "diagnostics",
+                replace(self.diagnostics, diagnostics_sink=diagnostics_sink),
+            )
         async_policy = self._validate_async_udf_policy()
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
@@ -3408,26 +3594,26 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Runtime environment builder for the profile.
         """
         builder = RuntimeEnvBuilder()
-        if self.spill_dir is not None:
+        if self.execution.spill_dir is not None:
             builder = _apply_builder(
                 builder,
                 method="with_disk_manager_specified",
-                args=(self.spill_dir,),
+                args=(self.execution.spill_dir,),
             )
             builder = _apply_builder(
                 builder,
                 method="with_temp_file_path",
-                args=(self.spill_dir,),
+                args=(self.execution.spill_dir,),
             )
-        if self.memory_limit_bytes is not None:
-            limit = int(self.memory_limit_bytes)
-            if self.memory_pool == "fair":
+        if self.execution.memory_limit_bytes is not None:
+            limit = int(self.execution.memory_limit_bytes)
+            if self.execution.memory_pool == "fair":
                 builder = _apply_builder(
                     builder,
                     method="with_fair_spill_pool",
                     args=(limit,),
                 )
-            elif self.memory_pool == "greedy":
+            elif self.execution.memory_pool == "greedy":
                 builder = _apply_builder(
                     builder,
                     method="with_greedy_memory_pool",
@@ -3435,11 +3621,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 )
         builder = _attach_cache_manager(
             builder,
-            enabled=self.enable_cache_manager,
-            factory=self.cache_manager_factory,
+            enabled=self.features.enable_cache_manager,
+            factory=self.policies.cache_manager_factory,
         )
-        if self.runtime_env_hook is not None:
-            builder = self.runtime_env_hook(builder)
+        if self.policies.runtime_env_hook is not None:
+            builder = self.policies.runtime_env_hook(builder)
         return builder
 
     def _delta_runtime_env_options(self) -> _DeltaRuntimeEnvOptions | None:
@@ -3458,7 +3644,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         TypeError
             Raised when the delta runtime env options class is unavailable.
         """
-        if self.delta_max_spill_size is None and self.delta_max_temp_directory_size is None:
+        if (
+            self.execution.delta_max_spill_size is None
+            and self.execution.delta_max_temp_directory_size is None
+        ):
             return None
         module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
         if module is None:
@@ -3469,10 +3658,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "Delta runtime env options type is unavailable in the extension module."
             raise TypeError(msg)
         options = cast("_DeltaRuntimeEnvOptions", options_cls())
-        if self.delta_max_spill_size is not None:
-            options.max_spill_size = int(self.delta_max_spill_size)
-        if self.delta_max_temp_directory_size is not None:
-            options.max_temp_directory_size = int(self.delta_max_temp_directory_size)
+        if self.execution.delta_max_spill_size is not None:
+            options.max_spill_size = int(self.execution.delta_max_spill_size)
+        if self.execution.delta_max_temp_directory_size is not None:
+            options.max_temp_directory_size = int(self.execution.delta_max_temp_directory_size)
         return options
 
     def session_context(self) -> SessionContext:
@@ -3539,7 +3728,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Session context configured for Delta operations.
         """
         if storage_options:
-            return replace(self, share_context=False).delta_runtime_ctx()
+            return replace(
+                self,
+                execution=replace(self.execution, share_context=False),
+            ).delta_runtime_ctx()
         return self.delta_runtime_ctx()
 
     def _session_runtime_from_context(self, ctx: SessionContext) -> SessionRuntime:
@@ -3572,8 +3764,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         str
             Root directory for cache tables.
         """
-        if self.cache_output_root is not None:
-            return self.cache_output_root
+        if self.policies.cache_output_root is not None:
+            return self.policies.cache_output_root
         return str(Path(tempfile.gettempdir()) / "datafusion_cache")
 
     def runtime_artifact_root(self) -> str:
@@ -3584,8 +3776,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         str
             Root directory for runtime artifact cache outputs.
         """
-        if self.runtime_artifact_cache_root is not None:
-            return self.runtime_artifact_cache_root
+        if self.policies.runtime_artifact_cache_root is not None:
+            return self.policies.runtime_artifact_cache_root
         return str(Path(self.cache_root()) / "runtime_artifacts")
 
     def metadata_cache_snapshot_root(self) -> str:
@@ -3637,22 +3829,29 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Validation report with status and configuration details.
         """
         errors: list[str] = []
-        if self.enable_async_udfs and not self.enable_udfs:
+        if self.features.enable_async_udfs and not self.features.enable_udfs:
             errors.append("Async UDFs require enable_udfs to be True.")
-        if not self.enable_async_udfs and (
-            self.async_udf_timeout_ms is not None or self.async_udf_batch_size is not None
+        if not self.features.enable_async_udfs and (
+            self.policies.async_udf_timeout_ms is not None
+            or self.policies.async_udf_batch_size is not None
         ):
             errors.append("Async UDF settings provided while async UDFs are disabled.")
-        if self.enable_async_udfs:
-            if self.async_udf_timeout_ms is None or self.async_udf_timeout_ms <= 0:
+        if self.features.enable_async_udfs:
+            if (
+                self.policies.async_udf_timeout_ms is None
+                or self.policies.async_udf_timeout_ms <= 0
+            ):
                 errors.append("async_udf_timeout_ms must be a positive integer.")
-            if self.async_udf_batch_size is None or self.async_udf_batch_size <= 0:
+            if (
+                self.policies.async_udf_batch_size is None
+                or self.policies.async_udf_batch_size <= 0
+            ):
                 errors.append("async_udf_batch_size must be a positive integer.")
         return {
             "valid": not errors,
-            "enable_async_udfs": self.enable_async_udfs,
-            "async_udf_timeout_ms": self.async_udf_timeout_ms,
-            "async_udf_batch_size": self.async_udf_batch_size,
+            "enable_async_udfs": self.features.enable_async_udfs,
+            "async_udf_timeout_ms": self.policies.async_udf_timeout_ms,
+            "async_udf_batch_size": self.policies.async_udf_batch_size,
             "errors": errors,
         }
 
@@ -3670,7 +3869,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         warnings: list[str] = []
 
         # Check if function factory is enabled but expr planners are not
-        if self.enable_function_factory and not self.enable_expr_planners:
+        if self.features.enable_function_factory and not self.features.enable_expr_planners:
             warnings.append(
                 "FunctionFactory enabled without ExprPlanners; "
                 "named arguments may not be supported in SQL."
@@ -3678,15 +3877,19 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
         # Check if expr planners are configured
         valid = True
-        if self.enable_expr_planners and not self.expr_planner_names and not self.expr_planner_hook:
+        if (
+            self.features.enable_expr_planners
+            and not self.policies.expr_planner_names
+            and not self.policies.expr_planner_hook
+        ):
             valid = False
             warnings.append("ExprPlanners enabled but no planner names or hook configured.")
 
         return {
             "valid": valid,
-            "enable_function_factory": self.enable_function_factory,
-            "enable_expr_planners": self.enable_expr_planners,
-            "expr_planner_names": list(self.expr_planner_names),
+            "enable_function_factory": self.features.enable_function_factory,
+            "enable_expr_planners": self.features.enable_expr_planners,
+            "expr_planner_names": list(self.policies.expr_planner_names),
             "named_args_supported": named_args_supported(self),
             "warnings": warnings,
         }
@@ -3704,7 +3907,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when required routines are missing from information_schema.
         """
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return {
                 "missing_in_information_schema": [],
                 "routines_available": False,
@@ -3734,44 +3937,44 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
-        for plugin in self.input_plugins:
+        for plugin in self.policies.input_plugins:
             plugin(ctx)
 
     def _install_registry_catalogs(self, ctx: SessionContext) -> None:
         """Install registry-backed catalog providers on the session context."""
-        if not self.registry_catalogs:
+        if not self.catalog.registry_catalogs:
             return
         from datafusion_engine.catalog.provider import (
             register_registry_catalogs,
         )
 
-        catalog_name = self.registry_catalog_name or self.default_catalog
+        catalog_name = self.catalog.registry_catalog_name or self.catalog.default_catalog
         register_registry_catalogs(
             ctx,
-            catalogs=self.registry_catalogs,
+            catalogs=self.catalog.registry_catalogs,
             catalog_name=catalog_name,
-            default_schema=self.default_schema,
+            default_schema=self.catalog.default_schema,
             runtime_profile=self,
         )
 
     def _install_view_schema(self, ctx: SessionContext) -> None:
         """Install the view schema namespace when configured."""
-        if self.view_schema_name is None:
+        if self.catalog.view_schema_name is None:
             return
-        catalog_name = self.view_catalog_name or self.default_catalog
+        catalog_name = self.catalog.view_catalog_name or self.catalog.default_catalog
         try:
             catalog = ctx.catalog(catalog_name)
         except (KeyError, RuntimeError, TypeError, ValueError):
             return
         try:
-            existing_schema = catalog.schema(self.view_schema_name)
+            existing_schema = catalog.schema(self.catalog.view_schema_name)
         except KeyError:
             existing_schema = None
         if existing_schema is not None:
             return
         from datafusion.catalog import Schema
 
-        catalog.register_schema(self.view_schema_name, Schema.memory_schema())
+        catalog.register_schema(self.catalog.view_schema_name, Schema.memory_schema())
 
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
@@ -3782,21 +3985,21 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion_engine.udf.runtime import udf_backend_available
 
         options = RustUdfPlatformOptions(
-            enable_udfs=self.enable_udfs,
-            enable_async_udfs=self.enable_async_udfs,
-            async_udf_timeout_ms=self.async_udf_timeout_ms,
-            async_udf_batch_size=self.async_udf_batch_size,
-            enable_function_factory=self.enable_function_factory,
-            enable_expr_planners=self.enable_expr_planners,
-            function_factory_hook=self.function_factory_hook,
-            expr_planner_hook=self.expr_planner_hook,
-            expr_planner_names=self.expr_planner_names,
+            enable_udfs=self.features.enable_udfs,
+            enable_async_udfs=self.features.enable_async_udfs,
+            async_udf_timeout_ms=self.policies.async_udf_timeout_ms,
+            async_udf_batch_size=self.policies.async_udf_batch_size,
+            enable_function_factory=self.features.enable_function_factory,
+            enable_expr_planners=self.features.enable_expr_planners,
+            function_factory_hook=self.policies.function_factory_hook,
+            expr_planner_hook=self.policies.expr_planner_hook,
+            expr_planner_names=self.policies.expr_planner_names,
             strict=udf_backend_available(),
         )
         platform = install_rust_udf_platform(ctx, options=options)
         if platform.snapshot is not None:
             self._record_udf_snapshot(platform.snapshot)
-        if platform.docs is not None and self.diagnostics_sink is not None:
+        if platform.docs is not None and self.diagnostics.diagnostics_sink is not None:
             self._record_udf_docs(platform.docs)
         if platform.function_factory is not None:
             self._record_function_factory(
@@ -3813,7 +4016,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 policy=platform.expr_planner_policy,
             )
         if (
-            self.enable_information_schema
+            self.catalog.enable_information_schema
             and platform.snapshot is not None
             and platform.function_factory is not None
             and platform.function_factory.installed
@@ -3857,7 +4060,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             msg = "UdfCatalog requires information_schema to be enabled."
             raise ValueError(msg)
         introspector = self._schema_introspector(ctx)
@@ -3898,7 +4101,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
         missing = self._missing_udf_names(catalog, required_builtins)
         if missing:
-            if self.diagnostics_sink is not None:
+            if self.diagnostics.diagnostics_sink is not None:
                 self.record_artifact(
                     "datafusion_udf_validation_v1",
                     {
@@ -4001,7 +4204,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 )
             run = create_run_context(
                 label="delta_commit",
-                sink=self.diagnostics_sink,
+                sink=self.diagnostics.diagnostics_sink,
                 metadata=base_metadata,
             )
             self.delta_commit_runs[key] = run
@@ -4010,7 +4213,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if commit_metadata:
             run.metadata["commit_metadata"] = dict(commit_metadata)
         options, updated = run.next_commit_version()
-        if self.diagnostics_sink is not None:
+        if self.diagnostics.diagnostics_sink is not None:
             commit_meta_payload = dict(commit_metadata) if commit_metadata is not None else None
             payload = {
                 "event_time_unix_ms": int(time.time() * 1000),
@@ -4037,7 +4240,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if metadata:
             run.metadata.update(dict(metadata))
         self.delta_commit_runs[key] = run
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         committed_version = run.commit_sequence - 1 if run.commit_sequence > 0 else None
         payload = {
@@ -4060,7 +4263,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when required rulepack functions are missing or mismatched.
         """
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         try:
             function_catalog = function_catalog_snapshot_for_profile(
@@ -4095,7 +4298,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         view_errors: Mapping[str, str] | None = None,
         tree_sitter_checks: Mapping[str, object] | None = None,
     ) -> SchemaRegistryValidationResult:
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return SchemaRegistryValidationResult()
         expected = tuple(sorted(set(expected_names or ())))
         missing = missing_schema_names(ctx, expected=expected) if expected else ()
@@ -4119,7 +4322,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if relationship_errors
             else None,
         )
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return result
         if (
             not result.missing
@@ -4157,9 +4360,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return result
 
     def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         catalog_location, catalog_format = self._effective_catalog_autoload()
         if catalog_location is None and catalog_format is None:
@@ -4228,12 +4431,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return view_names, disabled_views, payload
 
     def _record_ast_feature_gates(self, payload: Mapping[str, object]) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact("datafusion_ast_feature_gates_v1", payload)
 
     def _record_ast_span_metadata(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -4253,7 +4456,22 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             payload["datafusion_version"] = version
         self.record_artifact("datafusion_ast_span_metadata_v1", payload)
 
+    def _dataset_template(self, name: str) -> DatasetLocation | None:
+        templates = self.data_sources.dataset_templates
+        if not templates:
+            return None
+        template = templates.get(name)
+        if template is not None:
+            return template
+        if name.endswith("_files_v1"):
+            short_name = name.removesuffix("_files_v1")
+            return templates.get(short_name)
+        return None
+
     def _ast_dataset_location(self) -> DatasetLocation | None:
+        template = self._dataset_template("ast_files_v1")
+        if template is not None:
+            return template
         if self.ast_external_location and self.ast_delta_location:
             msg = "AST dataset config cannot set both external and delta locations."
             raise ValueError(msg)
@@ -4326,6 +4544,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._record_ast_registration(location=location)
 
     def _bytecode_dataset_location(self) -> DatasetLocation | None:
+        template = self._dataset_template("bytecode_files_v1")
+        if template is not None:
+            return template
         if self.bytecode_external_location and self.bytecode_delta_location:
             msg = "Bytecode dataset config cannot set both external and delta locations."
             raise ValueError(msg)
@@ -4405,13 +4626,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         DatasetLocation | None
             Extract dataset location when configured.
         """
+        template = self._dataset_template(name)
+        if template is not None:
+            return template
         location = extract_output_locations_for_profile(self).get(name)
         if location is None:
             if name == "ast_files_v1":
                 return self._ast_dataset_location()
             if name == "bytecode_files_v1":
                 return self._bytecode_dataset_location()
-            location = self.scip_dataset_locations.get(name)
+            location = self.data_sources.scip_dataset_locations.get(name)
         if location is None:
             return None
         if location.dataset_spec is None and location.table_spec is None:
@@ -4434,7 +4658,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         location = self.extract_dataset_location(name)
         if location is not None:
-            return apply_delta_store_policy(location, policy=self.delta_store_policy)
+            return apply_delta_store_policy(
+                location,
+                policy=self.policies.delta_store_policy,
+            )
         from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 
         catalog = dataset_catalog_from_profile(self)
@@ -4462,12 +4689,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return location
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
-        if not self.scip_dataset_locations:
+        if not self.data_sources.scip_dataset_locations:
             return
         from datafusion_engine.io.adapter import DataFusionIOAdapter
 
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
-        for name, location in sorted(self.scip_dataset_locations.items()):
+        for name, location in sorted(self.data_sources.scip_dataset_locations.items()):
             resolved = location
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(name)
@@ -4489,7 +4716,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             self._record_scip_registration(snapshot=snapshot)
 
     def _record_ast_registration(self, *, location: DatasetLocation) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         scan = location.datafusion_scan
         payload = {
@@ -4525,7 +4752,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_ast_dataset_v1", payload)
 
     def _record_bytecode_registration(self, *, location: DatasetLocation) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         scan = location.datafusion_scan
         payload = {
@@ -4565,7 +4792,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         *,
         snapshot: _ScipRegistrationSnapshot,
     ) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         location = snapshot.location
         scan = location.datafusion_scan
@@ -4612,7 +4839,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             msg = f"AST catalog autoload failed: {exc}."
             raise ValueError(msg) from exc
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         try:
             self._schema_introspector(ctx).table_column_names("ast_files_v1")
@@ -4628,7 +4855,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             msg = f"Bytecode catalog autoload failed: {exc}."
             raise ValueError(msg) from exc
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         try:
             self._schema_introspector(ctx).table_column_names("bytecode_files_v1")
@@ -4637,7 +4864,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise ValueError(msg) from exc
 
     def _record_cst_schema_diagnostics(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -4666,7 +4893,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
 
     def _record_tree_sitter_stats(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -4689,7 +4916,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_tree_sitter_stats_v1", payload)
 
     def _record_tree_sitter_view_schemas(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         views: list[dict[str, object]] = []
         payload: dict[str, object] = {
@@ -4728,7 +4955,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
 
     def _record_tree_sitter_cross_checks(self, ctx: SessionContext) -> dict[str, object] | None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return None
         views: list[dict[str, object]] = []
         payload: dict[str, object] = {
@@ -4793,7 +5020,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return payload
 
     def _record_cst_view_plans(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         views: list[dict[str, object]] = []
         payload: dict[str, object] = {
@@ -4817,7 +5044,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_cst_view_plans_v1", payload)
 
     def _record_cst_dfschema_snapshots(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         views: list[dict[str, object]] = []
         payload: dict[str, object] = {
@@ -4841,9 +5068,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_cst_dfschema_v1", payload)
 
     def _record_bytecode_metadata(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -4866,9 +5093,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact("datafusion_bytecode_metadata_v1", payload)
 
     def _record_schema_snapshots(self, ctx: SessionContext) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
-        if not self.enable_information_schema:
+        if not self.catalog.enable_information_schema:
             return
         introspector = self._schema_introspector(ctx)
         payload: dict[str, object] = {
@@ -4891,7 +5118,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "functions": function_catalog_snapshot_for_profile(
                         self,
                         ctx,
-                        include_routines=self.enable_information_schema,
+                        include_routines=self.catalog.enable_information_schema,
                     ),
                 }
             )
@@ -5015,18 +5242,20 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when schema registration or validation fails.
         """
-        if not self.enable_schema_registry:
+        if not self.features.enable_schema_registry:
             return
         self._record_catalog_autoload_snapshot(ctx)
         ast_view_names, _, ast_gate_payload = self._ast_feature_gates(ctx)
         self._record_ast_feature_gates(ast_gate_payload)
         ast_registration = (
-            self.ast_external_location is not None or self.ast_delta_location is not None
+            self.data_sources.ast.external_location is not None
+            or self.data_sources.ast.delta_location is not None
         )
         if ast_registration:
             self._register_ast_dataset(ctx)
         bytecode_registration = (
-            self.bytecode_external_location is not None or self.bytecode_delta_location is not None
+            self.data_sources.bytecode.external_location is not None
+            or self.data_sources.bytecode.delta_location is not None
         )
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
@@ -5077,8 +5306,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""
-        statements = list(self.prepared_statements)
-        if not self.enable_information_schema:
+        statements = list(self.policies.prepared_statements)
+        if not self.catalog.enable_information_schema:
             statements = [
                 statement
                 for statement in statements
@@ -5097,7 +5326,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             self._record_prepared_statement(statement)
 
     def _record_prepared_statement(self, statement: PreparedStatementSpec) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_prepared_statements_v1",
@@ -5129,10 +5358,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not callable(register):
             return False, False
         try:
-            register(self.delta_plan_codec_physical, self.delta_plan_codec_logical)
+            register(
+                self.policies.delta_plan_codec_physical,
+                self.policies.delta_plan_codec_logical,
+            )
         except TypeError:
             try:
-                register(self.delta_plan_codec_logical, self.delta_plan_codec_physical)
+                register(
+                    self.policies.delta_plan_codec_logical,
+                    self.policies.delta_plan_codec_physical,
+                )
             except TypeError:
                 return True, False
         return True, True
@@ -5145,7 +5380,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         bool
             True when codecs were installed, otherwise False.
         """
-        if not self.enable_delta_plan_codecs:
+        if not self.features.enable_delta_plan_codecs:
             return False
         available, installed = self._install_delta_plan_codecs_extension(ctx)
         if not available:
@@ -5157,7 +5392,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return installed
 
     def _record_udf_snapshot(self, snapshot: Mapping[str, object]) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_udf_registry_v1",
@@ -5165,7 +5400,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
 
     def _record_udf_docs(self, docs: Mapping[str, object]) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_udf_docs_v1",
@@ -5173,16 +5408,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
 
     def _record_delta_plan_codecs(self, *, available: bool, installed: bool) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_delta_plan_codecs_v1",
             {
-                "enabled": self.enable_delta_plan_codecs,
+                "enabled": self.features.enable_delta_plan_codecs,
                 "available": available,
                 "installed": installed,
-                "physical_codec": self.delta_plan_codec_physical,
-                "logical_codec": self.delta_plan_codec_logical,
+                "physical_codec": self.policies.delta_plan_codec_physical,
+                "logical_codec": self.policies.delta_plan_codec_logical,
             },
         )
 
@@ -5193,12 +5428,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         installed: bool,
         error: str | None,
     ) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_delta_session_defaults_v1",
             {
-                "enabled": self.enable_delta_session_defaults,
+                "enabled": self.features.enable_delta_session_defaults,
                 "available": available,
                 "installed": installed,
                 "error": error,
@@ -5209,10 +5444,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         payload = dict(self._validate_named_args_extension_parity())
         payload["async_udf_policy"] = self._validate_async_udf_policy()
         payload["udf_info_schema_parity"] = self._validate_udf_info_schema_parity(ctx)
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         payload["event_time_unix_ms"] = int(time.time() * 1000)
-        payload["profile_name"] = self.config_policy_name
+        payload["profile_name"] = self.policies.config_policy_name
         payload["settings_hash"] = self.settings_hash()
         self.record_artifact(
             "datafusion_extension_parity_v1",
@@ -5228,7 +5463,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             DataFusion session context to introspect.
         """
         self._snapshot_metadata_caches(ctx)
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         cache_diag = _capture_cache_diagnostics(ctx)
         config_payload = _cache_config_payload(cache_diag)
@@ -5237,10 +5472,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "datafusion_cache_root_v1",
             {"cache_root": self.cache_root()},
         )
-        if self.cache_policy is not None:
+        if self.policies.cache_policy is not None:
             self.record_artifact(
                 "cache_policy_v1",
-                cache_policy_settings(self.cache_policy),
+                cache_policy_settings(self.policies.cache_policy),
             )
         cache_snapshots = _cache_snapshot_rows(cache_diag)
         if cache_snapshots:
@@ -5248,7 +5483,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "datafusion_cache_state_v1",
                 cache_snapshots,
             )
-        diskcache_profile = self.diskcache_profile
+        diskcache_profile = self.policies.diskcache_profile
         if diskcache_profile is None:
             return
         diskcache_events = self._diskcache_event_rows(diskcache_profile)
@@ -5259,14 +5494,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
 
     def _snapshot_metadata_caches(self, ctx: SessionContext) -> None:
-        if not self.metadata_cache_snapshot_enabled:
+        if not self.policies.metadata_cache_snapshot_enabled:
             return
         from datafusion_engine.cache.metadata_snapshots import snapshot_datafusion_caches
 
         try:
             snapshots = snapshot_datafusion_caches(ctx, runtime_profile=self)
         except (RuntimeError, TypeError, ValueError) as exc:
-            if self.diagnostics_sink is None:
+            if self.diagnostics.diagnostics_sink is None:
                 return
             self.record_artifact(
                 "datafusion_cache_snapshot_error_v1",
@@ -5276,7 +5511,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 },
             )
             return
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         if snapshots:
             self.record_events(
@@ -5313,7 +5548,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _install_cache_tables(self, ctx: SessionContext) -> None:
         if not (
-            self.enable_cache_manager or self.cache_enabled or self.metadata_cache_snapshot_enabled
+            self.features.enable_cache_manager
+            or self.features.cache_enabled
+            or self.policies.metadata_cache_snapshot_enabled
         ):
             return
         try:
@@ -5336,29 +5573,29 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return SessionFactory(self).build()
 
     def _apply_url_table(self, ctx: SessionContext) -> SessionContext:
-        return ctx.enable_url_table() if self.enable_url_table else ctx
+        return ctx.enable_url_table() if self.features.enable_url_table else ctx
 
     def _register_local_filesystem(self, ctx: SessionContext) -> None:
-        if self.local_filesystem_root is None:
+        if self.policies.local_filesystem_root is None:
             return
-        store = LocalFileSystem(prefix=self.local_filesystem_root)
+        store = LocalFileSystem(prefix=self.policies.local_filesystem_root)
         from datafusion_engine.io.adapter import DataFusionIOAdapter
 
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         adapter.register_object_store(scheme="file://", store=store, host=None)
 
     def _install_function_factory(self, ctx: SessionContext) -> None:
-        if not self.enable_function_factory:
+        if not self.features.enable_function_factory:
             return
         available = True
         installed = False
         error: str | None = None
         cause: Exception | None = None
         try:
-            if self.function_factory_hook is None:
+            if self.policies.function_factory_hook is None:
                 install_function_factory(ctx)
             else:
-                self.function_factory_hook(ctx)
+                self.policies.function_factory_hook(ctx)
             installed = True
         except ImportError as exc:
             available = False
@@ -5377,17 +5614,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise RuntimeError(msg) from cause
 
     def _install_expr_planners(self, ctx: SessionContext) -> None:
-        if not self.enable_expr_planners:
+        if not self.features.enable_expr_planners:
             return
         available = True
         installed = False
         error: str | None = None
         cause: Exception | None = None
         try:
-            if self.expr_planner_hook is None:
-                install_expr_planners(ctx, planner_names=self.expr_planner_names)
+            if self.policies.expr_planner_hook is None:
+                install_expr_planners(ctx, planner_names=self.policies.expr_planner_names)
             else:
-                self.expr_planner_hook(ctx)
+                self.policies.expr_planner_hook(ctx)
             installed = True
         except ImportError as exc:
             available = False
@@ -5413,9 +5650,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         TypeError
             Raised when the SessionContext cannot accept the factory.
         """
-        factory = self.physical_expr_adapter_factory
+        factory = self.policies.physical_expr_adapter_factory
         uses_default_adapter = False
-        if factory is None and self.enable_schema_evolution_adapter:
+        if factory is None and self.features.enable_schema_evolution_adapter:
             try:
                 factory = _load_schema_evolution_adapter_factory()
                 uses_default_adapter = True
@@ -5440,17 +5677,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         error: str | None,
         policy: Mapping[str, object] | None = None,
     ) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_expr_planners_v1",
             {
-                "enabled": self.enable_expr_planners,
+                "enabled": self.features.enable_expr_planners,
                 "available": available,
                 "installed": installed,
-                "hook_enabled": bool(self.expr_planner_hook),
-                "planner_names": list(self.expr_planner_names),
-                "policy": policy or expr_planner_payloads(self.expr_planner_names),
+                "hook_enabled": bool(self.policies.expr_planner_hook),
+                "planner_names": list(self.policies.expr_planner_names),
+                "policy": policy or expr_planner_payloads(self.policies.expr_planner_names),
                 "error": error,
             },
         )
@@ -5463,22 +5700,22 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         error: str | None,
         policy: Mapping[str, object] | None = None,
     ) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
             "datafusion_function_factory_v1",
             {
-                "enabled": self.enable_function_factory,
+                "enabled": self.features.enable_function_factory,
                 "available": available,
                 "installed": installed,
-                "hook_enabled": bool(self.function_factory_hook),
+                "hook_enabled": bool(self.policies.function_factory_hook),
                 "policy": policy or function_factory_payloads(),
                 "error": error,
             },
         )
 
     def _record_tracing_install(self, error: str, details: Mapping[str, object]) -> None:
-        if self.diagnostics_sink is None:
+        if self.diagnostics.diagnostics_sink is None:
             return
         payload = {"error": error, **details}
         self.record_artifact("datafusion_tracing_install_v1", payload)
@@ -5491,9 +5728,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         ValueError
             Raised when tracing is enabled without a hook.
         """
-        if not self.enable_tracing:
+        if not self.diagnostics.enable_tracing:
             return
-        if self.tracing_hook is None:
+        if self.diagnostics.tracing_hook is None:
             module = _resolve_extension_module(required_attr="install_tracing")
             if module is None:
                 msg = "Tracing enabled but datafusion._internal or datafusion_ext is unavailable."
@@ -5520,7 +5757,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 }
                 self._record_tracing_install(str(exc), error_details)
             return
-        self.tracing_hook(ctx)
+        self.diagnostics.tracing_hook(ctx)
 
     def _resolve_compile_hooks(
         self,
@@ -5539,44 +5776,48 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "cache_event": resolved.cache_event_hook,
             "substrait_fallback": resolved.substrait_fallback_hook,
         }
-        if hooks["explain"] is None and capture_explain and self.explain_collector is not None:
-            hooks["explain"] = self.explain_collector.hook
+        if (
+            hooks["explain"] is None
+            and capture_explain
+            and self.diagnostics.explain_collector is not None
+        ):
+            hooks["explain"] = self.diagnostics.explain_collector.hook
         if (
             hooks["plan_artifacts"] is None
             and capture_plan_artifacts
-            and self.plan_collector is not None
+            and self.diagnostics.plan_collector is not None
         ):
-            hooks["plan_artifacts"] = self.plan_collector.hook
-        if self.diagnostics_sink is not None:
+            hooks["plan_artifacts"] = self.diagnostics.plan_collector.hook
+        if self.diagnostics.diagnostics_sink is not None:
             if capture_explain or hooks["explain"] is not None:
                 hooks["explain"] = _chain_explain_hooks(
                     cast("ExplainHook", hooks["explain"]),
                     diagnostics_explain_hook(
-                        self.diagnostics_sink,
+                        self.diagnostics.diagnostics_sink,
                         explain_analyze=explain_analyze,
                     ),
                 )
             if capture_plan_artifacts or hooks["plan_artifacts"] is not None:
                 hooks["plan_artifacts"] = _chain_plan_artifacts_hooks(
                     cast("PlanArtifactsHook", hooks["plan_artifacts"]),
-                    diagnostics_plan_artifacts_hook(self.diagnostics_sink),
+                    diagnostics_plan_artifacts_hook(self.diagnostics.diagnostics_sink),
                 )
             if capture_semantic_diff or hooks["semantic_diff"] is not None:
                 hooks["semantic_diff"] = _chain_plan_artifacts_hooks(
                     cast("PlanArtifactsHook", hooks["semantic_diff"]),
-                    diagnostics_semantic_diff_hook(self.diagnostics_sink),
+                    diagnostics_semantic_diff_hook(self.diagnostics.diagnostics_sink),
                 )
             hooks["sql_ingest"] = _chain_sql_ingest_hooks(
                 cast("SqlIngestHook", hooks["sql_ingest"]),
-                diagnostics_sql_ingest_hook(self.diagnostics_sink),
+                diagnostics_sql_ingest_hook(self.diagnostics.diagnostics_sink),
             )
             hooks["cache_event"] = _chain_cache_hooks(
                 cast("CacheEventHook", hooks["cache_event"]),
-                diagnostics_cache_hook(self.diagnostics_sink),
+                diagnostics_cache_hook(self.diagnostics.diagnostics_sink),
             )
             hooks["substrait_fallback"] = _chain_substrait_fallback_hooks(
                 cast("SubstraitFallbackHook", hooks["substrait_fallback"]),
-                diagnostics_substrait_fallback_hook(self.diagnostics_sink),
+                diagnostics_substrait_fallback_hook(self.diagnostics.diagnostics_sink),
             )
         return _ResolvedCompileHooks(
             explain_hook=cast("ExplainHook | None", hooks["explain"]),
@@ -5899,8 +6140,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return _build_telemetry_payload_row(self)
 
     def _cache_key(self) -> str:
-        if self.session_context_key:
-            return self.session_context_key
+        if self.execution.session_context_key:
+            return self.execution.session_context_key
         return self.telemetry_payload_hash()
 
     def context_cache_key(self) -> str:
@@ -5914,12 +6155,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return self._cache_key()
 
     def _cached_context(self) -> SessionContext | None:
-        if not self.share_context or self.diagnostics_sink is not None:
+        if not self.execution.share_context or self.diagnostics.diagnostics_sink is not None:
             return None
         return _SESSION_CONTEXT_CACHE.get(self._cache_key())
 
     def _cache_context(self, ctx: SessionContext) -> None:
-        if not self.share_context:
+        if not self.execution.share_context:
             return
         _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
 
@@ -5934,9 +6175,12 @@ def collect_datafusion_metrics(
     Mapping[str, object] | None
         Metrics payload when enabled and available.
     """
-    if not profile.enable_metrics or profile.metrics_collector is None:
+    if (
+        not profile.diagnostics.enable_metrics
+        or profile.diagnostics.metrics_collector is None
+    ):
         return None
-    return profile.metrics_collector()
+    return profile.diagnostics.metrics_collector()
 
 
 def schema_introspector_for_profile(
@@ -5950,7 +6194,7 @@ def schema_introspector_for_profile(
     SchemaIntrospector
         Introspector configured from the profile.
     """
-    cache_profile = profile.diskcache_profile
+    cache_profile = profile.policies.diskcache_profile
     cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
     cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
     return SchemaIntrospector(
@@ -5976,7 +6220,7 @@ def run_diskcache_maintenance(
     list[dict[str, object]]
         Maintenance payloads for each cache kind.
     """
-    cache_profile = profile.diskcache_profile
+    cache_profile = profile.policies.diskcache_profile
     if cache_profile is None:
         return []
     results = run_profile_maintenance(
@@ -6011,7 +6255,7 @@ def evict_diskcache_entries(
     int
         Count of evicted entries.
     """
-    cache_profile = profile.diskcache_profile
+    cache_profile = profile.policies.diskcache_profile
     if cache_profile is None:
         return 0
     return evict_cache_tag(cache_profile, kind=kind, tag=tag)
@@ -6045,9 +6289,12 @@ def collect_datafusion_traces(
     Mapping[str, object] | None
         Tracing payload when enabled and available.
     """
-    if not profile.enable_tracing or profile.tracing_collector is None:
+    if (
+        not profile.diagnostics.enable_tracing
+        or profile.diagnostics.tracing_collector is None
+    ):
         return None
-    return profile.tracing_collector()
+    return profile.diagnostics.tracing_collector()
 
 
 def _rulepack_parameter_counts(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
@@ -6641,6 +6888,144 @@ def dataset_spec_from_context(
     return dataset_spec_from_schema(name, schema)
 
 
+def record_dataset_readiness(
+    profile: DataFusionRuntimeProfile,
+    *,
+    dataset_names: Sequence[str],
+) -> None:
+    """Record readiness diagnostics for configured dataset locations."""
+    if profile.diagnostics.diagnostics_sink is None:
+        return
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from obs.otel.heartbeat import set_heartbeat_blockers
+
+    blockers: list[str] = []
+    for name in dataset_names:
+        location = profile.dataset_location(name)
+        if location is None:
+            record_artifact(
+                profile,
+                "dataset_readiness_v1",
+                {
+                    "dataset": name,
+                    "status": "missing_location",
+                    "reason": "no_dataset_location_configured",
+                },
+            )
+            blockers.append(name)
+            continue
+        readiness = _dataset_readiness_payload(name, location)
+        record_artifact(profile, "dataset_readiness_v1", readiness)
+        status = readiness.get("status")
+        if isinstance(status, str) and status not in {"ok", "remote_path"}:
+            blockers.append(name)
+    if blockers:
+        set_heartbeat_blockers(sorted(set(blockers)))
+
+
+def _dataset_readiness_payload(name: str, location: DatasetLocation) -> dict[str, object]:
+    path_value = str(location.path)
+    payload = _base_readiness_payload(name, location, path_value)
+    parsed = urlparse(path_value)
+    if _is_remote_scheme(parsed.scheme):
+        return _remote_readiness_payload(payload)
+    path = _resolve_local_path(parsed, path_value)
+    return _local_readiness_payload(payload, path, location.format)
+
+
+def _base_readiness_payload(
+    name: str,
+    location: DatasetLocation,
+    path_value: str,
+) -> dict[str, object]:
+    return {
+        "dataset": name,
+        "path": path_value,
+        "format": location.format,
+        "status": "ok",
+    }
+
+
+def _is_remote_scheme(scheme: str) -> bool:
+    return scheme not in {"", "file"}
+
+
+def _remote_readiness_payload(payload: dict[str, object]) -> dict[str, object]:
+    payload.update(
+        {
+            "status": "remote_path",
+            "reason": "remote_scheme",
+            "path_exists": None,
+            "delta_log_present": None,
+        }
+    )
+    return payload
+
+
+def _resolve_local_path(parsed: object, path_value: str) -> Path:
+    scheme = getattr(parsed, "scheme", "")
+    parsed_path = getattr(parsed, "path", "")
+    if scheme == "file" and parsed_path:
+        return Path(parsed_path)
+    return Path(path_value)
+
+
+def _local_readiness_payload(
+    payload: dict[str, object],
+    path: Path,
+    format_name: str,
+) -> dict[str, object]:
+    exists = path.exists()
+    payload["path_exists"] = exists
+    if not exists:
+        return _apply_readiness_status(payload, "missing_path", "path_not_found")
+    if format_name == "delta":
+        return _delta_readiness_payload(payload, path)
+    return _file_readiness_payload(payload, path)
+
+
+def _delta_readiness_payload(payload: dict[str, object], path: Path) -> dict[str, object]:
+    delta_log = path / "_delta_log"
+    delta_exists = delta_log.exists()
+    payload["delta_log_present"] = delta_exists
+    if not delta_exists:
+        return _apply_readiness_status(payload, "missing_delta_log", "delta_log_missing")
+    delta_count = _count_dir_entries(delta_log)
+    payload["delta_log_file_count"] = delta_count
+    if delta_count == 0:
+        return _apply_readiness_status(payload, "empty_delta_log", "delta_log_empty")
+    return payload
+
+
+def _file_readiness_payload(payload: dict[str, object], path: Path) -> dict[str, object]:
+    payload["delta_log_present"] = None
+    if path.is_dir():
+        file_count = _count_dir_entries(path)
+        payload["file_count"] = file_count
+        if file_count == 0:
+            return _apply_readiness_status(payload, "empty_path", "no_files_found")
+        return payload
+    payload["file_count"] = 1
+    return payload
+
+
+def _count_dir_entries(path: Path) -> int:
+    try:
+        return sum(1 for _ in path.iterdir())
+    except OSError:
+        return 0
+
+
+def _apply_readiness_status(
+    payload: dict[str, object],
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    payload["status"] = status
+    payload["reason"] = reason
+    return payload
+
+
 __all__ = [
     "DATAFUSION_POLICY_PRESETS",
     "DEFAULT_DF_POLICY",
@@ -6648,17 +7033,24 @@ __all__ = [
     "PROD_DF_POLICY",
     "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
+    "CatalogConfig",
     "DataFusionConfigPolicy",
     "DataFusionFeatureGates",
     "DataFusionJoinPolicy",
     "DataFusionRuntimeProfile",
     "DataFusionSettingsContract",
+    "DataSourceConfig",
+    "DiagnosticsConfig",
+    "ExecutionConfig",
     "ExecutionLabel",
+    "FeatureGatesConfig",
     "FeatureStateSnapshot",
     "MemoryPool",
+    "PolicyBundleConfig",
     "PreparedStatementSpec",
     "SchemaHardeningProfile",
     "SessionRuntime",
+    "TableSourceConfig",
     "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",
@@ -6675,6 +7067,7 @@ __all__ = [
     "feature_state_snapshot",
     "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
+    "record_dataset_readiness",
     "record_runtime_setting_override",
     "record_schema_snapshots_for_profile",
     "refresh_session_runtime",

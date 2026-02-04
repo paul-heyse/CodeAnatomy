@@ -38,7 +38,13 @@ from datafusion_engine.io.write import (
     WritePipeline,
     WriteRequest,
 )
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DataSourceConfig,
+    DiagnosticsConfig,
+    FeatureGatesConfig,
+    PolicyBundleConfig,
+)
 from storage.deltalake.config import DeltaSchemaPolicy
 
 
@@ -54,9 +60,11 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
         )
     }
     profile = DataFusionRuntimeProfile(
-        extract_dataset_locations=dataset_locations,
-        enable_schema_registry=False,
-        enable_schema_evolution_adapter=False,
+        data_sources=DataSourceConfig(extract_dataset_locations=dataset_locations),
+        features=FeatureGatesConfig(
+            enable_schema_registry=False,
+            enable_schema_evolution_adapter=False,
+        ),
     )
     ctx = profile.session_context()
     seed = register_arrow_table(
@@ -97,14 +105,18 @@ def test_delta_protocol_support_warns_and_records(tmp_path: Path) -> None:
     delta_path = tmp_path / "delta_table"
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
-            diagnostics_sink=diagnostics,
-            delta_protocol_support=DeltaProtocolSupport(
-                max_reader_version=0,
-                max_writer_version=0,
+            diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+            policies=PolicyBundleConfig(
+                delta_protocol_support=DeltaProtocolSupport(
+                    max_reader_version=0,
+                    max_writer_version=0,
+                ),
+                delta_protocol_mode="warn",
             ),
-            delta_protocol_mode="warn",
-            enable_schema_registry=False,
-            enable_schema_evolution_adapter=False,
+            features=FeatureGatesConfig(
+                enable_schema_registry=False,
+                enable_schema_evolution_adapter=False,
+            ),
         )
     )
     ctx = profile.session_context()

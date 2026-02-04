@@ -373,6 +373,22 @@ class DataFusionExecutionFacade:
                 record_exception(span, exc)
                 record_error("datafusion", type(exc).__name__)
                 record_datafusion_duration(duration_s, status="error", plan_kind=plan_kind)
+                from datafusion_engine.plan.diagnostics import (
+                    PlanExecutionDiagnostics,
+                    record_plan_execution_diagnostics,
+                )
+
+                record_plan_execution_diagnostics(
+                    request=PlanExecutionDiagnostics(
+                        bundle=bundle,
+                        runtime_profile=self.runtime_profile,
+                        view_name=view_name,
+                        plan_kind=plan_kind,
+                        status="error",
+                        duration_ms=duration_ms,
+                        error=str(exc),
+                    ),
+                )
                 set_span_attributes(
                     span,
                     {
@@ -396,6 +412,22 @@ class DataFusionExecutionFacade:
             duration_s = time.perf_counter() - start
             duration_ms = duration_s * 1000.0
             record_datafusion_duration(duration_s, status="ok", plan_kind=plan_kind)
+            from datafusion_engine.plan.diagnostics import (
+                PlanExecutionDiagnostics,
+                record_plan_execution_diagnostics,
+            )
+
+            record_plan_execution_diagnostics(
+                request=PlanExecutionDiagnostics(
+                    bundle=bundle,
+                    runtime_profile=self.runtime_profile,
+                    view_name=view_name,
+                    plan_kind=plan_kind,
+                    status="ok",
+                    duration_ms=duration_ms,
+                    error=None,
+                ),
+            )
             self._record_execution_artifact(
                 _ExecutionArtifactRequest(
                     bundle=bundle,
@@ -763,19 +795,16 @@ class DataFusionExecutionFacade:
         if self.runtime_profile is None:
             msg = "Runtime profile is required for dataset registration."
             raise ValueError(msg)
-        from datafusion_engine.dataset.registration import (
-            DatasetRegistrationOptions,
-            register_dataset_df,
-        )
+        from datafusion_engine.registry_facade import registry_facade_for_context
 
-        return register_dataset_df(
+        registry_facade = registry_facade_for_context(
             self.ctx,
+            runtime_profile=self.runtime_profile,
+        )
+        return registry_facade.register_dataset_df(
             name=name,
             location=location,
-            options=DatasetRegistrationOptions(
-                cache_policy=cache_policy,
-                runtime_profile=self.runtime_profile,
-            ),
+            cache_policy=cache_policy,
         )
 
     def schema_introspector(self) -> SchemaIntrospector:

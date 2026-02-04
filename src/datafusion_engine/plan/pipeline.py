@@ -219,28 +219,32 @@ def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, Datase
     locations: dict[str, DatasetLocation] = {}
     for name, location in extract_output_locations_for_profile(profile).items():
         locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+            name,
+            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
         )
-    for name, location in profile.scip_dataset_locations.items():
+    for name, location in profile.data_sources.scip_dataset_locations.items():
         locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+            name,
+            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
         )
     for name, location in normalize_dataset_locations_for_profile(profile).items():
         locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+            name,
+            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
         )
     for name, location in semantic_output_locations_for_profile(profile).items():
         locations.setdefault(
-            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+            name,
+            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
         )
-    for catalog in profile.registry_catalogs.values():
+    for catalog in profile.catalog.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
                 continue
             try:
                 locations[name] = apply_delta_store_policy(
                     catalog.get(name),
-                    policy=profile.delta_store_policy,
+                    policy=profile.policies.delta_store_policy,
                 )
             except KeyError:
                 continue

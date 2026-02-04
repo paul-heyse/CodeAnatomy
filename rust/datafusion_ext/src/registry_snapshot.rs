@@ -7,7 +7,7 @@ use datafusion_expr::{Signature, TypeSignature, Volatility, WindowUDF};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::udf_config::UdfConfigValue;
-use crate::{udaf_builtin, udf_custom, udf_docs, udf_registry, udwf_builtin};
+use crate::{udaf_builtin, udf, udf_docs, udf_registry, udwf_builtin};
 
 pub struct RegistrySnapshot {
     pub scalar: Vec<String>,
@@ -94,7 +94,7 @@ fn record_scalar_udfs(
         record_signature_details(name, udf_ref.signature(), snapshot, |arg_types| {
             udf_ref.return_type(arg_types).ok()
         });
-        if let Some(defaults) = udf_custom::config_defaults_for(udf_ref.inner().as_ref()) {
+        if let Some(defaults) = udf::config_defaults_for(udf_ref.inner().as_ref()) {
             snapshot.config_defaults.insert(name.clone(), defaults);
         }
     }
@@ -247,23 +247,11 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
         Field::new("config_limit", DataType::Utf8, true),
     ]));
     signatures.insert(
-        "range_table".to_string(),
-        TableSignature {
-            inputs: vec![vec![DataType::Int64, DataType::Int64]],
-            return_type: DataType::Struct(Fields::from(vec![Field::new(
-                "value",
-                DataType::Int64,
-                false,
-            )])),
-        },
-    );
-    signatures.insert(
         "read_parquet".to_string(),
         TableSignature {
             inputs: vec![
                 vec![DataType::Utf8],
                 vec![DataType::Utf8, DataType::Int64],
-                vec![DataType::Utf8, DataType::Int64, DataType::Binary],
                 vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
             ],
             return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
@@ -275,50 +263,7 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
             inputs: vec![
                 vec![DataType::Utf8],
                 vec![DataType::Utf8, DataType::Int64],
-                vec![DataType::Utf8, DataType::Int64, DataType::Binary],
                 vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Binary,
-                    DataType::Boolean,
-                ],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                    DataType::Boolean,
-                ],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Binary,
-                    DataType::Boolean,
-                    DataType::Utf8,
-                ],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                    DataType::Boolean,
-                    DataType::Utf8,
-                ],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Binary,
-                    DataType::Boolean,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ],
-                vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                    DataType::Boolean,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ],
             ],
             return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
         },
@@ -720,7 +665,6 @@ fn rewrite_tags_for(name: &str) -> Option<Vec<String>> {
         ("row_number_window", &["window"]),
         ("lag_window", &["window"]),
         ("lead_window", &["window"]),
-        ("range_table", &["table"]),
     ];
     REWRITE_TAGS
         .iter()
@@ -738,6 +682,17 @@ fn simplify_flag_for(name: &str) -> Option<bool> {
         "prefixed_hash_parts64",
         "stable_hash_any",
         "utf8_normalize",
+        "span_make",
+        "span_len",
+        "interval_align_score",
+        "span_overlaps",
+        "span_contains",
+        "span_id",
+        "map_get_default",
+        "map_normalize",
+        "list_compact",
+        "list_unique_sorted",
+        "cpg_score",
     ];
     if SIMPLIFY.iter().any(|entry| *entry == name) {
         Some(true)

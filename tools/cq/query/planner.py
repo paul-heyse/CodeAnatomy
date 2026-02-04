@@ -407,6 +407,8 @@ def _determine_record_types(query: Query) -> set[str]:
     }
     if query.entity is not None:
         record_types.update(entity_records.get(query.entity, set()))
+        if query.entity in {"function", "class", "method"}:
+            record_types.add("call")
 
     # Add record types based on expanders
     for expander in query.expand:

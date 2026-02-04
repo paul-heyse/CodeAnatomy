@@ -6,7 +6,11 @@ import importlib.util
 
 import pytest
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DiagnosticsConfig,
+    FeatureGatesConfig,
+)
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -18,8 +22,8 @@ def test_function_factory_records_installation_result() -> None:
     """Record FunctionFactory installation success or failure."""
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
-            diagnostics_sink=diagnostics,
-            enable_function_factory=True,
+            diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+            features=FeatureGatesConfig(enable_function_factory=True),
         )
     )
     has_extension = importlib.util.find_spec("datafusion_ext") is not None

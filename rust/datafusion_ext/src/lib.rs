@@ -1,6 +1,7 @@
 //! DataFusion extension for native function registration.
 
 pub mod async_runtime;
+pub mod compat;
 pub mod config_macros;
 pub mod delta_control_plane;
 pub mod delta_maintenance;
@@ -20,13 +21,13 @@ pub mod registry_snapshot;
 pub mod udaf_builtin;
 #[cfg(feature = "async-udf")]
 pub mod udf_async;
-pub mod udf_builtin;
 pub mod udf_config;
-pub mod udf_custom;
+pub mod udf;
+pub mod udf_expr;
 pub mod udf_docs;
 pub mod udf_registry;
 pub mod udtf_builtin;
-pub mod udtf_external;
+pub mod udtf_sources;
 pub mod udwf_builtin;
 
 pub use generated::delta_types::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};

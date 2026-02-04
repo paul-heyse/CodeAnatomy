@@ -1,8 +1,8 @@
 # Rust Architecture Documentation Verification Report
 
-**Date**: 2026-01-30
+**Date**: 2026-02-03
 **Document**: `docs/architecture/part_viii_rust_architecture.md`
-**Reviewer**: Claude Code
+**Reviewer**: Codex
 
 ## Summary
 
@@ -48,14 +48,14 @@ All crate descriptions match implementation:
 
 | Module | Doc Claims | Actual | Status |
 |--------|-----------|--------|--------|
-| `udf_custom.rs` | 4983 lines | 4983 ✓ | Exact |
-| `udf_registry.rs` | 358 → 174 | 174 ✓ | Corrected |
+| `udf/` (11 files) | 5405 lines total | 5405 ✓ | Exact |
+| `udf_registry.rs` | 174 → 165 | 165 ✓ | Corrected |
 | `function_factory.rs` | 923 lines | 923 ✓ | Exact |
 | `delta_control_plane.rs` | 515 → 514 | 514 ✓ | Corrected |
-| `delta_mutations.rs` | 437 → 423 | 423 ✓ | Corrected |
+| `delta_mutations.rs` | 437 → 421 | 421 ✓ | Corrected |
 | `delta_maintenance.rs` | 430 lines | 430 ✓ | Exact |
 | `expr_planner.rs` | 59 lines | 59 ✓ | Exact |
-| `registry_snapshot.rs` | 971 → 974 | 974 ✓ | Corrected |
+| `registry_snapshot.rs` | 971 → 929 | 929 ✓ | Corrected |
 | `udaf_builtin.rs` | 1906 → 1927 | 1927 ✓ | Corrected |
 | `udf_async.rs` | 254 lines | 254 ✓ | Exact |
 
@@ -71,7 +71,7 @@ All crate descriptions match implementation:
 **Actual count**: **28 custom scalar functions**
 
 Verified via:
-1. Grepping `pub fn \w+_udf()` in `udf_custom.rs` → 28 functions
+1. Grepping `pub fn \w+_udf()` across `udf/*.rs` → 28 functions
 2. Cross-checking `udf_registry.rs` spec declarations → 28 entries
 3. Registry test validates expected names
 
@@ -124,9 +124,9 @@ Implementation matches documentation exactly.
 
 ### ✓ Python Bindings - CORRECTED
 
-**Function names updated**:
-- `install_function_factory()` → `install_sql_macro_factory()`
-- Updated to reflect actual exported function names
+**Function names verified**:
+- Python exports `install_function_factory()` (wrapper for `datafusion_ext::udf::install_function_factory_native`)
+- `install_sql_macro_factory_native()` remains an internal Rust helper (not a Python export)
 
 **Verified exports** in `datafusion_python/src/codeanatomy_ext.rs`:
 - Two public functions: `init_module()` and `init_internal_module()`
@@ -135,18 +135,16 @@ Implementation matches documentation exactly.
 ### ✓ Table Functions - CORRECTED
 
 **Documentation claimed**: 2 table functions (`range`, `unnest`)
-**Actual**: 1 table function (`range_table`)
+**Actual**: 0 custom table UDFs (use built-in `range`/`generate_series`)
 
-**Source**: `udf_registry.rs:52-56`
+**Source**: `udf_registry.rs` (table_udf_specs is empty)
 ```rust
 pub fn table_udf_specs() -> Vec<TableUdfSpec> {
-    table_udfs![
-        "range_table" => range_table_udtf;
-    ]
+    table_udfs![]
 }
 ```
 
-**Correction applied**: Updated to reflect single table function.
+**Correction applied**: Updated to reflect no custom table UDFs.
 
 ### ✓ Crate Types - VERIFIED
 
@@ -176,12 +174,12 @@ Updated module line counts to match current implementation (see table above).
 - Updated ABI minor version from 0 → 1
 
 ### 5. Python API Names
-- `install_function_factory` → `install_sql_macro_factory`
-- Updated usage examples to reflect actual function signatures
+- Confirmed `install_function_factory` as the public Python export
+- Updated usage examples to reflect the policy payload requirement
 
 ### 6. Table Function Count
-- Corrected from 2 functions → 1 function
-- Updated function name from `range` → `range_table`
+- Corrected from 2 functions → 0 custom functions
+- Use built-in `range` / `generate_series` instead of a custom alias
 
 ### 7. Added Missing Modules
 Documented previously unlisted but important modules:

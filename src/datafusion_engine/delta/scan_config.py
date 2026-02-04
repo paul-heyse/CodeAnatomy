@@ -31,9 +31,9 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
     """
-    from storage.deltalake.scan_profile import build_delta_scan_config
+    from datafusion_engine.dataset.registry import resolve_dataset_location
 
-    return build_delta_scan_config(location)
+    return resolve_dataset_location(location).delta_scan
 
 
 def delta_scan_config_snapshot(

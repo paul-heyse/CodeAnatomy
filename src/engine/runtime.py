@@ -57,7 +57,13 @@ def build_engine_runtime(
             diagnostics_policy,
         )
     if diagnostics is not None:
-        datafusion_profile = replace(datafusion_profile, diagnostics_sink=diagnostics)
+        datafusion_profile = replace(
+            datafusion_profile,
+            diagnostics=replace(
+                datafusion_profile.diagnostics,
+                diagnostics_sink=diagnostics,
+            ),
+        )
     return EngineRuntime(
         datafusion_profile=datafusion_profile,
     )
@@ -80,17 +86,24 @@ def _apply_diagnostics_policy(
     capture_plan_artifacts = capture_explain
     return replace(
         profile,
-        capture_explain=capture_explain,
-        explain_analyze=policy.explain_analyze,
-        explain_analyze_level=policy.explain_analyze_level,
-        explain_collector=profile.explain_collector if capture_explain else None,
-        capture_plan_artifacts=capture_plan_artifacts,
-        plan_collector=profile.plan_collector if capture_plan_artifacts else None,
-        enable_metrics=enable_metrics,
-        metrics_collector=profile.metrics_collector if enable_metrics else None,
-        enable_tracing=enable_tracing,
-        tracing_collector=profile.tracing_collector if enable_tracing else None,
-        emit_semantic_quality_diagnostics=policy.emit_semantic_quality_diagnostics,
+        diagnostics=replace(
+            profile.diagnostics,
+            capture_explain=capture_explain,
+            explain_analyze=policy.explain_analyze,
+            explain_analyze_level=policy.explain_analyze_level,
+            explain_collector=profile.diagnostics.explain_collector
+            if capture_explain
+            else None,
+            capture_plan_artifacts=capture_plan_artifacts,
+            plan_collector=profile.diagnostics.plan_collector
+            if capture_plan_artifacts
+            else None,
+            enable_metrics=enable_metrics,
+            metrics_collector=profile.diagnostics.metrics_collector if enable_metrics else None,
+            enable_tracing=enable_tracing,
+            tracing_collector=profile.diagnostics.tracing_collector if enable_tracing else None,
+            emit_semantic_quality_diagnostics=policy.emit_semantic_quality_diagnostics,
+        ),
     )
 
 

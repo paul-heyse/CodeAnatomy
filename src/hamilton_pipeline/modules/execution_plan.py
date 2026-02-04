@@ -240,10 +240,8 @@ def _evidence_catalog_node(options: PlanModuleOptions) -> object:
     ) -> EvidenceCatalog:
         evidence = execution_plan.evidence
         profile = runtime_profile_spec.datafusion
-        _ensure_view_graph(profile)
         if options.record_evidence_artifacts:
             _record_evidence_contract_violations(profile, evidence)
-            _record_udf_parity(profile)
         return evidence
 
     return evidence_catalog
@@ -433,18 +431,6 @@ def _active_task_names_node() -> object:
         return execution_plan.active_tasks
 
     return active_task_names
-
-
-def _ensure_view_graph(profile: DataFusionRuntimeProfile) -> None:
-    from datafusion_engine.views.registration import ensure_view_graph
-    from semantics.ir_pipeline import build_semantic_ir
-
-    session = profile.session_context()
-    ensure_view_graph(
-        session,
-        runtime_profile=profile,
-        semantic_ir=build_semantic_ir(),
-    )
 
 
 def _record_evidence_contract_violations(

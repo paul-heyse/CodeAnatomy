@@ -978,10 +978,12 @@ def _reset_artifacts_table_path(
 
 
 def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
-    root_value = profile.plan_artifacts_root
+    root_value = profile.policies.plan_artifacts_root
     if root_value is None:
-        if profile.local_filesystem_root is not None:
-            root_value = str(Path(profile.local_filesystem_root) / _LOCAL_ARTIFACTS_DIRNAME)
+        if profile.policies.local_filesystem_root is not None:
+            root_value = str(
+                Path(profile.policies.local_filesystem_root) / _LOCAL_ARTIFACTS_DIRNAME
+            )
         else:
             root_value = str(_DEFAULT_ARTIFACTS_ROOT)
     if "://" in root_value:
@@ -1000,7 +1002,7 @@ def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
 
 
 def _profile_name(profile: DataFusionRuntimeProfile) -> str | None:
-    return profile.config_policy_name
+    return profile.policies.config_policy_name
 
 
 def _plan_artifacts_schema() -> pa.Schema:

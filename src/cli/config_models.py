@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
+from hamilton_pipeline.types import GraphAdapterConfig
 from serde_msgspec import StructBaseStrict
 
 
@@ -27,13 +28,6 @@ class CacheConfig(StructBaseStrict, frozen=True):
     path: str | None = None
     log_to_file: bool | None = None
     opt_in: bool | None = None
-
-
-class GraphAdapterConfig(StructBaseStrict, frozen=True):
-    """Graph adapter configuration values."""
-
-    kind: str | None = None
-    options: dict[str, object] | None = None
 
 
 class IncrementalConfig(StructBaseStrict, frozen=True):
@@ -96,6 +90,57 @@ class DocstringsConfig(StructBaseStrict, frozen=True):
     policy: DocstringsPolicyConfig | None = None
 
 
+class OtelConfig(StructBaseStrict, frozen=True):
+    """OpenTelemetry configuration values."""
+
+    enable_node_tracing: bool | None = None
+    enable_plan_tracing: bool | None = None
+    endpoint: str | None = None
+    protocol: str | None = None
+    sampler: str | None = None
+    sampler_arg: float | int | None = None
+    log_correlation: bool | None = None
+    metric_export_interval_ms: int | None = None
+    metric_export_timeout_ms: int | None = None
+    bsp_schedule_delay_ms: int | None = None
+    bsp_export_timeout_ms: int | None = None
+    bsp_max_queue_size: int | None = None
+    bsp_max_export_batch_size: int | None = None
+    blrp_schedule_delay_ms: int | None = None
+    blrp_export_timeout_ms: int | None = None
+    blrp_max_queue_size: int | None = None
+    blrp_max_export_batch_size: int | None = None
+
+
+class HamiltonConfig(StructBaseStrict, frozen=True):
+    """Hamilton-related configuration values."""
+
+    enable_tracker: bool | None = None
+    enable_type_checker: bool | None = None
+    enable_node_diagnostics: bool | None = None
+    graph_adapter_kind: str | None = None
+    graph_adapter_options: dict[str, object] | None = None
+    enable_structured_run_logs: bool | None = None
+    structured_log_path: str | None = None
+    run_log_path: str | None = None
+    enable_graph_snapshot: bool | None = None
+    graph_snapshot_path: str | None = None
+    graph_snapshot_hamilton_path: str | None = None
+    enable_cache_lineage: bool | None = None
+    cache_lineage_path: str | None = None
+    cache_path: str | None = None
+    capture_data_statistics: bool | None = None
+    max_list_length_capture: int | None = None
+    max_dict_length_capture: int | None = None
+    tags: dict[str, object] | None = None
+    project_id: int | None = None
+    username: str | None = None
+    dag_name: str | None = None
+    api_url: str | None = None
+    ui_url: str | None = None
+    telemetry_profile: str | None = None
+
+
 class RootConfig(StructBaseStrict, frozen=True):
     """Root configuration payload for CodeAnatomy."""
 
@@ -105,33 +150,8 @@ class RootConfig(StructBaseStrict, frozen=True):
     incremental: IncrementalConfig | None = None
     delta: DeltaConfig | None = None
     docstrings: DocstringsConfig | None = None
-
-    plan_allow_partial: bool | None = None
-    plan_requested_tasks: tuple[str, ...] | None = None
-    plan_impacted_tasks: tuple[str, ...] | None = None
-    enable_metric_scheduling: bool | None = None
-    enable_plan_diagnostics: bool | None = None
-    enable_plan_task_submission_hook: bool | None = None
-    enable_plan_task_grouping_hook: bool | None = None
-    enforce_plan_task_submission: bool | None = None
-
-    cache_policy_profile: str | None = None
-    cache_path: str | None = None
-    cache_log_to_file: bool | None = None
-    cache_opt_in: bool | None = None
-
-    graph_adapter_kind: str | None = None
-    graph_adapter_options: dict[str, object] | None = None
-    hamilton_graph_adapter_kind: str | None = None
-    hamilton_graph_adapter_options: dict[str, object] | None = None
-
-    incremental_enabled: bool | None = None
-    incremental_state_dir: str | None = None
-    incremental_repo_id: str | None = None
-    incremental_impact_strategy: str | None = None
-    incremental_git_base_ref: str | None = None
-    incremental_git_head_ref: str | None = None
-    incremental_git_changed_only: bool | None = None
+    otel: OtelConfig | None = None
+    hamilton: HamiltonConfig | None = None
 
     runtime_profile_name: str | None = None
     diagnostics_profile: str | None = None
@@ -142,73 +162,11 @@ class RootConfig(StructBaseStrict, frozen=True):
     work_dir: str | None = None
     execution_mode: str | None = None
 
-    enable_hamilton_tracker: bool | None = None
-    enable_hamilton_type_checker: bool | None = None
-    enable_hamilton_node_diagnostics: bool | None = None
-    enable_otel_node_tracing: bool | None = None
-    enable_otel_plan_tracing: bool | None = None
-    otel_endpoint: str | None = None
-    otel_protocol: str | None = None
-    otel_sampler: str | None = None
-    otel_sampler_arg: float | int | None = None
-    otel_log_correlation: bool | None = None
-    otel_metric_export_interval_ms: int | None = None
-    otel_metric_export_timeout_ms: int | None = None
-    otel_bsp_schedule_delay_ms: int | None = None
-    otel_bsp_export_timeout_ms: int | None = None
-    otel_bsp_max_queue_size: int | None = None
-    otel_bsp_max_export_batch_size: int | None = None
-    otel_blrp_schedule_delay_ms: int | None = None
-    otel_blrp_export_timeout_ms: int | None = None
-    otel_blrp_max_queue_size: int | None = None
-    otel_blrp_max_export_batch_size: int | None = None
-    enable_structured_run_logs: bool | None = None
-    structured_log_path: str | None = None
-    hamilton_run_log_path: str | None = None
-
-    enable_graph_snapshot: bool | None = None
-    graph_snapshot_path: str | None = None
-    hamilton_graph_snapshot_path: str | None = None
-
-    enable_cache_lineage: bool | None = None
-    cache_lineage_path: str | None = None
-
-    hamilton_cache_path: str | None = None
-    hamilton_capture_data_statistics: bool | None = None
-    hamilton_max_list_length_capture: int | None = None
-    hamilton_max_dict_length_capture: int | None = None
-    hamilton_tags: dict[str, object] | None = None
-    hamilton_project_id: int | None = None
-    hamilton_username: str | None = None
-    hamilton_dag_name: str | None = None
-    hamilton_api_url: str | None = None
-    hamilton_ui_url: str | None = None
-    hamilton_telemetry_profile: str | None = None
-
     runtime_environment: str | None = None
     runtime_team: str | None = None
 
     disable_scip: bool | None = None
     scip_output_dir: str | None = None
-
-
-class RootConfigPatch(StructBaseStrict, frozen=True):
-    """Patch payload for root configuration overrides."""
-
-    output_dir: str | msgspec.UnsetType = msgspec.UNSET
-    work_dir: str | msgspec.UnsetType = msgspec.UNSET
-    execution_mode: str | msgspec.UnsetType = msgspec.UNSET
-    runtime_profile_name: str | msgspec.UnsetType = msgspec.UNSET
-    log_level: str | msgspec.UnsetType = msgspec.UNSET
-    determinism_override: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_state_dir: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_repo_id: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_impact_strategy: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_git_base_ref: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_git_head_ref: str | msgspec.UnsetType = msgspec.UNSET
-    incremental_git_changed_only: bool | msgspec.UnsetType = msgspec.UNSET
-    disable_scip: bool | msgspec.UnsetType = msgspec.UNSET
-    scip_output_dir: str | msgspec.UnsetType = msgspec.UNSET
 
 
 __all__ = [
@@ -219,8 +177,9 @@ __all__ = [
     "DocstringsConfig",
     "DocstringsPolicyConfig",
     "GraphAdapterConfig",
+    "HamiltonConfig",
     "IncrementalConfig",
+    "OtelConfig",
     "PlanConfig",
     "RootConfig",
-    "RootConfigPatch",
 ]

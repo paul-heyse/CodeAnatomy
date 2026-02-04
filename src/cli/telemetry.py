@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from functools import lru_cache
 
 from cyclopts import App
 from cyclopts._result_action import handle_result_action
@@ -15,7 +17,11 @@ from opentelemetry import trace
 
 from cli.context import RunContext
 from cli.exit_codes import ExitCode
+from obs.otel.config import resolve_otel_config
+from obs.otel.logs import emit_diagnostics_event
 from obs.otel.run_context import reset_run_id, set_run_id
+from obs.otel.scopes import SCOPE_OBS
+from obs.otel.tracing import root_span, set_span_attributes
 
 _LOGGER = logging.getLogger(__name__)
 tracer = trace.get_tracer("codeanatomy.cli")
@@ -89,8 +95,10 @@ def _run_with_app_stack(
         state.parse_ms = (time.perf_counter() - state.t0) * 1000.0
         state.command_name = getattr(command, "__qualname__", repr(command))
 
-        if run_context is not None and "run_context" in ignored:
-            bound.arguments["run_context"] = run_context
+        if run_context is not None and ignored:
+            for name, hint in ignored.items():
+                if hint is RunContext or name == "run_context":
+                    bound.arguments[name] = run_context
 
         t1 = time.perf_counter()
         with tracer.start_as_current_span("cli.command") as span:
@@ -127,29 +135,52 @@ def invoke_with_telemetry(
     -------
     tuple[int, CliInvokeEvent]
         Exit code and structured telemetry payload.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the invocation does not produce a result payload.
     """
     state = _InvokeState(time.perf_counter(), _command_name_from_tokens(tokens))
     run_token = None
     if run_context is not None:
         run_token = set_run_id(run_context.run_id)
-    try:
-        exit_code = _run_with_app_stack(app, tokens, run_context=run_context, state=state)
-        return (
-            exit_code,
-            CliInvokeEvent(
+    event: CliInvokeEvent | None = None
+    exit_code: int | None = None
+    with root_span(
+        "cli.invocation",
+        scope_name=SCOPE_OBS,
+        attributes={
+            "cli.command": state.command_name,
+            "cli.tokens": len(tokens or ()),
+            "cli.run_id": run_context.run_id if run_context else None,
+        },
+    ) as span:
+        snapshot = get_otel_config_snapshot()
+        emit_diagnostics_event(
+            "otel_config_snapshot_v1",
+            payload={
+                "diagnostic.severity": "info",
+                "diagnostic.category": "telemetry_config",
+                "config": dict(snapshot),
+            },
+            event_kind="artifact",
+        )
+        if run_context is not None:
+            run_context = replace(run_context, span=span)
+        try:
+            exit_code = _run_with_app_stack(app, tokens, run_context=run_context, state=state)
+            event = CliInvokeEvent(
                 ok=True,
                 command=state.command_name,
                 parse_ms=state.parse_ms or 0.0,
                 exec_ms=state.exec_ms or 0.0,
                 exit_code=exit_code,
-            ),
-        )
-    except CycloptsError as exc:
-        _finalize_parse_ms(state)
-        exit_code = ExitCode.from_exception(exc)
-        return (
-            exit_code,
-            CliInvokeEvent(
+            )
+        except CycloptsError as exc:
+            _finalize_parse_ms(state)
+            exit_code = ExitCode.from_exception(exc)
+            event = CliInvokeEvent(
                 ok=False,
                 command=state.command_name,
                 parse_ms=state.parse_ms or 0.0,
@@ -158,18 +189,14 @@ def invoke_with_telemetry(
                 error_class=f"cyclopts.{exc.__class__.__name__}",
                 error_stage=_classify_error_stage(exc),
                 error_message=str(exc),
-            ),
-        )
-    except Exception as exc:
-        # General exception handler for command execution errors
-        _finalize_parse_ms(state)
-        if state.exec_ms is None:
-            state.exec_ms = (time.perf_counter() - state.t0) * 1000.0
-        exit_code = ExitCode.from_exception(exc)
-        _LOGGER.exception("Command execution failed.")
-        return (
-            exit_code,
-            CliInvokeEvent(
+            )
+        except Exception as exc:
+            _finalize_parse_ms(state)
+            if state.exec_ms is None:
+                state.exec_ms = (time.perf_counter() - state.t0) * 1000.0
+            exit_code = ExitCode.from_exception(exc)
+            _LOGGER.exception("Command execution failed.")
+            event = CliInvokeEvent(
                 ok=False,
                 command=state.command_name,
                 parse_ms=state.parse_ms or 0.0,
@@ -178,11 +205,37 @@ def invoke_with_telemetry(
                 error_class=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
                 error_stage="execution",
                 error_message=str(exc),
-            ),
-        )
-    finally:
-        if run_token is not None:
-            reset_run_id(run_token)
+            )
+        finally:
+            if event is not None:
+                set_span_attributes(
+                    span,
+                    {
+                        "cli.exit_code": event.exit_code,
+                        "cli.ok": event.ok,
+                        "cli.parse_ms": event.parse_ms,
+                        "cli.exec_ms": event.exec_ms,
+                    },
+                )
+                emit_diagnostics_event(
+                    "cli_invocation_v1",
+                    payload={
+                        "command": event.command,
+                        "ok": event.ok,
+                        "parse_ms": event.parse_ms,
+                        "exec_ms": event.exec_ms,
+                        "exit_code": event.exit_code,
+                        "error_class": event.error_class,
+                        "error_stage": event.error_stage,
+                    },
+                    event_kind="event",
+                )
+            if run_token is not None:
+                reset_run_id(run_token)
+    if exit_code is None or event is None:
+        msg = "CLI invocation did not produce a result."
+        raise RuntimeError(msg)
+    return exit_code, event
 
 
 def _classify_error_stage(exc: CycloptsError) -> str:
@@ -210,4 +263,27 @@ def _classify_error_stage(exc: CycloptsError) -> str:
     return "unknown"
 
 
-__all__ = ["CliInvokeEvent", "invoke_with_telemetry"]
+def apply_telemetry_config(*_args: object, **_kwargs: object) -> None:
+    """Resolve and cache OpenTelemetry config during CLI parse."""
+    get_otel_config_snapshot()
+
+
+@lru_cache(maxsize=1)
+def get_otel_config_snapshot() -> Mapping[str, object]:
+    """Return the cached OpenTelemetry config snapshot.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Immutable snapshot of resolved OpenTelemetry configuration.
+    """
+    config = resolve_otel_config()
+    return dict(config.fingerprint_payload())
+
+
+__all__ = [
+    "CliInvokeEvent",
+    "apply_telemetry_config",
+    "get_otel_config_snapshot",
+    "invoke_with_telemetry",
+]

@@ -54,18 +54,19 @@ def _fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
 
 def _call_expr(name: str, *args: object, **kwargs: object) -> Expr:
     try:
-        func = _require_callable(name)
-        resolved_args = tuple(_unwrap_expr_arg(arg) for arg in args)
-        resolved_kwargs = {key: _unwrap_expr_arg(value) for key, value in kwargs.items()}
-        result = func(*resolved_args, **resolved_kwargs)
-    except (RuntimeError, TypeError):
+        func = _require_callable("udf_expr")
+        resolved_args = [_unwrap_expr_arg(arg) for arg in args]
+        if kwargs:
+            resolved_args.extend(_unwrap_expr_arg(value) for value in kwargs.values())
+        result = func(name, *resolved_args)
+    except (RuntimeError, TypeError, ValueError):
         fallback = _fallback_expr(name, *args, **kwargs)
         if fallback is not None:
             return fallback
         raise
     try:
         return _wrap_result(result)
-    except TypeError as exc:
+    except (TypeError, ValueError) as exc:
         fallback = _fallback_expr(name, *args, **kwargs)
         if fallback is not None:
             return fallback

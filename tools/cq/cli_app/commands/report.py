@@ -21,7 +21,6 @@ def report(
     param: Annotated[str | None, Parameter(help="Parameter name for impact analysis")] = None,
     signature: Annotated[str | None, Parameter(name="--to", help="Proposed signature for sig-impact analysis")] = None,
     bytecode_show: Annotated[str | None, Parameter(name="--bytecode-show", help="Bytecode surface fields")] = None,
-    no_cache: Annotated[bool, Parameter(name="--no-cache", help="Disable caching")] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
     include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
     exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
@@ -32,11 +31,8 @@ def report(
 ) -> CliResult:
     """Run target-scoped report bundles."""
     from tools.cq.cli_app.context import CliResult, FilterConfig
-    from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
-    from tools.cq.index.diskcache_query_cache import QueryCache
-    from tools.cq.index.diskcache_index_cache import IndexCache
 
     if ctx is None:
         msg = "Context not injected"
@@ -75,17 +71,6 @@ def report(
         filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
         return CliResult(result=result, context=ctx, filters=filters)
 
-    use_cache = not no_cache
-    index_cache: IndexCache | None = None
-    query_cache: QueryCache | None = None
-
-    if use_cache:
-        rule_version = ctx.toolchain.sgpy_version or "unknown"
-        profile = default_cq_diskcache_profile()
-        index_cache = IndexCache(ctx.root, rule_version, profile=profile)
-        index_cache.initialize()
-        query_cache = QueryCache(ctx.root, profile=profile)
-
     bundle_ctx = BundleContext(
         tc=ctx.toolchain,
         root=ctx.root,
@@ -95,16 +80,9 @@ def report(
         param=param,
         signature=signature,
         bytecode_show=bytecode_show,
-        use_cache=use_cache,
-        index_cache=index_cache,
-        query_cache=query_cache,
     )
 
-    if index_cache is None or query_cache is None:
-        result = run_bundle(preset, bundle_ctx)
-    else:
-        with index_cache, query_cache:
-            result = run_bundle(preset, bundle_ctx)
+    result = run_bundle(preset, bundle_ctx)
 
     filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
     return CliResult(result=result, context=ctx, filters=filters)

@@ -1,58 +1,50 @@
 use std::sync::Arc;
 
-use datafusion::catalog::TableFunctionImpl;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, WindowUDF};
-use datafusion_functions_table::generate_series::RangeFunc;
 
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
 use crate::{scalar_udfs, table_udfs};
 pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
-use crate::{udaf_builtin, udf_custom, udtf_builtin, udtf_external, udwf_builtin};
-
-fn range_table_udtf(_ctx: &SessionContext) -> Result<Arc<dyn TableFunctionImpl>> {
-    Ok(Arc::new(RangeFunc {}))
-}
+use crate::{udaf_builtin, udf, udtf_builtin, udtf_sources, udwf_builtin};
 
 pub fn scalar_udf_specs() -> Vec<ScalarUdfSpec> {
     scalar_udfs![
-        "arrow_metadata" => udf_custom::arrow_metadata_udf;
-        "semantic_tag" => udf_custom::semantic_tag_udf;
-        "cpg_score" => udf_custom::cpg_score_udf;
-        "stable_hash64" => udf_custom::stable_hash64_udf, aliases: ["hash64"];
-        "stable_hash128" => udf_custom::stable_hash128_udf, aliases: ["hash128"];
-        "prefixed_hash64" => udf_custom::prefixed_hash64_udf, aliases: ["prefixed_hash"];
-        "stable_id" => udf_custom::stable_id_udf;
-        "stable_id_parts" => udf_custom::stable_id_parts_udf, aliases: ["stable_id_multi"];
-        "prefixed_hash_parts64" => udf_custom::prefixed_hash_parts64_udf, aliases: ["prefixed_hash_parts"];
-        "stable_hash_any" => udf_custom::stable_hash_any_udf, aliases: ["stable_hash"];
-        "span_make" => udf_custom::span_make_udf, aliases: ["span"];
-        "span_len" => udf_custom::span_len_udf;
-        "interval_align_score" => udf_custom::interval_align_score_udf;
-        "span_overlaps" => udf_custom::span_overlaps_udf;
-        "span_contains" => udf_custom::span_contains_udf;
-        "span_id" => udf_custom::span_id_udf;
-        "utf8_normalize" => udf_custom::utf8_normalize_udf, aliases: ["normalize_utf8"];
-        "utf8_null_if_blank" => udf_custom::utf8_null_if_blank_udf, aliases: ["null_if_blank"];
-        "qname_normalize" => udf_custom::qname_normalize_udf, aliases: ["qualname_normalize"];
-        "map_get_default" => udf_custom::map_get_default_udf;
-        "map_normalize" => udf_custom::map_normalize_udf;
-        "list_compact" => udf_custom::list_compact_udf, aliases: ["array_compact"];
-        "list_unique_sorted" => udf_custom::list_unique_sorted_udf, aliases: ["array_unique_sorted"];
-        "struct_pick" => udf_custom::struct_pick_udf, aliases: ["struct_select"];
-        "cdf_change_rank" => udf_custom::cdf_change_rank_udf;
-        "cdf_is_upsert" => udf_custom::cdf_is_upsert_udf;
-        "cdf_is_delete" => udf_custom::cdf_is_delete_udf;
-        "col_to_byte" => udf_custom::col_to_byte_udf;
+        "arrow_metadata" => udf::arrow_metadata_udf;
+        "semantic_tag" => udf::semantic_tag_udf;
+        "cpg_score" => udf::cpg_score_udf;
+        "stable_hash64" => udf::stable_hash64_udf, aliases: ["hash64"];
+        "stable_hash128" => udf::stable_hash128_udf, aliases: ["hash128"];
+        "prefixed_hash64" => udf::prefixed_hash64_udf, aliases: ["prefixed_hash"];
+        "stable_id" => udf::stable_id_udf;
+        "stable_id_parts" => udf::stable_id_parts_udf, aliases: ["stable_id_multi"];
+        "prefixed_hash_parts64" => udf::prefixed_hash_parts64_udf, aliases: ["prefixed_hash_parts"];
+        "stable_hash_any" => udf::stable_hash_any_udf, aliases: ["stable_hash"];
+        "span_make" => udf::span_make_udf, aliases: ["span"];
+        "span_len" => udf::span_len_udf;
+        "interval_align_score" => udf::interval_align_score_udf;
+        "span_overlaps" => udf::span_overlaps_udf;
+        "span_contains" => udf::span_contains_udf;
+        "span_id" => udf::span_id_udf;
+        "utf8_normalize" => udf::utf8_normalize_udf, aliases: ["normalize_utf8"];
+        "utf8_null_if_blank" => udf::utf8_null_if_blank_udf, aliases: ["null_if_blank"];
+        "qname_normalize" => udf::qname_normalize_udf, aliases: ["qualname_normalize"];
+        "map_get_default" => udf::map_get_default_udf;
+        "map_normalize" => udf::map_normalize_udf;
+        "list_compact" => udf::list_compact_udf, aliases: ["array_compact"];
+        "list_unique_sorted" => udf::list_unique_sorted_udf, aliases: ["array_unique_sorted"];
+        "struct_pick" => udf::struct_pick_udf, aliases: ["struct_select"];
+        "cdf_change_rank" => udf::cdf_change_rank_udf;
+        "cdf_is_upsert" => udf::cdf_is_upsert_udf;
+        "cdf_is_delete" => udf::cdf_is_delete_udf;
+        "col_to_byte" => udf::col_to_byte_udf;
     ]
 }
 
 pub fn table_udf_specs() -> Vec<TableUdfSpec> {
-    table_udfs![
-        "range_table" => range_table_udtf;
-    ]
+    table_udfs![]
 }
 
 pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSpec>> {
@@ -124,7 +116,7 @@ pub fn register_all_with_policy(
         ctx.register_udwf(udwf);
     }
     udtf_builtin::register_builtin_udtfs(ctx)?;
-    udtf_external::register_external_udtfs(ctx)?;
+    udtf_sources::register_external_udtfs(ctx)?;
     if enable_async {
         #[cfg(feature = "async-udf")]
         {
@@ -161,7 +153,6 @@ mod tests {
             "prefixed_hash64",
             "stable_id",
             "col_to_byte",
-            "range_table",
         ] {
             assert!(names.contains(name), "missing {name}");
         }
@@ -169,6 +160,6 @@ mod tests {
 
     #[test]
     fn registry_has_table_functions() {
-        assert!(!table_udf_specs().is_empty(), "expected at least one table UDF");
+        assert!(table_udf_specs().is_empty(), "expected no custom table UDFs");
     }
 }

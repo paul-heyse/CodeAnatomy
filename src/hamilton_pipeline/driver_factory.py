@@ -65,6 +65,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 _DEFAULT_DAG_NAME = "codeintel::semantic_v1"
 _SEMANTIC_VERSION = "v1"
+_PACKED_REF_FIELDS = 2
 
 
 def _ensure_hamilton_dataframe_types() -> None:
@@ -629,7 +630,51 @@ def _base_graph_tags(config_payload: Mapping[str, JsonValue]) -> dict[str, str]:
     telemetry_profile = _string_override(config_payload, "hamilton_telemetry_profile")
     if telemetry_profile is not None:
         merged_tags.setdefault("telemetry_profile", telemetry_profile)
+    merged_tags.setdefault("semantic_version", _SEMANTIC_VERSION)
+    repo_hash = _repo_hash_from_root(config_payload.get("repo_root"))
+    if repo_hash:
+        merged_tags.setdefault("repo_hash", repo_hash)
     return merged_tags
+
+
+def _repo_hash_from_root(repo_root: object | None) -> str | None:
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        return None
+    root = Path(repo_root).expanduser()
+    git_dir = root / ".git"
+    head_value = _read_text(git_dir / "HEAD")
+    if head_value is None:
+        return None
+    if not head_value.startswith("ref:"):
+        return head_value
+    ref_name = head_value.split("ref:", maxsplit=1)[-1].strip()
+    if not ref_name:
+        return None
+    return _read_text(git_dir / ref_name) or _resolve_packed_ref(git_dir, ref_name)
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _resolve_packed_ref(git_dir: Path, ref_name: str) -> str | None:
+    packed_text = _read_text(git_dir / "packed-refs")
+    if packed_text is None:
+        return None
+    for line in packed_text.splitlines():
+        if not line or line.startswith(("#", "^")):
+            continue
+        parts = line.split()
+        if len(parts) != _PACKED_REF_FIELDS:
+            continue
+        sha, ref = parts
+        if ref == ref_name:
+            return sha
+    return None
 
 
 def _append_plan_tags(tags: dict[str, str], *, plan: ExecutionPlan) -> None:
@@ -1440,6 +1485,15 @@ def build_plan_context(
     """
     modules = list(request.modules) if request.modules is not None else default_modules()
     resolved_view_ctx = request.view_ctx or build_view_graph_context(request.config)
+    if bool(request.config.get("enable_dataset_readiness", True)):
+        from datafusion_engine.session.runtime import record_dataset_readiness
+        from semantics.catalog.dataset_rows import get_all_dataset_rows
+
+        dataset_names = tuple(row.name for row in get_all_dataset_rows() if row.role == "input")
+        record_dataset_readiness(
+            resolved_view_ctx.profile,
+            dataset_names=dataset_names,
+        )
     resolved_plan = request.plan or _compile_plan(
         resolved_view_ctx,
         request.config,

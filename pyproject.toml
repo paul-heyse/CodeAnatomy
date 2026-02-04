@@ -3,7 +3,7 @@ name = "codeanatomy"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = "==3.13.11"
+requires-python = "==3.13.12"
 dependencies = [
     "pip>=25.3",
     "setuptools>=80.9.0",
@@ -86,8 +86,8 @@ line-length = 100
 target-version = "py313"
 required-version = ">=0.14.8"
 output-format = "grouped"
-src = ["src","rust"]
-extend-exclude = ["docs/**", "tools/**"]
+src = ["src"]
+extend-exclude = ["docs/**", "rust/**"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "PLR6301", "PLC1901", "D103", "D100"]

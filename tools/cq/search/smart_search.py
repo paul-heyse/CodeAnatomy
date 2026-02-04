@@ -1,0 +1,1184 @@
+"""Smart Search pipeline for semantically-enriched code search.
+
+Integrates rpygrep candidate generation with ast-grep classification
+and symtable enrichment to provide grouped, ranked search results.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import replace
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated
+
+import msgspec
+
+from tools.cq.core.schema import (
+    Anchor,
+    CqResult,
+    DetailPayload,
+    Finding,
+    ScoreDetails,
+    Section,
+    mk_runmeta,
+    ms,
+)
+from tools.cq.search.adapter import find_def_lines
+from tools.cq.search.classifier import (
+    MatchCategory,
+    NodeClassification,
+    QueryMode,
+    SymtableEnrichment,
+    classify_from_node,
+    classify_heuristic,
+    clear_caches,
+    detect_query_mode,
+    enrich_with_symtable,
+    get_cached_source,
+    get_sg_root,
+)
+from tools.cq.search.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.timeout import search_sync_with_timeout
+
+if TYPE_CHECKING:
+    from rpygrep import RipGrepSearch
+    from rpygrep.types import RipGrepSearchResult
+
+    from tools.cq.core.toolchain import Toolchain
+
+
+# Derive smart search limits from INTERACTIVE profile
+SMART_SEARCH_LIMITS = replace(
+    INTERACTIVE,
+    max_files=200,
+    max_matches_per_file=50,
+    max_total_matches=500,
+    max_file_size_bytes=2 * 1024 * 1024,
+    timeout_seconds=30.0,
+)
+
+
+class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
+    """Raw match from rpygrep candidate generation.
+
+    Parameters
+    ----------
+    file
+        Relative file path.
+    line
+        1-indexed line number.
+    col
+        0-indexed column offset.
+    text
+        Full line content.
+    match_text
+        Exact matched substring.
+    match_start
+        Column offset of match start.
+    match_end
+        Column offset of match end.
+    submatch_index
+        Which submatch on this line.
+    context_before
+        Lines before match (line_no -> text).
+    context_after
+        Lines after match (line_no -> text).
+    """
+
+    file: str
+    line: Annotated[int, msgspec.Meta(ge=1)]
+    col: Annotated[int, msgspec.Meta(ge=0)]
+    text: str
+    match_text: str
+    match_start: int
+    match_end: int
+    submatch_index: int = 0
+    context_before: dict[int, str] | None = None
+    context_after: dict[int, str] | None = None
+
+
+class SearchStats(msgspec.Struct, omit_defaults=True):
+    """Statistics from candidate generation phase.
+
+    Parameters
+    ----------
+    scanned_files
+        Number of files scanned.
+    matched_files
+        Number of files with matches.
+    total_matches
+        Total match count.
+    truncated
+        Whether results were truncated.
+    timed_out
+        Whether search timed out.
+    """
+
+    scanned_files: int
+    matched_files: int
+    total_matches: int
+    truncated: bool = False
+    timed_out: bool = False
+
+
+class EnrichedMatch(msgspec.Struct, frozen=True, omit_defaults=True):
+    """Fully enriched match with classification and context.
+
+    Parameters
+    ----------
+    file
+        Relative file path.
+    line
+        1-indexed line number.
+    col
+        0-indexed column offset.
+    text
+        Full line content.
+    match_text
+        Exact matched substring.
+    category
+        Classified match category.
+    confidence
+        Classification confidence.
+    evidence_kind
+        Classification evidence source.
+    node_kind
+        AST node kind, if available.
+    containing_scope
+        Containing function/class name.
+    context_window
+        Line range for context.
+    context_snippet
+        Source code snippet.
+    symtable
+        Symtable enrichment data.
+    """
+
+    file: str
+    line: Annotated[int, msgspec.Meta(ge=1)]
+    col: Annotated[int, msgspec.Meta(ge=0)]
+    text: str
+    match_text: str
+    category: MatchCategory
+    confidence: float
+    evidence_kind: str
+    node_kind: str | None = None
+    containing_scope: str | None = None
+    context_window: dict[str, int] | None = None
+    context_snippet: str | None = None
+    symtable: SymtableEnrichment | None = None
+
+
+# Kind weights for relevance scoring
+KIND_WEIGHTS: dict[MatchCategory, float] = {
+    "definition": 1.0,
+    "callsite": 0.8,
+    "import": 0.7,
+    "from_import": 0.7,
+    "reference": 0.6,
+    "assignment": 0.5,
+    "annotation": 0.5,
+    "text_match": 0.3,
+    "docstring_match": 0.2,
+    "comment_match": 0.15,
+    "string_match": 0.1,
+}
+
+
+def build_candidate_searcher(
+    root: Path,
+    query: str,
+    mode: QueryMode,
+    limits: SearchLimits,
+    *,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+) -> tuple[RipGrepSearch, str]:
+    """Build rpygrep searcher for candidate generation.
+
+    Parameters
+    ----------
+    root
+        Repository root to search from.
+    query
+        Search query string.
+    mode
+        Query mode (identifier/regex/literal).
+    limits
+        Search safety limits.
+    include_globs
+        File patterns to include.
+    exclude_globs
+        File patterns to exclude.
+
+    Returns
+    -------
+    tuple[RipGrepSearch, str]
+        Configured searcher and effective pattern string.
+    """
+    from rpygrep import RipGrepSearch
+
+    searcher = (
+        RipGrepSearch()
+        .set_working_directory(root)
+        .add_safe_defaults()
+        .include_type("py")
+        .case_sensitive(True)
+        .before_context(1)
+        .after_context(1)
+        .max_count(limits.max_matches_per_file)
+        .max_depth(limits.max_depth)
+        .max_file_size(limits.max_file_size_bytes)
+        .as_json()
+    )
+
+    if mode == QueryMode.IDENTIFIER:
+        # Word boundary match for identifiers
+        pattern = rf"\b{re.escape(query)}\b"
+        searcher = searcher.add_pattern(pattern)
+    elif mode == QueryMode.LITERAL:
+        # Exact literal match (non-regex)
+        pattern = query
+        searcher = searcher.patterns_are_not_regex().add_pattern(query)
+    else:
+        # User-provided regex (pass through)
+        pattern = query
+        searcher = searcher.add_pattern(query)
+
+    # Add include globs
+    include_globs = include_globs or []
+    for glob in include_globs:
+        searcher = searcher.include_glob(glob)
+
+    # Add exclude globs
+    exclude_globs = exclude_globs or []
+    for glob in exclude_globs:
+        searcher = searcher.exclude_glob(glob)
+
+    return searcher, pattern
+
+
+def collect_candidates(
+    searcher: RipGrepSearch,
+    limits: SearchLimits,
+) -> tuple[list[RawMatch], SearchStats]:
+    """Execute rpygrep search and collect raw matches.
+
+    Parameters
+    ----------
+    searcher
+        Configured rpygrep searcher.
+    limits
+        Search safety limits.
+
+    Returns
+    -------
+    tuple[list[RawMatch], SearchStats]
+        Raw matches and collection statistics.
+    """
+    matches: list[RawMatch] = []
+    seen_files: set[str] = set()
+    truncated = False
+    timed_out = False
+
+    try:
+        results = search_sync_with_timeout(
+            lambda: list(searcher.run()),
+            limits.timeout_seconds,
+        )
+    except TimeoutError:
+        timed_out = True
+        results: list[RipGrepSearchResult] = []
+
+    # Build context map from rpygrep helpers if available
+    context_map: dict[tuple[str, int], tuple[dict[int, str], dict[int, str]]] = {}
+    try:
+        from rpygrep.helpers import MatchedFile
+
+        matched_files = MatchedFile.from_search_results(results, before_context=1, after_context=1)
+        for mf in matched_files:
+            for ml in mf.matched_lines:
+                for line_no in ml.match:
+                    context_map[str(mf.path), line_no] = (ml.before, ml.after)
+    except Exception:
+        context_map = {}
+
+    for result in results:
+        file_path = str(result.path)
+        if file_path not in seen_files:
+            if len(seen_files) >= limits.max_files:
+                truncated = True
+                break
+            seen_files.add(file_path)
+
+        for match in result.matches:
+            if len(matches) >= limits.max_total_matches:
+                truncated = True
+                break
+
+            line_text = match.data.lines.text or ""
+            before, after = context_map.get((file_path, match.data.line_number), ({}, {}))
+
+            # Emit one RawMatch per submatch
+            if match.data.submatches:
+                for i, sub in enumerate(match.data.submatches):
+                    if len(matches) >= limits.max_total_matches:
+                        truncated = True
+                        break
+                    raw = RawMatch(
+                        file=file_path,
+                        line=match.data.line_number,
+                        col=sub.start,
+                        text=line_text,
+                        match_text=line_text[sub.start : sub.end],
+                        match_start=sub.start,
+                        match_end=sub.end,
+                        submatch_index=i,
+                        context_before=before if before else None,
+                        context_after=after if after else None,
+                    )
+                    matches.append(raw)
+            else:
+                raw = RawMatch(
+                    file=file_path,
+                    line=match.data.line_number,
+                    col=0,
+                    text=line_text,
+                    match_text=line_text,
+                    match_start=0,
+                    match_end=len(line_text),
+                    submatch_index=0,
+                    context_before=before if before else None,
+                    context_after=after if after else None,
+                )
+                matches.append(raw)
+
+        if truncated:
+            break
+
+    stats = SearchStats(
+        scanned_files=len(seen_files),
+        matched_files=len(seen_files),
+        total_matches=len(matches),
+        truncated=truncated,
+        timed_out=timed_out,
+    )
+
+    return matches, stats
+
+
+def _compute_context_window(
+    call_line: int,
+    def_lines: list[tuple[int, int]],
+    total_lines: int,
+) -> dict[str, int]:
+    """Compute context window for a match.
+
+    Parameters
+    ----------
+    call_line
+        Line number of the match.
+    def_lines
+        List of (line_number, indent_level) for all defs.
+    total_lines
+        Total lines in the file.
+
+    Returns
+    -------
+    dict[str, int]
+        Dict with 'start_line' and 'end_line' keys.
+    """
+    containing_def: tuple[int, int] | None = None
+    for def_line, def_indent in reversed(def_lines):
+        if def_line < call_line:
+            containing_def = (def_line, def_indent)
+            break
+
+    if containing_def is None:
+        return {"start_line": 1, "end_line": total_lines}
+
+    start_line, def_indent = containing_def
+    end_line = total_lines
+
+    for def_line, indent in def_lines:
+        if def_line > start_line and indent <= def_indent:
+            end_line = def_line - 1
+            break
+
+    return {"start_line": start_line, "end_line": end_line}
+
+
+def _extract_context_snippet(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+    *,
+    max_lines: int = 30,
+) -> str | None:
+    """Extract source snippet for context window.
+
+    Parameters
+    ----------
+    source_lines
+        All lines of the source file.
+    start_line
+        1-indexed start line.
+    end_line
+        1-indexed end line.
+    max_lines
+        Maximum lines before truncation.
+
+    Returns
+    -------
+    str | None
+        Extracted snippet, or None on error.
+    """
+    try:
+        start_idx = max(0, start_line - 1)
+        end_idx = min(len(source_lines), end_line)
+        snippet_lines = source_lines[start_idx:end_idx]
+
+        if not snippet_lines:
+            return None
+
+        total = len(snippet_lines)
+        if total <= max_lines:
+            return "\n".join(snippet_lines)
+
+        head_count = 15
+        tail_count = 5
+        omitted = total - head_count - tail_count
+        head = snippet_lines[:head_count]
+        tail = snippet_lines[-tail_count:]
+        marker = f"    # ... truncated ({omitted} more lines) ..."
+        return "\n".join([*head, marker, *tail])
+    except (IndexError, TypeError):
+        return None
+
+
+def classify_match(
+    raw: RawMatch,
+    root: Path,
+    *,
+    enable_symtable: bool = True,
+) -> EnrichedMatch:
+    """Run three-stage classification pipeline on a raw match.
+
+    Parameters
+    ----------
+    raw
+        Raw match from rpygrep.
+    root
+        Repository root for file resolution.
+    enable_symtable
+        Whether to run symtable enrichment.
+
+    Returns
+    -------
+    EnrichedMatch
+        Fully classified and enriched match.
+    """
+    match_text = raw.match_text
+
+    # Stage 1: Fast heuristic
+    heuristic = classify_heuristic(raw.text, raw.col, match_text)
+
+    if heuristic.skip_deeper and heuristic.category is not None:
+        return EnrichedMatch(
+            file=raw.file,
+            line=raw.line,
+            col=raw.col,
+            text=raw.text,
+            match_text=match_text,
+            category=heuristic.category,
+            confidence=heuristic.confidence,
+            evidence_kind="heuristic",
+        )
+
+    # Stage 2: AST node classification
+    file_path = root / raw.file
+    if file_path.suffix != ".py":
+        return EnrichedMatch(
+            file=raw.file,
+            line=raw.line,
+            col=raw.col,
+            text=raw.text,
+            match_text=match_text,
+            category=heuristic.category or "text_match",
+            confidence=heuristic.confidence or 0.4,
+            evidence_kind="rg_only",
+        )
+
+    sg_root = get_sg_root(file_path)
+
+    ast_result: NodeClassification | None = None
+    if sg_root is not None:
+        ast_result = classify_from_node(sg_root, raw.line, raw.col)
+
+    # Determine best classification
+    if ast_result is not None:
+        category = ast_result.category
+        confidence = ast_result.confidence
+        evidence_kind = ast_result.evidence_kind
+        node_kind = ast_result.node_kind
+        containing_scope = ast_result.containing_scope
+    elif heuristic.category is not None:
+        category = heuristic.category
+        confidence = heuristic.confidence
+        evidence_kind = "heuristic"
+        node_kind = None
+        containing_scope = None
+    else:
+        category = "text_match"
+        confidence = 0.50
+        evidence_kind = "rg_only"
+        node_kind = None
+        containing_scope = None
+
+    # Stage 3: Symtable enrichment (only for high-value categories)
+    symtable_enrichment: SymtableEnrichment | None = None
+    if enable_symtable and category in {"definition", "callsite", "reference", "assignment"}:
+        source = get_cached_source(file_path)
+        if source is not None:
+            symtable_enrichment = enrich_with_symtable(
+                source,
+                raw.file,
+                match_text,
+                raw.line,
+            )
+
+    # Compute context window and snippet
+    context_window: dict[str, int] | None = None
+    context_snippet: str | None = None
+    source = get_cached_source(file_path)
+    if source is not None:
+        source_lines = source.splitlines()
+        def_lines = find_def_lines(file_path)
+        if def_lines:
+            context_window = _compute_context_window(raw.line, def_lines, len(source_lines))
+            context_snippet = _extract_context_snippet(
+                source_lines,
+                context_window["start_line"],
+                context_window["end_line"],
+            )
+
+    return EnrichedMatch(
+        file=raw.file,
+        line=raw.line,
+        col=raw.col,
+        text=raw.text,
+        match_text=match_text,
+        category=category,
+        confidence=confidence,
+        evidence_kind=evidence_kind,
+        node_kind=node_kind,
+        containing_scope=containing_scope,
+        context_window=context_window,
+        context_snippet=context_snippet,
+        symtable=symtable_enrichment,
+    )
+
+
+def _classify_file_role(file_path: str) -> str:
+    """Classify file role for ranking.
+
+    Parameters
+    ----------
+    file_path
+        Relative file path.
+
+    Returns
+    -------
+    str
+        One of "src", "test", "doc", "lib", "other".
+    """
+    path_lower = file_path.lower()
+
+    if "/test" in path_lower or "test_" in path_lower or "_test.py" in path_lower:
+        return "test"
+    if "/doc" in path_lower or "/docs/" in path_lower:
+        return "doc"
+    if "/vendor/" in path_lower or "/third_party/" in path_lower:
+        return "lib"
+    if "/src/" in path_lower or "/lib/" in path_lower:
+        return "src"
+
+    return "other"
+
+
+def compute_relevance_score(match: EnrichedMatch) -> float:
+    """Compute relevance score for ranking.
+
+    Parameters
+    ----------
+    match
+        Enriched match to score.
+
+    Returns
+    -------
+    float
+        Relevance score (higher is better).
+    """
+    # Base weight from category
+    base = KIND_WEIGHTS.get(match.category, 0.3)
+
+    # File role multiplier
+    role = _classify_file_role(match.file)
+    role_mult = {
+        "src": 1.0,
+        "lib": 0.9,
+        "other": 0.7,
+        "test": 0.5,
+        "doc": 0.3,
+    }.get(role, 0.7)
+
+    # Path depth penalty (prefer shallow paths)
+    depth = match.file.count("/")
+    depth_penalty = min(0.2, depth * 0.02)
+
+    # Confidence factor
+    conf_factor = match.confidence
+
+    return base * role_mult * conf_factor - depth_penalty
+
+
+def _evidence_to_bucket(evidence_kind: str) -> str:
+    """Map evidence kind to confidence bucket.
+
+    Parameters
+    ----------
+    evidence_kind
+        Evidence kind string.
+
+    Returns
+    -------
+    str
+        Confidence bucket name.
+    """
+    return {
+        "resolved_ast": "high",
+        "resolved_ast_heuristic": "medium",
+        "heuristic": "medium",
+        "rg_only": "low",
+    }.get(evidence_kind, "medium")
+
+
+def _category_message(category: MatchCategory, match: EnrichedMatch) -> str:
+    """Generate human-readable message for category.
+
+    Parameters
+    ----------
+    category
+        Match category.
+    match
+        Enriched match.
+
+    Returns
+    -------
+    str
+        Human-readable message.
+    """
+    messages = {
+        "definition": "Function/class definition",
+        "callsite": "Function call",
+        "import": "Import statement",
+        "from_import": "From import",
+        "reference": "Reference",
+        "assignment": "Assignment",
+        "annotation": "Type annotation",
+        "docstring_match": "Match in docstring",
+        "comment_match": "Match in comment",
+        "string_match": "Match in string literal",
+        "text_match": "Text match",
+    }
+    base = messages.get(category, "Match")
+    if match.containing_scope:
+        return f"{base} in {match.containing_scope}"
+    return base
+
+
+def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
+    """Convert EnrichedMatch to Finding.
+
+    Parameters
+    ----------
+    match
+        Enriched match.
+    root
+        Repository root.
+
+    Returns
+    -------
+    Finding
+        Finding object.
+    """
+    score = ScoreDetails(
+        confidence_score=match.confidence,
+        confidence_bucket=_evidence_to_bucket(match.evidence_kind),
+        evidence_kind=match.evidence_kind,
+    )
+
+    data: dict[str, object] = {
+        "match_text": match.match_text,
+        "line_text": match.text,
+    }
+    if match.context_window:
+        data["context_window"] = match.context_window
+    if match.context_snippet:
+        data["context_snippet"] = match.context_snippet
+    if match.containing_scope:
+        data["containing_scope"] = match.containing_scope
+    if match.node_kind:
+        data["node_kind"] = match.node_kind
+    if match.symtable:
+        symtable_flags: list[str] = []
+        if match.symtable.is_imported:
+            symtable_flags.append("imported")
+        if match.symtable.is_assigned:
+            symtable_flags.append("assigned")
+        if match.symtable.is_parameter:
+            symtable_flags.append("parameter")
+        if match.symtable.is_free:
+            symtable_flags.append("closure_var")
+        if match.symtable.is_global:
+            symtable_flags.append("global")
+        if symtable_flags:
+            data["binding_flags"] = symtable_flags
+
+    details = DetailPayload(
+        kind=match.category,
+        score=score,
+        data=data,
+    )
+
+    return Finding(
+        category=match.category,
+        message=_category_message(match.category, match),
+        anchor=Anchor(
+            file=match.file,
+            line=match.line,
+            col=match.col,
+        ),
+        severity="info",
+        details=details,
+    )
+
+
+def build_followups(
+    matches: list[EnrichedMatch],
+    query: str,
+    mode: QueryMode,
+) -> list[Finding]:
+    """Generate actionable next commands.
+
+    Parameters
+    ----------
+    matches
+        List of enriched matches.
+    query
+        Original search query.
+    mode
+        Query mode.
+
+    Returns
+    -------
+    list[Finding]
+        Follow-up suggestions.
+    """
+    findings: list[Finding] = []
+
+    if mode == QueryMode.IDENTIFIER:
+        defs = [m for m in matches if m.category == "definition"]
+        if defs:
+            findings.append(
+                Finding(
+                    category="next_step",
+                    message=f"Find callers: /cq calls {query}",
+                    severity="info",
+                    details=DetailPayload(
+                        kind="next_step",
+                        data={"cmd": f"/cq calls {query}"},
+                    ),
+                )
+            )
+            findings.append(
+                Finding(
+                    category="next_step",
+                    message=f'Find definitions: /cq q "entity=function name={query}"',
+                    severity="info",
+                    details=DetailPayload(
+                        kind="next_step",
+                        data={"cmd": f'/cq q "entity=function name={query}"'},
+                    ),
+                )
+            )
+            findings.append(
+                Finding(
+                    category="next_step",
+                    message=f'Find callers (transitive): /cq q "entity=function name={query} expand=callers(depth=2)"',
+                    severity="info",
+                    details=DetailPayload(
+                        kind="next_step",
+                        data={
+                            "cmd": f'/cq q "entity=function name={query} expand=callers(depth=2)"'
+                        },
+                    ),
+                )
+            )
+
+        calls = [m for m in matches if m.category == "callsite"]
+        if calls:
+            findings.append(
+                Finding(
+                    category="next_step",
+                    message=f"Analyze impact: /cq impact {query}",
+                    severity="info",
+                    details=DetailPayload(
+                        kind="next_step",
+                        data={"cmd": f"/cq impact {query}"},
+                    ),
+                )
+            )
+
+    return findings
+
+
+def build_summary(
+    query: str,
+    mode: QueryMode,
+    stats: SearchStats,
+    matches: list[EnrichedMatch],
+    limits: SearchLimits,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    file_globs: list[str] | None = None,
+    limit: int | None = None,
+    pattern: str | None = None,
+) -> dict[str, object]:
+    """Build summary dict for CqResult.
+
+    Parameters
+    ----------
+    query
+        Original query string.
+    mode
+        Query mode.
+    stats
+        Search statistics.
+    matches
+        List of enriched matches.
+    limits
+        Search limits.
+    include
+        Include patterns.
+    exclude
+        Exclude patterns.
+    file_globs
+        File glob patterns.
+    limit
+        Result limit.
+    pattern
+        Effective regex pattern.
+
+    Returns
+    -------
+    dict[str, object]
+        Summary dictionary.
+    """
+    return {
+        "query": query,
+        "mode": mode.value,
+        "file_globs": file_globs or ["*.py", "*.pyi"],
+        "include": include or [],
+        "exclude": exclude or [],
+        "context_lines": {"before": 1, "after": 1},
+        "limit": limit if limit is not None else limits.max_total_matches,
+        "scanned_files": stats.scanned_files,
+        "matched_files": stats.matched_files,
+        "total_matches": stats.total_matches,
+        "returned_matches": len(matches),
+        "scan_method": "hybrid",
+        "pattern": pattern,
+        "case_sensitive": True,
+        "caps_hit": "timeout"
+        if stats.timed_out
+        else ("max_total_matches" if stats.truncated else "none"),
+        "truncated": stats.truncated,
+        "timed_out": stats.timed_out,
+    }
+
+
+def build_sections(
+    matches: list[EnrichedMatch],
+    root: Path,
+    query: str,
+    mode: QueryMode,
+    *,
+    include_strings: bool = False,
+) -> list[Section]:
+    """Build organized sections for CqResult.
+
+    Parameters
+    ----------
+    matches
+        List of enriched matches.
+    root
+        Repository root.
+    query
+        Original query.
+    mode
+        Query mode.
+    include_strings
+        Include string/comment/docstring matches.
+
+    Returns
+    -------
+    list[Section]
+        Organized sections.
+    """
+    sections: list[Section] = []
+
+    non_code_categories = {"docstring_match", "comment_match", "string_match"}
+
+    # Sort by relevance
+    sorted_matches = sorted(
+        matches,
+        key=lambda m: compute_relevance_score(m),
+        reverse=True,
+    )
+
+    visible_matches = (
+        sorted_matches
+        if include_strings
+        else [m for m in sorted_matches if m.category not in non_code_categories]
+    )
+
+    # Group by containing function/method (fallback to file)
+    grouped: dict[str, list[EnrichedMatch]] = {}
+    for match in visible_matches:
+        key = f"{match.containing_scope} ({match.file})" if match.containing_scope else match.file
+        grouped.setdefault(key, []).append(match)
+
+    # Section 1: Top Contexts (representative match per group)
+    group_scores = [
+        (key, max(compute_relevance_score(m) for m in group), group)
+        for key, group in grouped.items()
+    ]
+    group_scores.sort(key=lambda t: t[1], reverse=True)
+    top_contexts: list[Finding] = []
+    for key, _score, group in group_scores[:20]:
+        rep = group[0]
+        finding = build_finding(rep, root)
+        finding.message = f"{key}"
+        top_contexts.append(finding)
+    sections.append(Section(title="Top Contexts", findings=top_contexts))
+
+    # Section 2: Identifier panels (definitions, imports, calls)
+    if mode == QueryMode.IDENTIFIER:
+        defs = [m for m in visible_matches if m.category == "definition"]
+        imps = [m for m in visible_matches if m.category in {"import", "from_import"}]
+        calls = [m for m in visible_matches if m.category == "callsite"]
+        if defs:
+            sections.append(
+                Section(
+                    title="Definitions",
+                    findings=[build_finding(m, root) for m in defs[:5]],
+                )
+            )
+        if imps:
+            sections.append(
+                Section(
+                    title="Imports",
+                    findings=[build_finding(m, root) for m in imps[:10]],
+                    collapsed=True,
+                )
+            )
+        if calls:
+            sections.append(
+                Section(
+                    title="Callsites",
+                    findings=[build_finding(m, root) for m in calls[:10]],
+                    collapsed=True,
+                )
+            )
+
+    # Section 3: Uses by Kind
+    category_counts = Counter(m.category for m in matches)
+    kind_findings = [
+        Finding(
+            category="count",
+            message=f"{cat}: {count}",
+            severity="info",
+            details=DetailPayload(kind="count", data={"category": cat, "count": count}),
+        )
+        for cat, count in category_counts.most_common()
+    ]
+    sections.append(
+        Section(
+            title="Uses by Kind",
+            findings=kind_findings,
+            collapsed=True,
+        )
+    )
+
+    # Section 4: Non-code matches (collapsed by default)
+    non_code = [m for m in sorted_matches if m.category in non_code_categories]
+    if non_code:
+        sections.append(
+            Section(
+                title="Non-Code Matches (Strings / Comments / Docstrings)",
+                findings=[build_finding(m, root) for m in non_code[:20]],
+                collapsed=True,
+            )
+        )
+
+    # Section 5: Hot Files
+    file_counts = Counter(m.file for m in matches)
+    hot_file_findings = [
+        Finding(
+            category="hot_file",
+            message=f"{file}: {count} matches",
+            anchor=Anchor(file=file, line=1),
+            severity="info",
+            details=DetailPayload(kind="hot_file", data={"count": count}),
+        )
+        for file, count in file_counts.most_common(10)
+    ]
+    sections.append(
+        Section(
+            title="Hot Files",
+            findings=hot_file_findings,
+            collapsed=True,
+        )
+    )
+
+    # Section 6: Suggested Follow-ups
+    followup_findings = build_followups(matches, query, mode)
+    if followup_findings:
+        sections.append(
+            Section(
+                title="Suggested Follow-ups",
+                findings=followup_findings,
+            )
+        )
+
+    return sections
+
+
+def smart_search(
+    root: Path,
+    query: str,
+    *,
+    mode: QueryMode | None = None,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    include_strings: bool = False,
+    limits: SearchLimits | None = None,
+    tc: Toolchain | None = None,
+    argv: list[str] | None = None,
+) -> CqResult:
+    """Execute Smart Search pipeline.
+
+    Parameters
+    ----------
+    root
+        Repository root path.
+    query
+        Search query string.
+    mode
+        Query mode override (auto-detected if None).
+    include_globs
+        File patterns to include.
+    exclude_globs
+        File patterns to exclude.
+    include_strings
+        Include strings/comments/docstrings in primary ranking.
+    limits
+        Search safety limits.
+    tc
+        Toolchain info from CliContext.
+    argv
+        Original command arguments.
+
+    Returns
+    -------
+    CqResult
+        Complete search results.
+    """
+    started = ms()
+    limits = limits or SMART_SEARCH_LIMITS
+    argv = argv or ["search", query]
+
+    # Clear caches from previous runs
+    clear_caches()
+
+    # Detect query mode
+    actual_mode = detect_query_mode(query, force_mode=mode)
+
+    # Phase 1: Candidate generation
+    searcher, pattern = build_candidate_searcher(
+        root,
+        query,
+        actual_mode,
+        limits,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+    )
+    raw_matches, stats = collect_candidates(searcher, limits)
+
+    # Phase 2: Classification
+    enriched_matches = [classify_match(raw, root) for raw in raw_matches]
+
+    # Phase 3: Assembly
+    summary = build_summary(
+        query,
+        actual_mode,
+        stats,
+        enriched_matches,
+        limits,
+        include=include_globs,
+        exclude=exclude_globs,
+        file_globs=["*.py", "*.pyi"],
+        limit=limits.max_total_matches,
+        pattern=pattern,
+    )
+    sections = build_sections(
+        enriched_matches, root, query, actual_mode, include_strings=include_strings
+    )
+
+    # Build CqResult
+    run = mk_runmeta(
+        macro="search",
+        argv=argv,
+        root=str(root),
+        started_ms=started,
+        toolchain=tc.to_dict() if tc else {},
+    )
+
+    return CqResult(
+        run=run,
+        summary=summary,
+        sections=sections,
+        key_findings=sections[0].findings[:5] if sections else [],
+        evidence=[build_finding(m, root) for m in enriched_matches],
+    )
+
+
+__all__ = [
+    "KIND_WEIGHTS",
+    "SMART_SEARCH_LIMITS",
+    "EnrichedMatch",
+    "RawMatch",
+    "SearchStats",
+    "build_candidate_searcher",
+    "build_finding",
+    "build_followups",
+    "build_sections",
+    "build_summary",
+    "classify_match",
+    "collect_candidates",
+    "compute_relevance_score",
+    "smart_search",
+]

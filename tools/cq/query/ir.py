@@ -507,7 +507,7 @@ class JoinTarget(msgspec.Struct, frozen=True):
         if entity_str not in valid_entities:
             msg = f"Invalid join target entity: {entity_str!r}. Valid types: {', '.join(valid_entities)}"
             raise ValueError(msg)
-        return cls(entity=cast(EntityType, entity_str), name=name)
+        return cls(entity=cast("EntityType", entity_str), name=name)
 
 
 class JoinConstraint(msgspec.Struct, frozen=True):

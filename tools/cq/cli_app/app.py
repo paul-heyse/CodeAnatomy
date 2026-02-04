@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 from cyclopts import App, Group, Parameter
 from rich.console import Console
@@ -18,9 +19,6 @@ from tools.cq.cli_app.config import build_config_chain, load_typed_config, load_
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 from tools.cq.cli_app.result import handle_result
 from tools.cq.cli_app.types import OutputFormat
-
-if TYPE_CHECKING:
-    pass
 
 # Version string
 VERSION = "0.3.0"
@@ -39,7 +37,7 @@ def _make_console() -> Console:
     Console
         Configured Rich console.
     """
-    force_color = os.environ.get("CQ_FORCE_COLOR", "").lower() in ("1", "true")
+    force_color = os.environ.get("CQ_FORCE_COLOR", "").lower() in {"1", "true"}
     return Console(
         width=100,
         force_terminal=force_color,
@@ -70,17 +68,37 @@ console = _make_console()
 
 
 @app.meta.default
-def launcher(
+def launcher(  # noqa: C901, PLR0912, PLR0913, PLR0914
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
-    root: Annotated[Path | None, Parameter(name="--root", group=global_group, help="Repository root")] = None,
-    config: Annotated[str | None, Parameter(name="--config", group=global_group, help="Config file path")] = None,
-    no_config: Annotated[bool, Parameter(name="--no-config", group=global_group, help="Skip config file loading")] = False,
-    verbose: Annotated[int, Parameter(name=["--verbose", "-v"], group=global_group, help="Verbosity level")] = 0,
-    output_format: Annotated[OutputFormat, Parameter(name="--format", group=global_group, help="Output format")] = OutputFormat.md,
-    artifact_dir: Annotated[Path | None, Parameter(name="--artifact-dir", group=global_group, help="Artifact directory")] = None,
-    no_save_artifact: Annotated[bool, Parameter(name="--no-save-artifact", group=global_group, help="Don't save artifact")] = False,
+    root: Annotated[
+        Path | None, Parameter(name="--root", group=global_group, help="Repository root")
+    ] = None,
+    config: Annotated[
+        str | None, Parameter(name="--config", group=global_group, help="Config file path")
+    ] = None,
+    no_config: Annotated[
+        bool, Parameter(name="--no-config", group=global_group, help="Skip config file loading")
+    ] = False,
+    verbose: Annotated[
+        int, Parameter(name=["--verbose", "-v"], group=global_group, help="Verbosity level")
+    ] = 0,
+    output_format: Annotated[
+        OutputFormat, Parameter(name="--format", group=global_group, help="Output format")
+    ] = OutputFormat.md,
+    artifact_dir: Annotated[
+        Path | None, Parameter(name="--artifact-dir", group=global_group, help="Artifact directory")
+    ] = None,
+    no_save_artifact: Annotated[
+        bool, Parameter(name="--no-save-artifact", group=global_group, help="Don't save artifact")
+    ] = False,
 ) -> int:
-    """Global option handler and command dispatcher."""
+    """Handle global options and dispatch the selected command.
+
+    Returns
+    -------
+    int
+        Process exit code.
+    """
     cli_root = root
     cli_verbose = verbose
     cli_output_format = output_format
@@ -99,10 +117,8 @@ def launcher(
         if cli_verbose == 0 and typed_config.verbose is not None:
             verbose = typed_config.verbose
         if typed_config.output_format and cli_output_format == OutputFormat.md:
-            try:
+            with suppress(ValueError):
                 output_format = OutputFormat(typed_config.output_format)
-            except ValueError:
-                pass
         if cli_artifact_dir is None and typed_config.artifact_dir:
             artifact_dir = Path(typed_config.artifact_dir)
         if typed_config.save_artifact is not None and not cli_no_save_artifact:
@@ -113,10 +129,8 @@ def launcher(
         if cli_verbose == 0 and typed_env.verbose is not None:
             verbose = typed_env.verbose
         if typed_env.output_format and cli_output_format == OutputFormat.md:
-            try:
+            with suppress(ValueError):
                 output_format = OutputFormat(typed_env.output_format)
-            except ValueError:
-                pass
         if cli_artifact_dir is None and typed_env.artifact_dir:
             artifact_dir = Path(typed_env.artifact_dir)
         if typed_env.save_artifact is not None and not cli_no_save_artifact:
@@ -188,6 +202,15 @@ app.command(bytecode_surface, name="bytecode-surface", group=analysis_group)
 from tools.cq.cli_app.commands.query import q
 
 app.command(q, group=analysis_group)
+
+
+# ============================================================================
+# Register Search Command
+# ============================================================================
+
+from tools.cq.cli_app.commands.search import search
+
+app.command(search, group=analysis_group)
 
 
 # ============================================================================

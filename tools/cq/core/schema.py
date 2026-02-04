@@ -11,7 +11,6 @@ import msgspec
 
 from tools.cq import SCHEMA_VERSION
 
-
 _SCORE_FIELDS: tuple[str, ...] = (
     "impact_score",
     "impact_bucket",
@@ -282,6 +281,7 @@ def mk_runmeta(
         Populated metadata.
     """
     import time
+
     from tools.cq.utils.uuid_factory import uuid7_str
 
     elapsed = time.time() * 1000 - started_ms

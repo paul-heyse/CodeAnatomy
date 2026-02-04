@@ -9,7 +9,7 @@ Agent operating protocol for the CodeAnatomy codebase.
 **Non-negotiables:**
 
 - **Always `uv run`** - Direct `python` calls will fail due to import issues
-- **Python 3.13.11** - Pinned, do not change
+- **Python 3.13.12** - Pinned, do not change
 - **Bootstrap first** - Run `scripts/bootstrap_codex.sh && uv sync` on fresh clones
 - **Ruff is canonical** - All style rules live in `pyproject.toml`; do not duplicate
 - **pyrefly is the strict gate** - pyright runs in "basic" mode for IDE support
@@ -26,6 +26,10 @@ to a queryable graph using Hamilton DAG + DataFusion.
 
 | Skill | Trigger | Command |
 |-------|---------|---------|
+| `/cq search` | Quick identifier search | `/cq search build_graph` |
+| `/cq search` | Regex code search | `/cq search "config.*path" --regex` |
+| `/cq search` | Include strings/comments | `/cq search foo --include-strings` |
+| `/cq search` | Scoped search | `/cq search CqResult --in tools/cq/core/` |
 | `/cq` | Modifying any function/class | `/cq calls <function>` |
 | `/cq` | Changing parameters | `/cq impact <function> --param <param>` |
 | `/cq` | Signature changes | `/cq sig-impact <function> --to "<new>"` |
@@ -63,6 +67,42 @@ to a queryable graph using Hamilton DAG + DataFusion.
 
 **Before understanding call flow:**
 - Visualize callers → `/cq q "entity=function name=<fn> expand=callers" --format mermaid`
+
+### Smart Search Examples
+
+Smart Search provides fast, semantically-enriched code search. It automatically groups
+results by containing function/scope and classifies matches as definitions, callsites,
+imports, comments, etc.
+
+```bash
+# Simple identifier search (auto-detected)
+/cq search build_graph
+
+# Regex search
+/cq search "config.*path" --regex
+
+# Literal string search
+/cq search "hello world" --literal
+
+# Scoped search (only in directory)
+/cq search CqResult --in tools/cq/core/
+
+# Include matches in strings/comments/docstrings
+/cq search build_graph --include-strings
+
+# Plain queries in /cq q also fall back to search
+/cq q build_graph  # Same as: /cq search build_graph
+```
+
+**Output structure:**
+- **Top Contexts**: Matches grouped by containing function
+- **Definitions**: Function/class definitions (identifier mode)
+- **Imports**: Import statements
+- **Callsites**: Function calls
+- **Uses by Kind**: Category breakdown
+- **Non-Code Matches**: Strings/comments (collapsed)
+- **Hot Files**: Files with most matches
+- **Suggested Follow-ups**: Next commands to explore
 
 ### Query Command Examples
 

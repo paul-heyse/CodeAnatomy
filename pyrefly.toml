@@ -1,11 +1,11 @@
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "tools", "rust"]
 project-excludes = [
     "**/.venv/**",
     "**/__pycache__/**",
     "**/tests/fixtures/heuristics/**",
 ]
 search-path = ["src", "."]
-python-version = "3.13.11"
+python-version = "3.13.12"
 python-interpreter-path = ".venv/bin/python"
 
 # Type-check behavior

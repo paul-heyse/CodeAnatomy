@@ -6,7 +6,8 @@ Provides synchronous and asynchronous timeout wrappers for rpygrep operations.
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
@@ -96,6 +97,6 @@ async def search_async_with_timeout(
 
     try:
         return await asyncio.wait_for(coro, timeout=timeout if timeout > 0 else None)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         msg = f"Async search operation timed out after {timeout:.1f} seconds"
         raise TimeoutError(msg) from e

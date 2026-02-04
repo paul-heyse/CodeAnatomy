@@ -6,9 +6,10 @@ Reports free vars, cell vars, globals, nonlocals for refactor analysis.
 from __future__ import annotations
 
 import symtable
-import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.core.schema import (
     Anchor,

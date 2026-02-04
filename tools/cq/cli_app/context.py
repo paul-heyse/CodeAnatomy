@@ -45,13 +45,14 @@ class CliContext:
     save_artifact: bool = True
 
     @classmethod
-    def build(
+    def build(  # noqa: PLR0913
         cls,
         argv: list[str],
         root: Path | None = None,
         verbose: int = 0,
         output_format: OutputFormat | None = None,
         artifact_dir: Path | None = None,
+        *,
         save_artifact: bool = True,
     ) -> CliContext:
         """Build a CLI context from arguments.

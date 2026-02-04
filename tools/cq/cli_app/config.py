@@ -17,6 +17,7 @@ from tools.cq.cli_app.config_types import CqConfig
 
 def build_config_chain(
     config_file: str | None = None,
+    *,
     no_config: bool = False,
 ) -> list[Any]:
     """Build config provider chain based on CLI options.
@@ -69,6 +70,7 @@ def build_config_chain(
 
 def load_typed_config(
     config_file: str | None = None,
+    *,
     no_config: bool = False,
 ) -> CqConfig | None:
     """Load typed config using msgspec TOML decoding.
@@ -84,6 +86,11 @@ def load_typed_config(
     -------
     CqConfig | None
         Parsed configuration, or None if no config is available.
+
+    Raises
+    ------
+    FileNotFoundError
+        If an explicit config file is provided but does not exist.
     """
     if no_config:
         return None
@@ -115,30 +122,32 @@ def load_typed_config(
         return None
 
 
-def load_typed_env_config() -> CqConfig | None:
-    """Load typed config overrides from CQ_* environment variables."""
-    data: dict[str, object] = {}
+def _env_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
 
-    def _env_value(name: str) -> str | None:
-        value = os.environ.get(name)
-        if value is None:
-            return None
-        value = value.strip()
-        return value or None
 
-    def _parse_bool(value: str) -> bool | None:
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
+def _parse_bool(value: str) -> bool | None:
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _parse_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
         return None
 
-    def _parse_int(value: str) -> int | None:
-        try:
-            return int(value)
-        except ValueError:
-            return None
+
+def _collect_env_overrides() -> dict[str, object]:
+    data: dict[str, object] = {}
 
     if (value := _env_value("CQ_ROOT")) is not None:
         data["root"] = value
@@ -150,7 +159,6 @@ def load_typed_env_config() -> CqConfig | None:
         data["output_format"] = value
     if (value := _env_value("CQ_ARTIFACT_DIR")) is not None:
         data["artifact_dir"] = value
-
     if (value := _env_value("CQ_SAVE_ARTIFACT")) is not None:
         parsed = _parse_bool(value)
         if parsed is not None:
@@ -160,6 +168,18 @@ def load_typed_env_config() -> CqConfig | None:
         if parsed is not None:
             data["save_artifact"] = not parsed
 
+    return data
+
+
+def load_typed_env_config() -> CqConfig | None:
+    """Load typed config overrides from CQ_* environment variables.
+
+    Returns
+    -------
+    CqConfig | None
+        Parsed configuration, or None if no environment values are set.
+    """
+    data = _collect_env_overrides()
     if not data:
         return None
 

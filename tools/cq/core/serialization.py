@@ -66,8 +66,8 @@ def to_builtins(value: Any) -> Any:
 
 __all__ = [
     "dumps_json",
-    "loads_json",
     "dumps_msgpack",
+    "loads_json",
     "loads_msgpack",
     "loads_msgpack_result",
     "to_builtins",

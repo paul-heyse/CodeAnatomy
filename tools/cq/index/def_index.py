@@ -667,4 +667,3 @@ class DefIndex:
             return (from_mod, sym)
 
         return (None, None)
-

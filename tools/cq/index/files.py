@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import pygit2
 from pathspec import GitIgnoreSpec
@@ -162,7 +162,7 @@ def _filter_tracked_to_scope(
 
 
 def _path_is_under(rel_path: str, scope_rel: Path) -> bool:
-    if scope_rel == Path("."):
+    if scope_rel == Path():
         return True
     rel = Path(rel_path)
     try:

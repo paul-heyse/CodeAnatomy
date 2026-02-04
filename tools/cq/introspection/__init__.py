@@ -13,8 +13,8 @@ from tools.cq.introspection.bytecode_index import (
     parse_exception_table,
 )
 from tools.cq.introspection.cfg_builder import (
-    BasicBlock,
     CFG,
+    BasicBlock,
     CFGEdge,
     build_cfg,
 )

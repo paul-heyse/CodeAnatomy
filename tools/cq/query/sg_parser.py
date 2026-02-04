@@ -53,6 +53,7 @@ def sg_scan(
         Root directory for relative paths.
     globs
         Glob filters for file selection (supports ! excludes).
+
     Returns
     -------
     list[SgRecord]

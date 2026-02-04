@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import DataTypeLike, FieldLike, SchemaLike
+from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 
 if TYPE_CHECKING:
     from typing import Self
@@ -71,7 +72,7 @@ class NestedTypeBuilder:
     def add_field(
         self,
         name: str,
-        dtype: DataTypeLike,
+        dtype: DataTypeLike | ArrowTypeSpec,
         *,
         nullable: bool = True,
         metadata: dict[bytes, bytes] | None = None,
@@ -94,7 +95,12 @@ class NestedTypeBuilder:
         Self
             Builder instance for chaining.
         """
-        self.fields.append(pa.field(name, dtype, nullable=nullable, metadata=metadata))
+        resolved_dtype = (
+            arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype
+        )
+        self.fields.append(
+            pa.field(name, resolved_dtype, nullable=nullable, metadata=metadata)
+        )
         return self
 
     def add_struct(
@@ -130,7 +136,7 @@ class NestedTypeBuilder:
     def add_struct_type(
         self,
         name: str,
-        struct_type: DataTypeLike,
+        struct_type: DataTypeLike | ArrowTypeSpec,
         *,
         nullable: bool = True,
         metadata: dict[bytes, bytes] | None = None,
@@ -153,13 +159,18 @@ class NestedTypeBuilder:
         Self
             Builder instance for chaining.
         """
-        self.fields.append(pa.field(name, struct_type, nullable=nullable, metadata=metadata))
+        resolved = (
+            arrow_type_to_pyarrow(struct_type)
+            if isinstance(struct_type, ArrowTypeBase)
+            else struct_type
+        )
+        self.fields.append(pa.field(name, resolved, nullable=nullable, metadata=metadata))
         return self
 
     def add_list(
         self,
         name: str,
-        item_type: DataTypeLike,
+        item_type: DataTypeLike | ArrowTypeSpec,
         *,
         nullable: bool = True,
         large: bool = False,
@@ -185,15 +196,20 @@ class NestedTypeBuilder:
         Self
             Builder instance for chaining.
         """
-        list_type = pa.large_list(item_type) if large else pa.list_(item_type)
+        resolved_item = (
+            arrow_type_to_pyarrow(item_type)
+            if isinstance(item_type, ArrowTypeBase)
+            else item_type
+        )
+        list_type = pa.large_list(resolved_item) if large else pa.list_(resolved_item)
         self.fields.append(pa.field(name, list_type, nullable=nullable, metadata=metadata))
         return self
 
     def add_map(
         self,
         name: str,
-        key_type: DataTypeLike,
-        value_type: DataTypeLike,
+        key_type: DataTypeLike | ArrowTypeSpec,
+        value_type: DataTypeLike | ArrowTypeSpec,
         *,
         options: MapFieldOptions | None = None,
     ) -> Self:
@@ -216,7 +232,17 @@ class NestedTypeBuilder:
             Builder instance for chaining.
         """
         resolved = options or MapFieldOptions()
-        map_type = pa.map_(key_type, value_type, keys_sorted=resolved.keys_sorted)
+        resolved_key = (
+            arrow_type_to_pyarrow(key_type)
+            if isinstance(key_type, ArrowTypeBase)
+            else key_type
+        )
+        resolved_value = (
+            arrow_type_to_pyarrow(value_type)
+            if isinstance(value_type, ArrowTypeBase)
+            else value_type
+        )
+        map_type = pa.map_(resolved_key, resolved_value, keys_sorted=resolved.keys_sorted)
         self.fields.append(
             pa.field(name, map_type, nullable=resolved.nullable, metadata=resolved.metadata)
         )

@@ -7,7 +7,7 @@
 - **exclude**: ["tests/**"]
 - **pattern**: \bbuild_graph\b
 - **caps_hit**: max_total_matches
-- **scanned_files_is_estimate**: True
+- **scanned_files_is_estimate**: False
 
 ---
 _Completed in 12ms | Schema: cq.v1_

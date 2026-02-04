@@ -54,7 +54,7 @@ def _render_search_summary() -> str:
         "exclude": ["tests/**"],
         "pattern": r"\bbuild_graph\b",
         "caps_hit": "max_total_matches",
-        "scanned_files_is_estimate": True,
+        "scanned_files_is_estimate": False,
     }
     result = CqResult(run=run, summary=summary)
     return render_markdown(result)

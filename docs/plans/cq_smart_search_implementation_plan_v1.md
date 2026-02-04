@@ -8,14 +8,14 @@ This plan captures all identified discrepancies between the current Smart Search
 
 - Scope 1: Completed
 - Scope 2: Completed
-- Scope 3: Partially completed (interval indexing in place, perf benchmark pending)
-- Scope 4: Partially completed (`caps_hit` and estimate flag added, true scanned file count still approximate)
+- Scope 3: Completed (interval tree indexing + perf benchmark)
+- Scope 4: Completed (rg summary-backed scanned files)
 - Scope 5: Completed
 - Scope 6: Completed (records preferred, node-kind fallback retained)
 - Scope 7: Completed (helpers reused via lazy import to avoid circular import)
 - Scope 8: Completed
-- Scope 9: Partially completed (parse-first fallback implemented, tests pending)
-- Scope 10: Partially completed (unit + golden coverage added, perf benchmark pending)
+- Scope 9: Completed (parse-first fallback + tests)
+- Scope 10: Completed (unit/golden coverage + perf benchmark)
 
 ## Scope 1: Per‑File Symtable Cache (Performance)
 
@@ -128,7 +128,7 @@ AST node lookup is O(n) per match (`_find_node_at_position` walks the tree).
 Build a per-file interval index for matchable spans (e.g., via `SgRecord` spans or AST node ranges) and do O(log n) lookups for match positions.
 
 **Status**  
-Partially completed. Interval indexes back record lookups and node lookups, and caching is in place. A timed perf benchmark is still pending.
+Completed. Interval tree indexing backs record and node lookups, caching is in place, and a perf benchmark was added.
 
 **Representative snippet**
 
@@ -167,7 +167,7 @@ def get_span_index(file_path: Path, sg_root: SgRoot) -> IntervalIndex:
 1. Add span/index cache for SgRoot files. **Done**
 2. Replace `_find_node_at_position()` with an interval-based lookup. **Done**
 3. Clear index cache in `clear_caches()`. **Done**
-4. Add a perf test on a large file with many hits. **Pending**
+4. Add a perf test on a large file with many hits. **Done**
 
 ---
 
@@ -180,7 +180,7 @@ def get_span_index(file_path: Path, sg_root: SgRoot) -> IntervalIndex:
 Track `scanned_files` separately if possible (via rg summary or by counting files traversed). If not available, set an explicit `scanned_files="unknown"` field or add `scanned_files_approx` to avoid misreporting. Add `max_files` to `caps_hit` logic.
 
 **Status**  
-Partially completed. `caps_hit` now distinguishes `max_files` vs `max_total_matches` and `scanned_files_is_estimate` is set, but `scanned_files` is still the matched file count.
+Completed. `caps_hit` distinguishes `max_files` vs `max_total_matches`, and `scanned_files` now comes from rg summary stats with `scanned_files_is_estimate` set only when summary data is unavailable.
 
 **Representative snippet**
 
@@ -200,7 +200,7 @@ elif stats.truncated:
 - Remove misleading `scanned_files` value if no accurate value can be computed.
 
 **Implementation checklist**
-1. Update `SearchStats` to add `scanned_files_approx` if needed. **Pending** (estimate flag added instead)
+1. Update `SearchStats` to track `scanned_files_is_estimate`. **Done**
 2. Adjust `caps_hit` to surface `max_files`. **Done**
 3. Update tests and summary schema expectations. **Done**
 
@@ -349,7 +349,7 @@ Completed. The context map and RawMatch context fields were removed.
 Attempt `parse_query()` first; fallback to Smart Search only on “missing entity” or “no tokens” errors.
 
 **Status**  
-Partially completed. Parse-first fallback is implemented, but dedicated tests for malformed queries vs plain identifiers are still pending.
+Completed. Parse-first fallback is in place with coverage for malformed queries vs plain identifiers.
 
 **Representative snippet**
 
@@ -373,7 +373,7 @@ except QueryParseError as exc:
 **Implementation checklist**
 1. Add helper to classify parse errors for fallback vs error. **Done**
 2. Update `q` command to use parse-first flow. **Done**
-3. Add tests for malformed queries and plain identifiers. **Pending**
+3. Add tests for malformed queries and plain identifiers. **Done**
 
 ---
 
@@ -386,7 +386,7 @@ Performance-sensitive changes need coverage and regression checks.
 Add unit tests and small performance fixtures to validate caches and grouping.
 
 **Status**  
-Partially completed. Unit and golden coverage added for caches, grouping, include-strings, and summary fields. A timed perf benchmark is still pending.
+Completed. Unit and golden coverage added for caches, grouping, include-strings, and summary fields, with a perf benchmark in place.
 
 **Target files**
 - `tests/unit/cq/search/test_smart_search.py`
@@ -401,6 +401,7 @@ Partially completed. Unit and golden coverage added for caches, grouping, includ
 2. Add tests for grouping by containing function. **Done**
 3. Add tests for `--include-strings`. **Done**
 4. Add golden test for summary fields (`caps_hit`, `pattern`, `include/exclude`). **Done**
+5. Add perf benchmark coverage for interval indexing. **Done**
 
 ---
 

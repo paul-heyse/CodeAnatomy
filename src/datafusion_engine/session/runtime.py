@@ -2649,7 +2649,7 @@ class _RuntimeDiagnosticsMixin:
                     "file_sort_order": [list(key) for key in scan.file_sort_order],
                     "partition_cols": [
                         {"name": col_name, "dtype": str(dtype)}
-                        for col_name, dtype in scan.partition_cols
+                        for col_name, dtype in scan.partition_cols_pyarrow()
                     ],
                     "schema_force_view_types": scan.schema_force_view_types,
                     "skip_arrow_metadata": scan.skip_arrow_metadata,
@@ -4891,7 +4891,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             ),
             "partition_cols": [
                 {"name": name, "dtype": str(dtype)}
-                for name, dtype in (scan.partition_cols if scan is not None else ())
+                for name, dtype in (scan.partition_cols_pyarrow() if scan is not None else ())
             ],
             "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
             "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
@@ -4930,7 +4930,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             ),
             "partition_cols": [
                 {"name": name, "dtype": str(dtype)}
-                for name, dtype in (scan.partition_cols if scan is not None else ())
+                for name, dtype in (scan.partition_cols_pyarrow() if scan is not None else ())
             ],
             "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
             "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
@@ -4974,7 +4974,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             ),
             "partition_cols": [
                 {"name": col_name, "dtype": str(dtype)}
-                for col_name, dtype in (scan.partition_cols if scan is not None else ())
+                for col_name, dtype in (scan.partition_cols_pyarrow() if scan is not None else ())
             ],
             "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
             "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,

@@ -19,6 +19,7 @@ from datafusion_engine.arrow.interop import (
 )
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
+from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 from utils.validation import ensure_table
 
 if TYPE_CHECKING:
@@ -135,9 +136,11 @@ def _datafusion_context() -> SessionContext:
     return profile.session_runtime().ctx
 
 
-def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:
+def _ensure_arrow_dtype(dtype: DataTypeLike | ArrowTypeSpec) -> pa.DataType:
     if isinstance(dtype, pa.DataType):
         return dtype
+    if isinstance(dtype, ArrowTypeBase):
+        return arrow_type_to_pyarrow(dtype)
     msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
     raise TypeError(msg)
 

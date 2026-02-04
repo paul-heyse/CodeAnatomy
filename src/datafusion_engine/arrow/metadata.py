@@ -54,6 +54,7 @@ from datafusion_engine.arrow.types import (
     MapTypeProtocol,
     StructTypeProtocol,
 )
+from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 from serde_msgspec import loads_msgpack
 from utils.hashing import hash_msgpack_canonical
 
@@ -840,15 +841,18 @@ def _encoding_hint(field: ArrowFieldSpec) -> str | None:
 def _encoding_info_from_field(
     field: ArrowFieldSpec,
 ) -> tuple[str, DataTypeLike | None, bool | None] | None:
+    dtype: DataTypeLike | ArrowTypeSpec = field.dtype
+    if isinstance(dtype, ArrowTypeBase):
+        dtype = arrow_type_to_pyarrow(dtype)
     hint = _encoding_hint(field)
     if hint != ENCODING_DICTIONARY:
-        if patypes.is_dictionary(field.dtype):
-            dtype = cast("pa.DictionaryType", field.dtype)
-            return field.name, dtype.index_type, dtype.ordered
+        if patypes.is_dictionary(dtype):
+            dict_dtype = cast("pa.DictionaryType", dtype)
+            return field.name, dict_dtype.index_type, dict_dtype.ordered
         return None
-    if patypes.is_dictionary(field.dtype):
-        dtype = cast("pa.DictionaryType", field.dtype)
-        return field.name, dtype.index_type, dtype.ordered
+    if patypes.is_dictionary(dtype):
+        dict_dtype = cast("pa.DictionaryType", dtype)
+        return field.name, dict_dtype.index_type, dict_dtype.ordered
     return field.name, None, None
 
 

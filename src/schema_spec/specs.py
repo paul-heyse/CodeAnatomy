@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
 
+import msgspec
 import pyarrow as pa
 
 from arrow_utils.core.schema_constants import (
@@ -27,7 +27,9 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
 from datafusion_engine.schema.policy import CastErrorPolicy, SchemaTransform
+from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
+from serde_msgspec import StructBaseStrict
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -94,9 +96,13 @@ def _encoding_hint_from_field(
     return None
 
 
-def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:
+def _ensure_arrow_dtype(dtype: DataTypeLike | ArrowTypeSpec) -> pa.DataType:
     if isinstance(dtype, pa.DataType):
         return dtype
+    if isinstance(dtype, ArrowTypeBase):
+        from schema_spec.arrow_types import arrow_type_to_pyarrow
+
+        return arrow_type_to_pyarrow(dtype)
     msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
     raise TypeError(msg)
 
@@ -122,22 +128,20 @@ def dict_field(
     dtype = cast("DataTypeLike", dict_factory(idx_type, interop.string(), ordered=ordered))
     return FieldSpec(
         name=name,
-        dtype=dtype,
+        dtype=arrow_type_from_pyarrow(dtype),
         nullable=nullable,
         metadata=meta,
     )
 
 
-@dataclass(frozen=True)
-class DerivedFieldSpec:
+class DerivedFieldSpec(StructBaseStrict, frozen=True):
     """Specification for a derived column."""
 
     name: str
     expr: ExprSpec
 
 
-@dataclass(frozen=True)
-class TableSchemaSpec:
+class TableSchemaSpec(StructBaseStrict, frozen=True):
     """Specification for a table schema and associated constraints."""
 
     name: str
@@ -182,7 +186,7 @@ class TableSchemaSpec:
             fields.append(
                 FieldSpec(
                     name=schema_field.name,
-                    dtype=schema_field.type,
+                    dtype=arrow_type_from_pyarrow(schema_field.type),
                     nullable=schema_field.nullable,
                     metadata=meta,
                     encoding=encoding,
@@ -250,7 +254,7 @@ class TableSchemaSpec:
         TableSchemaSpec
             Updated table schema spec.
         """
-        return replace(
+        return msgspec.structs.replace(
             self,
             required_non_null=tuple(required_non_null),
             key_fields=tuple(key_fields),
@@ -290,8 +294,7 @@ class TableSchemaSpec:
         )
 
 
-@dataclass(frozen=True)
-class FieldBundle:
+class FieldBundle(StructBaseStrict, frozen=True):
     """Bundle of fields plus required/key constraints."""
 
     name: str
@@ -300,8 +303,7 @@ class FieldBundle:
     key_fields: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class NestedFieldSpec:
+class NestedFieldSpec(StructBaseStrict, frozen=True):
     """Nested field specification with a builder hook."""
 
     name: str

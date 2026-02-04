@@ -222,7 +222,7 @@ def _bootstrap_cache_inventory_table(
 
 
 def _cache_inventory_root(profile: DataFusionRuntimeProfile) -> Path:
-    root_value = profile.plan_artifacts_root
+    root_value = profile.policies.plan_artifacts_root
     if root_value:
         return Path(root_value).expanduser()
     return _DEFAULT_CACHE_ROOT

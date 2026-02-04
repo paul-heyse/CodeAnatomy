@@ -361,7 +361,7 @@ def _maybe_validate_information_schema(
         return
     if not context.options.validate_schema or context.options.temporary:
         return
-    if not runtime_profile.enable_information_schema:
+    if not runtime_profile.catalog.enable_information_schema:
         return
     from datafusion_engine.schema.catalog_contracts import (
         contract_violations_for_schema,
@@ -432,7 +432,7 @@ def _maybe_record_explain_analyze_threshold(
     profile = context.runtime.runtime_profile
     if profile is None:
         return
-    threshold = profile.explain_analyze_threshold_ms
+    threshold = profile.diagnostics.explain_analyze_threshold_ms
     bundle = node.plan_bundle
     if threshold is None or bundle is None:
         return

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
+from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from storage.deltalake.delta import DeltaSchemaRequest, delta_table_schema
 
@@ -18,10 +20,30 @@ SchemaEvolutionMode = Literal["strict", "additive"]
 
 
 @dataclass(frozen=True)
-class SchemaEvolutionPolicy:
+class SchemaEvolutionPolicy(FingerprintableConfig):
     """Schema evolution policy for semantic outputs."""
 
     mode: SchemaEvolutionMode = "strict"
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for schema evolution policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing schema evolution policy settings.
+        """
+        return {"mode": self.mode}
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for schema evolution policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def _field_map(schema: pa.Schema) -> dict[str, pa.Field]:

@@ -1770,7 +1770,7 @@ def _build_semantic_diagnostics_context(
     runtime_config: SemanticRuntimeConfig,
     schema_policy: SchemaEvolutionPolicy,
 ) -> _SemanticDiagnosticsContext | None:
-    diagnostics_sink = runtime_profile.diagnostics_sink
+    diagnostics_sink = runtime_profile.diagnostics.diagnostics_sink
     output_locations = _semantic_output_locations(
         view_names=SEMANTIC_DIAGNOSTIC_VIEW_NAMES,
         runtime_config=runtime_config,

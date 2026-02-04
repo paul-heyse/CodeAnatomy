@@ -1284,8 +1284,7 @@ def _build_registration_context(
     # profile's physical expression adapter factory. When enabled, scan-time
     # adapters handle schema drift resolution at the TableProvider boundary.
     schema_adapter_enabled = (
-        runtime_profile is not None
-        and runtime_profile.features.enable_schema_evolution_adapter
+        runtime_profile is not None and runtime_profile.features.enable_schema_evolution_adapter
     )
     metadata = TableProviderMetadata(
         table_name=name,
@@ -1354,7 +1353,7 @@ def _invalidate_information_schema_cache(
     runtime_profile: DataFusionRuntimeProfile | None,
     ctx: SessionContext,
 ) -> None:
-    if runtime_profile is None or not runtime_profile.enable_information_schema:
+    if runtime_profile is None or not runtime_profile.catalog.enable_information_schema:
         return
     invalidate_introspection_cache(ctx)
     introspector = schema_introspector_for_profile(runtime_profile, ctx)
@@ -2468,7 +2467,10 @@ def _validate_table_schema_contract(contract: TableSchemaContract | None) -> Non
 
 
 def _validate_schema_contracts(context: DataFusionRegistrationContext) -> None:
-    if context.runtime_profile is None or not context.runtime_profile.enable_information_schema:
+    if (
+        context.runtime_profile is None
+        or not context.runtime_profile.catalog.enable_information_schema
+    ):
         return
     scan = context.options.scan
     contract = _resolve_table_schema_contract(
@@ -3243,9 +3245,9 @@ def _resolve_cache_policy(
     storage = cache_policy.storage if cache_policy is not None else "memory"
     if runtime_profile is not None:
         if enabled is None:
-            enabled = runtime_profile.cache_enabled
+            enabled = runtime_profile.features.cache_enabled
         if max_columns is None:
-            max_columns = runtime_profile.cache_max_columns
+            max_columns = runtime_profile.policies.cache_max_columns
     if enabled is None:
         enabled = True
     if max_columns is None:

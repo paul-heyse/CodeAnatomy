@@ -130,7 +130,7 @@ class SchemaPolicy(FingerprintableConfig):
 
 
 @dataclass(frozen=True)
-class SchemaPolicyOptions:
+class SchemaPolicyOptions(FingerprintableConfig):
     """Optional overrides for schema policy factory construction."""
 
     schema: SchemaLike | None = None
@@ -140,6 +140,51 @@ class SchemaPolicyOptions:
     safe_cast: bool | None = None
     keep_extra_columns: bool | None = None
     on_error: CastErrorPolicy | None = None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for schema policy overrides.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing schema policy overrides.
+        """
+        metadata_payload: Mapping[str, object] | None = None
+        if self.metadata is not None:
+            metadata_payload = {
+                "schema_metadata": self.metadata.schema_metadata,
+                "field_metadata": self.metadata.field_metadata,
+            }
+        validation_payload: Mapping[str, object] | None = None
+        if self.validation is not None:
+            validation_payload = {
+                "strict": self.validation.strict,
+                "coerce": self.validation.coerce,
+                "max_errors": self.validation.max_errors,
+                "emit_invalid_rows": self.validation.emit_invalid_rows,
+                "emit_error_table": self.validation.emit_error_table,
+            }
+        return {
+            "schema_identity_hash": (
+                schema_identity_hash(self.schema) if self.schema is not None else None
+            ),
+            "encoding": self.encoding.fingerprint() if self.encoding is not None else None,
+            "metadata": metadata_payload,
+            "validation": validation_payload,
+            "safe_cast": self.safe_cast,
+            "keep_extra_columns": self.keep_extra_columns,
+            "on_error": self.on_error,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for schema policy overrides.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the overrides.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def schema_policy_factory(

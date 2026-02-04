@@ -181,7 +181,7 @@ def _resolve_key_fields(
 
     constraints = _constraints_from_spec(spec)
     default_keys = constraint_key_fields(constraints) or spec.key_fields
-    if runtime_profile is None or not runtime_profile.enable_information_schema:
+    if runtime_profile is None or not runtime_profile.catalog.enable_information_schema:
         return default_keys
     try:
         rows = table_constraint_rows(

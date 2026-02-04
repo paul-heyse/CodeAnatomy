@@ -504,7 +504,7 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
 
 
 def _observability_root(profile: DataFusionRuntimeProfile) -> Path:
-    root_value = profile.plan_artifacts_root
+    root_value = profile.policies.plan_artifacts_root
     root = Path(root_value) if root_value else _DEFAULT_OBSERVABILITY_ROOT
     return root / "delta_observability"
 

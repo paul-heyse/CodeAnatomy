@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import msgspec
 
+from core.config_base import config_fingerprint
 from hamilton_pipeline.types import GraphAdapterConfig
 from serde_msgspec import StructBaseStrict
 
@@ -82,6 +85,31 @@ class DocstringsPolicyConfig(StructBaseStrict, frozen=True):
         default=None,
         name="missing-returns-action",
     )
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for docstring policy settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing docstring policy settings.
+        """
+        return {
+            "coverage_threshold": self.coverage_threshold,
+            "coverage_action": self.coverage_action,
+            "missing_params_action": self.missing_params_action,
+            "missing_returns_action": self.missing_returns_action,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for docstring policy settings.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 class DocstringsConfig(StructBaseStrict, frozen=True):

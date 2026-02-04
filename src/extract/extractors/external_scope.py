@@ -336,7 +336,7 @@ def _record_python_external_stats(
     repo_root: PathLike,
 ) -> None:
     profile = runtime_profile
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None or profile.diagnostics.diagnostics_sink is None:
         return
     resolved = sum(1 for row in rows if row.get("status") == "resolved")
     unresolved = sum(1 for row in rows if row.get("status") == "unresolved")

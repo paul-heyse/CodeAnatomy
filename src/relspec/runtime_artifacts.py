@@ -185,7 +185,7 @@ class RuntimeArtifacts:
         """Resolve DiskCache profile defaults after initialization."""
         if self.diskcache_profile is None and self.execution is not None:
             profile = self.execution.profile
-            self.diskcache_profile = profile.diskcache_profile
+            self.diskcache_profile = profile.policies.diskcache_profile
 
     def _cache(self) -> Cache | FanoutCache | None:
         if self._diskcache is not None:
@@ -325,7 +325,10 @@ class RuntimeArtifacts:
         persisted_spec = spec
         table_for_materialized = result.table
         session_runtime = self.execution
-        if session_runtime is not None and session_runtime.profile.runtime_artifact_cache_enabled:
+        if (
+            session_runtime is not None
+            and session_runtime.profile.policies.runtime_artifact_cache_enabled
+        ):
             persisted = _persist_execution_result(
                 session_runtime,
                 name=name,

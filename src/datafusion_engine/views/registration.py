@@ -142,16 +142,18 @@ def _platform_options(
             expr_planner_names=("codeanatomy_domain",),
             strict=True,
         )
+    features = profile.features
+    policies = profile.policies
     return RustUdfPlatformOptions(
-        enable_udfs=getattr(profile, "enable_udfs", True),
-        enable_async_udfs=getattr(profile, "enable_async_udfs", False),
-        async_udf_timeout_ms=getattr(profile, "async_udf_timeout_ms", None),
-        async_udf_batch_size=getattr(profile, "async_udf_batch_size", None),
-        enable_function_factory=getattr(profile, "enable_function_factory", True),
-        enable_expr_planners=getattr(profile, "enable_expr_planners", True),
-        function_factory_hook=getattr(profile, "function_factory_hook", None),
-        expr_planner_hook=getattr(profile, "expr_planner_hook", None),
-        expr_planner_names=getattr(profile, "expr_planner_names", ()),
+        enable_udfs=features.enable_udfs,
+        enable_async_udfs=features.enable_async_udfs,
+        async_udf_timeout_ms=policies.async_udf_timeout_ms,
+        async_udf_batch_size=policies.async_udf_batch_size,
+        enable_function_factory=features.enable_function_factory,
+        enable_expr_planners=features.enable_expr_planners,
+        function_factory_hook=policies.function_factory_hook,
+        expr_planner_hook=policies.expr_planner_hook,
+        expr_planner_names=policies.expr_planner_names,
         strict=True,
     )
 

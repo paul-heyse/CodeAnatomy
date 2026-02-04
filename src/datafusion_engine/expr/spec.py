@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from arrow_utils.core.expr_types import ScalarValue
 from datafusion_engine.arrow.interop import ScalarLike
 from datafusion_engine.udf.expr import udf_expr
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -61,8 +61,7 @@ def _sql_identifier(name: str) -> str:
     return f'"{escaped}"'
 
 
-@dataclass(frozen=True)
-class ExprIR:
+class ExprIR(StructBaseStrict, frozen=True):
     """Minimal expression spec for DataFusion SQL emission."""
 
     op: str
@@ -603,8 +602,7 @@ _SQL_CALLS: dict[str, Callable[[Sequence[str]], str]] = {
 }
 
 
-@dataclass(frozen=True)
-class ExprSpec:
+class ExprSpec(StructBaseStrict, frozen=True):
     """DataFusion SQL expression specification."""
 
     sql: str | None = None

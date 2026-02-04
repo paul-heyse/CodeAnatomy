@@ -599,6 +599,13 @@ class TestSmartSearch:
         # Should find matches
         assert len(result.evidence) > 0
 
+    def test_smart_search_scanned_files_exact(self, sample_repo: Path) -> None:
+        """Smart search should report exact scanned file counts when available."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph")
+        assert result.summary["scanned_files_is_estimate"] is False
+        assert result.summary["scanned_files"] >= result.summary["matched_files"]
+
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""
         clear_caches()

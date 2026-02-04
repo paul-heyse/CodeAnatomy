@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 
+import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
-from core.config_base import FingerprintableConfig, config_fingerprint
+from core.config_base import config_fingerprint
 from datafusion_engine.arrow.build import register_schema_extensions
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
@@ -42,9 +42,16 @@ from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.registry import extract_nested_dataset_names
 from datafusion_engine.schema.validation import ArrowValidationOptions, validate_table
+from schema_spec.arrow_types import (
+    ArrowTypeBase,
+    ArrowTypeSpec,
+    arrow_type_from_pyarrow,
+    arrow_type_to_pyarrow,
+)
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from serde_msgspec import StructBaseStrict
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
@@ -94,8 +101,7 @@ def validate_arrow_table(
     return report.validated
 
 
-@dataclass(frozen=True)
-class SortKeySpec:
+class SortKeySpec(StructBaseStrict, frozen=True):
     """Sort key specification."""
 
     column: str
@@ -112,8 +118,7 @@ class SortKeySpec:
         return SortKey(column=self.column, order=self.order)
 
 
-@dataclass(frozen=True)
-class DedupeSpecSpec:
+class DedupeSpecSpec(StructBaseStrict, frozen=True):
     """Dedupe specification."""
 
     keys: tuple[str, ...]
@@ -140,8 +145,7 @@ class DedupeSpecSpec:
         )
 
 
-@dataclass(frozen=True)
-class ContractRow:
+class ContractRow(StructBaseStrict, frozen=True):
     """Lightweight contract configuration for dataset rows."""
 
     dedupe: DedupeSpecSpec | None = None
@@ -153,8 +157,7 @@ class ContractRow:
     validation: ArrowValidationOptions | None = None
 
 
-@dataclass(frozen=True)
-class TableSchemaContract:
+class TableSchemaContract(StructBaseStrict, frozen=True):
     """Combine file and partition schema into a TableSchema contract.
 
     This contract specifies the schema expectations for DataFusion table
@@ -171,7 +174,23 @@ class TableSchemaContract:
     """
 
     file_schema: pa.Schema
-    partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+    partition_cols: tuple[tuple[str, ArrowTypeSpec], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Normalize partition column types into ArrowTypeSpec."""
+        if not self.partition_cols:
+            return
+        normalized = tuple(
+            (
+                name,
+                arrow_type_from_pyarrow(dtype)
+                if isinstance(dtype, pa.DataType)
+                else dtype,
+            )
+            for name, dtype in self.partition_cols
+        )
+        if normalized != self.partition_cols:
+            object.__setattr__(self, "partition_cols", normalized)
 
     def partition_schema(self) -> pa.Schema | None:
         """Return the partition schema when partition columns are present.
@@ -183,12 +202,32 @@ class TableSchemaContract:
         """
         if not self.partition_cols:
             return None
-        fields = [pa.field(name, dtype, nullable=False) for name, dtype in self.partition_cols]
+        fields = [
+            pa.field(
+                name,
+                arrow_type_to_pyarrow(dtype)
+                if isinstance(dtype, ArrowTypeBase)
+                else dtype,
+                nullable=False,
+            )
+            for name, dtype in self.partition_cols
+        ]
         return pa.schema(fields)
 
+    def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
+        """Return partition columns as pyarrow data types."""
+        return tuple(
+            (
+                name,
+                arrow_type_to_pyarrow(dtype)
+                if isinstance(dtype, ArrowTypeBase)
+                else dtype,
+            )
+            for name, dtype in self.partition_cols
+        )
 
-@dataclass(frozen=True)
-class ParquetColumnOptions:
+
+class ParquetColumnOptions(StructBaseStrict, frozen=True):
     """Per-column Parquet scan options."""
 
     statistics_enabled: tuple[str, ...] = ()
@@ -213,8 +252,7 @@ class ParquetColumnOptions:
         return options
 
 
-@dataclass(frozen=True)
-class DataFusionScanOptions:
+class DataFusionScanOptions(StructBaseStrict, frozen=True):
     """DataFusion-specific scan configuration.
 
     IO contracts are specified through DataFusion registration and DDL surfaces.
@@ -267,7 +305,7 @@ class DataFusionScanOptions:
         Custom expression adapter factory for specialized scans.
     """
 
-    partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+    partition_cols: tuple[tuple[str, ArrowTypeSpec], ...] = ()
     file_sort_order: tuple[tuple[str, str], ...] = ()
     parquet_pruning: bool = True
     skip_metadata: bool = True
@@ -289,9 +327,36 @@ class DataFusionScanOptions:
     table_schema_contract: TableSchemaContract | None = None
     expr_adapter_factory: object | None = None
 
+    def __post_init__(self) -> None:
+        """Normalize partition column types into ArrowTypeSpec."""
+        if not self.partition_cols:
+            return
+        normalized = tuple(
+            (
+                name,
+                arrow_type_from_pyarrow(dtype)
+                if isinstance(dtype, pa.DataType)
+                else dtype,
+            )
+            for name, dtype in self.partition_cols
+        )
+        if normalized != self.partition_cols:
+            object.__setattr__(self, "partition_cols", normalized)
 
-@dataclass(frozen=True)
-class ScanPolicyDefaults:
+    def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
+        """Return partition columns as pyarrow data types."""
+        return tuple(
+            (
+                name,
+                arrow_type_to_pyarrow(dtype)
+                if isinstance(dtype, ArrowTypeBase)
+                else dtype,
+            )
+            for name, dtype in self.partition_cols
+        )
+
+
+class ScanPolicyDefaults(StructBaseStrict, frozen=True):
     """Policy defaults for DataFusion listing scans."""
 
     collect_statistics: bool | None = None
@@ -325,7 +390,7 @@ class ScanPolicyDefaults:
         DataFusionScanOptions
             Scan options with policy defaults applied.
         """
-        return replace(
+        return msgspec.structs.replace(
             options,
             collect_statistics=(
                 options.collect_statistics
@@ -365,8 +430,7 @@ class ScanPolicyDefaults:
         }
 
 
-@dataclass(frozen=True)
-class DeltaScanPolicyDefaults:
+class DeltaScanPolicyDefaults(StructBaseStrict, frozen=True):
     """Policy defaults for Delta scan options."""
 
     enable_parquet_pushdown: bool | None = None
@@ -400,7 +464,7 @@ class DeltaScanPolicyDefaults:
         DeltaScanOptions
             Delta scan options with policy defaults applied.
         """
-        return replace(
+        return msgspec.structs.replace(
             options,
             enable_parquet_pushdown=(
                 self.enable_parquet_pushdown
@@ -440,13 +504,12 @@ class DeltaScanPolicyDefaults:
         }
 
 
-@dataclass(frozen=True)
-class ScanPolicyConfig(FingerprintableConfig):
+class ScanPolicyConfig(StructBaseStrict, frozen=True):
     """Policy defaults for scan options by dataset format."""
 
-    listing: ScanPolicyDefaults = field(default_factory=ScanPolicyDefaults)
-    delta_listing: ScanPolicyDefaults = field(default_factory=ScanPolicyDefaults)
-    delta_scan: DeltaScanPolicyDefaults = field(default_factory=DeltaScanPolicyDefaults)
+    listing: ScanPolicyDefaults = msgspec.field(default_factory=ScanPolicyDefaults)
+    delta_listing: ScanPolicyDefaults = msgspec.field(default_factory=ScanPolicyDefaults)
+    delta_scan: DeltaScanPolicyDefaults = msgspec.field(default_factory=DeltaScanPolicyDefaults)
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return a fingerprint payload for scan policies.
@@ -516,8 +579,7 @@ def apply_delta_scan_policy(
     return defaults.apply(base)
 
 
-@dataclass(frozen=True)
-class DeltaScanOptions:
+class DeltaScanOptions(StructBaseStrict, frozen=True):
     """Delta-specific scan configuration.
 
     Delta table registration uses DataFusion's native Delta TableProvider.
@@ -550,8 +612,7 @@ class DeltaScanOptions:
     schema: pa.Schema | None = None
 
 
-@dataclass(frozen=True)
-class DeltaCdfPolicy(FingerprintableConfig):
+class DeltaCdfPolicy(StructBaseStrict, frozen=True):
     """Policy describing Delta CDF requirements."""
 
     required: bool = False
@@ -581,8 +642,7 @@ class DeltaCdfPolicy(FingerprintableConfig):
         return config_fingerprint(self.fingerprint_payload())
 
 
-@dataclass(frozen=True)
-class DeltaMaintenancePolicy(FingerprintableConfig):
+class DeltaMaintenancePolicy(StructBaseStrict, frozen=True):
     """Policy describing Delta maintenance expectations."""
 
     optimize_on_write: bool = False
@@ -668,8 +728,7 @@ def _validate_view_specs(view_specs: Sequence[ViewSpec], *, label: str) -> None:
         raise ValueError(msg)
 
 
-@dataclass(frozen=True)
-class ContractSpec:
+class ContractSpec(StructBaseStrict, frozen=True):
     """Output contract specification."""
 
     name: str
@@ -723,8 +782,27 @@ class ContractSpec:
         return Contract(**contract_kwargs)
 
 
-@dataclass(frozen=True)
-class DatasetSpec:
+class DeltaPolicyBundle(StructBaseStrict, frozen=True):
+    """Delta-specific policy bundle for dataset specs."""
+
+    scan: DeltaScanOptions | None = None
+    cdf_policy: DeltaCdfPolicy | None = None
+    maintenance_policy: DeltaMaintenancePolicy | None = None
+    write_policy: DeltaWritePolicy | None = None
+    schema_policy: DeltaSchemaPolicy | None = None
+    feature_gate: DeltaFeatureGate | None = None
+    constraints: tuple[str, ...] = ()
+
+
+class DatasetPolicies(StructBaseStrict, frozen=True):
+    """Policy bundle for dataset specs."""
+
+    datafusion_scan: DataFusionScanOptions | None = None
+    delta: DeltaPolicyBundle | None = None
+    validation: ArrowValidationOptions | None = None
+
+
+class DatasetSpec(StructBaseStrict, frozen=True):
     """Unified dataset spec with schema, contract, and query behavior."""
 
     table_spec: TableSchemaSpec
@@ -732,20 +810,12 @@ class DatasetSpec:
     contract_spec: ContractSpec | None = None
     query_spec: QuerySpec | None = None
     view_specs: tuple[ViewSpec, ...] = ()
-    datafusion_scan: DataFusionScanOptions | None = None
-    delta_scan: DeltaScanOptions | None = None
-    delta_cdf_policy: DeltaCdfPolicy | None = None
-    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
-    delta_write_policy: DeltaWritePolicy | None = None
-    delta_schema_policy: DeltaSchemaPolicy | None = None
-    delta_feature_gate: DeltaFeatureGate | None = None
-    delta_constraints: tuple[str, ...] = ()
+    policies: DatasetPolicies = msgspec.field(default_factory=DatasetPolicies)
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
     predicate: ExprSpec | None = None
     pushdown_predicate: ExprSpec | None = None
-    evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
-    metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
-    validation: ArrowValidationOptions | None = None
+    evolution_spec: SchemaEvolutionSpec = msgspec.field(default_factory=SchemaEvolutionSpec)
+    metadata_spec: SchemaMetadataSpec = msgspec.field(default_factory=SchemaMetadataSpec)
 
     def __post_init__(self) -> None:
         """Validate dataset spec invariants."""
@@ -762,6 +832,65 @@ class DatasetSpec:
         """
         return self.table_spec.name
 
+    @property
+    def datafusion_scan(self) -> DataFusionScanOptions | None:
+        """Return DataFusion scan options from policy bundle."""
+        return self.policies.datafusion_scan
+
+    @property
+    def delta_scan(self) -> DeltaScanOptions | None:
+        """Return Delta scan options from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.scan
+
+    @property
+    def delta_cdf_policy(self) -> DeltaCdfPolicy | None:
+        """Return Delta CDF policy from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.cdf_policy
+
+    @property
+    def delta_maintenance_policy(self) -> DeltaMaintenancePolicy | None:
+        """Return Delta maintenance policy from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.maintenance_policy
+
+    @property
+    def delta_write_policy(self) -> DeltaWritePolicy | None:
+        """Return Delta write policy from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.write_policy
+
+    @property
+    def delta_schema_policy(self) -> DeltaSchemaPolicy | None:
+        """Return Delta schema policy from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.schema_policy
+
+    @property
+    def delta_feature_gate(self) -> DeltaFeatureGate | None:
+        """Return Delta feature gate from policy bundle."""
+        if self.policies.delta is None:
+            return None
+        return self.policies.delta.feature_gate
+
+    @property
+    def delta_constraints(self) -> tuple[str, ...]:
+        """Return Delta constraints from policy bundle."""
+        if self.policies.delta is None:
+            return ()
+        return self.policies.delta.constraints
+
+    @property
+    def validation(self) -> ArrowValidationOptions | None:
+        """Return validation options from policy bundle."""
+        return self.policies.validation
+
     def schema(self) -> SchemaLike:
         """Return the Arrow schema with dataset metadata applied.
 
@@ -771,12 +900,16 @@ class DatasetSpec:
             Arrow schema with metadata.
         """
         ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
+        delta_policy = self.policies.delta
         if (
             ordering is None
-            and self.delta_write_policy is not None
-            and self.delta_write_policy.zorder_by
+            and delta_policy is not None
+            and delta_policy.write_policy is not None
+            and delta_policy.write_policy.zorder_by
         ):
-            keys = tuple((name, "ascending") for name in self.delta_write_policy.zorder_by)
+            keys = tuple(
+                (name, "ascending") for name in delta_policy.write_policy.zorder_by
+            )
             ordering = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
         merged = merge_metadata_specs(self.metadata_spec, ordering)
         return merged.apply(self.table_spec.to_arrow_schema())
@@ -823,14 +956,15 @@ class DatasetSpec:
             Contract spec with validation applied.
         """
         if self.contract_spec is not None:
-            if self.validation is None or self.contract_spec.validation is not None:
+            validation = self.policies.validation
+            if validation is None or self.contract_spec.validation is not None:
                 return self.contract_spec
-            return replace(self.contract_spec, validation=self.validation)
+            return msgspec.structs.replace(self.contract_spec, validation=validation)
         return ContractSpec(
             name=self.table_spec.name,
             table_schema=self.table_spec,
             version=self.table_spec.version,
-            validation=self.validation,
+            validation=self.policies.validation,
         )
 
     def contract(self) -> Contract:
@@ -885,8 +1019,8 @@ class DatasetSpec:
         bool
             True if the dataset has unbounded DataFusion scan options.
         """
-        if self.datafusion_scan is not None:
-            return self.datafusion_scan.unbounded
+        if self.policies.datafusion_scan is not None:
+            return self.policies.datafusion_scan.unbounded
         return False
 
     def finalize_context(self) -> FinalizeContext:
@@ -947,8 +1081,7 @@ class DatasetSpec:
         return policy
 
 
-@dataclass(frozen=True)
-class DatasetOpenSpec:
+class DatasetOpenSpec(StructBaseStrict, frozen=True):
     """Dataset open parameters for schema discovery."""
 
     dataset_format: str = "delta"
@@ -956,12 +1089,14 @@ class DatasetOpenSpec:
     files: tuple[str, ...] | None = None
     partitioning: str | None = "hive"
     schema: SchemaLike | None = None
-    read_options: Mapping[str, object] = field(default_factory=dict)
-    storage_options: Mapping[str, str] = field(default_factory=dict)
-    delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
+    read_options: Mapping[str, object] = msgspec.field(default_factory=dict)
+    storage_options: Mapping[str, str] = msgspec.field(default_factory=dict)
+    delta_log_storage_options: Mapping[str, str] = msgspec.field(default_factory=dict)
     delta_version: int | None = None
     delta_timestamp: str | None = None
-    discovery: DatasetDiscoveryOptions | None = field(default_factory=DatasetDiscoveryOptions)
+    discovery: DatasetDiscoveryOptions | None = msgspec.field(
+        default_factory=DatasetDiscoveryOptions
+    )
 
     def open(self, path: PathLike) -> ds.Dataset:
         """Open a dataset using the stored options.
@@ -1000,16 +1135,14 @@ class DatasetOpenSpec:
         )
 
 
-@dataclass(frozen=True)
-class TableSpecConstraints:
+class TableSpecConstraints(StructBaseStrict, frozen=True):
     """Required and key fields for a table schema."""
 
     required_non_null: Iterable[str] = ()
     key_fields: Iterable[str] = ()
 
 
-@dataclass(frozen=True)
-class VirtualFieldSpec:
+class VirtualFieldSpec(StructBaseStrict, frozen=True):
     """Virtual field names and documentation for a contract."""
 
     fields: tuple[str, ...] = ()
@@ -1052,7 +1185,9 @@ class DatasetSpecKwargs(TypedDict, total=False):
     contract_spec: ContractSpec | None
     query_spec: QuerySpec | None
     view_specs: Sequence[ViewSpec]
+    policies: DatasetPolicies | None
     datafusion_scan: DataFusionScanOptions | None
+    delta: DeltaPolicyBundle | None
     delta_scan: DeltaScanOptions | None
     delta_cdf_policy: DeltaCdfPolicy | None
     delta_maintenance_policy: DeltaMaintenancePolicy | None
@@ -1218,26 +1353,36 @@ def make_dataset_spec(
     DatasetSpec
         Dataset specification bundling schema, contract, and query behavior.
     """
+    policies = kwargs.get("policies")
+    if policies is None:
+        delta_bundle = kwargs.get("delta")
+        if delta_bundle is None:
+            delta_bundle = DeltaPolicyBundle(
+                scan=kwargs.get("delta_scan"),
+                cdf_policy=kwargs.get("delta_cdf_policy"),
+                maintenance_policy=kwargs.get("delta_maintenance_policy"),
+                write_policy=kwargs.get("delta_write_policy"),
+                schema_policy=kwargs.get("delta_schema_policy"),
+                feature_gate=kwargs.get("delta_feature_gate"),
+                constraints=tuple(kwargs.get("delta_constraints", ())),
+            )
+        policies = DatasetPolicies(
+            datafusion_scan=kwargs.get("datafusion_scan"),
+            delta=delta_bundle,
+            validation=kwargs.get("validation"),
+        )
     return DatasetSpec(
         table_spec=table_spec,
         dataset_kind=kwargs.get("dataset_kind", "primary"),
         contract_spec=kwargs.get("contract_spec"),
         query_spec=kwargs.get("query_spec"),
         view_specs=tuple(kwargs.get("view_specs", ())),
-        datafusion_scan=kwargs.get("datafusion_scan"),
-        delta_scan=kwargs.get("delta_scan"),
-        delta_cdf_policy=kwargs.get("delta_cdf_policy"),
-        delta_maintenance_policy=kwargs.get("delta_maintenance_policy"),
-        delta_write_policy=kwargs.get("delta_write_policy"),
-        delta_schema_policy=kwargs.get("delta_schema_policy"),
-        delta_feature_gate=kwargs.get("delta_feature_gate"),
-        delta_constraints=tuple(kwargs.get("delta_constraints", ())),
+        policies=policies,
         derived_fields=tuple(kwargs.get("derived_fields", ())),
         predicate=kwargs.get("predicate"),
         pushdown_predicate=kwargs.get("pushdown_predicate"),
         evolution_spec=kwargs.get("evolution_spec") or SchemaEvolutionSpec(),
         metadata_spec=kwargs.get("metadata_spec") or SchemaMetadataSpec(),
-        validation=kwargs.get("validation"),
     )
 
 
@@ -1286,7 +1431,7 @@ def _table_spec_from_contract(contract: Contract) -> TableSchemaSpec:
     )
     if not contract.required_non_null and not contract.key_fields:
         return table_spec
-    return replace(
+    return msgspec.structs.replace(
         table_spec,
         required_non_null=contract.required_non_null,
         key_fields=contract.key_fields,
@@ -1576,8 +1721,7 @@ def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
     return SCHEMA_EVOLUTION_PRESETS.get(name, SchemaEvolutionSpec())
 
 
-@dataclass(frozen=True)
-class ContractCatalogSpec:
+class ContractCatalogSpec(StructBaseStrict, frozen=True):
     """Collection of contract specifications keyed by name."""
 
     contracts: dict[str, ContractSpec]

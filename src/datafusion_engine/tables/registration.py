@@ -239,7 +239,9 @@ def _set_runtime_setting(
 
 def _scan_details(scan: DataFusionScanOptions) -> dict[str, object]:
     return {
-        "partition_cols": [(col, str(dtype)) for col, dtype in scan.partition_cols],
+        "partition_cols": [
+            (col, str(dtype)) for col, dtype in scan.partition_cols_pyarrow()
+        ],
         "file_sort_order": [list(value) for value in scan.file_sort_order],
         "file_extension": scan.file_extension,
         "parquet_pruning": scan.parquet_pruning,
@@ -270,7 +272,7 @@ def _register_listing_table_native(
     scan: DataFusionScanOptions | None,
 ) -> None:
     file_extension = scan.file_extension if scan is not None else None
-    partition_cols = scan.partition_cols if scan is not None else ()
+    partition_cols = scan.partition_cols_pyarrow() if scan is not None else ()
     file_sort_order = scan.file_sort_order if scan is not None else ()
     arrow_schema = cast("pa.Schema | None", context.options.schema)
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)

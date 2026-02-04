@@ -3,25 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 
+import msgspec
 from datafusion import col
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
 from datafusion_engine.expr.spec import ExprIR, ExprSpec
+from serde_msgspec import StructBaseStrict
 
 
-@dataclass(frozen=True)
-class ProjectionSpec:
+class ProjectionSpec(StructBaseStrict, frozen=True):
     """Projection spec for DataFusion query compilation."""
 
     base: tuple[str, ...]
-    derived: Mapping[str, ExprSpec] = field(default_factory=dict)
+    derived: Mapping[str, ExprSpec] = msgspec.field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class QuerySpec:
+class QuerySpec(StructBaseStrict, frozen=True):
     """Declarative query spec for DataFusion execution."""
 
     projection: ProjectionSpec

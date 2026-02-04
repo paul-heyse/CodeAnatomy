@@ -954,10 +954,12 @@ def _process_decorator_query(
             source,
         )
 
+        decorators_value = decorator_info.get("decorators", [])
+        decorators = decorators_value if isinstance(decorators_value, list) else []
+        count = len(decorators)
+
         # Apply decorator filter if present
         if query.decorator_filter:
-            decorators = decorator_info.get("decorators", [])
-            count = len(decorators)
 
             # Filter by decorated_by
             if (
@@ -979,12 +981,12 @@ def _process_decorator_query(
                 continue
 
         # Only include if has decorators (for entity=decorator queries)
-        if decorator_info.get("decorator_count", 0) > 0:
+        if count > 0:
             matching_defs.append(def_record)
 
             finding = _def_to_finding(def_record, ctx.calls_by_def.get(def_record, []))
-            finding.details["decorators"] = decorator_info.get("decorators", [])
-            finding.details["decorator_count"] = decorator_info.get("decorator_count", 0)
+            finding.details["decorators"] = decorators
+            finding.details["decorator_count"] = count
             result.key_findings.append(finding)
 
     result.summary["total_defs"] = len(ctx.def_records)
@@ -1723,7 +1725,11 @@ def _build_scope_section(
             continue
         def_name = _extract_def_name(def_record) or "<unknown>"
         free_vars = scope_info.get("free_vars", [])
+        if not isinstance(free_vars, list):
+            free_vars = []
         cell_vars = scope_info.get("cell_vars", [])
+        if not isinstance(cell_vars, list):
+            cell_vars = []
         label = "closure" if scope_info.get("is_closure") else "toplevel"
         message = (
             f"scope: {def_name} ({label}) free_vars={len(free_vars)} cell_vars={len(cell_vars)}"

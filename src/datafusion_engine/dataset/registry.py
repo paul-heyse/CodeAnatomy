@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
@@ -23,8 +23,11 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import (
+        ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
+        DatasetPolicies,
+        DeltaPolicyBundle,
         DeltaCdfPolicy,
         DeltaMaintenancePolicy,
         DeltaScanOptions,
@@ -40,14 +43,9 @@ type DataFusionProvider = Literal["listing", "delta_cdf"]
 class DatasetLocationOverrides(StructBaseStrict, frozen=True):
     """Override-only fields for dataset locations."""
 
-    delta_scan: DeltaScanOptions | None = None
-    delta_cdf_policy: DeltaCdfPolicy | None = None
-    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
-    delta_write_policy: DeltaWritePolicy | None = None
-    delta_schema_policy: DeltaSchemaPolicy | None = None
-    delta_feature_gate: DeltaFeatureGate | None = None
-    delta_constraints: tuple[str, ...] | None = None
     datafusion_scan: DataFusionScanOptions | None = None
+    delta: DeltaPolicyBundle | None = None
+    validation: ArrowValidationOptions | None = None
     table_spec: TableSchemaSpec | None = None
 
 
@@ -197,7 +195,8 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
         if resolved.datafusion_scan is not None:
             scan = {
                 "partition_cols": [
-                    (col, str(dtype)) for col, dtype in resolved.datafusion_scan.partition_cols
+                    (col, str(dtype))
+                    for col, dtype in resolved.datafusion_scan.partition_cols_pyarrow()
                 ],
                 "file_sort_order": [list(key) for key in resolved.datafusion_scan.file_sort_order],
                 "parquet_pruning": resolved.datafusion_scan.parquet_pruning,
@@ -439,20 +438,45 @@ def _register_registry_catalog_name(
     )
 
 
-def _resolve_override(
+def _resolve_table_spec(
     location: DatasetLocation,
     overrides: DatasetLocationOverrides | None,
-    field: str,
-    *,
-    fallback_spec: bool = True,
-) -> object | None:
-    if overrides is not None:
-        value = getattr(overrides, field)
-        if value is not None:
-            return value
-    if fallback_spec and location.dataset_spec is not None:
-        return getattr(location.dataset_spec, field, None)
+) -> TableSchemaSpec | None:
+    if overrides is not None and overrides.table_spec is not None:
+        return overrides.table_spec
+    if location.dataset_spec is not None:
+        return location.dataset_spec.table_spec
     return None
+
+
+def _merge_delta_bundle(
+    base: DeltaPolicyBundle | None,
+    override: DeltaPolicyBundle | None,
+) -> DeltaPolicyBundle | None:
+    if override is None:
+        return base
+    if base is None:
+        return override
+    return DeltaPolicyBundle(
+        scan=override.scan or base.scan,
+        cdf_policy=override.cdf_policy or base.cdf_policy,
+        maintenance_policy=override.maintenance_policy or base.maintenance_policy,
+        write_policy=override.write_policy or base.write_policy,
+        schema_policy=override.schema_policy or base.schema_policy,
+        feature_gate=override.feature_gate or base.feature_gate,
+        constraints=override.constraints,
+    )
+
+
+def _resolve_delta_bundle(
+    location: DatasetLocation,
+    overrides: DatasetLocationOverrides | None,
+) -> DeltaPolicyBundle | None:
+    base = None
+    if location.dataset_spec is not None:
+        base = location.dataset_spec.policies.delta
+    override = overrides.delta if overrides is not None else None
+    return _merge_delta_bundle(base, override)
 
 
 def _resolve_datafusion_scan(
@@ -480,7 +504,7 @@ def _resolve_datafusion_scan(
         )
     if not file_sort_order:
         return scan
-    return replace(scan, file_sort_order=file_sort_order)
+    return msgspec.structs.replace(scan, file_sort_order=file_sort_order)
 
 
 def _resolve_delta_scan(
@@ -489,7 +513,9 @@ def _resolve_delta_scan(
 ) -> DeltaScanOptions | None:
     from storage.deltalake.scan_profile import build_delta_scan_config
 
-    delta_scan = overrides.delta_scan if overrides is not None else None
+    delta_scan = None
+    if overrides is not None and overrides.delta is not None:
+        delta_scan = overrides.delta.scan
     return build_delta_scan_config(
         dataset_format=location.format,
         dataset_spec=location.dataset_spec,
@@ -514,6 +540,7 @@ def apply_scan_policy_to_location(
     overrides = location.overrides
     datafusion_scan = _resolve_datafusion_scan(location, overrides)
     delta_scan = _resolve_delta_scan(location, overrides)
+    delta_bundle = _resolve_delta_bundle(location, overrides)
     from schema_spec.system import apply_delta_scan_policy, apply_scan_policy
 
     datafusion_scan = apply_scan_policy(
@@ -530,7 +557,12 @@ def apply_scan_policy_to_location(
     if datafusion_scan is not None:
         overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
     if delta_scan is not None:
-        overrides = msgspec.structs.replace(overrides, delta_scan=delta_scan)
+        if delta_bundle is None:
+            delta_bundle = DeltaPolicyBundle(scan=delta_scan)
+        else:
+            delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
+    if delta_bundle is not None:
+        overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
     return msgspec.structs.replace(location, overrides=overrides)
 
 
@@ -580,34 +612,16 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     dataset_spec = location.dataset_spec
     datafusion_scan = _resolve_datafusion_scan(location, overrides)
     delta_scan = _resolve_delta_scan(location, overrides)
-    delta_cdf_policy = cast(
-        "DeltaCdfPolicy | None",
-        _resolve_override(location, overrides, "delta_cdf_policy"),
+    delta_bundle = _resolve_delta_bundle(location, overrides)
+    delta_cdf_policy = delta_bundle.cdf_policy if delta_bundle is not None else None
+    delta_write_policy = delta_bundle.write_policy if delta_bundle is not None else None
+    delta_schema_policy = delta_bundle.schema_policy if delta_bundle is not None else None
+    delta_maintenance_policy = (
+        delta_bundle.maintenance_policy if delta_bundle is not None else None
     )
-    delta_write_policy = cast(
-        "DeltaWritePolicy | None",
-        _resolve_override(location, overrides, "delta_write_policy"),
-    )
-    delta_schema_policy = cast(
-        "DeltaSchemaPolicy | None",
-        _resolve_override(location, overrides, "delta_schema_policy"),
-    )
-    delta_maintenance_policy = cast(
-        "DeltaMaintenancePolicy | None",
-        _resolve_override(location, overrides, "delta_maintenance_policy"),
-    )
-    delta_feature_gate = cast(
-        "DeltaFeatureGate | None",
-        _resolve_override(location, overrides, "delta_feature_gate"),
-    )
-    delta_constraints = cast(
-        "tuple[str, ...]",
-        _resolve_override(location, overrides, "delta_constraints") or (),
-    )
-    table_spec = cast(
-        "TableSchemaSpec | None",
-        _resolve_override(location, overrides, "table_spec", fallback_spec=False),
-    )
+    delta_feature_gate = delta_bundle.feature_gate if delta_bundle is not None else None
+    delta_constraints = delta_bundle.constraints if delta_bundle is not None else ()
+    table_spec = _resolve_table_spec(location, overrides)
     datafusion_provider = location.datafusion_provider
     if datafusion_provider is None and (
         (delta_cdf_policy is not None and delta_cdf_policy.required)

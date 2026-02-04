@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike
+    from schema_spec.arrow_types import ArrowTypeSpec
 
 
 class ArrowFieldSpec(Protocol):
@@ -18,7 +19,7 @@ class ArrowFieldSpec(Protocol):
         ...
 
     @property
-    def dtype(self) -> DataTypeLike:
+    def dtype(self) -> DataTypeLike | ArrowTypeSpec:
         """Arrow-compatible data type."""
         ...
 

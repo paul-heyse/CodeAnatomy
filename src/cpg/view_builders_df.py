@@ -30,14 +30,7 @@ from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.shims import (
-    semantic_tag,
-    span_end,
-    span_id,
-    span_make,
-    span_start,
-    stable_id_parts,
-)
+from datafusion_engine.udf.expr import udf_expr
 from obs.otel.scopes import SCOPE_CPG
 from obs.otel.tracing import stage_span
 from relspec.view_defs import RELATION_OUTPUT_NAME
@@ -236,14 +229,14 @@ def _span_exprs_from_df(
     bstart_expr = (
         _coalesce_cols(df, bstart_cols, pa.int64())
         if any(name in df.schema().names for name in bstart_cols)
-        else span_start(col("span"))
+        else udf_expr("span_start", col("span"))
         if "span" in df.schema().names
         else _null_expr("Int64")
     )
     bend_expr = (
         _coalesce_cols(df, bend_cols, pa.int64())
         if any(name in df.schema().names for name in bend_cols)
-        else span_end(col("span"))
+        else udf_expr("span_end", col("span"))
         if "span" in df.schema().names
         else _null_expr("Int64")
     )
@@ -280,7 +273,7 @@ def _stable_id_from_parts(prefix: str, parts: Sequence[Expr]) -> Expr:
     if not parts:
         msg = "stable identifiers require at least one part."
         raise ValueError(msg)
-    return stable_id_parts(prefix, parts[0], *parts[1:])
+    return udf_expr("stable_id_parts", prefix, parts[0], *parts[1:])
 
 
 def build_cpg_nodes_df(
@@ -383,7 +376,7 @@ def _emit_nodes_df(
     node_id_parts = [col(c) if c in df.schema().names else _null_expr("Utf8") for c in id_cols]
     node_id_parts.append(lit(str(spec.node_kind)))
 
-    node_id = semantic_tag("NodeId", _stable_id_from_parts("node", node_id_parts))
+    node_id = udf_expr("semantic_tag", "NodeId", _stable_id_from_parts("node", node_id_parts))
     node_kind = lit(str(spec.node_kind))
     path = _coalesce_cols(df, spec.path_cols, pa.string())
     bstart, bend = _span_exprs_from_df(
@@ -392,7 +385,7 @@ def _emit_nodes_df(
         bend_cols=spec.bend_cols,
     )
     file_id = _coalesce_cols(df, spec.file_id_cols, pa.string())
-    span_expr = span_make(bstart, bend)
+    span_expr = udf_expr("span_make", bstart, bend)
 
     return df.select(
         node_id.alias("node_id"),
@@ -481,20 +474,27 @@ def _edge_span_bounds(names: set[str]) -> tuple[Expr, Expr]:
     if "bstart" in names and "bend" in names:
         return col("bstart"), col("bend")
     if "span" in names:
-        return span_start(col("span")), span_end(col("span"))
+        return udf_expr("span_start", col("span")), udf_expr("span_end", col("span"))
     return _null_expr("Int64"), _null_expr("Int64")
 
 
 def _edge_id_expr(edge_kind: Expr, span_bstart: Expr, span_bend: Expr) -> Expr:
     base_id = _stable_id_from_parts("edge", [edge_kind, col("src"), col("dst")])
     valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
-    span_id_expr = span_id("edge", col("path"), span_bstart, span_bend, kind=edge_kind)
+    span_id_expr = udf_expr(
+        "span_id",
+        "edge",
+        col("path"),
+        span_bstart,
+        span_bend,
+        kind=edge_kind,
+    )
     edge_id = (
         f.case(valid_nodes)
         .when(lit(value=True), f.coalesce(span_id_expr, base_id))
         .otherwise(_null_expr("Utf8"))
     )
-    return semantic_tag("EdgeId", edge_id)
+    return udf_expr("semantic_tag", "EdgeId", edge_id)
 
 
 def _edge_attr_exprs(names: set[str]) -> dict[str, Expr]:
@@ -533,13 +533,13 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:
     span_bstart, span_bend = _edge_span_bounds(names)
     edge_id = _edge_id_expr(edge_kind, span_bstart, span_bend)
     attrs = _edge_attr_exprs(names)
-    span_expr = span_make(span_bstart, span_bend)
+    span_expr = udf_expr("span_make", span_bstart, span_bend)
 
     return df.select(
         edge_id.alias("edge_id"),
         edge_kind.alias("edge_kind"),
-        semantic_tag("NodeId", col("src")).alias("src_node_id"),
-        semantic_tag("NodeId", col("dst")).alias("dst_node_id"),
+        udf_expr("semantic_tag", "NodeId", col("src")).alias("src_node_id"),
+        udf_expr("semantic_tag", "NodeId", col("dst")).alias("dst_node_id"),
         col("path").alias("path"),
         span_expr.alias("span"),
         span_bstart.alias("bstart"),
@@ -688,14 +688,14 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
         bstart = (
             col("bstart")
             if "bstart" in names
-            else span_start(col("span"))
+            else udf_expr("span_start", col("span"))
             if "span" in names
             else _null_expr("Int64")
         )
         bend = (
             col("bend")
             if "bend" in names
-            else span_end(col("span"))
+            else udf_expr("span_end", col("span"))
             if "span" in names
             else _null_expr("Int64")
         )
@@ -742,14 +742,14 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
         bstart = (
             col("bstart")
             if "bstart" in names
-            else span_start(col("span"))
+            else udf_expr("span_start", col("span"))
             if "span" in names
             else _null_expr("Int64")
         )
         bend = (
             col("bend")
             if "bend" in names
-            else span_end(col("span"))
+            else udf_expr("span_end", col("span"))
             if "span" in names
             else _null_expr("Int64")
         )

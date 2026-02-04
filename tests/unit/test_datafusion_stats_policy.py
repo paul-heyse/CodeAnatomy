@@ -11,7 +11,7 @@ from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
 )
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.session.runtime import (
     settings_snapshot_for_profile,
 )
@@ -44,8 +44,8 @@ def test_scan_policy_applies_stats_settings(tmp_path: Path) -> None:
         location=DatasetLocation(
             path=str(parquet_path),
             format="parquet",
-            datafusion_scan=scan,
             datafusion_provider="listing",
+            overrides=DatasetLocationOverrides(datafusion_scan=scan),
         ),
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )
@@ -73,8 +73,8 @@ def test_scan_policy_applies_listing_cache_and_projection(tmp_path: Path) -> Non
         location=DatasetLocation(
             path=str(parquet_path),
             format="parquet",
-            datafusion_scan=scan,
             datafusion_provider="listing",
+            overrides=DatasetLocationOverrides(datafusion_scan=scan),
         ),
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )
@@ -104,9 +104,11 @@ def test_listing_schema_evolution_adds_missing_columns(tmp_path: Path) -> None:
         location=DatasetLocation(
             path=str(parquet_path),
             format="parquet",
-            datafusion_scan=scan,
             datafusion_provider="listing",
-            table_spec=table_spec_from_schema("events", expected_schema),
+            overrides=DatasetLocationOverrides(
+                datafusion_scan=scan,
+                table_spec=table_spec_from_schema("events", expected_schema),
+            ),
         ),
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )

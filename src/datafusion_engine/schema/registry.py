@@ -62,7 +62,7 @@ from datafusion_engine.arrow.semantic import (
 )
 from datafusion_engine.schema.introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql.options import sql_options_for_profile
-from datafusion_engine.udf.shims import arrow_metadata
+from datafusion_engine.udf.expr import udf_expr
 from schema_spec.file_identity import FILE_ID_FIELD, FILE_SHA256_FIELD, PATH_FIELD
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from utils.registry_protocol import ImmutableRegistry
@@ -3053,7 +3053,7 @@ def _require_semantic_type(
 ) -> None:
     meta_key = SEMANTIC_TYPE_META.decode("utf-8")
     df = ctx.table(table_name).select(
-        arrow_metadata(col(column_name), meta_key).alias("semantic_type")
+        udf_expr("arrow_metadata", col(column_name), meta_key).alias("semantic_type")
     )
     rows = df.limit(1).to_arrow_table().to_pylist()
     semantic_type = rows[0].get("semantic_type") if rows else None

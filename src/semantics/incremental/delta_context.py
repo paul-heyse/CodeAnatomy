@@ -14,6 +14,7 @@ from datafusion_engine.dataset.registration import (
 )
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
+    DatasetLocationOverrides,
     resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
 )
@@ -148,8 +149,14 @@ def register_delta_df(
         if resolved_timestamp is None:
             resolved_timestamp = profile_location.delta_timestamp
         dataset_spec = profile_location.dataset_spec
-        if dataset_spec is None:
-            table_spec = profile_location.table_spec
+        if dataset_spec is None and profile_location.overrides is not None:
+            table_spec = profile_location.overrides.table_spec
+    overrides = None
+    if resolved_scan is not None or table_spec is not None:
+        overrides = DatasetLocationOverrides(
+            delta_scan=resolved_scan,
+            table_spec=table_spec,
+        )
     location = DatasetLocation(
         path=str(path),
         format="delta",
@@ -157,9 +164,8 @@ def register_delta_df(
         delta_log_storage_options=resolved_log_storage,
         delta_version=resolved_version,
         delta_timestamp=resolved_timestamp,
-        delta_scan=resolved_scan,
         dataset_spec=dataset_spec,
-        table_spec=table_spec,
+        overrides=overrides,
     )
     return register_dataset_df(
         context.runtime.session_runtime().ctx,

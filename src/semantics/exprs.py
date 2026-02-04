@@ -21,7 +21,7 @@ import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
-from datafusion_engine.udf.shims import stable_hash64 as _stable_hash64
+from datafusion_engine.udf.expr import udf_expr
 
 if TYPE_CHECKING:
     from datafusion import Expr
@@ -680,9 +680,7 @@ def span_start_expr(span_column: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        from datafusion_engine.udf.shims import span_start
-
-        return span_start(ctx.col(span_column))
+        return udf_expr("span_start", ctx.col(span_column))
 
     return _build
 
@@ -702,9 +700,7 @@ def span_end_expr(span_column: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        from datafusion_engine.udf.shims import span_end
-
-        return span_end(ctx.col(span_column))
+        return udf_expr("span_end", ctx.col(span_column))
 
     return _build
 
@@ -726,9 +722,7 @@ def span_overlaps_expr(left_span: str, right_span: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        from datafusion_engine.udf.shims import span_overlaps
-
-        return span_overlaps(ctx.col(left_span), ctx.col(right_span))
+        return udf_expr("span_overlaps", ctx.col(left_span), ctx.col(right_span))
 
     return _build
 
@@ -750,9 +744,7 @@ def span_contains_expr(outer_span: str, inner_span: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        from datafusion_engine.udf.shims import span_contains
-
-        return span_contains(ctx.col(outer_span), ctx.col(inner_span))
+        return udf_expr("span_contains", ctx.col(outer_span), ctx.col(inner_span))
 
     return _build
 
@@ -980,7 +972,7 @@ def stable_hash64(column: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        return _stable_hash64(ctx.col(column))
+        return udf_expr("stable_hash64", ctx.col(column))
 
     return _build
 

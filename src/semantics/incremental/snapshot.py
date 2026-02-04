@@ -25,7 +25,6 @@ from semantics.incremental.write_helpers import (
 )
 from storage.deltalake import (
     DeltaWriteResult,
-    delta_merge_arrow,
     delta_table_version,
     idempotent_commit_properties,
 )
@@ -189,28 +188,32 @@ def _merge_repo_snapshot(
     ctx = context.runtime.session_runtime().ctx
     dataset_location = context.runtime.profile.dataset_location("repo_snapshot")
     extra_constraints = delta_constraints_for_location(dataset_location)
+    from datafusion_engine.delta.service import DeltaMutationRequest
     from storage.deltalake import DeltaMergeArrowRequest
 
-    delta_merge_arrow(
-        ctx,
-        request=DeltaMergeArrowRequest(
-            path=str(target),
-            source=snapshot,
-            predicate="source.file_id = target.file_id",
-            storage_options=storage.storage_options,
-            log_storage_options=storage.log_storage_options,
-            source_alias="source",
-            target_alias="target",
-            matched_predicate=update_predicate,
-            update_all=True,
-            insert_all=True,
-            delete_not_matched_by_source=True,
-            commit_properties=commit_properties,
-            commit_metadata=commit_metadata,
-            extra_constraints=extra_constraints,
-            runtime_profile=context.runtime.profile,
-            dataset_name="repo_snapshot",
+    delta_service = context.runtime.profile.delta_service()
+    delta_service.mutate(
+        DeltaMutationRequest(
+            merge=DeltaMergeArrowRequest(
+                path=str(target),
+                source=snapshot,
+                predicate="source.file_id = target.file_id",
+                storage_options=storage.storage_options,
+                log_storage_options=storage.log_storage_options,
+                source_alias="source",
+                target_alias="target",
+                matched_predicate=update_predicate,
+                update_all=True,
+                insert_all=True,
+                delete_not_matched_by_source=True,
+                commit_properties=commit_properties,
+                commit_metadata=commit_metadata,
+                extra_constraints=extra_constraints,
+                runtime_profile=context.runtime.profile,
+                dataset_name="repo_snapshot",
+            )
         ),
+        ctx=ctx,
     )
     context.runtime.profile.finalize_delta_commit(
         key=commit_key,

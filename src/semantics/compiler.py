@@ -481,7 +481,7 @@ class SemanticCompiler:
         ):
             from datafusion import col
 
-            from datafusion_engine.udf.shims import span_make, stable_id_parts
+            from datafusion_engine.udf.expr import udf_expr
 
             self._require_udfs(("stable_id_parts", "span_make"))
             info = self.get(spec.table)
@@ -514,7 +514,8 @@ class SemanticCompiler:
             df = df.with_column(spec.primary_span.canonical_end, end_expr)
             df = df.with_column(
                 spec.primary_span.canonical_span,
-                span_make(
+                udf_expr(
+                    "span_make",
                     col(spec.primary_span.canonical_start),
                     col(spec.primary_span.canonical_end),
                 ),
@@ -524,7 +525,8 @@ class SemanticCompiler:
             if spec.primary_span.canonical_end != "bend":
                 df = df.with_column("bend", col(spec.primary_span.canonical_end))
 
-            id_expr = stable_id_parts(
+            id_expr = udf_expr(
+                "stable_id_parts",
                 spec.entity_id.namespace,
                 col(spec.entity_id.path_col),
                 col(spec.entity_id.start_col),
@@ -544,7 +546,8 @@ class SemanticCompiler:
                 df = df.with_column(spec.entity_id.canonical_entity_id, col(spec.entity_id.out_col))
 
             for foreign_key in spec.foreign_keys:
-                fk_expr = stable_id_parts(
+                fk_expr = udf_expr(
+                    "stable_id_parts",
                     foreign_key.target_namespace,
                     col(foreign_key.path_col),
                     col(foreign_key.start_col),
@@ -689,7 +692,7 @@ class SemanticCompiler:
         ):
             from datafusion import col
 
-            from datafusion_engine.udf.shims import utf8_normalize
+            from datafusion_engine.udf.expr import udf_expr
 
             info = self.get(table_name)
             self._require_udfs(("utf8_normalize",))
@@ -722,7 +725,8 @@ class SemanticCompiler:
                     raise SemanticSchemaError(msg)
                 df = df.with_column(
                     output_name,
-                    utf8_normalize(
+                    udf_expr(
+                        "utf8_normalize",
                         col(col_name),
                         form=resolved.form,
                         casefold=resolved.casefold,

@@ -11,7 +11,7 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.udf.shims import col_to_byte, span_make
+from datafusion_engine.udf.expr import udf_expr
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
 
@@ -103,7 +103,7 @@ def normalize_byte_span_df(
         df = df.with_column(cfg.bend_col, bend_expr)
         df = df.with_column(
             cfg.span_col,
-            span_make(col(cfg.bstart_col), col(cfg.bend_col)),
+            udf_expr("span_make", col(cfg.bstart_col), col(cfg.bend_col)),
         )
         if cfg.force_col_unit is not None:
             df = df.with_column(cfg.col_unit_col, lit(cfg.force_col_unit))
@@ -215,7 +215,7 @@ def _normalize_via_line_index(
     def _byte_offset(line_start: str, line_text: str, col_name: str) -> Expr:
         base = col(line_start).cast(pa.int64())
         char_col = col(col_name).cast(pa.int64())
-        offset = col_to_byte(col(line_text), char_col, unit_expr)
+        offset = udf_expr("col_to_byte", col(line_text), char_col, unit_expr)
         guard = col(line_start).is_null() | col(line_text).is_null() | col(col_name).is_null()
         if cfg.col_unit_col in names:
             guard |= col(cfg.col_unit_col).is_null()

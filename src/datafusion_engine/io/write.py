@@ -49,6 +49,7 @@ from core.config_base import config_fingerprint
 from core_types import IDENTIFIER_PATTERN
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
+    DatasetLocationOverrides,
     resolve_delta_feature_gate,
     resolve_delta_maintenance_policy,
     resolve_delta_schema_policy,
@@ -1754,12 +1755,15 @@ class WritePipeline:
 
         location = spec.dataset_location
         if location is None:
+            overrides = None
+            if spec.feature_gate is not None:
+                overrides = DatasetLocationOverrides(delta_feature_gate=spec.feature_gate)
             location = DatasetLocation(
                 path=spec.table_uri,
                 format="delta",
                 storage_options=dict(spec.storage_options or {}),
                 delta_log_storage_options=dict(spec.log_storage_options or {}),
-                delta_feature_gate=spec.feature_gate,
+                overrides=overrides,
             )
         if self.runtime_profile is not None:
             location = apply_delta_store_policy(

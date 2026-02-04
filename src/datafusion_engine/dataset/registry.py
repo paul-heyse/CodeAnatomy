@@ -60,19 +60,10 @@ class DatasetLocation:
     read_options: Mapping[str, object] = field(default_factory=dict)
     storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
-    delta_scan: DeltaScanOptions | None = None
     delta_cdf_options: DeltaCdfOptions | None = None
-    delta_cdf_policy: DeltaCdfPolicy | None = None
-    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
-    delta_write_policy: DeltaWritePolicy | None = None
-    delta_schema_policy: DeltaSchemaPolicy | None = None
-    delta_feature_gate: DeltaFeatureGate | None = None
-    delta_constraints: tuple[str, ...] = ()
     filesystem: object | None = None
     files: tuple[str, ...] | None = None
-    table_spec: TableSchemaSpec | None = None
     dataset_spec: DatasetSpec | None = None
-    datafusion_scan: DataFusionScanOptions | None = None
     datafusion_provider: DataFusionProvider | None = None
     delta_version: int | None = None
     delta_timestamp: str | None = None
@@ -198,77 +189,84 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
         loc = catalog.get(name)
         if loc.format != "delta":
             continue
-        schema = resolve_dataset_schema(loc)
+        resolved = resolve_dataset_location(loc)
+        schema = resolved.schema
         scan = None
-        if loc.datafusion_scan is not None:
+        if resolved.datafusion_scan is not None:
             scan = {
                 "partition_cols": [
-                    (col, str(dtype)) for col, dtype in loc.datafusion_scan.partition_cols
+                    (col, str(dtype)) for col, dtype in resolved.datafusion_scan.partition_cols
                 ],
-                "file_sort_order": [list(key) for key in loc.datafusion_scan.file_sort_order],
-                "parquet_pruning": loc.datafusion_scan.parquet_pruning,
-                "skip_metadata": loc.datafusion_scan.skip_metadata,
-                "skip_arrow_metadata": loc.datafusion_scan.skip_arrow_metadata,
-                "binary_as_string": loc.datafusion_scan.binary_as_string,
-                "schema_force_view_types": loc.datafusion_scan.schema_force_view_types,
+                "file_sort_order": [list(key) for key in resolved.datafusion_scan.file_sort_order],
+                "parquet_pruning": resolved.datafusion_scan.parquet_pruning,
+                "skip_metadata": resolved.datafusion_scan.skip_metadata,
+                "skip_arrow_metadata": resolved.datafusion_scan.skip_arrow_metadata,
+                "binary_as_string": resolved.datafusion_scan.binary_as_string,
+                "schema_force_view_types": resolved.datafusion_scan.schema_force_view_types,
                 "listing_table_factory_infer_partitions": (
-                    loc.datafusion_scan.listing_table_factory_infer_partitions
+                    resolved.datafusion_scan.listing_table_factory_infer_partitions
                 ),
                 "listing_table_ignore_subdirectory": (
-                    loc.datafusion_scan.listing_table_ignore_subdirectory
+                    resolved.datafusion_scan.listing_table_ignore_subdirectory
                 ),
-                "file_extension": loc.datafusion_scan.file_extension,
-                "cache": loc.datafusion_scan.cache,
-                "collect_statistics": loc.datafusion_scan.collect_statistics,
-                "meta_fetch_concurrency": loc.datafusion_scan.meta_fetch_concurrency,
-                "list_files_cache_ttl": loc.datafusion_scan.list_files_cache_ttl,
-                "list_files_cache_limit": loc.datafusion_scan.list_files_cache_limit,
-                "projection_exprs": list(loc.datafusion_scan.projection_exprs),
-                "unbounded": loc.datafusion_scan.unbounded,
+                "file_extension": resolved.datafusion_scan.file_extension,
+                "cache": resolved.datafusion_scan.cache,
+                "collect_statistics": resolved.datafusion_scan.collect_statistics,
+                "meta_fetch_concurrency": resolved.datafusion_scan.meta_fetch_concurrency,
+                "list_files_cache_ttl": resolved.datafusion_scan.list_files_cache_ttl,
+                "list_files_cache_limit": resolved.datafusion_scan.list_files_cache_limit,
+                "projection_exprs": list(resolved.datafusion_scan.projection_exprs),
+                "unbounded": resolved.datafusion_scan.unbounded,
             }
-        delta_scan_snapshot = delta_scan_config_snapshot_from_options(loc.delta_scan)
+        delta_scan_snapshot = delta_scan_config_snapshot_from_options(resolved.delta_scan)
         delta_scan = (
             cast("dict[str, object]", to_builtins(delta_scan_snapshot, str_keys=True))
             if delta_scan_snapshot is not None
             else None
         )
         delta_write_policy = None
-        if loc.delta_write_policy is not None:
+        if resolved.delta_write_policy is not None:
             parquet_writer_policy = None
-            if loc.delta_write_policy.parquet_writer_policy is not None:
+            if resolved.delta_write_policy.parquet_writer_policy is not None:
                 parquet_writer_policy = {
                     "statistics_enabled": list(
-                        loc.delta_write_policy.parquet_writer_policy.statistics_enabled
+                        resolved.delta_write_policy.parquet_writer_policy.statistics_enabled
                     ),
-                    "statistics_level": loc.delta_write_policy.parquet_writer_policy.statistics_level,
+                    "statistics_level": (
+                        resolved.delta_write_policy.parquet_writer_policy.statistics_level
+                    ),
                     "bloom_filter_enabled": list(
-                        loc.delta_write_policy.parquet_writer_policy.bloom_filter_enabled
+                        resolved.delta_write_policy.parquet_writer_policy.bloom_filter_enabled
                     ),
-                    "bloom_filter_fpp": loc.delta_write_policy.parquet_writer_policy.bloom_filter_fpp,
-                    "bloom_filter_ndv": loc.delta_write_policy.parquet_writer_policy.bloom_filter_ndv,
+                    "bloom_filter_fpp": (
+                        resolved.delta_write_policy.parquet_writer_policy.bloom_filter_fpp
+                    ),
+                    "bloom_filter_ndv": (
+                        resolved.delta_write_policy.parquet_writer_policy.bloom_filter_ndv
+                    ),
                     "dictionary_enabled": list(
-                        loc.delta_write_policy.parquet_writer_policy.dictionary_enabled
+                        resolved.delta_write_policy.parquet_writer_policy.dictionary_enabled
                     ),
                 }
             delta_write_policy = {
-                "target_file_size": loc.delta_write_policy.target_file_size,
-                "partition_by": list(loc.delta_write_policy.partition_by),
-                "zorder_by": list(loc.delta_write_policy.zorder_by),
-                "stats_policy": loc.delta_write_policy.stats_policy,
+                "target_file_size": resolved.delta_write_policy.target_file_size,
+                "partition_by": list(resolved.delta_write_policy.partition_by),
+                "zorder_by": list(resolved.delta_write_policy.zorder_by),
+                "stats_policy": resolved.delta_write_policy.stats_policy,
                 "stats_columns": (
-                    list(loc.delta_write_policy.stats_columns)
-                    if loc.delta_write_policy.stats_columns is not None
+                    list(resolved.delta_write_policy.stats_columns)
+                    if resolved.delta_write_policy.stats_columns is not None
                     else None
                 ),
-                "stats_max_columns": loc.delta_write_policy.stats_max_columns,
+                "stats_max_columns": resolved.delta_write_policy.stats_max_columns,
                 "parquet_writer_policy": parquet_writer_policy,
-                "enable_features": list(loc.delta_write_policy.enable_features),
+                "enable_features": list(resolved.delta_write_policy.enable_features),
             }
         delta_schema_policy = None
-        if loc.delta_schema_policy is not None:
+        if resolved.delta_schema_policy is not None:
             delta_schema_policy = {
-                "schema_mode": loc.delta_schema_policy.schema_mode,
-                "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
+                "schema_mode": resolved.delta_schema_policy.schema_mode,
+                "column_mapping_mode": resolved.delta_schema_policy.column_mapping_mode,
             }
         provider = resolve_datafusion_provider(loc)
         snapshot.append(
@@ -285,7 +283,9 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_scan": delta_scan,
                 "delta_write_policy": delta_write_policy,
                 "delta_schema_policy": delta_schema_policy,
-                "delta_constraints": list(loc.delta_constraints) if loc.delta_constraints else None,
+                "delta_constraints": (
+                    list(resolved.delta_constraints) if resolved.delta_constraints else None
+                ),
                 "delta_version": loc.delta_version,
                 "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
@@ -444,9 +444,6 @@ def _resolve_override(
         value = getattr(overrides, field)
         if value is not None:
             return value
-    value = getattr(location, field)
-    if value is not None:
-        return value
     if fallback_spec and location.dataset_spec is not None:
         return getattr(location.dataset_spec, field, None)
     return None
@@ -459,8 +456,6 @@ def _resolve_datafusion_scan(
     scan = None
     if overrides is not None and overrides.datafusion_scan is not None:
         scan = overrides.datafusion_scan
-    elif location.datafusion_scan is not None:
-        scan = location.datafusion_scan
     elif location.dataset_spec is not None:
         scan = location.dataset_spec.datafusion_scan
     if scan is None:
@@ -488,9 +483,12 @@ def _resolve_delta_scan(
 ) -> DeltaScanOptions | None:
     from storage.deltalake.scan_profile import build_delta_scan_config
 
-    if overrides is not None and overrides.delta_scan is not None:
-        location = replace(location, delta_scan=overrides.delta_scan)
-    return build_delta_scan_config(location)
+    delta_scan = overrides.delta_scan if overrides is not None else None
+    return build_delta_scan_config(
+        dataset_format=location.format,
+        dataset_spec=location.dataset_spec,
+        override=delta_scan,
+    )
 
 
 def _resolve_dataset_schema_internal(
@@ -603,8 +601,8 @@ def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScan
     """Return DataFusion scan options for a dataset location.
 
     Precedence:
-      1) Explicit ``DatasetLocation.datafusion_scan`` overrides everything.
-      2) ``DatasetSpec.datafusion_scan`` provides defaults when location overrides are absent.
+      1) ``DatasetLocationOverrides.datafusion_scan`` overrides everything.
+      2) ``DatasetSpec.datafusion_scan`` provides defaults when overrides are absent.
 
     Returns
     -------

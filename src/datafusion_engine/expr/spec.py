@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from arrow_utils.core.expr_types import ScalarValue
 from datafusion_engine.arrow.interop import ScalarLike
+from datafusion_engine.udf.expr import udf_expr
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -279,103 +280,77 @@ def _expr_binary_join(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_stable_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import stable_id_parts
-
     prefix = _literal_prefix(ir_args, name="stable_id")
-    return stable_id_parts(prefix, args[1])
+    return udf_expr("stable_id_parts", prefix, args[1])
 
 
 def _expr_stable_hash64(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import stable_hash64
-
-    return stable_hash64(args[0])
+    return udf_expr("stable_hash64", args[0])
 
 
 def _expr_stable_hash128(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import stable_hash128
-
-    return stable_hash128(args[0])
+    return udf_expr("stable_hash128", args[0])
 
 
 def _expr_prefixed_hash64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import prefixed_hash_parts64
-
     prefix = _literal_prefix(ir_args, name="prefixed_hash64")
-    return prefixed_hash_parts64(prefix, args[1])
+    return udf_expr("prefixed_hash_parts64", prefix, args[1])
 
 
 def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import stable_id_parts
-
     prefix = _literal_prefix(ir_args, name="stable_id_parts")
     if len(args) > _MAX_STABLE_ID_PART_ARGS:
         max_parts = _MAX_STABLE_ID_PART_ARGS - 1
         msg = f"stable_id_parts supports up to {max_parts} parts."
         raise ValueError(msg)
-    return stable_id_parts(prefix, args[1], *args[2:])
+    return udf_expr("stable_id_parts", prefix, args[1], *args[2:])
 
 
 def _expr_prefixed_hash_parts64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import prefixed_hash_parts64
-
     prefix = _literal_prefix(ir_args, name="prefixed_hash_parts64")
     if len(args) > _MAX_STABLE_ID_PART_ARGS:
         max_parts = _MAX_STABLE_ID_PART_ARGS - 1
         msg = f"prefixed_hash_parts64 supports up to {max_parts} parts."
         raise ValueError(msg)
-    return prefixed_hash_parts64(prefix, args[1], *args[2:])
+    return udf_expr("prefixed_hash_parts64", prefix, args[1], *args[2:])
 
 
 def _expr_stable_hash_any(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import stable_hash_any
-
     canonical = None
     null_sentinel = None
     if len(ir_args) >= _MIN_STABLE_HASH_ANY_CANONICAL_ARGS:
         canonical = _literal_bool_arg(ir_args, name="stable_hash_any", index=1)
     if len(ir_args) >= _MIN_STABLE_HASH_ANY_NULL_SENTINEL_ARGS:
         null_sentinel = _literal_string_arg(ir_args, name="stable_hash_any", index=2)
-    return stable_hash_any(args[0], canonical=canonical, null_sentinel=null_sentinel)
+    return udf_expr("stable_hash_any", args[0], canonical=canonical, null_sentinel=null_sentinel)
 
 
 def _expr_span_make(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import span_make
-
     if len(args) > _MAX_SPAN_MAKE_ARGS:
         msg = "span_make supports up to five arguments."
         raise ValueError(msg)
-    return span_make(args[0], args[1], *args[2:])
+    return udf_expr("span_make", args[0], args[1], *args[2:])
 
 
 def _expr_span_len(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import span_len
-
-    return span_len(args[0])
+    return udf_expr("span_len", args[0])
 
 
 def _expr_span_overlaps(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import span_overlaps
-
-    return span_overlaps(args[0], args[1])
+    return udf_expr("span_overlaps", args[0], args[1])
 
 
 def _expr_span_contains(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import span_contains
-
-    return span_contains(args[0], args[1])
+    return udf_expr("span_contains", args[0], args[1])
 
 
 def _expr_span_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import span_id
-
     prefix = _literal_prefix(ir_args, name="span_id")
     kind = args[4] if len(args) >= _SPAN_ID_KIND_ARG_COUNT else None
-    return span_id(prefix, args[1], args[2], args[3], kind=kind)
+    return udf_expr("span_id", prefix, args[1], args[2], args[3], kind=kind)
 
 
 def _expr_utf8_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import utf8_normalize as udf_utf8_normalize
-
     form = None
     casefold = None
     collapse_ws = None
@@ -385,57 +360,49 @@ def _expr_utf8_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Exp
         casefold = _literal_bool_arg(ir_args, name="utf8_normalize", index=2)
     if len(ir_args) >= _MIN_UTF8_NORMALIZE_COLLAPSE_ARGS:
         collapse_ws = _literal_bool_arg(ir_args, name="utf8_normalize", index=3)
-    return udf_utf8_normalize(args[0], form=form, casefold=casefold, collapse_ws=collapse_ws)
+    return udf_expr(
+        "utf8_normalize",
+        args[0],
+        form=form,
+        casefold=casefold,
+        collapse_ws=collapse_ws,
+    )
 
 
 def _expr_utf8_null_if_blank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import utf8_null_if_blank
-
-    return utf8_null_if_blank(args[0])
+    return udf_expr("utf8_null_if_blank", args[0])
 
 
 def _expr_qname_normalize(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import qname_normalize
-
     module = args[1] if len(args) > 1 else None
     lang = args[2] if len(args) >= _MIN_QNAME_LANG_ARGS else None
-    return qname_normalize(args[0], module=module, lang=lang)
+    return udf_expr("qname_normalize", args[0], module=module, lang=lang)
 
 
 def _expr_map_get_default(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import map_get_default
-
     key = _literal_string_arg(ir_args, name="map_get_default", index=1)
-    return map_get_default(args[0], key, args[2])
+    return udf_expr("map_get_default", args[0], key, args[2])
 
 
 def _expr_map_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import map_normalize
-
     key_case = None
     sort_keys = None
     if len(ir_args) >= _MIN_MAP_NORMALIZE_KEY_CASE_ARGS:
         key_case = _literal_string_arg(ir_args, name="map_normalize", index=1)
     if len(ir_args) >= _MIN_MAP_NORMALIZE_SORT_KEYS_ARGS:
         sort_keys = _literal_bool_arg(ir_args, name="map_normalize", index=2)
-    return map_normalize(args[0], key_case=key_case, sort_keys=sort_keys)
+    return udf_expr("map_normalize", args[0], key_case=key_case, sort_keys=sort_keys)
 
 
 def _expr_list_compact(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import list_compact
-
-    return list_compact(args[0])
+    return udf_expr("list_compact", args[0])
 
 
 def _expr_list_unique_sorted(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import list_unique_sorted
-
-    return list_unique_sorted(args[0])
+    return udf_expr("list_unique_sorted", args[0])
 
 
 def _expr_struct_pick(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import struct_pick
-
     field_names = [
         _literal_string_arg(ir_args, name="struct_pick", index=index)
         for index in range(1, len(ir_args))
@@ -446,53 +413,39 @@ def _expr_struct_pick(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
     if len(field_names) > _MAX_STRUCT_PICK_FIELDS:
         msg = "struct_pick supports up to six field names."
         raise ValueError(msg)
-    return struct_pick(args[0], field_names[0], *field_names[1:])
+    return udf_expr("struct_pick", args[0], field_names[0], *field_names[1:])
 
 
 def _expr_cdf_change_rank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import cdf_change_rank
-
-    return cdf_change_rank(args[0])
+    return udf_expr("cdf_change_rank", args[0])
 
 
 def _expr_cdf_is_upsert(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import cdf_is_upsert
-
-    return cdf_is_upsert(args[0])
+    return udf_expr("cdf_is_upsert", args[0])
 
 
 def _expr_cdf_is_delete(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import cdf_is_delete
-
-    return cdf_is_delete(args[0])
+    return udf_expr("cdf_is_delete", args[0])
 
 
 def _expr_first_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import first_value_agg
-
-    return first_value_agg(args[0])
+    return udf_expr("first_value_agg", args[0])
 
 
 def _expr_last_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import last_value_agg
-
-    return last_value_agg(args[0])
+    return udf_expr("last_value_agg", args[0])
 
 
 def _expr_count_distinct_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import count_distinct_agg
-
-    return count_distinct_agg(args[0])
+    return udf_expr("count_distinct_agg", args[0])
 
 
 def _expr_string_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_engine.udf.shims import string_agg
-
     if len(args) == 1:
         from datafusion import lit
 
-        return string_agg(args[0], lit(","))
-    return string_agg(args[0], args[1])
+        return udf_expr("string_agg", args[0], lit(","))
+    return udf_expr("string_agg", args[0], args[1])
 
 
 def _expr_row_number_window(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:

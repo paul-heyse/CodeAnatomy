@@ -574,10 +574,10 @@ class SemanticSchema:
         Expr
             Span struct expression.
         """
-        from datafusion_engine.udf.shims import span_make
+        from datafusion_engine.udf.expr import udf_expr
 
         # span_make(bstart, bend) -> struct
-        return span_make(self.span_start_col(), self.span_end_col())
+        return udf_expr("span_make", self.span_start_col(), self.span_end_col())
 
     def entity_id_expr(self, prefix: str) -> Expr:
         """Generate stable entity ID using Rust UDF.
@@ -592,9 +592,10 @@ class SemanticSchema:
         Expr
             stable_id(prefix, path, bstart, bend) expression.
         """
-        from datafusion_engine.udf.shims import stable_id_parts
+        from datafusion_engine.udf.expr import udf_expr
 
-        return stable_id_parts(
+        return udf_expr(
+            "stable_id_parts",
             prefix,
             self.path_col(),
             self.span_start_col(),

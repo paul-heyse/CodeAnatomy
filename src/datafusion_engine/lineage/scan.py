@@ -13,6 +13,7 @@ from datafusion import SessionContext
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_datafusion_provider,
+    resolve_datafusion_scan_options,
     resolve_delta_feature_gate,
 )
 from datafusion_engine.delta.contracts import build_delta_provider_contract
@@ -657,7 +658,7 @@ def _policy_from_lineage(
 
 
 def _partition_column_names(location: DatasetLocation) -> set[str]:
-    scan = location.datafusion_scan
+    scan = resolve_datafusion_scan_options(location)
     if scan is None:
         return set()
     return {name for name, _dtype in scan.partition_cols}

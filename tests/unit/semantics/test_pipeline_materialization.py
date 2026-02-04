@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.io.write import WriteViewRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -52,10 +52,12 @@ def _dataset_location(view_name: str) -> DatasetLocation:
         path=f"/tmp/{view_name}",
         format="delta",
         dataset_spec=spec,
-        delta_write_policy=spec.delta_write_policy,
-        delta_schema_policy=spec.delta_schema_policy,
-        delta_maintenance_policy=spec.delta_maintenance_policy,
-        delta_feature_gate=spec.delta_feature_gate,
+        overrides=DatasetLocationOverrides(
+            delta_write_policy=spec.delta_write_policy,
+            delta_schema_policy=spec.delta_schema_policy,
+            delta_maintenance_policy=spec.delta_maintenance_policy,
+            delta_feature_gate=spec.delta_feature_gate,
+        ),
     )
 
 

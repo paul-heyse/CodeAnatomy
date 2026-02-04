@@ -13,7 +13,7 @@ from datafusion_engine.identity import schema_identity_hash
 from storage.deltalake.delta import DeltaSchemaRequest, delta_table_schema
 
 if TYPE_CHECKING:
-    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.dataset.registry import DatasetLocation, resolve_delta_feature_gate
 
 
 SchemaEvolutionMode = Literal["strict", "additive"]
@@ -104,7 +104,7 @@ def enforce_schema_policy(
         log_storage_options=dict(dataset_location.delta_log_storage_options),
         version=dataset_location.delta_version,
         timestamp=dataset_location.delta_timestamp,
-        gate=dataset_location.delta_feature_gate,
+        gate=resolve_delta_feature_gate(dataset_location),
     )
     existing_schema = delta_table_schema(request)
     expected_hash = schema_identity_hash(expected_schema)

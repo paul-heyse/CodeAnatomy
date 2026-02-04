@@ -12,6 +12,7 @@ import pyarrow as pa
 
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
+    DatasetLocationOverrides,
     resolve_delta_cdf_policy,
     resolve_delta_log_storage_options,
 )
@@ -240,13 +241,16 @@ def read_cdf_changes(
     with TempTableRegistry(state.runtime) as registry:
         cdf_name = f"__cdf_{uuid7_hex()}"
         try:
+            overrides = None
+            if state.inputs.scan_options is not None:
+                overrides = DatasetLocationOverrides(delta_scan=state.inputs.scan_options)
             location = DatasetLocation(
                 path=str(state.inputs.path),
                 format="delta",
                 storage_options=state.inputs.storage_options,
                 delta_log_storage_options=state.inputs.log_storage_options,
                 delta_cdf_options=state.cdf_options,
-                delta_scan=state.inputs.scan_options,
+                overrides=overrides,
                 datafusion_provider="delta_cdf",
             )
             runtime_profile = state.runtime.profile

@@ -1,0 +1,138 @@
+"""Generic UDF expression helper."""
+
+from __future__ import annotations
+
+import importlib
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from datafusion import Expr
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+
+def _require_callable(name: str) -> Callable[..., object]:
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        func = getattr(module, name, None)
+        if isinstance(func, Callable):
+            return func
+    msg = f"DataFusion extension entrypoint {name} is unavailable."
+    raise TypeError(msg)
+
+
+def _unwrap_expr_arg(value: object) -> object:
+    if isinstance(value, Expr):
+        return value.expr
+    return value
+
+
+def _wrap_result(result: object) -> Expr:
+    if isinstance(result, Expr):
+        return result
+    try:
+        return Expr(result)
+    except TypeError as exc:
+        msg = "DataFusion extension returned a non-Expr result."
+        raise TypeError(msg) from exc
+
+
+def _fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
+    try:
+        from datafusion_engine.udf.fallback import fallback_expr
+    except ImportError:
+        return None
+    try:
+        return fallback_expr(name, *args, **kwargs)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _ctx_udf_expr(
+    ctx: SessionContext,
+    *,
+    name: str,
+    args: list[object],
+) -> Expr | None:
+    udf_accessor = getattr(ctx, "udf", None)
+    if not callable(udf_accessor):
+        return None
+    try:
+        udf_callable = udf_accessor(name)
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        return None
+    if not callable(udf_callable):
+        return None
+    try:
+        expr = udf_callable(*args)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not isinstance(expr, Expr):
+        try:
+            expr = Expr(expr)
+        except TypeError:
+            return None
+    return expr
+
+
+def _extension_udf_expr(name: str, args: list[object]) -> Expr:
+    func = _require_callable("udf_expr")
+    resolved_args = [_unwrap_expr_arg(arg) for arg in args]
+    result = func(name, *resolved_args)
+    return _wrap_result(result)
+
+
+def udf_expr(
+    name: str,
+    *args: object,
+    ctx: SessionContext | None = None,
+    **kwargs: object,
+) -> Expr:
+    """Return a DataFusion expression for the named UDF.
+
+    Parameters
+    ----------
+    name
+        UDF name as registered in the runtime catalog.
+    *args
+        Positional arguments for the UDF.
+    ctx
+        Optional SessionContext; when provided, prefer its registry.
+    **kwargs
+        Keyword arguments are appended positionally for compatibility.
+
+    Returns
+    -------
+    datafusion.expr.Expr
+        Expression representing the UDF invocation.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the DataFusion extension fails to build the expression.
+    TypeError
+        Raised when the extension returns an unsupported result type.
+    ValueError
+        Raised when the extension rejects the arguments.
+    """
+    call_args = list(args)
+    if kwargs:
+        call_args.extend(kwargs.values())
+    if ctx is not None:
+        expr = _ctx_udf_expr(ctx, name=name, args=call_args)
+        if expr is not None:
+            return expr
+    try:
+        return _extension_udf_expr(name, call_args)
+    except (RuntimeError, TypeError, ValueError):
+        fallback = _fallback_expr(name, *args, **kwargs)
+        if fallback is not None:
+            return fallback
+        raise
+
+
+__all__ = ["udf_expr"]

@@ -26,12 +26,7 @@ from datafusion_engine.hashing import (
     TYPE_ID_SPEC,
 )
 from datafusion_engine.sql.guard import safe_sql
-from datafusion_engine.udf.shims import (
-    span_make,
-    stable_id_parts,
-    utf8_normalize,
-    utf8_null_if_blank,
-)
+from datafusion_engine.udf.expr import udf_expr
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -103,7 +98,7 @@ def _normalized_text(expr: Expr) -> Expr:
     Expr
         Normalized text expression.
     """
-    return utf8_normalize(expr, collapse_ws=True)
+    return udf_expr("utf8_normalize", expr, collapse_ws=True)
 
 
 def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -> Expr:
@@ -123,7 +118,7 @@ def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -
         msg = "stable identifiers require at least one part."
         raise ValueError(msg)
     normalized = [_hash_part(part, null_sentinel=null_sentinel) for part in parts]
-    return stable_id_parts(prefix, normalized[0], *normalized[1:])
+    return udf_expr("stable_id_parts", prefix, normalized[0], *normalized[1:])
 
 
 def _span_expr(
@@ -149,7 +144,7 @@ def _span_expr(
         Span struct expression from span_make UDF.
     """
     unit = col_unit if col_unit is not None else lit("byte")
-    return span_make(bstart, bend, unit)
+    return udf_expr("span_make", bstart, bend, unit)
 
 
 def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
@@ -169,7 +164,7 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
 
     # Filter out empty or whitespace-only expressions using utf8_null_if_blank UDF
     expr_text = _arrow_cast(col("expr_text"), "Utf8")
-    type_repr = utf8_null_if_blank(_normalized_text(expr_text))
+    type_repr = udf_expr("utf8_null_if_blank", _normalized_text(expr_text))
 
     df = table.filter(type_repr.is_not_null()).with_column("type_repr", type_repr)
 
@@ -232,7 +227,10 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     type_exprs = ctx.table("type_exprs_norm_v1")
 
     # Build rows from type expressions using utf8_null_if_blank for blank checks
-    expr_type_repr = utf8_null_if_blank(_normalized_text(_arrow_cast(col("type_repr"), "Utf8")))
+    expr_type_repr = udf_expr(
+        "utf8_null_if_blank",
+        _normalized_text(_arrow_cast(col("type_repr"), "Utf8")),
+    )
     expr_valid = expr_type_repr.is_not_null() & col("type_id").is_not_null()
 
     expr_rows = (
@@ -247,8 +245,9 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     try:
         scip = ctx.table("scip_symbol_information")
         if "type_repr" in scip.schema().names:
-            scip_type_repr = utf8_null_if_blank(
-                _normalized_text(_arrow_cast(col("type_repr"), "Utf8"))
+            scip_type_repr = udf_expr(
+                "utf8_null_if_blank",
+                _normalized_text(_arrow_cast(col("type_repr"), "Utf8")),
             )
 
             scip_rows = (

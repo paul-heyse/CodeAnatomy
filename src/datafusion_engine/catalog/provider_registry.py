@@ -369,7 +369,7 @@ class ProviderRegistry:
             _build_registration_context,
             _register_dataset_with_context,
         )
-        from datafusion_engine.dataset.registry import DatasetLocation
+        from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 
         if self.runtime_profile is None:
             msg = "ProviderRegistry requires a runtime profile for registration."
@@ -380,6 +380,9 @@ class ProviderRegistry:
             from schema_spec.system import dataset_spec_from_schema
 
             dataset_spec = dataset_spec_from_schema(spec.name, spec.schema)
+        overrides = None
+        if spec.datafusion_scan is not None:
+            overrides = DatasetLocationOverrides(datafusion_scan=spec.datafusion_scan)
         location = DatasetLocation(
             path=spec.storage_location,
             format=spec.format,
@@ -387,8 +390,8 @@ class ProviderRegistry:
             delta_timestamp=spec.delta_timestamp,
             storage_options=spec.storage_options,
             dataset_spec=dataset_spec,
-            datafusion_scan=spec.datafusion_scan,
             datafusion_provider=spec.datafusion_provider,
+            overrides=overrides,
         )
 
         context = _build_registration_context(

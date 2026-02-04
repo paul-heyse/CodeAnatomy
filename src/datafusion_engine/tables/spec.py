@@ -155,12 +155,13 @@ def table_spec_from_location(
         msg = f"Schema required for TableSpec: {name}"
         raise ValueError(msg)
 
+    resolved = location.resolved
     return TableSpec(
         name=name,
         schema=schema,
         dataset_spec=location.dataset_spec,
-        datafusion_scan=location.datafusion_scan,
-        datafusion_provider=location.datafusion_provider,
+        datafusion_scan=resolved.datafusion_scan,
+        datafusion_provider=resolved.datafusion_provider,
         storage_location=str(location.path),
         format=location.format or "delta",
         delta_version=location.delta_version,

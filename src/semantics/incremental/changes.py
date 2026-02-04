@@ -111,7 +111,7 @@ def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
     Expr
         Filter predicate for the specified CDF change types.
     """
-    from datafusion_engine.udf.shims import cdf_is_delete, cdf_is_upsert
+    from datafusion_engine.udf.expr import udf_expr
 
     change_type_col = col("_change_type")
     upsert_types = {
@@ -122,18 +122,20 @@ def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
     change_set = set(change_types)
 
     if change_set == upsert_types:
-        return cdf_is_upsert(change_type_col)
+        return udf_expr("cdf_is_upsert", change_type_col)
     if change_set == delete_types:
-        return cdf_is_delete(change_type_col)
+        return udf_expr("cdf_is_delete", change_type_col)
     if change_set <= upsert_types | delete_types:
         has_upsert = bool(change_set & upsert_types)
         has_delete = bool(change_set & delete_types)
         if has_upsert and has_delete:
-            return cdf_is_upsert(change_type_col) | cdf_is_delete(change_type_col)
+            return udf_expr("cdf_is_upsert", change_type_col) | udf_expr(
+                "cdf_is_delete", change_type_col
+            )
         if has_upsert:
-            return cdf_is_upsert(change_type_col)
+            return udf_expr("cdf_is_upsert", change_type_col)
         if has_delete:
-            return cdf_is_delete(change_type_col)
+            return udf_expr("cdf_is_delete", change_type_col)
     # Fallback to in_list for custom or unknown change types
     change_literals = [lit(value) for value in change_types]
     return f.in_list(change_type_col, change_literals)

@@ -12,7 +12,7 @@ from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
 )
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
@@ -45,7 +45,11 @@ def test_information_schema_column_defaults(tmp_path: Path) -> None:
     register_dataset_df(
         ctx,
         name="defaults_tbl",
-        location=DatasetLocation(path=str(data_dir), format="parquet", table_spec=table_spec),
+        location=DatasetLocation(
+            path=str(data_dir),
+            format="parquet",
+            overrides=DatasetLocationOverrides(table_spec=table_spec),
+        ),
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     defaults = SchemaIntrospector(ctx).table_column_defaults("defaults_tbl")

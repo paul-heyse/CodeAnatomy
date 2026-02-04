@@ -365,10 +365,13 @@ def table_constraints_from_location(
             or None,
         )
     dataset_spec = location.dataset_spec
-    table_spec = dataset_spec.table_spec if dataset_spec is not None else location.table_spec
+    resolved = location.resolved
+    table_spec = resolved.table_spec or (
+        dataset_spec.table_spec if dataset_spec is not None else None
+    )
     resolved_checks: tuple[str, ...]
-    if location.delta_constraints:
-        resolved_checks = merge_constraint_expressions(location.delta_constraints, extra_checks)
+    if resolved.delta_constraints:
+        resolved_checks = merge_constraint_expressions(resolved.delta_constraints, extra_checks)
     elif dataset_spec is not None:
         resolved_checks = merge_constraint_expressions(dataset_spec.delta_constraints, extra_checks)
     else:

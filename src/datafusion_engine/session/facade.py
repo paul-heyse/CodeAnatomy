@@ -150,16 +150,18 @@ class DataFusionExecutionFacade:
             return
 
         # Profile-driven configuration with strict validation
+        features = self.runtime_profile.features
+        policies = self.runtime_profile.policies
         options = RustUdfPlatformOptions(
-            enable_udfs=self.runtime_profile.enable_udfs,
-            enable_async_udfs=self.runtime_profile.enable_async_udfs,
-            async_udf_timeout_ms=self.runtime_profile.async_udf_timeout_ms,
-            async_udf_batch_size=self.runtime_profile.async_udf_batch_size,
-            enable_function_factory=self.runtime_profile.enable_function_factory,
-            enable_expr_planners=self.runtime_profile.enable_expr_planners,
-            function_factory_hook=self.runtime_profile.function_factory_hook,
-            expr_planner_hook=self.runtime_profile.expr_planner_hook,
-            expr_planner_names=self.runtime_profile.expr_planner_names,
+            enable_udfs=features.enable_udfs,
+            enable_async_udfs=features.enable_async_udfs,
+            async_udf_timeout_ms=policies.async_udf_timeout_ms,
+            async_udf_batch_size=policies.async_udf_batch_size,
+            enable_function_factory=features.enable_function_factory,
+            enable_expr_planners=features.enable_expr_planners,
+            function_factory_hook=policies.function_factory_hook,
+            expr_planner_hook=policies.expr_planner_hook,
+            expr_planner_names=policies.expr_planner_names,
             strict=platform_strict,
         )
         install_rust_udf_platform(self.ctx, options=options)

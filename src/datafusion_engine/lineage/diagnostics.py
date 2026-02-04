@@ -602,7 +602,7 @@ def record_artifact(
     payload : dict[str, Any]
         Artifact payload.
     """
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None or profile.diagnostics.diagnostics_sink is None:
         return
     recorder = recorder_for_profile(profile, operation_id=name)
     if recorder is None:
@@ -627,7 +627,7 @@ def record_events(
     rows : Sequence[Mapping[str, Any]]
         Event payload rows.
     """
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None or profile.diagnostics.diagnostics_sink is None:
         return
     recorder = recorder_for_profile(profile, operation_id=name)
     if recorder is None:
@@ -715,11 +715,11 @@ def recorder_for_profile(
     DiagnosticsRecorder | None
         Recorder instance when diagnostics are enabled, otherwise ``None``.
     """
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None or profile.diagnostics.diagnostics_sink is None:
         return None
     resolved_session = session_id or profile.context_cache_key()
     context = DiagnosticsContext(session_id=resolved_session, operation_id=operation_id)
-    sink = profile.diagnostics_sink
+    sink = profile.diagnostics.diagnostics_sink
     return DiagnosticsRecorder(sink, context)
 
 

@@ -246,8 +246,8 @@ def _preflight_sql(
     if _contains_named_args(sql):
         allow_named_args = (
             runtime_profile is not None
-            and runtime_profile.enable_expr_planners
-            and runtime_profile.expr_planner_hook is not None
+            and runtime_profile.features.enable_expr_planners
+            and runtime_profile.policies.expr_planner_hook is not None
         )
         if not allow_named_args:
             msg = "SQL execution failed under safe options: named arguments."
@@ -262,11 +262,11 @@ def _resolved_sql_policy(
     default = DataFusionSqlPolicy(allow_ddl=False, allow_dml=False, allow_statements=False)
     if runtime_profile is None:
         return default
-    if runtime_profile.sql_policy is not None:
-        return runtime_profile.sql_policy
-    if runtime_profile.sql_policy_name is None:
+    if runtime_profile.policies.sql_policy is not None:
+        return runtime_profile.policies.sql_policy
+    if runtime_profile.policies.sql_policy_name is None:
         return default
-    return resolve_sql_policy(runtime_profile.sql_policy_name, fallback=default)
+    return resolve_sql_policy(runtime_profile.policies.sql_policy_name, fallback=default)
 
 
 def _sql_head(sql: str) -> str:

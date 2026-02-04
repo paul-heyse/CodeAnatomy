@@ -64,7 +64,7 @@ def diskcache_profile_from_ctx(
     """
     if profile is None:
         return None
-    return profile.diskcache_profile
+    return profile.policies.diskcache_profile
 
 
 def cache_for_extract(

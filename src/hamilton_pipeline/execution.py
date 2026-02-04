@@ -228,7 +228,7 @@ def _record_cache_run_summary(
     profile_spec = resolve_runtime_profile(profile_name)
     profile = profile_spec.datafusion
     cache_root = _cache_output_root_for_options(options)
-    if cache_root is not None and profile.cache_output_root is None:
+    if cache_root is not None and profile.policies.cache_output_root is None:
         profile = replace(
             profile,
             policies=replace(

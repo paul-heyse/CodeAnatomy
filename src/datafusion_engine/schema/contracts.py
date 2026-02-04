@@ -18,6 +18,7 @@ import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
 
+from core.config_base import config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema.introspection import schema_from_table
 from schema_spec.field_spec import FieldSpec
@@ -413,6 +414,26 @@ class EvolutionPolicy(Enum):
     STRICT = auto()  # No changes allowed
     ADDITIVE = auto()  # New columns allowed, no removals
     RELAXED = auto()  # Any compatible change allowed
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for the evolution policy.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing the evolution policy.
+        """
+        return {"policy": self.name}
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for the evolution policy.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 def _decode_field_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:

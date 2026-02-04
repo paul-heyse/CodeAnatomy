@@ -68,7 +68,7 @@ def _information_schema_column_order(
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[str, ...] | None:
-    if not runtime_profile.enable_information_schema:
+    if not runtime_profile.catalog.enable_information_schema:
         msg = "information_schema must be enabled for schema introspection."
         raise ValueError(msg)
     sql_options = sql_options_for_profile(runtime_profile)

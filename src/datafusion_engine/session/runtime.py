@@ -2406,12 +2406,8 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "delta_plan_codec_logical": profile.policies.delta_plan_codec_logical,
             "expr_planners_enabled": profile.features.enable_expr_planners,
             "expr_planner_names": list(profile.policies.expr_planner_names),
-            "physical_expr_adapter_factory": bool(
-                profile.policies.physical_expr_adapter_factory
-            ),
-            "schema_evolution_adapter_enabled": (
-                profile.features.enable_schema_evolution_adapter
-            ),
+            "physical_expr_adapter_factory": bool(profile.policies.physical_expr_adapter_factory),
+            "schema_evolution_adapter_enabled": (profile.features.enable_schema_evolution_adapter),
             "named_args_supported": named_args_supported(profile),
             "async_udfs_enabled": profile.features.enable_async_udfs,
             "async_udf_timeout_ms": profile.policies.async_udf_timeout_ms,
@@ -2440,9 +2436,7 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
             profile.execution.repartition_aggregations
         ),
         "datafusion.optimizer.repartition_windows": profile.execution.repartition_windows,
-        "datafusion.execution.repartition_file_scans": (
-            profile.execution.repartition_file_scans
-        ),
+        "datafusion.execution.repartition_file_scans": (profile.execution.repartition_file_scans),
         "datafusion.execution.repartition_file_min_size": (
             profile.execution.repartition_file_min_size
         ),
@@ -2487,10 +2481,7 @@ def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]
     payload.update(profile.policies.feature_gates.settings())
     if profile.policies.join_policy is not None:
         payload.update(profile.policies.join_policy.settings())
-    if (
-        profile.diagnostics.explain_analyze_level is not None
-        and _supports_explain_analyze_level()
-    ):
+    if profile.diagnostics.explain_analyze_level is not None and _supports_explain_analyze_level():
         payload["datafusion.explain.analyze_level"] = profile.diagnostics.explain_analyze_level
     return payload
 
@@ -2540,10 +2531,7 @@ class _RuntimeDiagnosticsMixin:
         payload.update(_runtime_settings_payload(profile))
         if profile.policies.settings_overrides:
             payload.update(
-                {
-                    str(key): str(value)
-                    for key, value in profile.policies.settings_overrides.items()
-                }
+                {str(key): str(value) for key, value in profile.policies.settings_overrides.items()}
             )
         payload.update(_extra_settings_payload(profile))
         return payload
@@ -2611,12 +2599,10 @@ class _RuntimeDiagnosticsMixin:
         ast = data_sources.ast
         bytecode = data_sources.bytecode
         ast_partitions = [
-            {"name": name, "dtype": str(dtype)}
-            for name, dtype in ast.external_partition_cols
+            {"name": name, "dtype": str(dtype)} for name, dtype in ast.external_partition_cols
         ]
         bytecode_partitions = [
-            {"name": name, "dtype": str(dtype)}
-            for name, dtype in bytecode.external_partition_cols
+            {"name": name, "dtype": str(dtype)} for name, dtype in bytecode.external_partition_cols
         ]
         return {
             "datafusion_version": datafusion.__version__,
@@ -2680,13 +2666,9 @@ class _RuntimeDiagnosticsMixin:
                 bytecode.external_listing_table_ignore_subdirectory
             ),
             "bytecode_external_collect_statistics": bytecode.external_collect_statistics,
-            "bytecode_external_meta_fetch_concurrency": (
-                bytecode.external_meta_fetch_concurrency
-            ),
+            "bytecode_external_meta_fetch_concurrency": (bytecode.external_meta_fetch_concurrency),
             "bytecode_external_list_files_cache_ttl": bytecode.external_list_files_cache_ttl,
-            "bytecode_external_list_files_cache_limit": (
-                bytecode.external_list_files_cache_limit
-            ),
+            "bytecode_external_list_files_cache_limit": (bytecode.external_list_files_cache_limit),
             "bytecode_delta_location": bytecode.delta_location,
             "bytecode_delta_version": bytecode.delta_version,
             "bytecode_delta_timestamp": bytecode.delta_timestamp,
@@ -2873,9 +2855,7 @@ class _RuntimeDiagnosticsMixin:
                     execution.maximum_parallel_row_group_writers
                 ),
                 "objectstore_writer_buffer_size": execution.objectstore_writer_buffer_size,
-                "datafusion_write_policy": _datafusion_write_policy_payload(
-                    policies.write_policy
-                ),
+                "datafusion_write_policy": _datafusion_write_policy_payload(policies.write_policy),
             },
         }
 
@@ -3433,6 +3413,158 @@ class PolicyBundleConfig:
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
+
+    @staticmethod
+    def _callable_identity(value: object | None) -> str | None:
+        if value is None:
+            return None
+        qualname = getattr(value, "__qualname__", None) or getattr(value, "__name__", None)
+        module = getattr(value, "__module__", None)
+        if qualname and module:
+            return f"{module}.{qualname}"
+        cls = getattr(value, "__class__", None)
+        if cls is None:
+            return None
+        return f"{cls.__module__}.{cls.__name__}"
+
+    @staticmethod
+    def _diskcache_profile_payload(
+        profile: DiskCacheProfile | None,
+    ) -> Mapping[str, object] | None:
+        if profile is None:
+            return None
+        overrides = {
+            str(kind): settings.fingerprint_payload()
+            for kind, settings in sorted(profile.overrides.items(), key=lambda item: str(item[0]))
+        }
+        ttl_seconds = {
+            str(kind): profile.ttl_seconds.get(kind)
+            for kind in sorted(profile.ttl_seconds, key=lambda item: str(item))
+        }
+        return {
+            "root": str(profile.root),
+            "base_settings": profile.base_settings.fingerprint_payload(),
+            "overrides": overrides,
+            "ttl_seconds": ttl_seconds,
+        }
+
+    @staticmethod
+    def _schema_adapter_payload(
+        factories: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return {
+            str(name): PolicyBundleConfig._callable_identity(factory)
+            for name, factory in sorted(factories.items(), key=lambda item: str(item[0]))
+        }
+
+    @staticmethod
+    def _prepared_statement_payload(
+        statements: tuple[PreparedStatementSpec, ...],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "name": statement.name,
+                "sql": statement.sql,
+                "param_types": list(statement.param_types),
+            }
+            for statement in statements
+        ]
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for policy bundle settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing policy bundle settings.
+        """
+        external_table_options = {
+            str(key): str(value) for key, value in self.external_table_options.items()
+        }
+        settings_overrides = {
+            str(key): str(value) for key, value in self.settings_overrides.items()
+        }
+        schema_hardening_payload = (
+            _map_entries(self.schema_hardening.settings())
+            if self.schema_hardening is not None
+            else None
+        )
+        return {
+            "config_policy_name": self.config_policy_name,
+            "config_policy": (
+                self.config_policy.fingerprint() if self.config_policy is not None else None
+            ),
+            "cache_policy": (
+                self.cache_policy.fingerprint() if self.cache_policy is not None else None
+            ),
+            "schema_hardening_name": self.schema_hardening_name,
+            "schema_hardening": schema_hardening_payload,
+            "sql_policy_name": self.sql_policy_name,
+            "sql_policy": self.sql_policy.fingerprint() if self.sql_policy is not None else None,
+            "param_identifier_allowlist": list(self.param_identifier_allowlist),
+            "external_table_options": external_table_options,
+            "write_policy": (
+                self.write_policy.fingerprint() if self.write_policy is not None else None
+            ),
+            "settings_overrides": settings_overrides,
+            "feature_gates": dict(self.feature_gates.settings()),
+            "physical_rulepack_enabled": self.physical_rulepack_enabled,
+            "join_policy": self.join_policy.fingerprint() if self.join_policy is not None else None,
+            "cache_max_columns": self.cache_max_columns,
+            "cache_manager_factory": self._callable_identity(self.cache_manager_factory),
+            "function_factory_hook": self._callable_identity(self.function_factory_hook),
+            "expr_planner_names": list(self.expr_planner_names),
+            "expr_planner_hook": self._callable_identity(self.expr_planner_hook),
+            "physical_expr_adapter_factory": self._callable_identity(
+                self.physical_expr_adapter_factory
+            ),
+            "schema_adapter_factories": self._schema_adapter_payload(self.schema_adapter_factories),
+            "udf_catalog_policy": self.udf_catalog_policy,
+            "async_udf_timeout_ms": self.async_udf_timeout_ms,
+            "async_udf_batch_size": self.async_udf_batch_size,
+            "delta_plan_codec_physical": self.delta_plan_codec_physical,
+            "delta_plan_codec_logical": self.delta_plan_codec_logical,
+            "delta_store_policy": (
+                self.delta_store_policy.fingerprint()
+                if self.delta_store_policy is not None
+                else None
+            ),
+            "delta_protocol_support": (
+                {
+                    "max_reader_version": self.delta_protocol_support.max_reader_version,
+                    "max_writer_version": self.delta_protocol_support.max_writer_version,
+                    "supported_reader_features": list(
+                        self.delta_protocol_support.supported_reader_features
+                    ),
+                    "supported_writer_features": list(
+                        self.delta_protocol_support.supported_writer_features
+                    ),
+                }
+                if self.delta_protocol_support is not None
+                else None
+            ),
+            "delta_protocol_mode": self.delta_protocol_mode,
+            "diskcache_profile": self._diskcache_profile_payload(self.diskcache_profile),
+            "cache_output_root": self.cache_output_root,
+            "runtime_artifact_cache_enabled": self.runtime_artifact_cache_enabled,
+            "runtime_artifact_cache_root": self.runtime_artifact_cache_root,
+            "metadata_cache_snapshot_enabled": self.metadata_cache_snapshot_enabled,
+            "local_filesystem_root": self.local_filesystem_root,
+            "plan_artifacts_root": self.plan_artifacts_root,
+            "input_plugins": [self._callable_identity(plugin) for plugin in self.input_plugins],
+            "prepared_statements": self._prepared_statement_payload(self.prepared_statements),
+            "runtime_env_hook": self._callable_identity(self.runtime_env_hook),
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for policy bundle settings.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy bundle.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)
@@ -5836,9 +5968,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ) -> DataFusionSqlPolicy | None:
         if resolved.sql_policy is not None:
             return resolved.sql_policy
-        if self.sql_policy is None and self.sql_policy_name is None:
+        if self.policies.sql_policy is None and self.policies.sql_policy_name is None:
             return None
-        return self.sql_policy or resolve_sql_policy(self.sql_policy_name)
+        return self.policies.sql_policy or resolve_sql_policy(self.policies.sql_policy_name)
 
     def _compile_options(
         self,
@@ -5858,32 +5990,36 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         resolved = options or DataFusionCompileOptions(
             cache=None,
             cache_max_columns=None,
-            enforce_preflight=self.enforce_preflight,
+            enforce_preflight=self.features.enforce_preflight,
         )
         resolved_params = resolved.params if resolved.params is not None else params
         prepared = _resolve_prepared_statement_options(resolved)
-        capture_explain = resolved.capture_explain or self.capture_explain
-        explain_analyze = resolved.explain_analyze or self.explain_analyze
-        substrait_validation = resolved.substrait_validation or self.substrait_validation
+        capture_explain = resolved.capture_explain or self.diagnostics.capture_explain
+        explain_analyze = resolved.explain_analyze or self.diagnostics.explain_analyze
+        substrait_validation = (
+            resolved.substrait_validation or self.diagnostics.substrait_validation
+        )
         capture_plan_artifacts = (
             resolved.capture_plan_artifacts
-            or self.capture_plan_artifacts
+            or self.diagnostics.capture_plan_artifacts
             or capture_explain
             or substrait_validation
         )
-        capture_semantic_diff = resolved.capture_semantic_diff or self.capture_semantic_diff
+        capture_semantic_diff = (
+            resolved.capture_semantic_diff or self.diagnostics.capture_semantic_diff
+        )
         resolution = _CompileOptionResolution(
-            cache=resolved.cache if resolved.cache is not None else self.cache_enabled,
+            cache=resolved.cache if resolved.cache is not None else self.features.cache_enabled,
             cache_max_columns=(
                 resolved.cache_max_columns
                 if resolved.cache_max_columns is not None
-                else self.cache_max_columns
+                else self.policies.cache_max_columns
             ),
             params=resolved_params,
             param_allowlist=(
                 resolved.param_identifier_allowlist
                 if resolved.param_identifier_allowlist is not None
-                else tuple(self.param_identifier_allowlist) or None
+                else tuple(self.policies.param_identifier_allowlist) or None
             ),
             prepared_param_types=prepared[0],
             prepared_statements=prepared[1],
@@ -5897,7 +6033,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             sql_policy_name=(
                 resolved.sql_policy_name
                 if resolved.sql_policy_name is not None
-                else self.sql_policy_name
+                else self.policies.sql_policy_name
             ),
         )
         hooks = self._resolve_compile_hooks(
@@ -5911,7 +6047,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             resolution.cache == resolved.cache,
             resolution.cache_max_columns == resolved.cache_max_columns,
             resolution.params == resolved.params,
-            self.enforce_preflight == resolved.enforce_preflight,
+            self.features.enforce_preflight == resolved.enforce_preflight,
             resolution.capture_explain == resolved.capture_explain,
             resolution.explain_analyze == resolved.explain_analyze,
             hooks.explain_hook == resolved.explain_hook,
@@ -5958,7 +6094,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             updated = apply_execution_label(
                 updated,
                 execution_label=execution_label,
-                explain_sink=self.labeled_explains,
+                explain_sink=self.diagnostics.labeled_explains,
             )
         if execution_policy is None:
             return updated
@@ -5975,11 +6111,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         DataFusionSqlPolicy
             SQL policy derived from the profile configuration.
         """
-        if self.sql_policy is not None:
-            return self.sql_policy
-        if self.sql_policy_name is None:
+        if self.policies.sql_policy is not None:
+            return self.policies.sql_policy
+        if self.policies.sql_policy_name is None:
             return DataFusionSqlPolicy()
-        return resolve_sql_policy(self.sql_policy_name)
+        return resolve_sql_policy(self.policies.sql_policy_name)
 
     @staticmethod
     def _sql_options() -> SQLOptions:
@@ -6025,7 +6161,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         diskcache.Cache | diskcache.FanoutCache | None
             Cache instance when DiskCache is configured.
         """
-        profile = self.diskcache_profile
+        profile = self.policies.diskcache_profile
         if profile is None:
             return None
         return cache_for_kind(profile, kind)
@@ -6038,7 +6174,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         float | None
             TTL in seconds or None when unset.
         """
-        profile = self.diskcache_profile
+        profile = self.policies.diskcache_profile
         if profile is None:
             return None
         return profile.ttl_for(kind)
@@ -6175,10 +6311,7 @@ def collect_datafusion_metrics(
     Mapping[str, object] | None
         Metrics payload when enabled and available.
     """
-    if (
-        not profile.diagnostics.enable_metrics
-        or profile.diagnostics.metrics_collector is None
-    ):
+    if not profile.diagnostics.enable_metrics or profile.diagnostics.metrics_collector is None:
         return None
     return profile.diagnostics.metrics_collector()
 
@@ -6289,10 +6422,7 @@ def collect_datafusion_traces(
     Mapping[str, object] | None
         Tracing payload when enabled and available.
     """
-    if (
-        not profile.diagnostics.enable_tracing
-        or profile.diagnostics.tracing_collector is None
-    ):
+    if not profile.diagnostics.enable_tracing or profile.diagnostics.tracing_collector is None:
         return None
     return profile.diagnostics.tracing_collector()
 

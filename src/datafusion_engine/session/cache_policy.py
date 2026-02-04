@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from core.config_base import FingerprintableConfig, config_fingerprint
+
 
 @dataclass(frozen=True)
-class CachePolicyConfig:
+class CachePolicyConfig(FingerprintableConfig):
     """Explicit cache policy settings for DataFusion.
 
     Attributes
@@ -23,6 +26,30 @@ class CachePolicyConfig:
     listing_cache_size: int
     metadata_cache_size: int
     stats_cache_size: int | None = None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for cache policy settings.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing cache policy settings.
+        """
+        return {
+            "listing_cache_size": self.listing_cache_size,
+            "metadata_cache_size": self.metadata_cache_size,
+            "stats_cache_size": self.stats_cache_size,
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for cache policy settings.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 DEFAULT_CACHE_POLICY: Final[CachePolicyConfig] = CachePolicyConfig(

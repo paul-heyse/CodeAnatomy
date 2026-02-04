@@ -980,7 +980,7 @@ def _record_repo_scope_stats(
     session: ExtractSession,
 ) -> None:
     runtime_profile = session.engine_session.datafusion_profile
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     scope_policy = _resolve_scope_policy(options)
     repo_roots = {
@@ -1071,7 +1071,7 @@ def _record_repo_scope_trace(
     if not options.record_pathspec_trace:
         return
     runtime_profile = session.engine_session.datafusion_profile
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     scoped_roots = _scoped_roots(repo_root, options=options)
     traces: list[dict[str, object]] = []
@@ -1126,7 +1126,7 @@ def _record_repo_blame(
     if not options.record_blame:
         return
     runtime_profile = session.engine_session.datafusion_profile
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None or runtime_profile.diagnostics.diagnostics_sink is None:
         return
     paths = _blame_paths(entries, limit=options.blame_max_files)
     if not paths:

@@ -132,7 +132,7 @@ class EngineEventRecorder:
     def _sink(self) -> object | None:
         if self.runtime_profile is None:
             return None
-        return self.runtime_profile.diagnostics_sink
+        return self.runtime_profile.diagnostics.diagnostics_sink
 
     def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
         """Record a diagnostics artifact.
@@ -223,7 +223,7 @@ class EngineEventRecorder:
         """Record diskcache stats for known cache kinds."""
         if self._sink is None or self.runtime_profile is None:
             return
-        profile = self.runtime_profile.diskcache_profile
+        profile = self.runtime_profile.policies.diskcache_profile
         if profile is None:
             return
         from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot

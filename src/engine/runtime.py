@@ -91,13 +91,9 @@ def _apply_diagnostics_policy(
             capture_explain=capture_explain,
             explain_analyze=policy.explain_analyze,
             explain_analyze_level=policy.explain_analyze_level,
-            explain_collector=profile.diagnostics.explain_collector
-            if capture_explain
-            else None,
+            explain_collector=profile.diagnostics.explain_collector if capture_explain else None,
             capture_plan_artifacts=capture_plan_artifacts,
-            plan_collector=profile.diagnostics.plan_collector
-            if capture_plan_artifacts
-            else None,
+            plan_collector=profile.diagnostics.plan_collector if capture_plan_artifacts else None,
             enable_metrics=enable_metrics,
             metrics_collector=profile.diagnostics.metrics_collector if enable_metrics else None,
             enable_tracing=enable_tracing,

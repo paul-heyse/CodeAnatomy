@@ -924,9 +924,7 @@ def _execute_extract_task(
         msg = f"Unknown extract task output {spec.task_output!r}."
         raise ValueError(msg)
     extract_session = ExtractSession(engine_session=inputs.engine_session)
-    profile_name = (
-        inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
-    )
+    profile_name = inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
     try:
         outputs = _extract_outputs_for_template(
             inputs,

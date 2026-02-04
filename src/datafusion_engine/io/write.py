@@ -45,6 +45,7 @@ from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions, col
 from datafusion.dataframe import DataFrame
 from datafusion.expr import SortExpr
 
+from core.config_base import config_fingerprint
 from core_types import IDENTIFIER_PATTERN
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
@@ -182,6 +183,57 @@ class _DeltaPolicyContext:
     writer_properties: WriterProperties | None
     storage_options: dict[str, str] | None
     log_storage_options: dict[str, str] | None
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for Delta policy context.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload describing Delta policy context settings.
+        """
+        writer_kind = None
+        if self.writer_properties is not None:
+            writer_kind = (
+                f"{self.writer_properties.__class__.__module__}."
+                f"{self.writer_properties.__class__.__name__}"
+            )
+        return {
+            "write_policy": (
+                self.write_policy.fingerprint() if self.write_policy is not None else None
+            ),
+            "schema_policy": (
+                self.schema_policy.fingerprint() if self.schema_policy is not None else None
+            ),
+            "table_properties": {
+                str(key): str(value) for key, value in self.table_properties.items()
+            },
+            "target_file_size": self.target_file_size,
+            "partition_by": list(self.partition_by),
+            "zorder_by": list(self.zorder_by),
+            "enable_features": list(self.enable_features),
+            "writer_properties": writer_kind,
+            "storage_options": (
+                {str(key): str(value) for key, value in self.storage_options.items()}
+                if self.storage_options is not None
+                else None
+            ),
+            "log_storage_options": (
+                {str(key): str(value) for key, value in self.log_storage_options.items()}
+                if self.log_storage_options is not None
+                else None
+            ),
+        }
+
+    def fingerprint(self) -> str:
+        """Return fingerprint for Delta policy context.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint for the context.
+        """
+        return config_fingerprint(self.fingerprint_payload())
 
 
 @dataclass(frozen=True)

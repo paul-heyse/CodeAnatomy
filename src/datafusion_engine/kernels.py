@@ -169,7 +169,7 @@ def _df_from_table(
 def _batch_size_from_profile(runtime_profile: DataFusionRuntimeProfile | None) -> int | None:
     if runtime_profile is None:
         return None
-    return runtime_profile.batch_size
+    return runtime_profile.execution.batch_size
 
 
 def _arrow_ingest_hook(
@@ -179,7 +179,7 @@ def _arrow_ingest_hook(
 
     if runtime_profile is None:
         return None
-    diagnostics = runtime_profile.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics.diagnostics_sink
     if diagnostics is None:
         return None
     return diagnostics_arrow_ingest_hook(diagnostics)
@@ -193,10 +193,10 @@ def _repartition_for_join(
 ) -> DataFrame:
     if not keys or runtime_profile is None:
         return df
-    target_partitions = runtime_profile.target_partitions
+    target_partitions = runtime_profile.execution.target_partitions
     if target_partitions is None or target_partitions < MIN_JOIN_PARTITIONS:
         return df
-    join_policy = runtime_profile.join_policy
+    join_policy = runtime_profile.policies.join_policy
     if join_policy is not None and not join_policy.repartition_joins:
         return df
     repartition_by_hash = getattr(df, "repartition_by_hash", None)

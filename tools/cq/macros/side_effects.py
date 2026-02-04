@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -125,21 +126,17 @@ def _is_main_guard(node: ast.If) -> bool:
     left = test.left
     right = test.comparators[0]
 
-    if (
+    return (
         isinstance(left, ast.Name)
         and left.id == "__name__"
         and isinstance(right, ast.Constant)
         and right.value == "__main__"
-    ):
-        return True
-    if (
+    ) or (
         isinstance(right, ast.Name)
         and right.id == "__name__"
         and isinstance(left, ast.Constant)
         and left.value == "__main__"
-    ):
-        return True
-    return False
+    )
 
 
 class SideEffectVisitor(ast.NodeVisitor):
@@ -307,7 +304,7 @@ def _append_kind_sections(
         "global_write": "Global Writes",
         "ambient_read": "Ambient Reads",
     }
-    severity_map = {
+    severity_map: dict[str, Literal["info", "warning", "error"]] = {
         "top_level_call": "warning",
         "global_write": "warning",
         "ambient_read": "info",
@@ -325,7 +322,7 @@ def _append_kind_sections(
                     message=effect.description,
                     anchor=Anchor(file=effect.file, line=effect.line),
                     severity=severity_map[kind],
-                    details=dict(scoring_details),
+                    details=DetailPayload.from_legacy(dict(scoring_details)),
                 )
             )
         if len(effects) > _MAX_EFFECTS_DISPLAY:
@@ -334,7 +331,7 @@ def _append_kind_sections(
                     category="truncated",
                     message=f"... and {len(effects) - _MAX_EFFECTS_DISPLAY} more",
                     severity="info",
-                    details=dict(scoring_details),
+                    details=DetailPayload.from_legacy(dict(scoring_details)),
                 )
             )
         result.sections.append(section)
@@ -351,7 +348,7 @@ def _append_evidence(
                 category=effect.kind,
                 message=effect.description,
                 anchor=Anchor(file=effect.file, line=effect.line),
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -408,7 +405,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,
@@ -423,7 +420,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="warning",
                 message=f"{len(by_kind['top_level_call'])} import-time function calls",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if by_kind.get("global_write"):
@@ -432,7 +429,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="warning",
                 message=f"{len(by_kind['global_write'])} module-level mutations",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if by_kind.get("ambient_read"):
@@ -441,7 +438,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="info",
                 message=f"{len(by_kind['ambient_read'])} ambient state accesses",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -451,7 +448,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
                 category="info",
                 message="No import-time side effects detected",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import polars as pl
 
 from tools.cq.core.findings_table import (
@@ -10,7 +12,7 @@ from tools.cq.core.findings_table import (
     flatten_result,
     rehydrate_result,
 )
-from tools.cq.core.schema import Anchor, CqResult, Finding, RunMeta, Section
+from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
 
 _TEST_IMPACT_SCORE_HIGH = 0.75
 _TEST_CONFIDENCE_SCORE_HIGH = 0.95
@@ -33,7 +35,7 @@ def _make_finding(
     message: str = "test message",
     file: str | None = "src/foo.py",
     line: int | None = 10,
-    severity: str = "info",
+    severity: Literal["info", "warning", "error"] = "info",
     impact_score: float = 0.5,
     impact_bucket: str = "med",
     confidence_score: float = 0.8,
@@ -53,13 +55,15 @@ def _make_finding(
         message=message,
         anchor=anchor,
         severity=severity,
-        details={
-            "impact_score": impact_score,
-            "impact_bucket": impact_bucket,
-            "confidence_score": confidence_score,
-            "confidence_bucket": confidence_bucket,
-            "evidence_kind": evidence_kind,
-        },
+        details=DetailPayload.from_legacy(
+            {
+                "impact_score": impact_score,
+                "impact_bucket": impact_bucket,
+                "confidence_score": confidence_score,
+                "confidence_bucket": confidence_bucket,
+                "evidence_kind": evidence_kind,
+            }
+        ),
     )
 
 

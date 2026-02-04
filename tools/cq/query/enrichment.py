@@ -240,7 +240,7 @@ def _enrich_record(
     symtable_map: dict[str, SymtableInfo],
     tree: ast.Module | None,
     file_path: Path,
-) -> dict:
+) -> dict[str, object]:
     """Enrich a single record with symtable and bytecode data.
 
     Parameters
@@ -261,7 +261,7 @@ def _enrich_record(
     dict
         Enrichment data (may be empty)
     """
-    enrichment: dict = {}
+    enrichment: dict[str, object] = {}
     function_kinds = {"function", "async_function", "function_typeparams"}
     class_kinds = {"class", "class_bases", "class_typeparams", "class_typeparams_bases"}
 
@@ -290,7 +290,7 @@ def enrich_records(
     records: list[SgRecord],
     root: Path,
     python_path: str | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, object]]:
     """Enrich records with symtable and bytecode analysis.
 
     Parameters
@@ -311,7 +311,7 @@ def enrich_records(
     """
     if python_path is not None:
         logger.debug("python_path is currently unused: %s", python_path)
-    enrichment_map: dict[str, dict] = {}
+    enrichment_map: dict[str, dict[str, object]] = {}
 
     # Group records by file for efficient processing
     records_by_file: dict[Path, list[SgRecord]] = {}
@@ -388,7 +388,7 @@ class SymtableEnricher:
         self,
         finding: Finding,
         record: SgRecord,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Enrich a function finding with scope details.
 
         Parameters
@@ -421,7 +421,7 @@ class SymtableEnricher:
         if scope is None:
             return {}
 
-        enrichment: dict = {
+        enrichment: dict[str, object] = {
             "is_closure": scope.has_free_vars,
             "is_nested": scope.is_nested,
             "free_vars": list(scope.free_vars),
@@ -500,12 +500,16 @@ def filter_by_scope(
         # Check captures filter
         if scope_filter.captures:
             free_vars = scope_info.get("free_vars", [])
+            if not isinstance(free_vars, list):
+                free_vars = []
             if scope_filter.captures not in free_vars:
                 continue
 
         # Check has_cells filter
         if scope_filter.has_cells is not None:
             cell_vars = scope_info.get("cell_vars", [])
+            if not isinstance(cell_vars, list):
+                cell_vars = []
             has_cells = len(cell_vars) > 0
             if scope_filter.has_cells != has_cells:
                 continue
@@ -563,7 +567,7 @@ def _extract_decorator_name(decorator: ast.expr) -> str | None:
     if isinstance(decorator, ast.Attribute):
         # Handle dotted decorators like @foo.bar
         parts: list[str] = []
-        node = decorator
+        node: ast.expr = decorator
         while isinstance(node, ast.Attribute):
             parts.append(node.attr)
             node = node.value
@@ -579,7 +583,7 @@ def _extract_decorator_name(decorator: ast.expr) -> str | None:
 def enrich_with_decorators(
     finding: Finding,
     source: str,
-) -> dict:
+) -> dict[str, object]:
     """Enrich a finding with decorator information.
 
     Parameters

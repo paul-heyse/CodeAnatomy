@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from tools.cq.core.schema import CqResult, Finding, Section, mk_result, mk_runmeta, ms
+from tools.cq.core.schema import (
+    CqResult,
+    DetailPayload,
+    Finding,
+    Section,
+    mk_result,
+    mk_runmeta,
+    ms,
+)
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.exceptions import cmd_exceptions
@@ -253,8 +261,10 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
 
 
 def _clone_finding_with_macro(finding: Finding, macro: str) -> Finding:
-    details = dict(finding.details)
-    details["source_macro"] = macro
+    details = finding.details
+    data = dict(details.data)
+    data["source_macro"] = macro
+    details = DetailPayload(kind=details.kind, score=details.score, data=data)
     return Finding(
         category=finding.category,
         message=finding.message,
@@ -292,15 +302,15 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.param:
             results.append(
                 BundleStepResult(
-                    result=cmd_impact(
-                        ImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            function=target.value,
-                            param=ctx.param,
-                        )
-                    ),
+                        result=cmd_impact(
+                            ImpactRequest(
+                                tc=ctx.tc,
+                                root=ctx.root,
+                                argv=ctx.argv,
+                                function_name=target.value,
+                                param_name=ctx.param,
+                            )
+                        ),
                     apply_scope=False,
                 )
             )
@@ -309,15 +319,15 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.signature:
             results.append(
                 BundleStepResult(
-                    result=cmd_sig_impact(
-                        SigImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            function=target.value,
-                            to_signature=ctx.signature,
-                        )
-                    ),
+                        result=cmd_sig_impact(
+                            SigImpactRequest(
+                                tc=ctx.tc,
+                                root=ctx.root,
+                                argv=ctx.argv,
+                                symbol=target.value,
+                                to=ctx.signature,
+                            )
+                        ),
                     apply_scope=False,
                 )
             )
@@ -385,15 +395,15 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.param:
             results.append(
                 BundleStepResult(
-                    result=cmd_impact(
-                        ImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            function=target.value,
-                            param=ctx.param,
-                        )
-                    ),
+                        result=cmd_impact(
+                            ImpactRequest(
+                                tc=ctx.tc,
+                                root=ctx.root,
+                                argv=ctx.argv,
+                                function_name=target.value,
+                                param_name=ctx.param,
+                            )
+                        ),
                     apply_scope=False,
                 )
             )

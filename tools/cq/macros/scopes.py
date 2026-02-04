@@ -14,6 +14,7 @@ import msgspec
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -241,7 +242,7 @@ def _append_scope_section(
                 message=f"{scope.name}: {'; '.join(detail_parts)}",
                 anchor=Anchor(file=scope.file, line=scope.line),
                 severity=severity,
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -251,7 +252,7 @@ def _append_scope_section(
                 category="truncated",
                 message=f"... and {len(all_scopes) - _MAX_SCOPES_DISPLAY} more",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(section)
@@ -278,7 +279,7 @@ def _append_scope_evidence(
                 category="scope",
                 message=f"{scope.name} ({scope.kind})",
                 anchor=Anchor(file=scope.file, line=scope.line),
-                details=evidence_details,
+                details=DetailPayload.from_legacy(evidence_details),
             )
         )
 
@@ -328,7 +329,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,
@@ -347,7 +348,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="closure",
                 message=f"{len(closures)} closures capturing outer variables",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if providers:
@@ -356,7 +357,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="provider",
                 message=f"{len(providers)} functions providing variables to nested scopes",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if nonlocal_users:
@@ -365,7 +366,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="nonlocal",
                 message=f"{len(nonlocal_users)} functions using nonlocal declarations",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     if not all_scopes:
@@ -374,7 +375,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
                 category="info",
                 message="No scope captures or closures detected",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
+from tools.cq.core.schema import DetailPayload
+
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding, Section
 
@@ -92,7 +94,7 @@ class FindingRecord:
         return self._finding_idx
 
 
-def _extract_scoring_from_details(details: dict[str, Any]) -> tuple[float, str, float, str, str]:
+def _extract_scoring_from_details(details: DetailPayload) -> tuple[float, str, float, str, str]:
     """Extract scoring fields from finding details.
 
     Returns
@@ -100,11 +102,12 @@ def _extract_scoring_from_details(details: dict[str, Any]) -> tuple[float, str, 
     tuple[float, str, float, str, str]
         (impact_score, impact_bucket, confidence_score, confidence_bucket, evidence_kind)
     """
-    impact = float(details.get("impact_score", 0.0))
-    impact_bucket = str(details.get("impact_bucket", "low"))
-    confidence = float(details.get("confidence_score", 0.0))
-    confidence_bucket = str(details.get("confidence_bucket", "low"))
-    evidence_kind = str(details.get("evidence_kind", "unresolved"))
+    score = details.score
+    impact = score.impact_score if score and score.impact_score is not None else 0.0
+    impact_bucket = score.impact_bucket if score and score.impact_bucket is not None else "low"
+    confidence = score.confidence_score if score and score.confidence_score is not None else 0.0
+    confidence_bucket = score.confidence_bucket if score and score.confidence_bucket is not None else "low"
+    evidence_kind = score.evidence_kind if score and score.evidence_kind is not None else "unresolved"
     return impact, impact_bucket, confidence, confidence_bucket, evidence_kind
 
 
@@ -143,7 +146,7 @@ def _finding_to_record(
         confidence_bucket=conf_bucket,
         evidence_kind=ev_kind,
         severity=finding.severity,
-        details=finding.details,
+        details=finding.details.to_legacy_dict(),
         _section_title=section_title,
         _section_idx=section_idx,
         _finding_idx=finding_idx,
@@ -438,7 +441,7 @@ def rehydrate_result(original: CqResult, filtered_df: pl.DataFrame) -> CqResult:
             message=row["message"],
             anchor=anchor,
             severity=row["severity"],
-            details=details,
+            details=DetailPayload.from_legacy(details),
         )
 
         group = row["group"]

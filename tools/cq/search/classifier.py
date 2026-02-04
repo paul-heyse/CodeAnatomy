@@ -97,8 +97,8 @@ class RecordContext:
     """Cached ast-grep record context for a file."""
 
     records: list[SgRecord]
-    record_index: IntervalIndex
-    def_index: IntervalIndex
+    record_index: IntervalIndex[SgRecord]
+    def_index: IntervalIndex[SgRecord]
 
 
 @dataclass(frozen=True)
@@ -116,7 +116,7 @@ class NodeSpan:
 class NodeIntervalIndex:
     """Interval index for AST node spans."""
 
-    spans: list[NodeSpan]
+    line_index: IntervalIndex[NodeSpan]
 
     def find_containing(self, line: int, col: int) -> SgNode | None:
         """Find the innermost node containing a position.
@@ -128,7 +128,11 @@ class NodeIntervalIndex:
         SgNode | None
             Innermost node containing the position, or None if not found.
         """
-        candidates = [span for span in self.spans if _span_contains(span, line, col)]
+        candidates = [
+            span
+            for span in self.line_index.find_candidates(line)
+            if _span_contains(span, line, col)
+        ]
         if not candidates:
             return None
         best = min(candidates, key=lambda s: (s.end_line - s.start_line, s.end_col - s.start_col))
@@ -412,7 +416,11 @@ def get_record_context(file_path: Path, root: Path) -> RecordContext:
     records = scan_files([file_path], rules, root)
     record_index = IntervalIndex.from_records(records)
     def_records = [record for record in records if record.record == "def"]
-    def_index = IntervalIndex.from_records(def_records) if def_records else IntervalIndex([])
+    def_index: IntervalIndex[SgRecord]
+    if def_records:
+        def_index = IntervalIndex.from_records(def_records)
+    else:
+        def_index = IntervalIndex([])
 
     context = RecordContext(
         records=records,
@@ -445,6 +453,11 @@ def _build_node_spans(root: SgNode) -> list[NodeSpan]:
     return spans
 
 
+def _build_node_interval_index(spans: list[NodeSpan]) -> IntervalIndex[NodeSpan]:
+    intervals = [(span.start_line, span.end_line, span) for span in spans]
+    return IntervalIndex.from_intervals(intervals)
+
+
 def get_node_index(file_path: Path, sg_root: SgRoot) -> NodeIntervalIndex:
     """Get or build cached node interval index for a file.
 
@@ -459,7 +472,7 @@ def get_node_index(file_path: Path, sg_root: SgRoot) -> NodeIntervalIndex:
     if key in _node_index_cache:
         return _node_index_cache[key]
     spans = _build_node_spans(sg_root.root())
-    index = NodeIntervalIndex(spans=spans)
+    index = NodeIntervalIndex(line_index=_build_node_interval_index(spans))
     _node_index_cache[key] = index
     return index
 
@@ -514,7 +527,7 @@ def _find_node_at_position(
         return index.find_containing(line, col)
 
     spans = _build_node_spans(sg_root.root())
-    index = NodeIntervalIndex(spans=spans)
+    index = NodeIntervalIndex(line_index=_build_node_interval_index(spans))
     return index.find_containing(line, col)
 
 

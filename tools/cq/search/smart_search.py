@@ -6,6 +6,7 @@ and symtable enrichment to provide grouped, ranked search results.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -47,7 +48,6 @@ from tools.cq.search.timeout import search_sync_with_timeout
 
 if TYPE_CHECKING:
     from rpygrep import RipGrepSearch
-    from rpygrep.types import RipGrepSearchResult
 
     from tools.cq.core.toolchain import Toolchain
 
@@ -124,6 +124,8 @@ class SearchStats(msgspec.Struct, omit_defaults=True):
     ----------
     scanned_files
         Number of files scanned.
+    scanned_files_is_estimate
+        Whether scanned_files is an estimate.
     matched_files
         Number of files with matches.
     total_matches
@@ -137,6 +139,7 @@ class SearchStats(msgspec.Struct, omit_defaults=True):
     scanned_files: int
     matched_files: int
     total_matches: int
+    scanned_files_is_estimate: bool = True
     truncated: bool = False
     timed_out: bool = False
     max_files_hit: bool = False
@@ -280,6 +283,131 @@ def build_candidate_searcher(
     return searcher, pattern
 
 
+def _parse_rg_line(line: str) -> dict[str, object] | None:
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+
+def _collect_candidates_raw(
+    searcher: RipGrepSearch,
+    limits: SearchLimits,
+) -> tuple[list[RawMatch], set[str], dict[str, object] | None, bool, bool, bool]:
+    matches: list[RawMatch] = []
+    seen_files: set[str] = set()
+    truncated = False
+    max_files_hit = False
+    max_matches_hit = False
+    summary_stats: dict[str, object] | None = None
+
+    def _allow_file(file_path: str) -> bool:
+        nonlocal truncated, max_files_hit
+        if max_files_hit:
+            return False
+        if file_path in seen_files:
+            return True
+        if len(seen_files) >= limits.max_files:
+            truncated = True
+            max_files_hit = True
+            return False
+        seen_files.add(file_path)
+        return True
+
+    for line in searcher.run_direct():
+        payload = _parse_rg_line(line)
+        if not payload:
+            continue
+        kind = payload.get("type")
+        if kind == "summary":
+            data = payload.get("data", {})
+            if isinstance(data, dict):
+                stats = data.get("stats")
+                if isinstance(stats, dict):
+                    summary_stats = stats
+            continue
+        if kind != "match":
+            continue
+        if max_matches_hit or max_files_hit:
+            continue
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        path_data = data.get("path", {})
+        file_path = None
+        if isinstance(path_data, dict):
+            file_path = path_data.get("text") or path_data.get("bytes")
+        if not isinstance(file_path, str):
+            continue
+        if not _allow_file(file_path):
+            continue
+
+        line_number = data.get("line_number")
+        if not isinstance(line_number, int):
+            continue
+        lines_data = data.get("lines", {})
+        line_text = ""
+        if isinstance(lines_data, dict):
+            text_value = lines_data.get("text")
+            if isinstance(text_value, str):
+                line_text = text_value
+
+        submatches_raw = data.get("submatches")
+        submatches: list[object] = submatches_raw if isinstance(submatches_raw, list) else []
+
+        if submatches:
+            for i, submatch in enumerate(submatches):
+                if len(matches) >= limits.max_total_matches:
+                    truncated = True
+                    max_matches_hit = True
+                    break
+                if not isinstance(submatch, dict):
+                    continue
+                start = submatch.get("start")
+                end = submatch.get("end")
+                if not isinstance(start, int) or not isinstance(end, int):
+                    continue
+                match_text = ""
+                match_data = submatch.get("match", {})
+                if isinstance(match_data, dict):
+                    text_value = match_data.get("text")
+                    if isinstance(text_value, str):
+                        match_text = text_value
+                if not match_text and line_text:
+                    match_text = line_text[start:end]
+                matches.append(
+                    RawMatch(
+                        file=file_path,
+                        line=line_number,
+                        col=start,
+                        text=line_text,
+                        match_text=match_text,
+                        match_start=start,
+                        match_end=end,
+                        submatch_index=i,
+                    )
+                )
+        else:
+            if len(matches) >= limits.max_total_matches:
+                truncated = True
+                max_matches_hit = True
+                continue
+            matches.append(
+                RawMatch(
+                    file=file_path,
+                    line=line_number,
+                    col=0,
+                    text=line_text,
+                    match_text=line_text,
+                    match_start=0,
+                    match_end=len(line_text),
+                    submatch_index=0,
+                )
+            )
+
+    return matches, seen_files, summary_stats, truncated, max_files_hit, max_matches_hit
+
+
 def collect_candidates(
     searcher: RipGrepSearch,
     limits: SearchLimits,
@@ -298,80 +426,54 @@ def collect_candidates(
     tuple[list[RawMatch], SearchStats]
         Raw matches and collection statistics.
     """
-    matches: list[RawMatch] = []
-    seen_files: set[str] = set()
-    truncated = False
-    timed_out = False
-    max_files_hit = False
-    max_matches_hit = False
-
     try:
-        results = search_sync_with_timeout(
-            lambda: list(searcher.run()),
+        (
+            matches,
+            seen_files,
+            summary_stats,
+            truncated,
+            max_files_hit,
+            max_matches_hit,
+        ) = search_sync_with_timeout(
+            lambda: _collect_candidates_raw(searcher, limits),
             limits.timeout_seconds,
         )
     except TimeoutError:
+        matches: list[RawMatch] = []
+        seen_files = set()
+        summary_stats = None
+        truncated = False
+        max_files_hit = False
+        max_matches_hit = False
         timed_out = True
-        results: list[RipGrepSearchResult] = []
+    else:
+        timed_out = False
 
-    for result in results:
-        file_path = str(result.path)
-        if file_path not in seen_files:
-            if len(seen_files) >= limits.max_files:
-                truncated = True
-                max_files_hit = True
-                break
-            seen_files.add(file_path)
-
-        for match in result.matches:
-            if len(matches) >= limits.max_total_matches:
-                truncated = True
-                max_matches_hit = True
-                break
-
-            line_text = match.data.lines.text or ""
-            # Emit one RawMatch per submatch
-            if match.data.submatches:
-                for i, sub in enumerate(match.data.submatches):
-                    if len(matches) >= limits.max_total_matches:
-                        truncated = True
-                        max_matches_hit = True
-                        break
-                    raw = RawMatch(
-                        file=file_path,
-                        line=match.data.line_number,
-                        col=sub.start,
-                        text=line_text,
-                        match_text=line_text[sub.start : sub.end],
-                        match_start=sub.start,
-                        match_end=sub.end,
-                        submatch_index=i,
-                    )
-                    matches.append(raw)
-            else:
-                raw = RawMatch(
-                    file=file_path,
-                    line=match.data.line_number,
-                    col=0,
-                    text=line_text,
-                    match_text=line_text,
-                    match_start=0,
-                    match_end=len(line_text),
-                    submatch_index=0,
-                )
-                matches.append(raw)
-
-        if truncated:
-            break
+    scanned_files = len(seen_files)
+    matched_files = len(seen_files)
+    total_matches = len(matches)
+    scanned_files_is_estimate = True
+    if isinstance(summary_stats, dict):
+        searches = summary_stats.get("searches")
+        searches_with_match = summary_stats.get("searches_with_match")
+        matches_reported = summary_stats.get("matches")
+        if isinstance(searches, int):
+            scanned_files = searches
+            scanned_files_is_estimate = False
+        if isinstance(searches_with_match, int):
+            matched_files = searches_with_match
+        if isinstance(matches_reported, int):
+            total_matches = matches_reported
 
     stats = SearchStats(
-        scanned_files=len(seen_files),
-        matched_files=len(seen_files),
-        total_matches=len(matches),
+        scanned_files=scanned_files,
+        matched_files=matched_files,
+        total_matches=total_matches,
         truncated=truncated,
         timed_out=timed_out,
         max_files_hit=max_files_hit,
         max_matches_hit=max_matches_hit,
+        scanned_files_is_estimate=scanned_files_is_estimate,
     )
 
     return matches, stats
@@ -824,7 +926,7 @@ def build_summary(
         "context_lines": {"before": 1, "after": 1},
         "limit": limit if limit is not None else limits.max_total_matches,
         "scanned_files": stats.scanned_files,
-        "scanned_files_is_estimate": True,
+        "scanned_files_is_estimate": stats.scanned_files_is_estimate,
         "matched_files": stats.matched_files,
         "total_matches": stats.total_matches,
         "returned_matches": len(matches),

@@ -7,15 +7,17 @@ identifying downstream consumers and potential impacts of changes.
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -262,9 +264,7 @@ def _tainted_call(visitor: TaintVisitor, expr: ast.Call) -> bool:
     if any(visitor.expr_tainted(kw.value) for kw in expr.keywords):
         return True
     # Check if method receiver is tainted (e.g., `tainted_obj.method()`)
-    if isinstance(expr.func, ast.Attribute) and visitor.expr_tainted(expr.func.value):
-        return True
-    return False
+    return isinstance(expr.func, ast.Attribute) and visitor.expr_tainted(expr.func.value)
 
 
 def _tainted_ifexp(visitor: TaintVisitor, expr: ast.IfExp) -> bool:
@@ -391,24 +391,26 @@ def _tainted_dictcomp(visitor: TaintVisitor, expr: ast.DictComp) -> bool:
     return visitor.expr_tainted(expr.key) or visitor.expr_tainted(expr.value)
 
 
-_EXPR_TAINT_HANDLERS: dict[type[ast.AST], callable[[TaintVisitor, ast.AST], bool]] = {
-    ast.Attribute: _tainted_attribute,
-    ast.Subscript: _tainted_subscript,
-    ast.BinOp: _tainted_binop,
-    ast.UnaryOp: _tainted_unary,
-    ast.Call: _tainted_call,
-    ast.IfExp: _tainted_ifexp,
-    ast.Compare: _tainted_compare,
-    ast.FormattedValue: _tainted_formatted,
-    ast.JoinedStr: _tainted_joined,
-    ast.BoolOp: _tainted_boolop,
-    ast.NamedExpr: _tainted_namedexpr,
-    ast.Starred: _tainted_starred,
-    ast.Lambda: _tainted_lambda,
-    ast.GeneratorExp: _tainted_generator,
-    ast.ListComp: _tainted_listcomp,
-    ast.SetComp: _tainted_setcomp,
-    ast.DictComp: _tainted_dictcomp,
+TaintHandler = Callable[[TaintVisitor, ast.AST], bool]
+
+_EXPR_TAINT_HANDLERS: dict[type[ast.AST], TaintHandler] = {
+    ast.Attribute: cast("TaintHandler", _tainted_attribute),
+    ast.Subscript: cast("TaintHandler", _tainted_subscript),
+    ast.BinOp: cast("TaintHandler", _tainted_binop),
+    ast.UnaryOp: cast("TaintHandler", _tainted_unary),
+    ast.Call: cast("TaintHandler", _tainted_call),
+    ast.IfExp: cast("TaintHandler", _tainted_ifexp),
+    ast.Compare: cast("TaintHandler", _tainted_compare),
+    ast.FormattedValue: cast("TaintHandler", _tainted_formatted),
+    ast.JoinedStr: cast("TaintHandler", _tainted_joined),
+    ast.BoolOp: cast("TaintHandler", _tainted_boolop),
+    ast.NamedExpr: cast("TaintHandler", _tainted_namedexpr),
+    ast.Starred: cast("TaintHandler", _tainted_starred),
+    ast.Lambda: cast("TaintHandler", _tainted_lambda),
+    ast.GeneratorExp: cast("TaintHandler", _tainted_generator),
+    ast.ListComp: cast("TaintHandler", _tainted_listcomp),
+    ast.SetComp: cast("TaintHandler", _tainted_setcomp),
+    ast.DictComp: cast("TaintHandler", _tainted_dictcomp),
 }
 
 
@@ -512,7 +514,10 @@ def _analyze_function(
                     call_info.keywords,
                     target,
                 )
-                new_tainted = tainted_params_from_bound_call(bound, tainted_args)
+                tainted_indices = {arg for arg in tainted_args if isinstance(arg, int)}
+                tainted_values = {arg for arg in tainted_args if isinstance(arg, str)}
+                new_tainted = tainted_params_from_bound_call(bound, tainted_indices)
+                new_tainted |= tainted_params_from_bound_call(bound, tainted_values)
                 if new_tainted:
                     _analyze_function(
                         target,
@@ -586,7 +591,7 @@ def _append_depth_findings(
                 f"reaches {site_count} sites in {len(files_affected)} files"
             ),
             severity="info",
-            details=dict(scoring_details),
+            details=DetailPayload.from_legacy(dict(scoring_details)),
         )
     )
     for depth, count in sorted(depth_counts.items()):
@@ -595,7 +600,7 @@ def _append_depth_findings(
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 
@@ -622,7 +627,7 @@ def _append_kind_sections(
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
-                    details=details,
+                    details=DetailPayload.from_legacy(details),
                 )
             )
         result.sections.append(section)
@@ -643,7 +648,7 @@ def _append_callers_section(
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(caller_section)
@@ -666,7 +671,7 @@ def _append_evidence(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
 
@@ -772,7 +777,7 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
     conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
-    scoring_details = {
+    scoring_details: dict[str, object] = {
         "impact_score": imp,
         "impact_bucket": bucket(imp),
         "confidence_score": conf,

@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import msgspec
 
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
+    DetailPayload,
     Finding,
     Section,
     mk_result,
@@ -46,6 +48,17 @@ _KW_TEXT_LIMIT = 15
 _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
 _MAX_CONTEXT_SNIPPET_LINES = 30
+
+
+class CallAnalysis(TypedDict):
+    """Structured analysis output for a call expression."""
+
+    num_args: int
+    num_kwargs: int
+    kwargs: list[str]
+    has_star_args: bool
+    has_star_kwargs: bool
+    arg_preview: str
 
 
 class CallSite(msgspec.Struct):
@@ -167,7 +180,7 @@ def _preview_kwarg(kw: ast.keyword) -> str:
     return f"{kw.arg}={val}"
 
 
-def _analyze_call(node: ast.Call) -> dict:
+def _analyze_call(node: ast.Call) -> CallAnalysis:
     """Analyze a call node for argument patterns.
 
     Returns
@@ -329,7 +342,7 @@ def _find_function_signature(
     return ""
 
 
-def _detect_hazards(call: ast.Call, info: dict) -> list[str]:
+def _detect_hazards(call: ast.Call, info: CallAnalysis) -> list[str]:
     hazards: list[str] = []
     if info.get("has_star_args"):
         hazards.append("star_args")
@@ -797,7 +810,7 @@ def _add_shape_section(
                 category="shape",
                 message=f"{shape}: {count} calls",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(shape_section)
@@ -817,7 +830,7 @@ def _add_kw_section(
                 category="kwarg",
                 message=f"{kw}: {count} uses",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(kw_section)
@@ -835,7 +848,7 @@ def _add_context_section(
                 category="context",
                 message=f"{ctx}: {count} calls",
                 severity="info",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(ctx_section)
@@ -855,7 +868,7 @@ def _add_hazard_section(
                 category="hazard",
                 message=f"{label}: {count} calls",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
     result.sections.append(hazard_section)
@@ -900,7 +913,7 @@ def _add_sites_section(
                 message=f"{function_name}({site.arg_preview})",
                 anchor=Anchor(file=site.file, line=site.line, col=site.col),
                 severity="info",
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
     result.sections.append(sites_section)
@@ -941,9 +954,133 @@ def _add_evidence(
                 category="call_site",
                 message=f"{site.context} calls {function_name}",
                 anchor=Anchor(file=site.file, line=site.line),
-                details=details,
+                details=DetailPayload.from_legacy(details),
             )
         )
+
+
+@dataclass(frozen=True)
+class CallScanResult:
+    """Bundle results from scanning call sites."""
+
+    candidate_files: list[Path]
+    scan_files: list[Path]
+    total_py_files: int
+    call_records: list[SgRecord]
+    used_fallback: bool
+    all_sites: list[CallSite]
+    files_with_calls: int
+    rg_candidates: int
+    signature_info: str
+
+
+def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
+    """Scan for call sites using ast-grep, falling back to rpygrep if needed.
+
+    Returns
+    -------
+    CallScanResult
+        Summary of scan inputs, outputs, and fallback status.
+    """
+    search_name = function_name.rsplit(".", maxsplit=1)[-1]
+    pattern = rf"\b{search_name}\s*\("
+    candidate_files = find_files_with_pattern(root_path, pattern, limits=INTERACTIVE)
+
+    all_py_files = list_scan_files([root_path], root=root_path)
+    total_py_files = len(all_py_files)
+
+    scan_files = candidate_files if candidate_files else all_py_files
+
+    used_fallback = False
+    call_records: list[SgRecord] = []
+    if scan_files:
+        try:
+            call_records = sg_scan(
+                paths=scan_files,
+                record_types={"call"},
+                root=root_path,
+            )
+        except (OSError, RuntimeError, ValueError):
+            used_fallback = True
+    else:
+        used_fallback = True
+
+    signature_info = _find_function_signature(root_path, function_name)
+
+    if not used_fallback:
+        all_sites, files_with_calls = _collect_call_sites_from_records(
+            root_path,
+            call_records,
+            function_name,
+        )
+        rg_candidates = 0
+    else:
+        candidates = _rg_find_candidates(function_name, root_path)
+        by_file = _group_candidates(candidates)
+        all_sites = _collect_call_sites(root_path, by_file, function_name)
+        files_with_calls = len({site.file for site in all_sites})
+        rg_candidates = len(candidates)
+
+    return CallScanResult(
+        candidate_files=candidate_files,
+        scan_files=scan_files,
+        total_py_files=total_py_files,
+        call_records=call_records,
+        used_fallback=used_fallback,
+        all_sites=all_sites,
+        files_with_calls=files_with_calls,
+        rg_candidates=rg_candidates,
+        signature_info=signature_info,
+    )
+
+
+def _build_call_scoring(
+    all_sites: list[CallSite],
+    files_with_calls: int,
+    forwarding_count: int,
+    hazard_counts: dict[str, int],
+    *,
+    used_fallback: bool,
+) -> dict[str, object]:
+    """Compute scoring details for call-site findings.
+
+    Returns
+    -------
+    dict[str, object]
+        Scoring details for impact/confidence.
+    """
+    hazard_sites = sum(hazard_counts.values())
+    imp_signals = ImpactSignals(
+        sites=len(all_sites),
+        files=files_with_calls,
+        depth=0,
+        breakages=0,
+        ambiguities=forwarding_count,
+    )
+    has_closures = any(
+        site.symtable_info and site.symtable_info.get("is_closure") for site in all_sites
+    )
+    has_bytecode = any(site.bytecode_info for site in all_sites)
+    if used_fallback:
+        evidence_kind = "rg_only"
+    elif has_closures:
+        evidence_kind = "resolved_ast_closure"
+    elif forwarding_count or hazard_sites:
+        evidence_kind = "resolved_ast_heuristic"
+    elif has_bytecode:
+        evidence_kind = "resolved_ast_bytecode"
+    else:
+        evidence_kind = "resolved_ast"
+    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    return {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
 
 
 def cmd_calls(
@@ -976,60 +1113,20 @@ def cmd_calls(
     run = mk_runmeta("calls", argv, str(root_path), started, tc.to_dict())
     result = mk_result(run)
 
-    # Pre-filter files containing the function name using rpygrep for performance
-    search_name = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"\b{search_name}\s*\("
-    candidate_files = find_files_with_pattern(root_path, pattern, limits=INTERACTIVE)
-
-    # Track total files for summary (before filtering)
-    all_py_files = list_scan_files([root_path], root=root_path)
-    total_py_files = len(all_py_files)
-
-    # Use candidate files if available, otherwise fall back to scanning all files
-    scan_files = candidate_files if candidate_files else all_py_files
-
-    used_fallback = False
-    call_records: list[SgRecord] = []
-    if scan_files:
-        try:
-            call_records = sg_scan(
-                paths=scan_files,
-                record_types={"call"},
-                root=root_path,
-            )
-        except (OSError, RuntimeError, ValueError):
-            used_fallback = True
-    else:
-        used_fallback = True
-
-    # On-demand signature lookup (avoids full repo scan)
-    signature_info = _find_function_signature(root_path, function_name)
-
-    if not used_fallback:
-        all_sites, files_with_calls = _collect_call_sites_from_records(
-            root_path,
-            call_records,
-            function_name,
-        )
-        rg_candidates = 0
-    else:
-        candidates = _rg_find_candidates(function_name, root_path)
-        by_file = _group_candidates(candidates)
-        all_sites = _collect_call_sites(root_path, by_file, function_name)
-        files_with_calls = len({site.file for site in all_sites})
-        rg_candidates = len(candidates)
+    scan_result = _scan_call_sites(root_path, function_name)
+    all_sites = scan_result.all_sites
 
     result.summary = {
         "function": function_name,
-        "signature": signature_info,
+        "signature": scan_result.signature_info,
         "total_sites": len(all_sites),
-        "files_with_calls": files_with_calls,
-        "total_py_files": total_py_files,
-        "candidate_files": len(candidate_files),
-        "scanned_files": len(scan_files),
-        "call_records": len(call_records),
-        "rg_candidates": rg_candidates,
-        "scan_method": "ast-grep" if not used_fallback else "rpygrep",
+        "files_with_calls": scan_result.files_with_calls,
+        "total_py_files": scan_result.total_py_files,
+        "candidate_files": len(scan_result.candidate_files),
+        "scanned_files": len(scan_result.scan_files),
+        "call_records": len(scan_result.call_records),
+        "rg_candidates": scan_result.rg_candidates,
+        "scan_method": "ast-grep" if not scan_result.used_fallback else "rpygrep",
     }
 
     if not all_sites:
@@ -1051,49 +1148,24 @@ def cmd_calls(
     ) = _analyze_sites(all_sites)
 
     # Compute scoring signals
-    hazard_sites = sum(hazard_counts.values())
-    imp_signals = ImpactSignals(
-        sites=len(all_sites),
-        files=files_with_calls,
-        depth=0,
-        breakages=0,
-        ambiguities=forwarding_count,
+    scoring_details = _build_call_scoring(
+        all_sites,
+        scan_result.files_with_calls,
+        forwarding_count,
+        hazard_counts,
+        used_fallback=scan_result.used_fallback,
     )
-    # Determine evidence kind based on enrichment
-    has_closures = any(
-        site.symtable_info and site.symtable_info.get("is_closure") for site in all_sites
-    )
-    has_bytecode = any(site.bytecode_info for site in all_sites)
-    if used_fallback:
-        evidence_kind = "rg_only"
-    elif has_closures:
-        # Closures require more careful handling
-        evidence_kind = "resolved_ast_closure"
-    elif forwarding_count or hazard_sites:
-        evidence_kind = "resolved_ast_heuristic"
-    elif has_bytecode:
-        # Bytecode enrichment gives additional confidence
-        evidence_kind = "resolved_ast_bytecode"
-    else:
-        evidence_kind = "resolved_ast"
-    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     result.key_findings.append(
         Finding(
             category="summary",
-            message=f"Found {len(all_sites)} calls to {function_name} across {files_with_calls} files",
+            message=(
+                f"Found {len(all_sites)} calls to {function_name} across "
+                f"{scan_result.files_with_calls} files"
+            ),
             severity="info",
-            details=dict(scoring_details),
+            details=DetailPayload.from_legacy(dict(scoring_details)),
         )
     )
 
@@ -1103,7 +1175,7 @@ def cmd_calls(
                 category="forwarding",
                 message=f"{forwarding_count} calls use *args/**kwargs forwarding",
                 severity="warning",
-                details=dict(scoring_details),
+                details=DetailPayload.from_legacy(dict(scoring_details)),
             )
         )
 

@@ -36,6 +36,7 @@ from datafusion_engine.views.bundle_extraction import (
 )
 from serde_artifacts import ViewCacheArtifact, ViewCacheArtifactEnvelope
 from serde_msgspec import convert, to_builtins
+from utils.registry_protocol import MappingRegistryAdapter
 from utils.uuid_factory import uuid7_hex
 from utils.validation import validate_required_items
 
@@ -77,6 +78,22 @@ class ViewNode:
     required_udfs: tuple[str, ...] = ()
     plan_bundle: DataFusionPlanBundle | None = None
     cache_policy: CachePolicy = "none"
+
+
+def view_graph_registry(
+    nodes: Sequence[ViewNode] = (),
+) -> MappingRegistryAdapter[str, ViewNode]:
+    """Return a registry adapter for view graph nodes.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, ViewNode]
+        Registry adapter populated with the provided view nodes.
+    """
+    registry = MappingRegistryAdapter[str, ViewNode]()
+    for node in nodes:
+        registry.register(node.name, node)
+    return registry
 
 
 class SchemaContractViolationError(ValueError):
@@ -1380,4 +1397,5 @@ __all__ = [
     "ViewGraphOptions",
     "ViewNode",
     "register_view_graph",
+    "view_graph_registry",
 ]

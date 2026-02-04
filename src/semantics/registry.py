@@ -19,6 +19,7 @@ from semantics.specs import (
     SemanticTableSpec,
     SpanBinding,
 )
+from utils.registry_protocol import MappingRegistryAdapter
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -206,6 +207,29 @@ _NORMALIZATION_BY_SOURCE: Final[dict[str, SemanticNormalizationSpec]] = {
 }
 
 
+def semantic_table_registry() -> MappingRegistryAdapter[str, SemanticTableSpec]:
+    """Return a registry adapter for semantic table specs.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, SemanticTableSpec]
+        Read-only registry adapter for semantic table specs.
+    """
+    return MappingRegistryAdapter.from_mapping(SEMANTIC_TABLE_SPECS, read_only=True)
+
+
+def semantic_normalization_registry() -> MappingRegistryAdapter[str, SemanticNormalizationSpec]:
+    """Return a registry adapter for semantic normalization specs.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, SemanticNormalizationSpec]
+        Read-only registry adapter for semantic normalization specs.
+    """
+    mapping = {spec.output_name: spec for spec in SEMANTIC_NORMALIZATION_SPECS}
+    return MappingRegistryAdapter.from_mapping(mapping, read_only=True)
+
+
 def normalization_spec_for_output(output_name: str) -> SemanticNormalizationSpec | None:
     """Return the normalization spec for a given output view name.
 
@@ -273,6 +297,18 @@ RELATIONSHIP_SPECS: Final[tuple[QualityRelationshipSpec, ...]] = (
     REL_IMPORT_SYMBOL,
     REL_CALLSITE_SYMBOL,
 )
+
+
+def semantic_relationship_registry() -> MappingRegistryAdapter[str, QualityRelationshipSpec]:
+    """Return a registry adapter for semantic relationship specs.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, QualityRelationshipSpec]
+        Read-only registry adapter for semantic relationship specs.
+    """
+    mapping = {spec.name: spec for spec in RELATIONSHIP_SPECS}
+    return MappingRegistryAdapter.from_mapping(mapping, read_only=True)
 
 
 def spec_for_relationship(name: str) -> QualityRelationshipSpec | None:
@@ -501,6 +537,9 @@ __all__ = [
     "normalization_spec_for_output",
     "normalization_spec_for_source",
     "relationship_names",
+    "semantic_normalization_registry",
+    "semantic_relationship_registry",
+    "semantic_table_registry",
     "spec_for_relationship",
     "spec_for_table",
 ]

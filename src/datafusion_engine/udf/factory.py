@@ -338,6 +338,22 @@ def function_factory_payloads(
     return resolved.to_payload()
 
 
+def function_factory_policy_hash(
+    snapshot: Mapping[str, object],
+    *,
+    allow_async: bool = False,
+) -> str:
+    """Return the fingerprint hash for a snapshot-derived policy.
+
+    Returns
+    -------
+    str
+        Fingerprint hash for the derived policy.
+    """
+    policy = function_factory_policy_from_snapshot(snapshot, allow_async=allow_async)
+    return policy.fingerprint()
+
+
 def function_factory_policy_from_snapshot(
     snapshot: Mapping[str, object],
     *,
@@ -569,6 +585,7 @@ __all__ = [
     "function_factory_fallback_active",
     "function_factory_payloads",
     "function_factory_policy_from_snapshot",
+    "function_factory_policy_hash",
     "install_function_factory",
     "register_function",
 ]

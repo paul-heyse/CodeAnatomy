@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         DeltaScanOptions,
         DeltaSchemaPolicy,
         DeltaWritePolicy,
+        ScanPolicyConfig,
     )
 
 type DatasetFormat = str
@@ -70,8 +71,8 @@ class DatasetLocation(StructBaseStrict, frozen=True):
 
     @property
     def resolved(self) -> ResolvedDatasetLocation:
-        """Return a resolved view of this dataset location."""
-        return resolve_dataset_location(self)
+        """Return a cached resolved view of this dataset location."""
+        return _resolve_cached_location(self)
 
 
 class ResolvedDatasetLocation(StructBaseStrict, frozen=True):
@@ -91,6 +92,9 @@ class ResolvedDatasetLocation(StructBaseStrict, frozen=True):
     delta_constraints: tuple[str, ...]
     table_spec: TableSchemaSpec | None
     schema: SchemaLike | None
+
+
+_RESOLVED_LOCATION_CACHE: dict[int, ResolvedDatasetLocation] = {}
 
 
 @dataclass
@@ -187,7 +191,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
         loc = catalog.get(name)
         if loc.format != "delta":
             continue
-        resolved = resolve_dataset_location(loc)
+        resolved = loc.resolved
         schema = resolved.schema
         scan = None
         if resolved.datafusion_scan is not None:
@@ -377,6 +381,10 @@ def _register_location(
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
 
     resolved = apply_delta_store_policy(location, policy=profile.policies.delta_store_policy)
+    resolved = apply_scan_policy_to_location(
+        resolved,
+        policy=profile.policies.scan_policy,
+    )
     catalog.register(name, resolved)
 
 
@@ -489,6 +497,43 @@ def _resolve_delta_scan(
     )
 
 
+def apply_scan_policy_to_location(
+    location: DatasetLocation,
+    *,
+    policy: ScanPolicyConfig | None,
+) -> DatasetLocation:
+    """Apply scan policy defaults to a dataset location override bundle.
+
+    Returns
+    -------
+    DatasetLocation
+        Updated location with scan policy defaults applied.
+    """
+    if policy is None:
+        return location
+    overrides = location.overrides
+    datafusion_scan = _resolve_datafusion_scan(location, overrides)
+    delta_scan = _resolve_delta_scan(location, overrides)
+    from schema_spec.system import apply_delta_scan_policy, apply_scan_policy
+
+    datafusion_scan = apply_scan_policy(
+        datafusion_scan,
+        policy=policy,
+        dataset_format=location.format,
+    )
+    if location.format == "delta":
+        delta_scan = apply_delta_scan_policy(delta_scan, policy=policy)
+    if datafusion_scan is None and delta_scan is None:
+        return location
+    if overrides is None:
+        overrides = DatasetLocationOverrides()
+    if datafusion_scan is not None:
+        overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
+    if delta_scan is not None:
+        overrides = msgspec.structs.replace(overrides, delta_scan=delta_scan)
+    return msgspec.structs.replace(location, overrides=overrides)
+
+
 def _resolve_dataset_schema_internal(
     location: DatasetLocation,
     *,
@@ -597,6 +642,16 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     )
 
 
+def _resolve_cached_location(location: DatasetLocation) -> ResolvedDatasetLocation:
+    cache_key = id(location)
+    cached = _RESOLVED_LOCATION_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    resolved = resolve_dataset_location(location)
+    _RESOLVED_LOCATION_CACHE[cache_key] = resolved
+    return resolved
+
+
 def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScanOptions | None:
     """Return DataFusion scan options for a dataset location.
 
@@ -609,8 +664,7 @@ def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScan
     DataFusionScanOptions | None
         Scan options derived from the dataset location, when present.
     """
-    resolved = resolve_dataset_location(location)
-    return resolved.datafusion_scan
+    return location.resolved.datafusion_scan
 
 
 def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider | None:
@@ -621,7 +675,7 @@ def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider
     DataFusionProvider | None
         Resolved provider for the dataset location, when available.
     """
-    return resolve_dataset_location(location).datafusion_provider
+    return location.resolved.datafusion_provider
 
 
 def resolve_delta_cdf_policy(location: DatasetLocation) -> DeltaCdfPolicy | None:
@@ -632,7 +686,7 @@ def resolve_delta_cdf_policy(location: DatasetLocation) -> DeltaCdfPolicy | None
     DeltaCdfPolicy | None
         Resolved Delta CDF policy when configured.
     """
-    return resolve_dataset_location(location).delta_cdf_policy
+    return location.resolved.delta_cdf_policy
 
 
 def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
@@ -643,7 +697,7 @@ def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str,
     Mapping[str, str] | None
         Log-store options for Delta table access.
     """
-    return resolve_dataset_location(location).delta_log_storage_options
+    return location.resolved.delta_log_storage_options
 
 
 def resolve_delta_write_policy(location: DatasetLocation) -> DeltaWritePolicy | None:
@@ -654,7 +708,7 @@ def resolve_delta_write_policy(location: DatasetLocation) -> DeltaWritePolicy | 
     DeltaWritePolicy | None
         Delta write policy derived from the dataset location, when present.
     """
-    return resolve_dataset_location(location).delta_write_policy
+    return location.resolved.delta_write_policy
 
 
 def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy | None:
@@ -665,7 +719,7 @@ def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy 
     DeltaSchemaPolicy | None
         Delta schema policy derived from the dataset location, when present.
     """
-    return resolve_dataset_location(location).delta_schema_policy
+    return location.resolved.delta_schema_policy
 
 
 def resolve_delta_maintenance_policy(location: DatasetLocation) -> DeltaMaintenancePolicy | None:
@@ -676,7 +730,7 @@ def resolve_delta_maintenance_policy(location: DatasetLocation) -> DeltaMaintena
     DeltaMaintenancePolicy | None
         Delta maintenance policy derived from the dataset location, when present.
     """
-    return resolve_dataset_location(location).delta_maintenance_policy
+    return location.resolved.delta_maintenance_policy
 
 
 def resolve_delta_feature_gate(location: DatasetLocation) -> DeltaFeatureGate | None:
@@ -687,7 +741,7 @@ def resolve_delta_feature_gate(location: DatasetLocation) -> DeltaFeatureGate | 
     DeltaFeatureGate | None
         Feature gate requirements for the dataset when configured.
     """
-    return resolve_dataset_location(location).delta_feature_gate
+    return location.resolved.delta_feature_gate
 
 
 def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
@@ -698,7 +752,7 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
     SchemaLike | None
         Resolved schema when available, otherwise ``None``.
     """
-    return resolve_dataset_location(location).schema
+    return location.resolved.schema
 
 
 __all__ = [
@@ -714,6 +768,7 @@ __all__ = [
     "DeltaWritePolicy",
     "PathLike",
     "ResolvedDatasetLocation",
+    "apply_scan_policy_to_location",
     "dataset_catalog_from_profile",
     "registry_snapshot",
     "resolve_datafusion_provider",

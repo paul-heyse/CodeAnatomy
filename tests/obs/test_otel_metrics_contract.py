@@ -5,6 +5,7 @@ from __future__ import annotations
 from obs.otel.metrics import (
     record_cache_event,
     record_stage_duration,
+    record_storage_operation,
     record_task_duration,
     set_dataset_stats,
     set_scan_telemetry,
@@ -57,6 +58,7 @@ def test_metrics_catalog_emits() -> None:
         result="write",
         duration_s=0.01,
     )
+    record_storage_operation(operation="read", status="ok", duration_s=0.02)
     data = harness.metric_reader.get_metrics_data()
     names = _metric_names(data)
     assert "codeanatomy.stage.duration" in names
@@ -65,6 +67,8 @@ def test_metrics_catalog_emits() -> None:
     assert "codeanatomy.scan.row_groups" in names
     assert "codeanatomy.cache.operation.count" in names
     assert "codeanatomy.cache.operation.duration" in names
+    assert "codeanatomy.storage.operation.count" in names
+    assert "codeanatomy.storage.operation.duration" in names
 
 
 def test_cache_metrics_include_run_id() -> None:

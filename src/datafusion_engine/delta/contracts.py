@@ -166,7 +166,10 @@ def _resolve_delta_scan(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DeltaScanOptions | None:
-    delta_scan = resolve_delta_scan_options(location)
+    delta_scan = resolve_delta_scan_options(
+        location,
+        scan_policy=runtime_profile.policies.scan_policy if runtime_profile is not None else None,
+    )
     if delta_scan is None:
         return None
     settings = _profile_settings(runtime_profile)

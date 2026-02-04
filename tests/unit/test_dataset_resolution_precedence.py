@@ -7,11 +7,17 @@ import pyarrow as pa
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
+    apply_scan_policy_to_location,
     resolve_dataset_location,
 )
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import DatasetSpec
+from schema_spec.system import (
+    DatasetSpec,
+    DeltaScanPolicyDefaults,
+    ScanPolicyConfig,
+    ScanPolicyDefaults,
+)
 from storage.deltalake.config import DeltaSchemaPolicy
 
 
@@ -62,3 +68,40 @@ def test_resolved_location_uses_dataset_spec_when_no_override() -> None:
 
     assert resolved.delta_schema_policy == base_policy
     assert resolved.schema == dataset_spec.schema()
+
+
+def test_scan_policy_applies_listing_defaults() -> None:
+    """Listing scan defaults should populate scan options when absent."""
+    policy = ScanPolicyConfig(
+        listing=ScanPolicyDefaults(
+            collect_statistics=True,
+            list_files_cache_ttl="1h",
+        )
+    )
+    location = DatasetLocation(path="/tmp/events", format="parquet")
+
+    resolved = apply_scan_policy_to_location(location, policy=policy)
+
+    scan = resolved.resolved.datafusion_scan
+    assert scan is not None
+    assert scan.collect_statistics is True
+    assert scan.list_files_cache_ttl == "1h"
+
+
+def test_scan_policy_applies_delta_defaults() -> None:
+    """Delta scan defaults should use delta-specific policy overrides."""
+    policy = ScanPolicyConfig(
+        listing=ScanPolicyDefaults(list_files_cache_ttl="1h"),
+        delta_listing=ScanPolicyDefaults(list_files_cache_ttl="5m"),
+        delta_scan=DeltaScanPolicyDefaults(schema_force_view_types=True),
+    )
+    location = DatasetLocation(path="/tmp/events", format="delta")
+
+    resolved = apply_scan_policy_to_location(location, policy=policy)
+
+    scan = resolved.resolved.datafusion_scan
+    delta_scan = resolved.resolved.delta_scan
+    assert scan is not None
+    assert scan.list_files_cache_ttl == "5m"
+    assert delta_scan is not None
+    assert delta_scan.schema_force_view_types is True

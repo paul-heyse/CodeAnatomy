@@ -313,6 +313,7 @@ def evaluate_and_select_files(
         stage="storage",
         scope_name=SCOPE_STORAGE,
         attributes={
+            "codeanatomy.operation": "file_pruning",
             "codeanatomy.total_files": total_files,
             "codeanatomy.has_filters": policy.has_filters(),
         },

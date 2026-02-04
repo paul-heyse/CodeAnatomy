@@ -666,10 +666,11 @@ class UdfCatalog:
 
 
 @dataclass
-class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, DataFusionUdfSpec]):
+class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, object]):
     """Registry adapter exposing custom UDF specs from a UdfCatalog."""
 
     catalog: UdfCatalog
+    function_factory_hash: str | None = None
 
     def register(self, key: str, value: DataFusionUdfSpec) -> None:
         """Register a custom UDF spec by key.
@@ -724,19 +725,46 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
         """
         return len(self.catalog.custom_specs())
 
-    def snapshot(self) -> Mapping[str, DataFusionUdfSpec]:
-        """Return a snapshot of custom UDF specs.
+    def snapshot(self) -> Mapping[str, object]:
+        """Return a snapshot of custom UDF specs plus policy hash.
 
         Returns
         -------
-        Mapping[str, DataFusionUdfSpec]
-            Snapshot of custom UDF specifications.
+        Mapping[str, object]
+            Snapshot payload containing specs and policy hash.
         """
-        return dict(self.catalog.custom_specs())
+        return {
+            "specs": dict(self.catalog.custom_specs()),
+            "function_factory_hash": self.function_factory_hash,
+        }
 
-    def restore(self, snapshot: Mapping[str, DataFusionUdfSpec]) -> None:
-        """Restore custom UDF specs from a snapshot."""
-        self.catalog.replace_custom_specs(snapshot)
+    def restore(self, snapshot: Mapping[str, object]) -> None:
+        """Restore custom UDF specs from a snapshot.
+
+        Raises
+        ------
+        ValueError
+            Raised when the snapshot is malformed or the policy hash mismatches.
+        """
+        if "specs" in snapshot:
+            specs = snapshot.get("specs")
+            if not isinstance(specs, Mapping):
+                msg = "UdfCatalogAdapter snapshot missing specs mapping."
+                raise ValueError(msg)
+            snapshot_hash = snapshot.get("function_factory_hash")
+            if (
+                snapshot_hash is not None
+                and self.function_factory_hash is not None
+                and snapshot_hash != self.function_factory_hash
+            ):
+                msg = (
+                    "UdfCatalogAdapter snapshot FunctionFactory hash mismatch: "
+                    f"snapshot={snapshot_hash!r} current={self.function_factory_hash!r}."
+                )
+                raise ValueError(msg)
+            self.catalog.replace_custom_specs(cast("Mapping[str, DataFusionUdfSpec]", specs))
+            return
+        self.catalog.replace_custom_specs(cast("Mapping[str, DataFusionUdfSpec]", snapshot))
 
 
 def create_default_catalog(

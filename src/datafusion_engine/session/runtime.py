@@ -79,6 +79,7 @@ from datafusion_engine.lineage.diagnostics import (
     record_events,
 )
 from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
+from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
 from datafusion_engine.schema.introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -143,6 +144,7 @@ from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DatasetSpec,
     DeltaScanOptions,
+    ScanPolicyConfig,
     dataset_spec_from_schema,
 )
 
@@ -3437,6 +3439,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     cache_policy: CachePolicyConfig | None = None
+    scan_policy: ScanPolicyConfig = msgspec.field(default_factory=ScanPolicyConfig)
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
     sql_policy_name: str | None = "write"
@@ -3556,6 +3559,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
             "config_policy": (
                 self.config_policy.fingerprint() if self.config_policy is not None else None
             ),
+            "scan_policy": self.scan_policy.fingerprint(),
             "cache_policy": (
                 self.cache_policy.fingerprint() if self.cache_policy is not None else None
             ),
@@ -3977,24 +3981,78 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         datafusion.SessionContext
             Session context configured for the profile without caching.
         """
-        ctx = self._build_session_context()
-        ctx = self._apply_url_table(ctx)
-        self._register_local_filesystem(ctx)
+        ctx = self._apply_url_table(self._build_session_context())
+        RegistrationPhaseOrchestrator().run(self._ephemeral_context_phases(ctx))
+        return ctx
+
+    def _ephemeral_context_phases(
+        self,
+        ctx: SessionContext,
+    ) -> tuple[RegistrationPhase, ...]:
+        return (
+            RegistrationPhase(name="context", validate=lambda: None),
+            RegistrationPhase(
+                name="filesystems",
+                requires=("context",),
+                validate=lambda: self._register_local_filesystem(ctx),
+            ),
+            RegistrationPhase(
+                name="catalogs",
+                requires=("filesystems",),
+                validate=lambda: self._install_catalogs_for_context(ctx),
+            ),
+            RegistrationPhase(
+                name="udf_stack",
+                requires=("catalogs",),
+                validate=lambda: self._install_udf_stack_for_context(ctx),
+            ),
+            RegistrationPhase(
+                name="schema_guards",
+                requires=("udf_stack",),
+                validate=lambda: self._install_schema_guards_for_context(ctx),
+            ),
+            RegistrationPhase(
+                name="planning_extensions",
+                requires=("schema_guards",),
+                validate=lambda: self._install_planning_extensions_for_context(ctx),
+            ),
+            RegistrationPhase(
+                name="extension_hooks",
+                requires=("planning_extensions",),
+                validate=lambda: self._install_extension_hooks_for_context(ctx),
+            ),
+            RegistrationPhase(
+                name="observability",
+                requires=("extension_hooks",),
+                validate=lambda: self._install_observability_for_context(ctx),
+            ),
+        )
+
+    def _install_catalogs_for_context(self, ctx: SessionContext) -> None:
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_view_schema(ctx)
+
+    def _install_udf_stack_for_context(self, ctx: SessionContext) -> None:
         self._install_udf_platform(ctx)
         self._install_planner_rules(ctx)
+
+    def _install_schema_guards_for_context(self, ctx: SessionContext) -> None:
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
+
+    def _install_planning_extensions_for_context(self, ctx: SessionContext) -> None:
         self._prepare_statements(ctx)
         self.ensure_delta_plan_codecs(ctx)
+
+    def _install_extension_hooks_for_context(self, ctx: SessionContext) -> None:
         self._record_extension_parity_validation(ctx)
         self._install_physical_expr_adapter_factory(ctx)
+
+    def _install_observability_for_context(self, ctx: SessionContext) -> None:
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
         self._record_cache_diagnostics(ctx)
-        return ctx
 
     def _validate_async_udf_policy(self) -> dict[str, object]:
         """Validate async UDF policy configuration.
@@ -4354,6 +4412,25 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             self._refresh_udf_catalog(ctx)
             catalog = self.udf_catalog_cache[cache_key]
         return catalog
+
+    def function_factory_policy_hash(self, ctx: SessionContext) -> str | None:
+        """Return the FunctionFactory policy hash for a session context.
+
+        Returns
+        -------
+        str | None
+            Policy hash when enabled, otherwise ``None``.
+        """
+        if not self.features.enable_function_factory:
+            return None
+        from datafusion_engine.udf.factory import function_factory_policy_hash
+        from datafusion_engine.udf.runtime import rust_udf_snapshot
+
+        snapshot = rust_udf_snapshot(ctx)
+        return function_factory_policy_hash(
+            snapshot,
+            allow_async=self.features.enable_async_udfs,
+        )
 
     def reserve_delta_commit(
         self,
@@ -4734,9 +4811,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         """
         location = self.extract_dataset_location(name)
         if location is not None:
-            return apply_delta_store_policy(
+            resolved = apply_delta_store_policy(
                 location,
                 policy=self.policies.delta_store_policy,
+            )
+            from datafusion_engine.dataset.registry import apply_scan_policy_to_location
+
+            return apply_scan_policy_to_location(
+                resolved,
+                policy=self.policies.scan_policy,
             )
         from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 

@@ -114,17 +114,21 @@ Span links are used to connect task spans back to the root span when the executi
 ## Metrics Catalog
 Metrics are emitted via `src/obs/otel/metrics.py`:
 
-**Histograms**
+**Histograms (unit: seconds)**
 - `codeanatomy.stage.duration`
 - `codeanatomy.task.duration`
 - `codeanatomy.datafusion.execute.duration`
 - `codeanatomy.datafusion.write.duration`
+- `codeanatomy.cache.operation.duration`
+- `codeanatomy.storage.operation.duration`
 
-**Counters**
+**Counters (unit: 1)**
 - `codeanatomy.artifact.count`
 - `codeanatomy.error.count`
+- `codeanatomy.cache.operation.count`
+- `codeanatomy.storage.operation.count`
 
-**Gauges**
+**Gauges (unit: 1)**
 - `codeanatomy.dataset.rows`
 - `codeanatomy.dataset.columns`
 - `codeanatomy.scan.row_groups`

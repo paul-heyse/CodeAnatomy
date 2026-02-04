@@ -70,7 +70,6 @@ from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
     resolve_datafusion_scan_options,
-    resolve_dataset_location,
     resolve_dataset_schema,
 )
 from datafusion_engine.dataset.resolution import (
@@ -568,7 +567,7 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     DataFusionRegistryOptions
         Registration options derived from the dataset location.
     """
-    resolved = resolve_dataset_location(location)
+    resolved = location.resolved
     scan = resolved.datafusion_scan
     schema = resolved.schema
     provider = resolved.datafusion_provider
@@ -1094,7 +1093,7 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
 
 
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
-    resolved = resolve_dataset_location(location)
+    resolved = location.resolved
     if resolved.dataset_spec is not None:
         return resolved.dataset_spec
     if resolved.table_spec is not None:

@@ -12,8 +12,9 @@ from opentelemetry.trace import Link, Span, SpanContext, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
 from obs.otel.attributes import normalize_attributes
+from obs.otel.constants import AttributeName
 from obs.otel.heartbeat import pop_stage, push_stage
-from obs.otel.metrics import record_stage_duration
+from obs.otel.metrics import record_stage_duration, record_storage_operation
 from obs.otel.scope_metadata import instrumentation_schema_url, instrumentation_version
 from obs.otel.scopes import SCOPE_PIPELINE
 
@@ -123,6 +124,24 @@ def span_attributes(*, attrs: Mapping[str, object] | None = None) -> dict[str, A
     return normalize_attributes(attrs)
 
 
+def _storage_operation(attrs: Mapping[str, object]) -> str | None:
+    operation = attrs.get(AttributeName.STORAGE_OPERATION.value) or attrs.get(
+        "codeanatomy.operation"
+    )
+    if operation is None:
+        return None
+    operation_str = str(operation).strip()
+    if not operation_str:
+        return None
+    if operation_str == "metadata":
+        kind = attrs.get("codeanatomy.metadata_kind")
+        if kind:
+            kind_str = str(kind).strip()
+            if kind_str:
+                return f"{operation_str}.{kind_str}"
+    return operation_str
+
+
 @contextmanager
 def stage_span(
     name: str,
@@ -170,6 +189,14 @@ def stage_span(
         finally:
             duration_s = time.monotonic() - start
             record_stage_duration(stage, duration_s, status=status)
+            if stage == "storage":
+                storage_operation = _storage_operation(base_attrs)
+                if storage_operation is not None:
+                    record_storage_operation(
+                        operation=storage_operation,
+                        status=status,
+                        duration_s=duration_s,
+                    )
             slow_threshold_s = 5.0
             slow_attrs: dict[str, object] = {}
             if duration_s >= slow_threshold_s:

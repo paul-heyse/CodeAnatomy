@@ -566,35 +566,46 @@ def delta_table_features(
     dict[str, str] | None
         Feature configuration values or ``None`` if no features are set.
     """
-    snapshot = _snapshot_info(
-        DeltaSnapshotLookup(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            gate=gate,
-        )
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=path,
+        extra={"codeanatomy.metadata_kind": "features"},
     )
-    if snapshot is None:
-        return None
-    features: dict[str, str] = {}
-    properties = snapshot.get("table_properties")
-    if isinstance(properties, Mapping):
-        for key, value in properties.items():
-            name = str(key)
-            if not name.startswith("delta."):
-                continue
-            features[name] = str(value)
-    reader_features = snapshot.get("reader_features")
-    if isinstance(reader_features, Sequence) and not isinstance(
-        reader_features, (str, bytes, bytearray)
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
     ):
-        features["reader_features"] = ",".join(str(value) for value in reader_features)
-    writer_features = snapshot.get("writer_features")
-    if isinstance(writer_features, Sequence) and not isinstance(
-        writer_features, (str, bytes, bytearray)
-    ):
-        features["writer_features"] = ",".join(str(value) for value in writer_features)
-    return features or None
+        snapshot = _snapshot_info(
+            DeltaSnapshotLookup(
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                gate=gate,
+            )
+        )
+        if snapshot is None:
+            return None
+        features: dict[str, str] = {}
+        properties = snapshot.get("table_properties")
+        if isinstance(properties, Mapping):
+            for key, value in properties.items():
+                name = str(key)
+                if not name.startswith("delta."):
+                    continue
+                features[name] = str(value)
+        reader_features = snapshot.get("reader_features")
+        if isinstance(reader_features, Sequence) and not isinstance(
+            reader_features, (str, bytes, bytearray)
+        ):
+            features["reader_features"] = ",".join(str(value) for value in reader_features)
+        writer_features = snapshot.get("writer_features")
+        if isinstance(writer_features, Sequence) and not isinstance(
+            writer_features, (str, bytes, bytearray)
+        ):
+            features["writer_features"] = ",".join(str(value) for value in writer_features)
+        return features or None
 
 
 def delta_cdf_enabled(
@@ -644,17 +655,28 @@ def delta_commit_metadata(
     dict[str, str] | None
         Custom commit metadata or ``None`` when not present.
     """
-    snapshot = _snapshot_info(
-        DeltaSnapshotLookup(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            gate=gate,
-        )
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=path,
+        extra={"codeanatomy.metadata_kind": "commit_metadata"},
     )
-    if snapshot is None:
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        snapshot = _snapshot_info(
+            DeltaSnapshotLookup(
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                gate=gate,
+            )
+        )
+        if snapshot is None:
+            return None
         return None
-    return None
 
 
 def delta_history_snapshot(
@@ -672,28 +694,39 @@ def delta_history_snapshot(
     dict[str, object] | None
         History entry payload or ``None`` when unavailable.
     """
-    snapshot = _snapshot_info(
-        DeltaSnapshotLookup(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            gate=gate,
-        )
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=path,
+        extra={"codeanatomy.metadata_kind": "history"},
     )
-    if snapshot is None:
-        return None
-    return {
-        "version": snapshot.get("version"),
-        "snapshot_timestamp": snapshot.get("snapshot_timestamp"),
-        "min_reader_version": snapshot.get("min_reader_version"),
-        "min_writer_version": snapshot.get("min_writer_version"),
-        "reader_features": snapshot.get("reader_features"),
-        "writer_features": snapshot.get("writer_features"),
-        "table_properties": snapshot.get("table_properties"),
-        "schema_json": snapshot.get("schema_json"),
-        "partition_columns": snapshot.get("partition_columns"),
-        "limit": limit,
-    }
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        snapshot = _snapshot_info(
+            DeltaSnapshotLookup(
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                gate=gate,
+            )
+        )
+        if snapshot is None:
+            return None
+        return {
+            "version": snapshot.get("version"),
+            "snapshot_timestamp": snapshot.get("snapshot_timestamp"),
+            "min_reader_version": snapshot.get("min_reader_version"),
+            "min_writer_version": snapshot.get("min_writer_version"),
+            "reader_features": snapshot.get("reader_features"),
+            "writer_features": snapshot.get("writer_features"),
+            "table_properties": snapshot.get("table_properties"),
+            "schema_json": snapshot.get("schema_json"),
+            "partition_columns": snapshot.get("partition_columns"),
+            "limit": limit,
+        }
 
 
 def delta_protocol_snapshot(
@@ -710,32 +743,43 @@ def delta_protocol_snapshot(
     dict[str, object] | None
         Protocol payload or ``None`` when unavailable.
     """
-    snapshot = _snapshot_info(
-        DeltaSnapshotLookup(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            gate=gate,
-        )
+    attrs = _storage_span_attributes(
+        operation="metadata",
+        table_path=path,
+        extra={"codeanatomy.metadata_kind": "protocol"},
     )
-    if snapshot is None:
-        return None
-    from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
-
-    payload = DeltaProtocolSnapshot(
-        min_reader_version=coerce_int(snapshot.get("min_reader_version")),
-        min_writer_version=coerce_int(snapshot.get("min_writer_version")),
-        reader_features=tuple(coerce_str_list(snapshot.get("reader_features"))),
-        writer_features=tuple(coerce_str_list(snapshot.get("writer_features"))),
-    )
-    if (
-        payload.min_reader_version is None
-        and payload.min_writer_version is None
-        and not payload.reader_features
-        and not payload.writer_features
+    with stage_span(
+        "storage.metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
     ):
-        return None
-    return payload
+        snapshot = _snapshot_info(
+            DeltaSnapshotLookup(
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                gate=gate,
+            )
+        )
+        if snapshot is None:
+            return None
+        from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
+
+        payload = DeltaProtocolSnapshot(
+            min_reader_version=coerce_int(snapshot.get("min_reader_version")),
+            min_writer_version=coerce_int(snapshot.get("min_writer_version")),
+            reader_features=tuple(coerce_str_list(snapshot.get("reader_features"))),
+            writer_features=tuple(coerce_str_list(snapshot.get("writer_features"))),
+        )
+        if (
+            payload.min_reader_version is None
+            and payload.min_writer_version is None
+            and not payload.reader_features
+            and not payload.writer_features
+        ):
+            return None
+        return payload
 
 
 def enable_delta_features(
@@ -1996,42 +2040,53 @@ def create_delta_checkpoint(
     RuntimeError
         Raised when the Rust control-plane checkpoint call fails.
     """
-    storage = merged_storage_options(storage_options, log_storage_options)
-    profile = _runtime_profile_for_delta(runtime_profile)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaCheckpointRequest,
-            delta_create_checkpoint,
-        )
-
-        report = delta_create_checkpoint(
-            ctx,
-            request=DeltaCheckpointRequest(
-                table_uri=path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-            ),
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Delta checkpoint failed via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_maintenance(
-        _DeltaMaintenanceRecord(
-            runtime_profile=runtime_profile,
-            report=report,
-            operation="create_checkpoint",
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            dataset_name=dataset_name,
-            commit_metadata=None,
-            retention_hours=None,
-            dry_run=None,
-        )
+    attrs = _storage_span_attributes(
+        operation="checkpoint",
+        table_path=path,
+        dataset_name=dataset_name,
     )
-    return report
+    with stage_span(
+        "storage.checkpoint",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        storage = merged_storage_options(storage_options, log_storage_options)
+        profile = _runtime_profile_for_delta(runtime_profile)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaCheckpointRequest,
+                delta_create_checkpoint,
+            )
+
+            report = delta_create_checkpoint(
+                ctx,
+                request=DeltaCheckpointRequest(
+                    table_uri=path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta checkpoint failed via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_maintenance(
+            _DeltaMaintenanceRecord(
+                runtime_profile=runtime_profile,
+                report=report,
+                operation="create_checkpoint",
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                dataset_name=dataset_name,
+                commit_metadata=None,
+                retention_hours=None,
+                dry_run=None,
+            )
+        )
+        return report
 
 
 def cleanup_delta_log(
@@ -2054,42 +2109,53 @@ def cleanup_delta_log(
     RuntimeError
         Raised when the Rust control-plane cleanup call fails.
     """
-    storage = merged_storage_options(storage_options, log_storage_options)
-    profile = _runtime_profile_for_delta(runtime_profile)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaCheckpointRequest,
-            delta_cleanup_metadata,
-        )
-
-        report = delta_cleanup_metadata(
-            ctx,
-            request=DeltaCheckpointRequest(
-                table_uri=path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-            ),
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Delta metadata cleanup failed via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_maintenance(
-        _DeltaMaintenanceRecord(
-            runtime_profile=runtime_profile,
-            report=report,
-            operation="cleanup_metadata",
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            dataset_name=dataset_name,
-            commit_metadata=None,
-            retention_hours=None,
-            dry_run=None,
-        )
+    attrs = _storage_span_attributes(
+        operation="cleanup_metadata",
+        table_path=path,
+        dataset_name=dataset_name,
     )
-    return report
+    with stage_span(
+        "storage.cleanup_metadata",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        storage = merged_storage_options(storage_options, log_storage_options)
+        profile = _runtime_profile_for_delta(runtime_profile)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaCheckpointRequest,
+                delta_cleanup_metadata,
+            )
+
+            report = delta_cleanup_metadata(
+                ctx,
+                request=DeltaCheckpointRequest(
+                    table_uri=path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta metadata cleanup failed via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_maintenance(
+            _DeltaMaintenanceRecord(
+                runtime_profile=runtime_profile,
+                report=report,
+                operation="cleanup_metadata",
+                path=path,
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
+                dataset_name=dataset_name,
+                commit_metadata=None,
+                retention_hours=None,
+                dry_run=None,
+            )
+        )
+        return report
 
 
 def coerce_delta_table(
@@ -2407,51 +2473,66 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     TypeError
         Raised when the delta data checker entrypoint is missing.
     """
-    module = None
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            candidate = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        checker = getattr(candidate, "delta_data_checker", None)
-        if callable(checker):
-            module = candidate
-            break
-    if module is None:
-        msg = "Delta data checks require datafusion._internal or datafusion_ext."
-        raise ValueError(msg)
-    checker = getattr(module, "delta_data_checker", None)
-    if not callable(checker):
-        msg = "Delta data checker is unavailable in the extension module."
-        raise TypeError(msg)
-    table = to_arrow_table(request.data)
-    payload = ipc_bytes(cast("pa.Table", table))
-    storage = merged_storage_options(request.storage_options, request.log_storage_options)
-    storage_payload = list(storage.items()) if storage else None
-    constraints_payload = (
-        [str(item) for item in request.extra_constraints if str(item).strip()]
-        if request.extra_constraints
-        else None
+    attrs = _storage_span_attributes(
+        operation="data_check",
+        table_path=request.table_path,
+        extra={
+            "codeanatomy.has_constraints": bool(request.extra_constraints),
+            "codeanatomy.version": request.version,
+            "codeanatomy.timestamp": request.timestamp,
+        },
     )
-    gate = request.gate
-    result = checker(
-        request.ctx,
-        request.table_path,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        payload,
-        constraints_payload,
-        gate.min_reader_version if gate is not None else None,
-        gate.min_writer_version if gate is not None else None,
-        list(gate.required_reader_features) if gate is not None else None,
-        list(gate.required_writer_features) if gate is not None else None,
-    )
-    if result is None:
-        return []
-    if isinstance(result, Sequence) and not isinstance(result, (str, bytes, bytearray)):
-        return [str(item) for item in result]
-    return [str(result)]
+    with stage_span(
+        "storage.data_check",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    ):
+        module = None
+        for module_name in ("datafusion._internal", "datafusion_ext"):
+            try:
+                candidate = importlib.import_module(module_name)
+            except ImportError:
+                continue
+            checker = getattr(candidate, "delta_data_checker", None)
+            if callable(checker):
+                module = candidate
+                break
+        if module is None:
+            msg = "Delta data checks require datafusion._internal or datafusion_ext."
+            raise ValueError(msg)
+        checker = getattr(module, "delta_data_checker", None)
+        if not callable(checker):
+            msg = "Delta data checker is unavailable in the extension module."
+            raise TypeError(msg)
+        table = to_arrow_table(request.data)
+        payload = ipc_bytes(cast("pa.Table", table))
+        storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        storage_payload = list(storage.items()) if storage else None
+        constraints_payload = (
+            [str(item) for item in request.extra_constraints if str(item).strip()]
+            if request.extra_constraints
+            else None
+        )
+        gate = request.gate
+        result = checker(
+            request.ctx,
+            request.table_path,
+            storage_payload,
+            request.version,
+            request.timestamp,
+            payload,
+            constraints_payload,
+            gate.min_reader_version if gate is not None else None,
+            gate.min_writer_version if gate is not None else None,
+            list(gate.required_reader_features) if gate is not None else None,
+            list(gate.required_writer_features) if gate is not None else None,
+        )
+        if result is None:
+            return []
+        if isinstance(result, Sequence) and not isinstance(result, (str, bytes, bytearray)):
+            return [str(item) for item in result]
+        return [str(result)]
 
 
 def _record_delta_feature_mutation(request: _DeltaFeatureMutationRecord) -> None:

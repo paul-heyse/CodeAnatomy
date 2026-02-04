@@ -40,7 +40,7 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
     Returns
     -------
     str
-        Markdown-formatted line.
+        Markdown-formatted line(s), including context snippet if available.
     """
     # Use impact/confidence tags if available, otherwise fall back to severity icon
     if "impact_bucket" in f.details and "confidence_bucket" in f.details:
@@ -53,8 +53,27 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
 
     if show_anchor and f.anchor:
         loc = f"`{f.anchor.to_ref()}`"
-        return f"- {prefix}{f.message} ({loc})"
-    return f"- {prefix}{f.message}"
+        base_line = f"- {prefix}{f.message} ({loc})"
+    else:
+        base_line = f"- {prefix}{f.message}"
+
+    # Add context snippet if available
+    context_snippet = f.details.get("context_snippet")
+    context_window = f.details.get("context_window")
+    if context_snippet and isinstance(context_snippet, str):
+        # Build context header with line range
+        if context_window and isinstance(context_window, dict):
+            start = context_window.get("start_line", "?")
+            end = context_window.get("end_line", "?")
+            header = f"  Context (lines {start}-{end}):"
+        else:
+            header = "  Context:"
+        # Indent the code block
+        snippet_lines = context_snippet.split("\n")
+        indented_snippet = "\n".join(f"  {line}" for line in snippet_lines)
+        return f"{base_line}\n{header}\n  ```python\n{indented_snippet}\n  ```"
+
+    return base_line
 
 
 def _format_section(s: Section) -> str:
@@ -299,6 +318,8 @@ def render_summary(result: CqResult) -> str:
     )
 
     summary_line = ", ".join(summary_parts)
-    lines.append(f"{macro}: {summary_line} [{severity_str}] [impact:{impact} confidence:{confidence}]")
+    lines.append(
+        f"{macro}: {summary_line} [{severity_str}] [impact:{impact} confidence:{confidence}]"
+    )
 
     return "\n".join(lines)

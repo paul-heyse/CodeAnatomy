@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from utils.hashing import hash_json_canonical
 from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
@@ -840,7 +841,23 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     dict[str, object]
         Summary payload with counts and metadata coverage.
     """
-    from datafusion_engine.udf.runtime import udf_names_from_snapshot
+    from datafusion_engine.udf.runtime import rust_udf_snapshot_hash, udf_names_from_snapshot
+
+    def _plugin_manifest() -> Mapping[str, object] | None:
+        try:
+            import datafusion_ext
+        except ImportError:
+            return None
+        manifest = getattr(datafusion_ext, "plugin_manifest", None)
+        if not callable(manifest):
+            return None
+        try:
+            payload = manifest()
+        except (RuntimeError, TypeError, ValueError, OSError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        return dict(payload)
 
     def _count_seq(key: str) -> int:
         value = snapshot.get(key, ())
@@ -854,7 +871,13 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
             return 0
         return len(value)
 
+    manifest = _plugin_manifest()
     return {
+        "snapshot_hash": rust_udf_snapshot_hash(snapshot),
+        "manifest_hash": (
+            hash_json_canonical(manifest, str_keys=True) if manifest is not None else None
+        ),
+        "manifest": manifest,
         "total_udfs": len(udf_names_from_snapshot(snapshot)),
         "scalar_udfs": _count_seq("scalar"),
         "aggregate_udfs": _count_seq("aggregate"),

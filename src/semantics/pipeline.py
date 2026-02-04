@@ -1617,7 +1617,7 @@ def _write_semantic_output(
     spec = dataset_spec(view_name)
     location = apply_delta_store_policy(
         output_location,
-        policy=runtime_profile.delta_store_policy,
+        policy=runtime_profile.policies.delta_store_policy,
     )
     if location.format != "delta":
         msg = f"Semantic output {view_name!r} must be stored as Delta."

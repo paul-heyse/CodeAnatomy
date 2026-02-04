@@ -75,14 +75,12 @@ pub use datafusion_ext::registry_snapshot;
 pub use datafusion_ext::udaf_builtin;
 #[cfg(feature = "async-udf")]
 pub use datafusion_ext::udf_async;
-pub use datafusion_ext::udf_custom;
+pub use datafusion_ext::udf as udf_ext;
 pub use datafusion_ext::udf_config;
-mod udf_builtin;
-mod udf_custom_py;
 pub use datafusion_ext::udf_docs;
 pub use datafusion_ext::udf_registry;
 pub use datafusion_ext::udtf_builtin;
-pub use datafusion_ext::udtf_external;
+pub use datafusion_ext::udtf_sources;
 pub use datafusion_ext::udwf_builtin;
 
 #[cfg(feature = "mimalloc")]

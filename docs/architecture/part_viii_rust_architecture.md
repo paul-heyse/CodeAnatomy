@@ -72,16 +72,17 @@ flowchart TD
 **Crate Type**: `rlib` (Rust library)
 
 **Key Modules**:
-- `udf_custom.rs` (4983 lines) - 28 custom scalar functions
-- `udf_registry.rs` (174 lines) - UDF registration specs and registry functions
+- `udf/` (5405 lines total) - Modular scalar UDF implementations (hash, span, string, collections, etc.)
+- `udf_registry.rs` (165 lines) - UDF registration specs and registry functions
 - `function_factory.rs` (923 lines) - SQL macro factory for `CREATE FUNCTION`
 - `delta_control_plane.rs` (514 lines) - Delta table loading, scanning
-- `delta_mutations.rs` (423 lines) - Delta write/merge/delete/update
+- `delta_mutations.rs` (421 lines) - Delta write/merge/delete/update
 - `delta_maintenance.rs` (430 lines) - Vacuum, optimize, checkpoint
 - `expr_planner.rs` (59 lines) - Custom expression planning (arrow operators)
-- `registry_snapshot.rs` (974 lines) - Registry serialization/snapshotting
+- `registry_snapshot.rs` (929 lines) - Registry serialization/snapshotting
 - `udaf_builtin.rs` (1927 lines) - Aggregate UDF wrappers
 - `udf_async.rs` (254 lines) - Async UDF infrastructure (gated by `async-udf` feature)
+- `udf_expr.rs` (171 lines) - Generic UDF expression helper (used by Python `udf_expr`)
 - `macros.rs` - Spec structs and registration macros
 - `planner_rules.rs` - Logical plan optimization rules
 - `physical_rules.rs` - Physical plan optimization rules
@@ -235,10 +236,10 @@ for udf in exports.udf_bundle.scalar.iter() {
 
 **Exports**:
 - **Table Providers**: `delta`, `delta_cdf`
-- **Scalar UDFs**: All 28 custom functions from `datafusion_ext::udf_custom`
+- **Scalar UDFs**: All 28 custom functions from `datafusion_ext::udf` (modular UDFs)
 - **Aggregate UDFs**: All built-in UDAFs from `datafusion_ext::udaf_builtin`
 - **Window UDFs**: All built-in UDWFs from `datafusion_ext::udwf_builtin`
-- **Table Functions**: `range_table` + custom UDTFs
+- **Table Functions**: Built-in `range`/`generate_series` plus CodeAnatomy UDTFs
 
 **Plugin Options** (JSON):
 ```json
@@ -271,7 +272,7 @@ pub fn get_library() -> DfPluginMod_Ref {
 
 The UDF system consists of four layers:
 
-1. **Implementation Layer**: Concrete `ScalarUDFImpl` structs in `udf_custom.rs`
+1. **Implementation Layer**: Concrete `ScalarUDFImpl` structs in `udf/*.rs`
 2. **Registration Layer**: `UdfSpec` catalog in `udf_registry.rs`
 3. **Builder Layer**: Public `*_udf()` functions that construct `ScalarUDF` instances
 4. **Bridge Layer**: Python bindings in `datafusion_python` and `datafusion_ext_py`
@@ -343,7 +344,7 @@ scalar_udfs![
 ]
 
 table_udfs![
-    "range_table" => range_table_udtf;
+    // no custom table UDFs; rely on built-in range/generate_series
 ]
 ```
 
@@ -390,21 +391,16 @@ table_udfs![
 8. **Type Conversion** (1 function):
    - `col_to_byte` - Convert column value to bytes
 
-### UDF Built-in Wrappers (`udf_builtin.rs`)
+### UDF Expression Helper (`udf_expr.rs`)
 
-Provides ergonomic wrappers around DataFusion's built-in functions:
+Provides a single, generic helper that constructs expressions for both built-in
+functions and custom UDFs by name (used by the Python `udf_expr` binding):
 
 ```rust
-pub fn map_entries(expr: Expr) -> Expr
-pub fn map_keys(expr: Expr) -> Expr
-pub fn map_values(expr: Expr) -> Expr
-pub fn map_extract(expr: Expr, key: &str) -> Expr
-pub fn list_extract(expr: Expr, index: i64) -> Expr
-pub fn first_value_agg(expr: Expr) -> Expr
-pub fn string_agg(value: Expr, delimiter: Expr) -> Expr
-pub fn row_number_window(_value: Expr) -> Expr
-pub fn union_tag(expr: Expr) -> Expr
+pub fn expr_from_name(name: &str, args: Vec<Expr>, config: Option<&ConfigOptions>) -> Result<Expr>
 ```
+
+Per-UDF Python wrappers are removed to avoid drift from the registry snapshot.
 
 ### Async UDF Support (`udf_async.rs`)
 
@@ -1091,7 +1087,7 @@ fn install_function_factory(
     policy_ipc: &[u8],
 ) -> PyResult<()> {
     let ctx_ref = ctx.ctx();
-    udf_custom::install_function_factory_native(&ctx_ref, policy_ipc)
+    udf::install_function_factory_native(&ctx_ref, policy_ipc)
         .map_err(to_pyerr)?;
     Ok(())
 }
@@ -1102,12 +1098,13 @@ fn install_function_factory(
 **Session Initialization**:
 ```python
 from datafusion import SessionContext
-from datafusion_ext import install_sql_macro_factory, install_expr_planners
+from datafusion_engine.udf.factory import install_function_factory
+from datafusion_ext import install_expr_planners
 
 ctx = SessionContext()
 
-# Install SQL macro factory for CREATE FUNCTION support
-install_sql_macro_factory(ctx)
+# Install SQL macro factory for CREATE FUNCTION support (policy payload handled internally)
+install_function_factory(ctx)
 
 # Install expression planners (arrow operators, array containment)
 install_expr_planners(ctx, ["codeanatomy_domain"])
@@ -1820,9 +1817,9 @@ All standard SQL aggregates: `SUM`, `COUNT`, `AVG`, `MIN`, `MAX`, `STDDEV`, `VAR
 
 All standard SQL window functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTILE`, etc.
 
-### Table Functions (1)
+### Table Functions (built-in)
 
-- `range_table(start, stop, step)` - Integer series generator (wraps DataFusion's `RangeFunc`)
+- `range(start, stop, step)` / `generate_series` - Integer series generator (DataFusion built-in)
 
 ---
 

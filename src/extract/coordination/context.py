@@ -147,7 +147,13 @@ class ExtractExecutionContext:
         """
         profile = self.ensure_session().engine_session.datafusion_profile
         if profile.capture_plan_artifacts:
-            return replace(profile, capture_plan_artifacts=False)
+            return replace(
+                profile,
+                diagnostics=replace(
+                    profile.diagnostics,
+                    capture_plan_artifacts=False,
+                ),
+            )
         return profile
 
     def determinism_tier(self) -> DeterminismTier:

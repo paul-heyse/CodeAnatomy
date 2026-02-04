@@ -15,7 +15,11 @@ from datafusion_engine.dataset.registration import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.facade import ExecutionResult
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    FeatureGatesConfig,
+    PolicyBundleConfig,
+)
 from datafusion_engine.tables.spec import table_spec_from_location
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts
 from tests.test_helpers.delta_commit import latest_commit_metadata
@@ -47,8 +51,8 @@ def test_dataset_delta_cache_registration(tmp_path: Path) -> None:
     """Cache registered datasets to Delta when policy requests staging."""
     cache_root = tmp_path / "cache"
     runtime_profile = DataFusionRuntimeProfile(
-        cache_output_root=str(cache_root),
-        cache_enabled=True,
+        features=FeatureGatesConfig(cache_enabled=True),
+        policies=PolicyBundleConfig(cache_output_root=str(cache_root)),
     )
     table = pa.table({"id": [1, 2], "value": ["a", "b"]})
     runtime_profile, ctx, delta_path = write_delta_table(
@@ -80,8 +84,10 @@ def test_dataset_delta_cache_registration(tmp_path: Path) -> None:
 def test_runtime_artifact_delta_persistence(tmp_path: Path) -> None:
     """Persist runtime artifacts to Delta when enabled."""
     runtime_profile = DataFusionRuntimeProfile(
-        cache_output_root=str(tmp_path / "cache"),
-        runtime_artifact_cache_enabled=True,
+        policies=PolicyBundleConfig(
+            cache_output_root=str(tmp_path / "cache"),
+            runtime_artifact_cache_enabled=True,
+        ),
     )
     session_runtime = runtime_profile.session_runtime()
     artifacts = RuntimeArtifacts(execution=session_runtime)
@@ -110,9 +116,11 @@ def test_runtime_artifact_delta_persistence(tmp_path: Path) -> None:
 def test_metadata_cache_snapshots(tmp_path: Path) -> None:
     """Snapshot metadata caches into Delta and register outputs."""
     runtime_profile = DataFusionRuntimeProfile(
-        cache_output_root=str(tmp_path / "cache"),
-        cache_enabled=True,
-        metadata_cache_snapshot_enabled=True,
+        features=FeatureGatesConfig(cache_enabled=True),
+        policies=PolicyBundleConfig(
+            cache_output_root=str(tmp_path / "cache"),
+            metadata_cache_snapshot_enabled=True,
+        ),
     )
     ctx = runtime_profile.session_context()
     from datafusion_engine.cache.metadata_snapshots import snapshot_datafusion_caches
@@ -143,8 +151,8 @@ def test_metadata_cache_snapshots(tmp_path: Path) -> None:
 def test_cache_run_summary_ledger(tmp_path: Path) -> None:
     """Persist cache run summaries into the Delta ledger."""
     runtime_profile = DataFusionRuntimeProfile(
-        cache_output_root=str(tmp_path / "cache"),
-        cache_enabled=True,
+        features=FeatureGatesConfig(cache_enabled=True),
+        policies=PolicyBundleConfig(cache_output_root=str(tmp_path / "cache")),
     )
     ctx = runtime_profile.session_context()
     from datafusion_engine.cache.ledger import (

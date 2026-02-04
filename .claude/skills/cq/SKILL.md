@@ -22,7 +22,6 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Find closures | `/cq q "entity=function scope=closure"` |
 | Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
 | Security patterns | `/cq q "pattern='eval(\$X)'"` |
-| Cache status | `/cq cache --stats` |
 
 ## Global Options
 
@@ -110,7 +109,7 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `impact` | Trace data flow from a parameter | `/cq impact build_graph_product --param repo_root` |
-| `calls` | Census all call sites for a function | `/cq calls DefIndex.build` |
+| `calls` | Census all call sites for a function | `/cq calls build_graph_product` |
 | `sig-impact` | Test signature change viability | `/cq sig-impact foo --to "foo(a, *, b=None)"` |
 | `imports` | Analyze import structure/cycles | `/cq imports --cycles` |
 | `exceptions` | Analyze exception handling | `/cq exceptions` |
@@ -132,12 +131,31 @@ Example: /cq impact build_graph_product --param repo_root
 
 ### calls - Call Site Census
 
-Finds all call sites with argument shape analysis and forwarding detection.
+Finds all call sites with argument shape analysis, forwarding detection, and context enrichment.
 
 Results: !`./scripts/cq calls "$1" --root .`
 Usage: /cq calls <FUNCTION_NAME>
 
-Example: /cq calls DefIndex.build
+Example: /cq calls build_graph_product
+
+**Output Sections:**
+- Summary: total sites, files, signature preview
+- Argument Shape Histogram: distribution of arg patterns
+- Keyword Argument Usage: which kwargs used how often
+- Calling Contexts: which functions call this one
+- Hazards: dynamic dispatch patterns detected
+- Call Sites: detailed list with previews and context
+
+**Context Window Enrichment:**
+
+Each call site includes a context window showing the containing function:
+
+| Field | Description |
+|-------|-------------|
+| `context_window` | Line range (`start_line`, `end_line`) of containing function |
+| `context_snippet` | Source code snippet of the containing function (truncated if >30 lines) |
+
+The context snippet provides immediate visibility into how each call site is used, making it easier to understand argument patterns and refactoring impact without needing to read the full file.
 
 ### sig-impact - Signature Change Analysis
 
@@ -614,28 +632,6 @@ Use pattern queries to find security-sensitive constructs without a dedicated sc
 /cq q "pattern='subprocess.\$M(\$$$, shell=True)'"
 ```
 
-### Cache Management
-
-Manage query result caching for faster repeated queries.
-
-| Command | Description |
-|---------|-------------|
-| `cq cache --stats` | Show cache statistics |
-| `cq cache --clear` | Clear the cache |
-| `--no-cache` | Bypass cache for query |
-
-**Examples:**
-```bash
-# Check cache status
-/cq cache --stats
-
-# Run query without caching
-/cq q "entity=function" --no-cache
-
-# Clear cache after major changes
-/cq cache --clear
-```
-
 ## Filtering & Output
 
 ### Filter Options (all commands)
@@ -667,7 +663,7 @@ Manage query result caching for faster repeated queries.
 /cq exceptions --exclude "tests/" --limit 100
 
 # Multiple filters
-/cq calls DefIndex.build --impact med,high --include "src/relspec/" --exclude "*test*"
+/cq calls build_graph_product --impact med,high --include "src/relspec/" --exclude "*test*"
 
 # Regex pattern
 /cq side-effects --include "~src/(extract|normalize)/.*\\.py$"
@@ -722,7 +718,6 @@ Based on evidence quality:
 | Understanding code flow | `/cq q "entity=function expand=callers" --format mermaid` |
 | Decorator analysis | `/cq q "entity=function decorated_by=fixture"` |
 | Security pattern queries | `/cq q "pattern='eval(\$X)'"` |
-| Cache management | `/cq cache --stats` |
 
 ## Artifacts
 

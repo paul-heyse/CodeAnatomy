@@ -17,7 +17,11 @@ import rustworkx as rx
 from hamilton import driver
 
 from core_types import DeterminismTier, JsonValue
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DiagnosticsConfig,
+    FeatureGatesConfig,
+)
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.driver_factory import (
     DriverBuildRequest,
@@ -115,14 +119,18 @@ def _stub_execution_plan() -> ExecutionPlan:
 
 def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
     profile = DataFusionRuntimeProfile(
-        enable_function_factory=False,
-        enable_udfs=False,
-        enable_schema_registry=False,
-        enable_expr_planners=False,
-        enable_metrics=False,
-        enable_tracing=False,
-        enable_cache_manager=False,
-        capture_plan_artifacts=False,
+        features=FeatureGatesConfig(
+            enable_function_factory=False,
+            enable_udfs=False,
+            enable_schema_registry=False,
+            enable_expr_planners=False,
+            enable_cache_manager=False,
+        ),
+        diagnostics=DiagnosticsConfig(
+            enable_metrics=False,
+            enable_tracing=False,
+            capture_plan_artifacts=False,
+        ),
     )
     profile_spec = RuntimeProfileSpec(
         name="driver_factory_test",

@@ -79,26 +79,6 @@ def launcher(
     output_format: Annotated[OutputFormat, Parameter(name="--format", group=global_group, help="Output format")] = OutputFormat.md,
     artifact_dir: Annotated[Path | None, Parameter(name="--artifact-dir", group=global_group, help="Artifact directory")] = None,
     no_save_artifact: Annotated[bool, Parameter(name="--no-save-artifact", group=global_group, help="Don't save artifact")] = False,
-    cache_dir: Annotated[
-        Path | None,
-        Parameter(name="--cache-dir", group=global_group, help="DiskCache root directory"),
-    ] = None,
-    cache_query_ttl: Annotated[
-        float | None,
-        Parameter(name="--cache-query-ttl", group=global_group, help="Query cache TTL seconds"),
-    ] = None,
-    cache_query_size: Annotated[
-        int | None,
-        Parameter(name="--cache-query-size", group=global_group, help="Query cache size limit (bytes)"),
-    ] = None,
-    cache_index_size: Annotated[
-        int | None,
-        Parameter(name="--cache-index-size", group=global_group, help="Index cache size limit (bytes)"),
-    ] = None,
-    cache_query_shards: Annotated[
-        int | None,
-        Parameter(name="--cache-query-shards", group=global_group, help="Query cache shard count"),
-    ] = None,
 ) -> int:
     """Global option handler and command dispatcher."""
     cli_root = root
@@ -106,11 +86,6 @@ def launcher(
     cli_output_format = output_format
     cli_artifact_dir = artifact_dir
     cli_no_save_artifact = no_save_artifact
-    cli_cache_dir = cache_dir
-    cli_cache_query_ttl = cache_query_ttl
-    cli_cache_query_size = cache_query_size
-    cli_cache_index_size = cache_index_size
-    cli_cache_query_shards = cache_query_shards
 
     # Rebuild config if --config or --no-config specified
     if config or no_config:
@@ -132,16 +107,6 @@ def launcher(
             artifact_dir = Path(typed_config.artifact_dir)
         if typed_config.save_artifact is not None and not cli_no_save_artifact:
             no_save_artifact = not typed_config.save_artifact
-        if cli_cache_dir is None and typed_config.cache_dir:
-            cache_dir = Path(typed_config.cache_dir)
-        if cli_cache_query_ttl is None and typed_config.cache_query_ttl is not None:
-            cache_query_ttl = typed_config.cache_query_ttl
-        if cli_cache_query_size is None and typed_config.cache_query_size is not None:
-            cache_query_size = typed_config.cache_query_size
-        if cli_cache_index_size is None and typed_config.cache_index_size is not None:
-            cache_index_size = typed_config.cache_index_size
-        if cli_cache_query_shards is None and typed_config.cache_query_shards is not None:
-            cache_query_shards = typed_config.cache_query_shards
     if typed_env is not None:
         if cli_root is None and typed_env.root:
             root = Path(typed_env.root)
@@ -156,26 +121,6 @@ def launcher(
             artifact_dir = Path(typed_env.artifact_dir)
         if typed_env.save_artifact is not None and not cli_no_save_artifact:
             no_save_artifact = not typed_env.save_artifact
-        if cli_cache_dir is None and typed_env.cache_dir:
-            cache_dir = Path(typed_env.cache_dir)
-        if cli_cache_query_ttl is None and typed_env.cache_query_ttl is not None:
-            cache_query_ttl = typed_env.cache_query_ttl
-        if cli_cache_query_size is None and typed_env.cache_query_size is not None:
-            cache_query_size = typed_env.cache_query_size
-        if cli_cache_index_size is None and typed_env.cache_index_size is not None:
-            cache_index_size = typed_env.cache_index_size
-        if cli_cache_query_shards is None and typed_env.cache_query_shards is not None:
-            cache_query_shards = typed_env.cache_query_shards
-
-    from tools.cq.cli_app.params import DiskCacheOptions
-
-    DiskCacheOptions(
-        cache_dir=cache_dir,
-        cache_query_ttl=cache_query_ttl,
-        cache_query_size=cache_query_size,
-        cache_index_size=cache_index_size,
-        cache_query_shards=cache_query_shards,
-    ).apply_env()
 
     # Build context
     ctx = CliContext.build(

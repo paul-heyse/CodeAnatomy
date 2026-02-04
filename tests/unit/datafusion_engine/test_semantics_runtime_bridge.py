@@ -7,20 +7,22 @@ from datafusion_engine.semantics_runtime import (
     apply_semantic_runtime_config,
     semantic_runtime_from_profile,
 )
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataSourceConfig
 
 
 def test_semantic_runtime_round_trip() -> None:
     """Semantic runtime config should round-trip through the bridge."""
     profile = DataFusionRuntimeProfile(
-        semantic_output_locations={
-            "cpg_nodes_v1": DatasetLocation(path="/tmp/semantic_nodes", format="delta")
-        }
+        data_sources=DataSourceConfig(
+            semantic_output_locations={
+                "cpg_nodes_v1": DatasetLocation(path="/tmp/semantic_nodes", format="delta")
+            }
+        ),
     )
     runtime_config = semantic_runtime_from_profile(profile)
     assert runtime_config.output_locations["cpg_nodes_v1"] == "/tmp/semantic_nodes"
 
     updated = apply_semantic_runtime_config(profile, runtime_config)
-    location = updated.semantic_output_locations.get("cpg_nodes_v1")
+    location = updated.data_sources.semantic_output_locations.get("cpg_nodes_v1")
     assert location is not None
     assert str(location.path) == "/tmp/semantic_nodes"

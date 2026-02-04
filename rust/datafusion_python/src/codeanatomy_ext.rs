@@ -10,10 +10,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow::array::{Int64Array, MapBuilder, StringArray, StringBuilder};
+use arrow::array::{Int64Array, MapBuilder, RecordBatchReader, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::ffi_stream::ArrowArrayStreamReader;
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
+use blake2::digest::{Update, VariableOutput};
+use blake2::Blake2bVar;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
     TableFunctionImpl, TableProvider,
@@ -24,6 +27,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
+use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
@@ -35,8 +39,8 @@ use datafusion_common::{
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
-    CreateExternalTable, DdlStatement, Expr, LogicalPlan, SortExpr, TableProviderFilterPushDown,
-    TableType,
+    lit, CreateExternalTable, DdlStatement, Expr, LogicalPlan, SortExpr,
+    TableProviderFilterPushDown, TableType,
 };
 use datafusion_ext::install_expr_planners_native;
 use datafusion_ext::planner_rules::{
@@ -47,7 +51,10 @@ use datafusion_ext::physical_rules::{
     install_physical_rules as install_physical_rules_native,
 };
 use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
+use datafusion_ext::udf_expr as udf_expr_mod;
+use datafusion_ffi;
 use datafusion_ffi::table_provider::FFI_TableProvider;
+use df_plugin_host::{DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR};
 use crate::delta_control_plane::{
     delta_add_actions as delta_add_actions_native,
     delta_cdf_provider as delta_cdf_provider_native,
@@ -79,13 +86,15 @@ use crate::delta_observability::{
 use crate::delta_protocol::{gate_from_parts, DeltaSnapshotInfo};
 use datafusion_ext::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 use df_plugin_host::{load_plugin, PluginHandle};
-use serde_json::Value as JsonValue;
-use crate::{registry_snapshot, udf_builtin, udf_custom_py, udf_docs};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use crate::{registry_snapshot, udf_docs};
 use datafusion_ext::udf_registry;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
 use crate::context::{PyRuntimeEnvBuilder, PySessionContext};
+use crate::expr::PyExpr;
+use crate::utils::py_obj_to_scalar_value;
 use deltalake::delta_datafusion::{
     DeltaLogicalCodec, DeltaPhysicalCodec, DeltaRuntimeEnvBuilder, DeltaScanConfig,
     DeltaSessionConfig, DeltaTableFactory, DeltaTableProvider,
@@ -96,8 +105,12 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyFloat, PyInt, PyList, PyString,
+    PyTuple,
 };
 use tokio::runtime::Runtime;
+use datafusion::optimizer::OptimizerConfig;
+
+const DELTA_SCAN_CONFIG_VERSION: u32 = 1;
 
 macro_rules! register_pyfunctions {
     ($module:expr, [$($func:path),* $(,)?]) => {
@@ -171,6 +184,59 @@ fn scan_overrides_from_params(
     })
 }
 
+fn scan_config_payload_from_ctx(ctx: &SessionContext) -> Result<JsonValue, String> {
+    let session_state = ctx.state();
+    let scan_config = delta_scan_config_from_session_native(
+        &session_state,
+        None,
+        DeltaScanOverrides::default(),
+    )
+    .map_err(|err| format!("Failed to resolve Delta scan config: {err}"))?;
+    let mut payload = scan_config_payload(&scan_config)
+        .map_err(|err| format!("Failed to build Delta scan config payload: {err}"))?;
+    let schema_ipc = scan_config_schema_ipc(&scan_config)
+        .map_err(|err| format!("Failed to encode Delta scan schema IPC: {err}"))?;
+    let schema_value = match schema_ipc {
+        Some(bytes) => JsonValue::Array(
+            bytes
+                .into_iter()
+                .map(JsonValue::from)
+                .collect(),
+        ),
+        None => JsonValue::Null,
+    };
+    payload.insert(
+        "scan_config_version".to_string(),
+        JsonValue::from(DELTA_SCAN_CONFIG_VERSION),
+    );
+    payload.insert("schema_ipc".to_string(), schema_value);
+    Ok(JsonValue::Object(payload.into_iter().collect()))
+}
+
+fn inject_delta_scan_defaults(
+    ctx: &SessionContext,
+    provider_name: &str,
+    options_json: Option<&str>,
+) -> Result<Option<String>, String> {
+    if provider_name != "delta" {
+        return Ok(options_json.map(|value| value.to_string()));
+    }
+    let mut payload: JsonValue = if let Some(options_json) = options_json {
+        serde_json::from_str(options_json)
+            .map_err(|err| format!("Invalid options JSON for {provider_name}: {err}"))?
+    } else {
+        JsonValue::Object(JsonMap::new())
+    };
+    let JsonValue::Object(map) = &mut payload else {
+        return Ok(options_json.map(|value| value.to_string()));
+    };
+    map.entry("scan_config".to_string())
+        .or_insert(scan_config_payload_from_ctx(ctx)?);
+    serde_json::to_string(&payload)
+        .map(Some)
+        .map_err(|err| format!("Failed to serialize options JSON for {provider_name}: {err}"))
+}
+
 fn runtime() -> PyResult<Runtime> {
     Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
@@ -218,6 +284,27 @@ fn json_to_py(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     }
 }
 
+fn registry_snapshot_hash(snapshot: &registry_snapshot::RegistrySnapshot) -> PyResult<String> {
+    let mut hasher = Blake2bVar::new(16).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to initialize registry hash: {err}"))
+    })?;
+    for name in snapshot
+        .scalar
+        .iter()
+        .chain(snapshot.aggregate.iter())
+        .chain(snapshot.window.iter())
+        .chain(snapshot.table.iter())
+    {
+        hasher.update(name.as_bytes());
+        hasher.update(&[0]);
+    }
+    let mut out = vec![0_u8; 16];
+    hasher
+        .finalize_variable(&mut out)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to finalize registry hash: {err}")))?;
+    Ok(hex::encode(out))
+}
+
 fn payload_to_pydict(py: Python<'_>, payload: HashMap<String, JsonValue>) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     for (key, value) in payload {
@@ -241,6 +328,7 @@ fn scan_config_to_pydict(py: Python<'_>, scan_config: &DeltaScanConfig) -> PyRes
     for (key, value) in payload {
         dict.set_item(key, json_to_py(py, &value)?)?;
     }
+    dict.set_item("scan_config_version", DELTA_SCAN_CONFIG_VERSION)?;
     if let Some(schema_ipc) = schema_ipc {
         dict.set_item("schema_ipc", PyBytes::new(py, schema_ipc.as_slice()))?;
     } else {
@@ -333,7 +421,76 @@ fn extract_plugin_handle(py: Python<'_>, plugin: &Py<PyAny>) -> PyResult<Arc<Plu
         )));
     }
     let handle: &Arc<PluginHandle> = unsafe { capsule.reference() };
+    ensure_plugin_manifest_compat(handle)?;
     Ok(handle.clone())
+}
+
+fn parse_major(version: &str) -> PyResult<u16> {
+    let Some((major, _)) = version.split_once('.') else {
+        return Err(PyValueError::new_err(format!(
+            "Invalid version string {version:?}"
+        )));
+    };
+    major.parse::<u16>().map_err(|err| {
+        PyValueError::new_err(format!("Invalid version string {version:?}: {err}"))
+    })
+}
+
+fn ensure_plugin_manifest_compat(handle: &PluginHandle) -> PyResult<()> {
+    let manifest = handle.manifest();
+    if manifest.plugin_abi_major != DF_PLUGIN_ABI_MAJOR {
+        return Err(PyRuntimeError::new_err(format!(
+            "Plugin ABI mismatch: expected {expected} got {actual}",
+            expected = DF_PLUGIN_ABI_MAJOR,
+            actual = manifest.plugin_abi_major,
+        )));
+    }
+    if manifest.plugin_abi_minor > DF_PLUGIN_ABI_MINOR {
+        return Err(PyRuntimeError::new_err(format!(
+            "Plugin ABI minor version too new: expected <= {expected} got {actual}",
+            expected = DF_PLUGIN_ABI_MINOR,
+            actual = manifest.plugin_abi_minor,
+        )));
+    }
+    let ffi_major = datafusion_ffi::version();
+    if manifest.df_ffi_major != ffi_major {
+        return Err(PyRuntimeError::new_err(format!(
+            "Plugin FFI major mismatch: expected {expected} got {actual}",
+            expected = ffi_major,
+            actual = manifest.df_ffi_major,
+        )));
+    }
+    let datafusion_major = parse_major(datafusion::DATAFUSION_VERSION)?;
+    if manifest.datafusion_major != datafusion_major {
+        return Err(PyRuntimeError::new_err(format!(
+            "Plugin DataFusion major mismatch: expected {expected} got {actual}",
+            expected = datafusion_major,
+            actual = manifest.datafusion_major,
+        )));
+    }
+    let arrow_major = parse_major(arrow::ARROW_VERSION)?;
+    if manifest.arrow_major != arrow_major {
+        return Err(PyRuntimeError::new_err(format!(
+            "Plugin Arrow major mismatch: expected {expected} got {actual}",
+            expected = arrow_major,
+            actual = manifest.arrow_major,
+        )));
+    }
+    Ok(())
+}
+
+fn udf_config_payload_from_ctx(ctx: &SessionContext) -> JsonValue {
+    let config = CodeAnatomyUdfConfig::from_config(ctx.state().config_options());
+    json!({
+        "utf8_normalize_form": config.utf8_normalize_form,
+        "utf8_normalize_casefold": config.utf8_normalize_casefold,
+        "utf8_normalize_collapse_ws": config.utf8_normalize_collapse_ws,
+        "span_default_line_base": config.span_default_line_base,
+        "span_default_col_unit": config.span_default_col_unit,
+        "span_default_end_exclusive": config.span_default_end_exclusive,
+        "map_normalize_key_case": config.map_normalize_key_case,
+        "map_normalize_sort_keys": config.map_normalize_sort_keys,
+    })
 }
 
 #[pyfunction]
@@ -345,6 +502,106 @@ fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> 
         config.set_extension(Arc::new(CodeAnatomyUdfConfig::default()));
     }
     Ok(())
+}
+
+#[pyfunction]
+fn install_function_factory(
+    ctx: PyRef<PySessionContext>,
+    policy_ipc: &Bound<'_, PyBytes>,
+) -> PyResult<()> {
+    datafusion_ext::udf::install_function_factory_native(&ctx.ctx, policy_ipc.as_bytes())
+        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
+}
+
+#[pyfunction]
+fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to build registry snapshot: {err}")))?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
+    let hash = registry_snapshot_hash(&snapshot)?;
+    let payload = json!({
+        "datafusion_version": datafusion::DATAFUSION_VERSION,
+        "arrow_version": arrow::ARROW_VERSION,
+        "plugin_abi": {
+            "major": DF_PLUGIN_ABI_MAJOR,
+            "minor": DF_PLUGIN_ABI_MINOR,
+        },
+        "udf_registry": {
+            "scalar": snapshot.scalar.len(),
+            "aggregate": snapshot.aggregate.len(),
+            "window": snapshot.window.len(),
+            "table": snapshot.table.len(),
+            "custom": snapshot.custom_udfs.len(),
+            "hash": hash,
+        },
+    });
+    json_to_py(py, &payload)
+}
+
+#[pyfunction]
+fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let bound = obj.bind(py);
+    let mut reader = ArrowArrayStreamReader::from_pyarrow_bound(&bound).map_err(|err| {
+        PyValueError::new_err(format!(
+            "Expected an object supporting __arrow_c_stream__: {err}"
+        ))
+    })?;
+    let schema = reader.schema();
+    let mut batches = Vec::new();
+    while let Some(batch) = reader.next() {
+        let batch = batch
+            .map_err(|err| PyRuntimeError::new_err(format!("Arrow stream batch error: {err}")))?;
+        batches.push(batch);
+    }
+    let mut py_batches = Vec::with_capacity(batches.len());
+    for batch in batches {
+        py_batches.push(batch.to_pyarrow(py)?);
+    }
+    let py_batches = PyList::new(py, py_batches)?;
+    let schema_py = schema.to_pyarrow(py)?;
+    let reader = py
+        .import("pyarrow")?
+        .getattr("RecordBatchReader")?
+        .call_method1("from_batches", (schema_py, py_batches))?;
+    Ok(reader.into())
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, *args, ctx=None))]
+fn udf_expr(
+    py: Python<'_>,
+    name: String,
+    args: &Bound<'_, PyTuple>,
+    ctx: Option<PyRef<PySessionContext>>,
+) -> PyResult<PyExpr> {
+    let mut expr_args: Vec<Expr> = Vec::with_capacity(args.len());
+    for item in args.iter() {
+        if let Ok(expr) = item.extract::<PyExpr>() {
+            expr_args.push(expr.into());
+            continue;
+        }
+        let scalar = py_obj_to_scalar_value(py, item.unbind())?;
+        expr_args.push(lit(scalar));
+    }
+    let expr = if let Some(ctx_ref) = ctx.as_ref() {
+        let state = ctx_ref.ctx.state();
+        let config_options = state.config_options();
+        if let Some(registry) = state.function_registry() {
+            udf_expr_mod::expr_from_registry_or_specs(
+                registry,
+                name.as_str(),
+                expr_args,
+                Some(config_options),
+            )
+        } else {
+            udf_expr_mod::expr_from_name(name.as_str(), expr_args, Some(config_options))
+        }
+    } else {
+        udf_expr_mod::expr_from_name(name.as_str(), expr_args, None)
+    }
+    .map_err(|err| PyValueError::new_err(format!("UDF expression failed: {err}")))?;
+    Ok(expr.into())
 }
 
 #[pyfunction]
@@ -562,6 +819,29 @@ fn register_df_plugin_udfs(
     options_json: Option<String>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
+    let config_payload = udf_config_payload_from_ctx(&ctx.ctx);
+    let mut options_value = if let Some(raw) = options_json.as_deref() {
+        serde_json::from_str::<JsonValue>(raw)
+            .map_err(|err| PyValueError::new_err(format!("Invalid UDF options JSON: {err}")))?
+    } else {
+        JsonValue::Object(JsonMap::new())
+    };
+    options_value = match options_value {
+        JsonValue::Object(mut map) => {
+            map.entry("udf_config".to_string())
+                .or_insert(config_payload);
+            JsonValue::Object(map)
+        }
+        _ => {
+            let mut map = JsonMap::new();
+            map.insert("udf_config".to_string(), config_payload);
+            JsonValue::Object(map)
+        }
+    };
+    let options_json = Some(
+        serde_json::to_string(&options_value)
+            .map_err(|err| PyValueError::new_err(format!("Failed to encode UDF options: {err}")))?,
+    );
     handle
         .register_udfs(&ctx.ctx, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
@@ -612,8 +892,33 @@ fn register_df_plugin_table_providers(
 ) -> PyResult<()> {
     install_delta_plan_codecs_inner(&ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
+    let mut resolved = HashMap::new();
+    if let Some(options) = options_json {
+        for (name, value) in options {
+            let injected = inject_delta_scan_defaults(&ctx.ctx, name.as_str(), Some(&value))
+                .map_err(PyValueError::new_err)?;
+            if let Some(injected) = injected {
+                resolved.insert(name, injected);
+            }
+        }
+    }
+    let wants_delta = table_names
+        .as_ref()
+        .map_or(true, |names| names.iter().any(|name| name == "delta"));
+    if wants_delta && !resolved.contains_key("delta") {
+        if let Some(injected) = inject_delta_scan_defaults(&ctx.ctx, "delta", None)
+            .map_err(PyValueError::new_err)?
+        {
+            resolved.insert("delta".to_string(), injected);
+        }
+    }
+    let resolved_options = if resolved.is_empty() {
+        None
+    } else {
+        Some(resolved)
+    };
     handle
-        .register_table_providers(&ctx.ctx, table_names.as_deref(), options_json.as_ref())
+        .register_table_providers(&ctx.ctx, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -636,8 +941,21 @@ fn register_df_plugin(
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
     install_delta_plan_codecs_inner(&ctx)?;
+    let resolved_options = if let Some(options) = options_json {
+        let mut resolved = HashMap::with_capacity(options.len());
+        for (name, value) in options {
+            let injected = inject_delta_scan_defaults(&ctx.ctx, name.as_str(), Some(&value))
+                .map_err(PyValueError::new_err)?;
+            if let Some(injected) = injected {
+                resolved.insert(name, injected);
+            }
+        }
+        Some(resolved)
+    } else {
+        None
+    };
     handle
-        .register_table_providers(&ctx.ctx, table_names.as_deref(), options_json.as_ref())
+        .register_table_providers(&ctx.ctx, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -2467,51 +2785,8 @@ fn delta_data_checker(
 
 pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pyfunctions!(module, [
-        udf_custom_py::install_function_factory,
-        udf_custom_py::arrow_metadata,
-        udf_custom_py::semantic_tag,
-        udf_custom_py::stable_hash64,
-        udf_custom_py::stable_hash128,
-        udf_custom_py::prefixed_hash64,
-        udf_custom_py::stable_id,
-        udf_custom_py::stable_id_parts,
-        udf_custom_py::prefixed_hash_parts64,
-        udf_custom_py::stable_hash_any,
-        udf_custom_py::span_make,
-        udf_custom_py::span_len,
-        udf_custom_py::span_overlaps,
-        udf_custom_py::span_contains,
-        udf_custom_py::interval_align_score,
-        udf_custom_py::span_id,
-        udf_custom_py::utf8_normalize,
-        udf_custom_py::utf8_null_if_blank,
-        udf_custom_py::qname_normalize,
-        udf_custom_py::map_get_default,
-        udf_custom_py::map_normalize,
-        udf_custom_py::list_compact,
-        udf_custom_py::list_unique_sorted,
-        udf_custom_py::struct_pick,
-        udf_custom_py::cdf_change_rank,
-        udf_custom_py::cdf_is_upsert,
-        udf_custom_py::cdf_is_delete,
-        udf_custom_py::col_to_byte,
-    ]);
-    register_pyfunctions!(module, [
-        udf_builtin::map_entries,
-        udf_builtin::map_keys,
-        udf_builtin::map_values,
-        udf_builtin::map_extract,
-        udf_builtin::list_extract,
-        udf_builtin::list_unique,
-        udf_builtin::first_value_agg,
-        udf_builtin::last_value_agg,
-        udf_builtin::count_distinct_agg,
-        udf_builtin::string_agg,
-        udf_builtin::row_number_window,
-        udf_builtin::lag_window,
-        udf_builtin::lead_window,
-        udf_builtin::union_tag,
-        udf_builtin::union_extract,
+        crate::codeanatomy_ext::install_function_factory,
+        crate::codeanatomy_ext::udf_expr,
     ]);
     register_pyfunctions!(module, [
         crate::codeanatomy_ext::install_codeanatomy_udf_config,
@@ -2573,7 +2848,10 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
 
 pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pyfunctions!(module, [
-        udf_custom_py::install_function_factory,
+        crate::codeanatomy_ext::install_function_factory,
+        crate::codeanatomy_ext::capabilities_snapshot,
+        crate::codeanatomy_ext::arrow_stream_to_batches,
+        crate::codeanatomy_ext::udf_expr,
         crate::codeanatomy_ext::install_codeanatomy_udf_config,
         crate::codeanatomy_ext::install_codeanatomy_policy_config,
         crate::codeanatomy_ext::install_codeanatomy_physical_config,

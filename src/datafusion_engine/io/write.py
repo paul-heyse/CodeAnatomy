@@ -724,7 +724,7 @@ class WritePipeline:
         normalized_destination = str(destination)
         locations = [
             sorted(extract_output_locations_for_profile(self.runtime_profile).items()),
-            sorted(self.runtime_profile.scip_dataset_locations.items()),
+            sorted(self.runtime_profile.data_sources.scip_dataset_locations.items()),
             sorted(normalize_dataset_locations_for_profile(self.runtime_profile).items()),
             sorted(semantic_output_locations_for_profile(self.runtime_profile).items()),
         ]
@@ -735,7 +735,7 @@ class WritePipeline:
             )
             if match is not None:
                 return match
-        for catalog in self.runtime_profile.registry_catalogs.values():
+        for catalog in self.runtime_profile.catalog.registry_catalogs.values():
             candidates = ((name, catalog.get(name)) for name in catalog.names())
             match = self._match_dataset_location(
                 candidates,
@@ -761,7 +761,10 @@ class WritePipeline:
         if self.runtime_profile is None:
             return None
         for name, loc in candidates:
-            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
+            resolved = apply_delta_store_policy(
+                loc,
+                policy=self.runtime_profile.policies.delta_store_policy,
+            )
             if str(resolved.path) == normalized_destination:
                 return name, resolved
         return None
@@ -1708,7 +1711,7 @@ class WritePipeline:
             )
         if self.runtime_profile is not None:
             location = apply_delta_store_policy(
-                location, policy=self.runtime_profile.delta_store_policy
+                location, policy=self.runtime_profile.policies.delta_store_policy
             )
         resolution = resolve_dataset_provider(
             DatasetResolutionRequest(

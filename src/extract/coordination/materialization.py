@@ -56,6 +56,7 @@ from extract.coordination.spec_helpers import (
     plan_requires_row,
     rule_execution_options,
 )
+from extract.helpers import ExtractMaterializeOptions, ExtractPlanOptions
 from extract.session import ExtractSession
 from serde_msgspec import to_builtins
 
@@ -63,38 +64,6 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
-
-
-@dataclass(frozen=True)
-class ExtractPlanOptions:
-    """Options for building extract plans."""
-
-    normalize: ExtractNormalizeOptions | None = None
-    evidence_plan: EvidencePlan | None = None
-    repo_id: str | None = None
-
-    def resolved_repo_id(self) -> str | None:
-        """Return the effective repo id for query construction.
-
-        Returns
-        -------
-        str | None
-            Repo id used for query construction.
-        """
-        if self.repo_id is not None:
-            return self.repo_id
-        if self.normalize is None:
-            return None
-        return self.normalize.repo_id
-
-
-@dataclass(frozen=True)
-class ExtractMaterializeOptions:
-    """Options for materializing extract plans."""
-
-    normalize: ExtractNormalizeOptions | None = None
-    prefer_reader: bool = False
-    apply_post_kernels: bool = False
 
 
 @dataclass(frozen=True)

@@ -140,12 +140,6 @@ def load_typed_env_config() -> CqConfig | None:
         except ValueError:
             return None
 
-    def _parse_float(value: str) -> float | None:
-        try:
-            return float(value)
-        except ValueError:
-            return None
-
     if (value := _env_value("CQ_ROOT")) is not None:
         data["root"] = value
     if (value := _env_value("CQ_VERBOSE")) is not None:
@@ -165,25 +159,6 @@ def load_typed_env_config() -> CqConfig | None:
         parsed = _parse_bool(value)
         if parsed is not None:
             data["save_artifact"] = not parsed
-
-    if (value := _env_value("CQ_DISKCACHE_DIR")) is not None:
-        data["cache_dir"] = value
-    if (value := _env_value("CQ_DISKCACHE_QUERY_TTL_SECONDS")) is not None:
-        parsed = _parse_float(value)
-        if parsed is not None:
-            data["cache_query_ttl"] = parsed
-    if (value := _env_value("CQ_DISKCACHE_QUERY_SIZE_LIMIT")) is not None:
-        parsed = _parse_int(value)
-        if parsed is not None:
-            data["cache_query_size"] = parsed
-    if (value := _env_value("CQ_DISKCACHE_INDEX_SIZE_LIMIT")) is not None:
-        parsed = _parse_int(value)
-        if parsed is not None:
-            data["cache_index_size"] = parsed
-    if (value := _env_value("CQ_DISKCACHE_QUERY_SHARDS")) is not None:
-        parsed = _parse_int(value)
-        if parsed is not None:
-            data["cache_query_shards"] = parsed
 
     if not data:
         return None

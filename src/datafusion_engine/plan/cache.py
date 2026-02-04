@@ -12,6 +12,7 @@ from cache.diskcache_factory import (
     default_diskcache_profile,
     evict_cache_tag,
 )
+from core.fingerprinting import CompositeFingerprint
 from utils.hashing import CacheKeyBuilder
 
 if TYPE_CHECKING:
@@ -166,6 +167,38 @@ class PlanCacheKey:
         str
             Stable cache key.
         """
+        return self.composite_fingerprint().as_cache_key(prefix="plan")
+
+    def composite_fingerprint(self) -> CompositeFingerprint:
+        """Return a composite fingerprint for the cache key.
+
+        Returns
+        -------
+        CompositeFingerprint
+            Composite fingerprint for cache-key computation.
+        """
+        return CompositeFingerprint.from_components(
+            1,
+            profile_hash=self.profile_hash,
+            substrait_hash=self.substrait_hash,
+            plan_fingerprint=self.plan_fingerprint,
+            udf_snapshot_hash=self.udf_snapshot_hash,
+            function_registry_hash=self.function_registry_hash,
+            information_schema_hash=self.information_schema_hash,
+            required_udfs_hash=self.required_udfs_hash,
+            required_rewrite_tags_hash=self.required_rewrite_tags_hash,
+            settings_hash=self.settings_hash,
+            delta_inputs_hash=self.delta_inputs_hash,
+        )
+
+    def legacy_key(self) -> str:
+        """Return the legacy colon-concatenated cache key string.
+
+        Returns
+        -------
+        str
+            Legacy cache key string.
+        """
         parts = (
             self.profile_hash,
             self.substrait_hash,
@@ -248,7 +281,12 @@ class PlanCache:
         cache = self._ensure_cache()
         if cache is None:
             return None
-        value = cache.get(key.as_key(), default=None, retry=True)
+        primary_key = key.as_key()
+        value = cache.get(primary_key, default=None, retry=True)
+        if value is None:
+            legacy_key = key.legacy_key()
+            if legacy_key != primary_key:
+                value = cache.get(legacy_key, default=None, retry=True)
         if value is None:
             return None
         if isinstance(value, PlanCacheEntry):
@@ -292,7 +330,12 @@ class PlanCache:
         if cache is None:
             return False
         sentinel = object()
-        value = cache.get(key.as_key(), default=sentinel, retry=True)
+        primary_key = key.as_key()
+        value = cache.get(primary_key, default=sentinel, retry=True)
+        if value is sentinel:
+            legacy_key = key.legacy_key()
+            if legacy_key != primary_key:
+                value = cache.get(legacy_key, default=sentinel, retry=True)
         return value is not sentinel
 
     def snapshot(self) -> list[PlanCacheEntry]:

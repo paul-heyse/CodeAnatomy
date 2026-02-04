@@ -173,7 +173,7 @@ def _build_delta_session_context(
                 if not key.startswith("datafusion.runtime.")
             }
         settings["datafusion.catalog.information_schema"] = str(
-            profile.enable_information_schema
+            profile.catalog.enable_information_schema
         ).lower()
         delta_runtime = delta_runtime_env_options(profile)
         runtime_arg: RuntimeEnvBuilder | None = runtime_env
@@ -239,11 +239,11 @@ class SessionFactory:
         profile = self.profile
         config = SessionConfig()
         config = config.with_default_catalog_and_schema(
-            profile.default_catalog,
-            profile.default_schema,
+            profile.catalog.default_catalog,
+            profile.catalog.default_schema,
         )
         config = config.with_create_default_catalog_and_schema(enabled=True)
-        config = config.with_information_schema(profile.enable_information_schema)
+        config = config.with_information_schema(profile.catalog.enable_information_schema)
         config = _apply_identifier_settings(
             config,
             enable_ident_normalization=effective_ident_normalization(profile),
@@ -252,61 +252,61 @@ class SessionFactory:
             config,
             method="with_target_partitions",
             key="datafusion.execution.target_partitions",
-            value=profile.target_partitions,
+            value=profile.execution.target_partitions,
         )
         config = _apply_setting(
             config,
             method="with_batch_size",
             key="datafusion.execution.batch_size",
-            value=profile.batch_size,
+            value=profile.execution.batch_size,
         )
         config = _apply_setting(
             config,
             method="with_repartition_aggregations",
             key="datafusion.optimizer.repartition_aggregations",
-            value=profile.repartition_aggregations,
+            value=profile.execution.repartition_aggregations,
         )
         config = _apply_setting(
             config,
             method="with_repartition_windows",
             key="datafusion.optimizer.repartition_windows",
-            value=profile.repartition_windows,
+            value=profile.execution.repartition_windows,
         )
         config = _apply_setting(
             config,
             method="with_repartition_file_scans",
             key="datafusion.execution.repartition_file_scans",
-            value=profile.repartition_file_scans,
+            value=profile.execution.repartition_file_scans,
         )
         config = _apply_setting(
             config,
             method=None,
             key="datafusion.execution.repartition_file_min_size",
-            value=profile.repartition_file_min_size,
+            value=profile.execution.repartition_file_min_size,
         )
         config = _apply_setting(
             config,
             method=None,
             key="datafusion.execution.minimum_parallel_output_files",
-            value=profile.minimum_parallel_output_files,
+            value=profile.execution.minimum_parallel_output_files,
         )
         config = _apply_setting(
             config,
             method=None,
             key="datafusion.execution.soft_max_rows_per_output_file",
-            value=profile.soft_max_rows_per_output_file,
+            value=profile.execution.soft_max_rows_per_output_file,
         )
         config = _apply_setting(
             config,
             method=None,
             key="datafusion.execution.maximum_parallel_row_group_writers",
-            value=profile.maximum_parallel_row_group_writers,
+            value=profile.execution.maximum_parallel_row_group_writers,
         )
         config = _apply_setting(
             config,
             method=None,
             key="datafusion.execution.objectstore_writer_buffer_size",
-            value=profile.objectstore_writer_buffer_size,
+            value=profile.execution.objectstore_writer_buffer_size,
         )
         catalog_location, catalog_format = effective_catalog_autoload(profile)
         config = _apply_catalog_autoload(
@@ -317,20 +317,20 @@ class SessionFactory:
         config_policy = resolved_config_policy(profile)
         if config_policy is not None:
             config = config_policy.apply(config)
-        if profile.cache_policy is not None:
+        if profile.policies.cache_policy is not None:
             config = _apply_settings_overrides(
                 config,
-                cache_policy_settings(profile.cache_policy),
+                cache_policy_settings(profile.policies.cache_policy),
             )
         schema_hardening = resolved_schema_hardening(profile)
         if schema_hardening is not None:
             config = schema_hardening.apply(config)
-        config = _apply_settings_overrides(config, profile.settings_overrides)
-        config = _apply_feature_settings(config, profile.feature_gates)
-        config = _apply_join_settings(config, profile.join_policy)
+        config = _apply_settings_overrides(config, profile.policies.settings_overrides)
+        config = _apply_feature_settings(config, profile.policies.feature_gates)
+        config = _apply_join_settings(config, profile.policies.join_policy)
         return _apply_explain_analyze_level(
             config,
-            level=profile.explain_analyze_level,
+            level=profile.diagnostics.explain_analyze_level,
             supported=supports_explain_analyze_level(),
         )
 
@@ -358,7 +358,7 @@ class SessionFactory:
         profile = self.profile
         from datafusion_engine.session.runtime import record_delta_session_defaults
 
-        if not profile.enable_delta_session_defaults:
+        if not profile.features.enable_delta_session_defaults:
             return SessionContext(self.build_config(), self.build_runtime_env())
         result = _build_delta_session_context(profile, self.build_runtime_env())
         record_delta_session_defaults(

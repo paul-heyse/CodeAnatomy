@@ -41,6 +41,19 @@ class Registry(Protocol[K, V]):
         """Return count of registered items."""
 
 
+@runtime_checkable
+class SnapshotRegistry(Protocol[K, V]):
+    """Protocol for registries that support snapshot/restore."""
+
+    @abstractmethod
+    def snapshot(self) -> Mapping[K, V]:
+        """Return a snapshot of the registry state."""
+
+    @abstractmethod
+    def restore(self, snapshot: Mapping[K, V]) -> None:
+        """Restore the registry state from a snapshot."""
+
+
 @dataclass
 class MutableRegistry[K, V]:
     """Standard mutable registry with dict storage."""
@@ -139,6 +152,16 @@ class MutableRegistry[K, V]:
         """
         return dict(self._entries)
 
+    def restore(self, snapshot: Mapping[K, V]) -> None:
+        """Restore registry entries from a snapshot.
+
+        Parameters
+        ----------
+        snapshot
+            Mapping of registry entries to restore.
+        """
+        self._entries = dict(snapshot)
+
 
 @dataclass(frozen=True)
 class ImmutableRegistry[K, V]:
@@ -220,4 +243,5 @@ __all__ = [
     "ImmutableRegistry",
     "MutableRegistry",
     "Registry",
+    "SnapshotRegistry",
 ]

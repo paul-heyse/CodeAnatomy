@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-import msgspec
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from tools.cq.core.schema import (
     Anchor,
@@ -28,11 +29,14 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
-from tools.cq.index.def_index import DefIndex
-from tools.cq.search import INTERACTIVE, SearchLimits, find_call_candidates
+from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
+from tools.cq.search import INTERACTIVE, find_call_candidates
+from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
+from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.search import SearchLimits
 
 _ARG_PREVIEW_LIMIT = 3
 _KW_PREVIEW_LIMIT = 2
@@ -41,6 +45,7 @@ _ARG_TEXT_TRIM = 17
 _KW_TEXT_LIMIT = 15
 _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
+_MAX_CONTEXT_SNIPPET_LINES = 30
 
 
 class CallSite(msgspec.Struct):
@@ -68,6 +73,30 @@ class CallSite(msgspec.Struct):
         Calling context (function/method name).
     arg_preview : str
         Preview of arguments.
+    callee : str
+        Resolved callee name from the call expression.
+    receiver : str | None
+        Receiver name for attribute calls, if available.
+    resolution_confidence : str
+        Call resolution confidence (exact/likely/ambiguous/unresolved).
+    resolution_path : str
+        Resolution strategy label.
+    binding : str
+        Binding classification (ok/ambiguous/would_break/unresolved).
+    target_names : list[str]
+        Resolved target names, if any.
+    call_id : str
+        Stable callsite identifier.
+    hazards : list[str]
+        Detected dynamic hazards for this callsite.
+    symtable_info : dict[str, object] | None
+        Symtable analysis of containing function, if available.
+    bytecode_info : dict[str, object] | None
+        Bytecode analysis of containing function, if available.
+    context_window : dict[str, int] | None
+        Line range for containing definition context.
+    context_snippet : str | None
+        Source code snippet for the containing context.
     """
 
     file: str
@@ -80,6 +109,18 @@ class CallSite(msgspec.Struct):
     has_star_kwargs: bool
     context: str
     arg_preview: str
+    callee: str
+    receiver: str | None
+    resolution_confidence: str
+    resolution_path: str
+    binding: str
+    target_names: list[str]
+    call_id: str
+    hazards: list[str]
+    symtable_info: dict[str, object] | None = None
+    bytecode_info: dict[str, object] | None = None
+    context_window: dict[str, int] | None = None
+    context_snippet: str | None = None
 
 
 def _get_containing_function(tree: ast.AST, lineno: int) -> str:
@@ -171,6 +212,291 @@ def _analyze_call(node: ast.Call) -> dict:
     }
 
 
+def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
+    """Check if a call expression matches the target name."""
+    parts = target_name.split(".")
+    if isinstance(func, ast.Name):
+        return func.id == target_name or func.id == parts[-1]
+    if isinstance(func, ast.Attribute):
+        if func.attr == target_name:
+            return True
+        if (
+            len(parts) >= _MIN_QUAL_PARTS
+            and func.attr == parts[-1]
+            and isinstance(func.value, ast.Name)
+        ):
+            return func.value.id == parts[-2]
+        return func.attr == parts[-1]
+    return False
+
+
+def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
+    """Extract call name and determine if method call."""
+    if isinstance(func, ast.Name):
+        return (func.id, False, None)
+    if isinstance(func, ast.Attribute):
+        receiver = func.value
+        method = func.attr
+        if isinstance(receiver, ast.Name):
+            receiver_name = receiver.id
+            if receiver_name in {"self", "cls"}:
+                return (method, True, receiver_name)
+            return (f"{receiver_name}.{method}", True, receiver_name)
+        full = _safe_unparse(func, default=method)
+        parts = full.rsplit(".", 1)
+        if len(parts) == _MIN_QUAL_PARTS:
+            return (parts[1], True, parts[0])
+        return (full, True, None)
+    callee = _safe_unparse(func, default="<unknown>")
+    return (callee, False, None)
+
+
+def _build_call_index(tree: ast.AST) -> dict[tuple[int, int], ast.Call]:
+    index: dict[tuple[int, int], ast.Call] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            index[node.lineno, node.col_offset] = node
+    return index
+
+
+def _parse_call_expr(text: str) -> ast.Call | None:
+    try:
+        parsed = ast.parse(text.strip(), mode="eval")
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(parsed, ast.Expression) and isinstance(parsed.body, ast.Call):
+        return parsed.body
+    return None
+
+
+def _find_function_signature(
+    root: Path,
+    function_name: str,
+) -> str:
+    """Find function signature on-demand using rpygrep.
+
+    Avoids full repo scan by finding only the file containing the
+    function definition and parsing just that file.
+
+    Parameters
+    ----------
+    root : Path
+        Repository root.
+    function_name : str
+        Name of the function to find.
+
+    Returns
+    -------
+    str
+        Signature string like "(x, y, z)" or empty string if not found.
+    """
+    # Extract base name (handle qualified names like "MyClass.method")
+    base_name = function_name.rsplit(".", maxsplit=1)[-1]
+
+    # Find files containing the function definition
+    pattern = rf"\bdef {base_name}\s*\("
+    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE)
+
+    if not def_files:
+        return ""
+
+    # Parse first matching file and extract parameters
+    for filepath in def_files:
+        try:
+            source = filepath.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (SyntaxError, OSError, UnicodeDecodeError):
+            continue
+
+        # Walk AST to find matching function
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name == base_name:
+                    params = [arg.arg for arg in node.args.args]
+                    return f"({', '.join(params)})"
+
+    return ""
+
+
+def _detect_hazards(call: ast.Call, info: dict) -> list[str]:
+    hazards: list[str] = []
+    if info.get("has_star_args"):
+        hazards.append("star_args")
+    if info.get("has_star_kwargs"):
+        hazards.append("star_kwargs")
+    func = call.func
+    if isinstance(func, ast.Name):
+        name = func.id
+        if (
+            name in {"getattr", "setattr", "delattr", "hasattr"}
+            or name in {"eval", "exec", "__import__"}
+            or name in {"globals", "locals", "vars"}
+        ):
+            hazards.append(name)
+    elif isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Name):
+            if receiver.id == "importlib" and func.attr == "import_module":
+                hazards.append("importlib.import_module")
+            elif receiver.id == "operator" and func.attr in {"attrgetter", "methodcaller"}:
+                hazards.append(f"operator.{func.attr}")
+            elif receiver.id == "functools" and func.attr == "partial":
+                hazards.append("functools.partial")
+    return hazards
+
+
+def _enrich_call_site(
+    source: str,
+    containing_fn: str,
+    rel_path: str,
+) -> dict[str, dict[str, object] | None]:
+    """Enrich call site with symtable and bytecode signals.
+
+    Parameters
+    ----------
+    source
+        File source code.
+    containing_fn
+        Name of the containing function.
+    rel_path
+        Relative file path.
+
+    Returns
+    -------
+    dict[str, dict[str, object] | None]
+        Enrichment data with 'symtable' and 'bytecode' keys.
+    """
+    from tools.cq.query.enrichment import analyze_bytecode, analyze_symtable
+
+    enrichment: dict[str, dict[str, object] | None] = {
+        "symtable": None,
+        "bytecode": None,
+    }
+
+    # Symtable analysis
+    symtable_info = analyze_symtable(source, rel_path)
+    if containing_fn in symtable_info:
+        st_info = symtable_info[containing_fn]
+        enrichment["symtable"] = {
+            "is_closure": len(st_info.free_vars) > 0,
+            "free_vars": list(st_info.free_vars),
+            "globals_used": list(st_info.globals_used),
+            "nested_scopes": st_info.nested_scopes,
+        }
+
+    # Bytecode analysis (best-effort, requires compile)
+    try:
+        code = compile(source, rel_path, "exec")
+        for const in code.co_consts:
+            if hasattr(const, "co_name") and const.co_name == containing_fn:
+                bc_info = analyze_bytecode(const)
+                enrichment["bytecode"] = {
+                    "load_globals": list(bc_info.load_globals),
+                    "load_attrs": list(bc_info.load_attrs),
+                    "call_functions": list(bc_info.call_functions),
+                }
+                break
+    except (SyntaxError, ValueError, TypeError):
+        pass  # Best-effort
+
+    return enrichment
+
+
+def _compute_context_window(
+    call_line: int,
+    def_lines: list[tuple[int, int]],
+    total_lines: int,
+) -> dict[str, int]:
+    """Compute context window for a call site.
+
+    Finds the containing def based on indentation and computes line bounds.
+
+    Parameters
+    ----------
+    call_line
+        Line number of the call site.
+    def_lines
+        List of (line_number, indent_level) for all defs in the file.
+    total_lines
+        Total lines in the file.
+
+    Returns
+    -------
+    dict[str, int]
+        Dict with 'start_line' and 'end_line' keys.
+    """
+    # Find containing def (nearest preceding def at same/lesser indent)
+    containing_def: tuple[int, int] | None = None
+    for def_line, def_indent in reversed(def_lines):
+        if def_line < call_line:
+            containing_def = (def_line, def_indent)
+            break
+
+    if containing_def is None:
+        return {"start_line": 1, "end_line": total_lines}
+
+    start_line, def_indent = containing_def
+    end_line = total_lines
+
+    # Find end (next def at same/lesser indent or EOF)
+    for def_line, indent in def_lines:
+        if def_line > start_line and indent <= def_indent:
+            end_line = def_line - 1
+            break
+
+    return {"start_line": start_line, "end_line": end_line}
+
+
+def _extract_context_snippet(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+    *,
+    max_lines: int = _MAX_CONTEXT_SNIPPET_LINES,
+) -> str | None:
+    """Extract source snippet for context window with truncation.
+
+    Parameters
+    ----------
+    source_lines
+        All lines of the source file.
+    start_line
+        1-indexed start line of the context.
+    end_line
+        1-indexed end line of the context.
+    max_lines
+        Maximum lines before truncation.
+
+    Returns
+    -------
+    str | None
+        The extracted snippet, or None on errors.
+    """
+    try:
+        # Convert to 0-indexed, clamp to valid range
+        start_idx = max(0, start_line - 1)
+        end_idx = min(len(source_lines), end_line)
+        snippet_lines = source_lines[start_idx:end_idx]
+
+        if not snippet_lines:
+            return None
+
+        total = len(snippet_lines)
+        if total <= max_lines:
+            return "\n".join(snippet_lines)
+
+        # Truncate: show first 15 + marker + last 5
+        head_count = 15
+        tail_count = 5
+        omitted = total - head_count - tail_count
+        head = snippet_lines[:head_count]
+        tail = snippet_lines[-tail_count:]
+        marker = f"    # ... truncated ({omitted} more lines) ..."
+        return "\n".join([*head, marker, *tail])
+    except (IndexError, TypeError):
+        return None
+
+
 class CallFinder(ast.NodeVisitor):
     """Find all calls to a specific function."""
 
@@ -179,13 +505,14 @@ class CallFinder(ast.NodeVisitor):
         self.target_name = target_name
         self.tree = tree
         self.sites: list[CallSite] = []
-        self._parts = target_name.split(".")
 
     def visit_Call(self, node: ast.Call) -> None:
         """Record matching call sites."""
-        if self._matches_target(node.func):
+        if _matches_target_expr(node.func, self.target_name):
             info = _analyze_call(node)
             context = _get_containing_function(self.tree, node.lineno)
+            callee, _is_method, receiver = _get_call_name(node.func)
+            hazards = _detect_hazards(node, info)
             self.sites.append(
                 CallSite(
                     file=self.file,
@@ -198,33 +525,17 @@ class CallFinder(ast.NodeVisitor):
                     has_star_kwargs=info["has_star_kwargs"],
                     context=context,
                     arg_preview=info["arg_preview"],
+                    callee=callee,
+                    receiver=receiver,
+                    resolution_confidence="unresolved",
+                    resolution_path="",
+                    binding="unresolved",
+                    target_names=[],
+                    call_id=uuid7_str(),
+                    hazards=hazards,
                 )
             )
         self.generic_visit(node)
-
-    def _matches_target(self, func: ast.expr) -> bool:
-        """Check if call target matches our function name.
-
-        Returns
-        -------
-        bool
-            True when the call matches the target name.
-        """
-        if isinstance(func, ast.Name):
-            return func.id == self.target_name or func.id == self._parts[-1]
-
-        if isinstance(func, ast.Attribute):
-            if func.attr == self.target_name:
-                return True
-            if (
-                len(self._parts) >= _MIN_QUAL_PARTS
-                and func.attr == self._parts[-1]
-                and isinstance(func.value, ast.Name)
-            ):
-                return func.value.id == self._parts[-2]
-            return func.attr == self._parts[-1]
-
-        return False
 
 
 def _rg_find_candidates(
@@ -305,42 +616,141 @@ def _collect_call_sites(
             tree = ast.parse(source, filename=rel_path)
         except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
             continue
+        # Split source for snippet extraction and context window computation
+        source_lines = source.splitlines()
+        def_lines = find_def_lines(filepath)
+        total_lines = len(source_lines)
         finder = CallFinder(rel_path, function_name, tree)
         finder.visit(tree)
-        all_sites.extend(finder.sites)
+        # Enrich sites with context window and snippet
+        for site in finder.sites:
+            context_window = _compute_context_window(site.line, def_lines, total_lines)
+            context_snippet = _extract_context_snippet(
+                source_lines,
+                context_window["start_line"],
+                context_window["end_line"],
+            )
+            enriched_site = msgspec.structs.replace(
+                site,
+                context_window=context_window,
+                context_snippet=context_snippet,
+            )
+            all_sites.append(enriched_site)
     return all_sites
 
 
-def _signature_info(root: Path, function_name: str) -> str:
-    """Build a printable signature preview for a function.
+def _collect_call_sites_from_records(
+    root: Path,
+    records: list[SgRecord],
+    function_name: str,
+) -> tuple[list[CallSite], int]:
+    """Collect call sites from ast-grep records.
+
+    Parameters
+    ----------
+    root : Path
+        Repository root.
+    records : list[SgRecord]
+        AST-grep scan records.
+    function_name : str
+        Function name to find calls for.
 
     Returns
     -------
-    str
-        Signature preview string.
+    tuple[list[CallSite], int]
+        List of call sites and count of files with calls.
     """
-    index = DefIndex.build(root, max_files=2000)
-    functions = index.find_function_by_name(function_name.rsplit(".", maxsplit=1)[-1])
-    if not functions:
-        return ""
-    params = [param.name for param in functions[0].params]
-    return f"({', '.join(params)})"
+    by_file = group_records_by_file(records)
+    all_sites: list[CallSite] = []
+    for rel_path, file_records in by_file.items():
+        filepath = root / rel_path
+        if not filepath.exists():
+            continue
+        try:
+            source = filepath.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=rel_path)
+        except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
+            continue
+        # Split source for snippet extraction and context window computation
+        source_lines = source.splitlines()
+        def_lines = find_def_lines(filepath)
+        total_lines = len(source_lines)
+        call_index = _build_call_index(tree)
+        for record in file_records:
+            call_node = call_index.get((record.start_line, record.start_col))
+            if call_node is None:
+                call_node = _parse_call_expr(record.text)
+            if call_node is None:
+                continue
+            if not _matches_target_expr(call_node.func, function_name):
+                continue
+            info = _analyze_call(call_node)
+            context = _get_containing_function(tree, record.start_line)
+            callee, _is_method, receiver = _get_call_name(call_node.func)
+            hazards = _detect_hazards(call_node, info)
+            # Compute enrichment, context window, and snippet
+            enrichment = _enrich_call_site(source, context, rel_path)
+            context_window = _compute_context_window(record.start_line, def_lines, total_lines)
+            context_snippet = _extract_context_snippet(
+                source_lines,
+                context_window["start_line"],
+                context_window["end_line"],
+            )
+            site = CallSite(
+                file=rel_path,
+                line=record.start_line,
+                col=record.start_col,
+                num_args=info["num_args"],
+                num_kwargs=info["num_kwargs"],
+                kwargs=info["kwargs"],
+                has_star_args=info["has_star_args"],
+                has_star_kwargs=info["has_star_kwargs"],
+                context=context,
+                arg_preview=info["arg_preview"],
+                callee=callee,
+                receiver=receiver,
+                resolution_confidence="unresolved",
+                resolution_path="",
+                binding="unresolved",
+                target_names=[],
+                call_id=uuid7_str(),
+                hazards=hazards,
+                symtable_info=enrichment.get("symtable"),
+                bytecode_info=enrichment.get("bytecode"),
+                context_window=context_window,
+                context_snippet=context_snippet,
+            )
+            all_sites.append(site)
+    files_with_calls = len({site.file for site in all_sites})
+    return all_sites, files_with_calls
 
 
 def _analyze_sites(
     all_sites: list[CallSite],
-) -> tuple[Counter[str], Counter[str], int, Counter[str]]:
-    """Analyze call sites for shapes, kwargs, and contexts.
+) -> tuple[
+    Counter[str],
+    Counter[str],
+    int,
+    Counter[str],
+    Counter[str],
+]:
+    """Analyze call sites for shapes, kwargs, contexts, and hazards.
+
+    Parameters
+    ----------
+    all_sites : list[CallSite]
+        All call sites to analyze.
 
     Returns
     -------
-    tuple[Counter[str], Counter[str], int, Counter[str]]
-        Shape histogram, keyword usage, forwarding count, and contexts.
+    tuple[Counter[str], Counter[str], int, Counter[str], Counter[str]]
+        Argument shapes, keyword usage, forwarding count, contexts, hazard counts.
     """
     arg_shapes: Counter[str] = Counter()
     kwarg_usage: Counter[str] = Counter()
     forwarding_count = 0
     contexts: Counter[str] = Counter()
+    hazard_counts: Counter[str] = Counter()
     for site in all_sites:
         shape = f"args={site.num_args}, kwargs={site.num_kwargs}"
         if site.has_star_args:
@@ -353,7 +763,15 @@ def _analyze_sites(
         if site.has_star_args or site.has_star_kwargs:
             forwarding_count += 1
         contexts[site.context] += 1
-    return arg_shapes, kwarg_usage, forwarding_count, contexts
+        for hazard in site.hazards:
+            hazard_counts[hazard] += 1
+    return (
+        arg_shapes,
+        kwarg_usage,
+        forwarding_count,
+        contexts,
+        hazard_counts,
+    )
 
 
 def _add_shape_section(
@@ -412,12 +830,45 @@ def _add_context_section(
     result.sections.append(ctx_section)
 
 
+def _add_hazard_section(
+    result: CqResult,
+    hazard_counts: Counter[str],
+    scoring_details: dict[str, object],
+) -> None:
+    if not hazard_counts:
+        return
+    hazard_section = Section(title="Hazards")
+    for label, count in hazard_counts.most_common():
+        hazard_section.findings.append(
+            Finding(
+                category="hazard",
+                message=f"{label}: {count} calls",
+                severity="warning",
+                details=dict(scoring_details),
+            )
+        )
+    result.sections.append(hazard_section)
+
+
 def _add_sites_section(
     result: CqResult,
     function_name: str,
     all_sites: list[CallSite],
     scoring_details: dict[str, object],
 ) -> None:
+    """Add call sites section to result.
+
+    Parameters
+    ----------
+    result : CqResult
+        The result to add to.
+    function_name : str
+        Name of the function.
+    all_sites : list[CallSite]
+        All call sites.
+    scoring_details : dict[str, object]
+        Scoring information.
+    """
     sites_section = Section(title="Call Sites")
     for site in all_sites[:50]:
         details = {
@@ -426,6 +877,10 @@ def _add_sites_section(
             "num_kwargs": site.num_kwargs,
             "kwargs": site.kwargs,
             "forwarding": site.has_star_args or site.has_star_kwargs,
+            "call_id": site.call_id,
+            "hazards": site.hazards,
+            "context_window": site.context_window,
+            "context_snippet": site.context_snippet,
             **scoring_details,
         }
         sites_section.findings.append(
@@ -446,8 +901,30 @@ def _add_evidence(
     all_sites: list[CallSite],
     scoring_details: dict[str, object],
 ) -> None:
+    """Add evidence findings for each call site.
+
+    Parameters
+    ----------
+    result : CqResult
+        The result to add to.
+    function_name : str
+        Name of the function.
+    all_sites : list[CallSite]
+        All call sites.
+    scoring_details : dict[str, object]
+        Scoring information.
+    """
     for site in all_sites:
-        details = {"preview": site.arg_preview, **scoring_details}
+        details: dict[str, object] = {
+            "preview": site.arg_preview,
+            "call_id": site.call_id,
+            "hazards": site.hazards,
+            "context_window": site.context_window,
+            "context_snippet": site.context_snippet,
+            "symtable": site.symtable_info,
+            "bytecode": site.bytecode_info,
+            **scoring_details,
+        }
         result.evidence.append(
             Finding(
                 category="call_site",
@@ -483,23 +960,65 @@ def cmd_calls(
         Analysis result.
     """
     started = ms()
+    root_path = Path(root)
 
-    # Find candidates via rpygrep
-    candidates = _rg_find_candidates(function_name, root)
-
-    by_file = _group_candidates(candidates)
-    all_sites = _collect_call_sites(root, by_file, function_name)
-    signature_info = _signature_info(root, function_name)
-
-    run = mk_runmeta("calls", argv, str(root), started, tc.to_dict())
+    run = mk_runmeta("calls", argv, str(root_path), started, tc.to_dict())
     result = mk_result(run)
+
+    # Pre-filter files containing the function name using rpygrep for performance
+    search_name = function_name.rsplit(".", maxsplit=1)[-1]
+    pattern = rf"\b{search_name}\s*\("
+    candidate_files = find_files_with_pattern(root_path, pattern, limits=INTERACTIVE)
+
+    # Track total files for summary (before filtering)
+    all_py_files = list_scan_files([root_path], root=root_path)
+    total_py_files = len(all_py_files)
+
+    # Use candidate files if available, otherwise fall back to scanning all files
+    scan_files = candidate_files if candidate_files else all_py_files
+
+    used_fallback = False
+    call_records: list[SgRecord] = []
+    if scan_files:
+        try:
+            call_records = sg_scan(
+                paths=scan_files,
+                record_types={"call"},
+                root=root_path,
+            )
+        except Exception:
+            used_fallback = True
+    else:
+        used_fallback = True
+
+    # On-demand signature lookup (avoids full repo scan)
+    signature_info = _find_function_signature(root_path, function_name)
+
+    if not used_fallback:
+        all_sites, files_with_calls = _collect_call_sites_from_records(
+            root_path,
+            call_records,
+            function_name,
+        )
+        rg_candidates = 0
+    else:
+        candidates = _rg_find_candidates(function_name, root_path)
+        by_file = _group_candidates(candidates)
+        all_sites = _collect_call_sites(root_path, by_file, function_name)
+        files_with_calls = len({site.file for site in all_sites})
+        rg_candidates = len(candidates)
 
     result.summary = {
         "function": function_name,
         "signature": signature_info,
         "total_sites": len(all_sites),
-        "files_with_calls": len(by_file),
-        "rg_candidates": len(candidates),
+        "files_with_calls": files_with_calls,
+        "total_py_files": total_py_files,
+        "candidate_files": len(candidate_files),
+        "scanned_files": len(scan_files),
+        "call_records": len(call_records),
+        "rg_candidates": rg_candidates,
+        "scan_method": "ast-grep" if not used_fallback else "rpygrep",
     }
 
     if not all_sites:
@@ -512,17 +1031,41 @@ def cmd_calls(
         )
         return result
 
-    arg_shapes, kwarg_usage, forwarding_count, contexts = _analyze_sites(all_sites)
+    (
+        arg_shapes,
+        kwarg_usage,
+        forwarding_count,
+        contexts,
+        hazard_counts,
+    ) = _analyze_sites(all_sites)
 
     # Compute scoring signals
+    hazard_sites = sum(hazard_counts.values())
     imp_signals = ImpactSignals(
         sites=len(all_sites),
-        files=len(by_file),
+        files=files_with_calls,
         depth=0,
         breakages=0,
         ambiguities=forwarding_count,
     )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    # Determine evidence kind based on enrichment
+    has_closures = any(
+        site.symtable_info and site.symtable_info.get("is_closure") for site in all_sites
+    )
+    has_bytecode = any(site.bytecode_info for site in all_sites)
+    if used_fallback:
+        evidence_kind = "rg_only"
+    elif has_closures:
+        # Closures require more careful handling
+        evidence_kind = "resolved_ast_closure"
+    elif forwarding_count or hazard_sites:
+        evidence_kind = "resolved_ast_heuristic"
+    elif has_bytecode:
+        # Bytecode enrichment gives additional confidence
+        evidence_kind = "resolved_ast_bytecode"
+    else:
+        evidence_kind = "resolved_ast"
+    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
     imp = impact_score(imp_signals)
     conf = confidence_score(conf_signals)
     scoring_details = {
@@ -537,7 +1080,7 @@ def cmd_calls(
     result.key_findings.append(
         Finding(
             category="summary",
-            message=f"Found {len(all_sites)} calls to {function_name} across {len(by_file)} files",
+            message=f"Found {len(all_sites)} calls to {function_name} across {files_with_calls} files",
             severity="info",
             details=dict(scoring_details),
         )
@@ -556,6 +1099,7 @@ def cmd_calls(
     _add_shape_section(result, arg_shapes, scoring_details)
     _add_kw_section(result, kwarg_usage, scoring_details)
     _add_context_section(result, contexts, scoring_details)
+    _add_hazard_section(result, hazard_counts, scoring_details)
     _add_sites_section(result, function_name, all_sites, scoring_details)
     _add_evidence(result, function_name, all_sites, scoring_details)
 

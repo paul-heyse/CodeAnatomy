@@ -50,7 +50,11 @@ def write_delta_table(
         Runtime profile, session context, and Delta table path.
     """
     resolved_options = options or DeltaSeedOptions()
-    runtime_profile = resolved_options.profile or DataFusionRuntimeProfile()
+    runtime_profile = (
+        resolved_options.profile
+        if resolved_options.profile is not None
+        else DataFusionRuntimeProfile()
+    )
     ctx = runtime_profile.session_context()
     seed = register_arrow_table(ctx, name="delta_seed", value=table)
     pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)

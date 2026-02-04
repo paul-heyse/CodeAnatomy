@@ -11,28 +11,6 @@ from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import TracebackType
-
-try:  # pragma: no cover - optional dependency
-    from diskcache import Lock as DiskcacheLock
-except ImportError:  # pragma: no cover - optional dependency
-    class DiskcacheLock:
-        def __init__(self, cache: object, key: object) -> None:
-            _ = (cache, key)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc_val: BaseException | None,
-            exc_tb: TracebackType | None,
-        ) -> None:
-            _ = (exc_type, exc_val, exc_tb)
-            return None
-
-from tools.cq.cache.diskcache_profile import cache_for_kind, default_cq_diskcache_profile
 
 _SELF_CLS: set[str] = {"self", "cls"}
 
@@ -484,29 +462,56 @@ class DefIndex:
                 "**/dist/**",
             ]
 
-        profile = default_cq_diskcache_profile()
-        lock_cache = cache_for_kind(profile, "cq_coordination")
-        lock_key = f"def_index:{root_path}"
+        index = DefIndex(root=str(root_path))
+        for filepath in _iter_source_files(
+            root_path,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+            max_files=max_files,
+        ):
+            rel_path = str(filepath.relative_to(root_path))
+            try:
+                source = filepath.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(filepath))
+            except (SyntaxError, OSError, UnicodeDecodeError):
+                continue
+            visitor = DefIndexVisitor(rel_path)
+            visitor.visit(tree)
+            index.modules[rel_path] = visitor.to_module_info()
 
-        with DiskcacheLock(lock_cache, lock_key):
-            index = DefIndex(root=str(root_path))
-            for filepath in _iter_source_files(
-                root_path,
-                include_patterns=include_patterns,
-                exclude_patterns=exclude_patterns,
-                max_files=max_files,
-            ):
-                rel_path = str(filepath.relative_to(root_path))
-                try:
-                    source = filepath.read_text(encoding="utf-8")
-                    tree = ast.parse(source, filename=str(filepath))
-                except (SyntaxError, OSError, UnicodeDecodeError):
-                    continue
-                visitor = DefIndexVisitor(rel_path)
-                visitor.visit(tree)
-                index.modules[rel_path] = visitor.to_module_info()
+        return index
 
-            return index
+    @staticmethod
+    def load_or_build(
+        root: str | Path,
+        max_files: int = 10000,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
+    ) -> DefIndex:
+        """Build a fresh definition index.
+
+        Build is always fresh; no caching is performed.
+        """
+        root_path = Path(root).resolve()
+        if include_patterns is None:
+            include_patterns = ["**/*.py"]
+        if exclude_patterns is None:
+            exclude_patterns = [
+                "**/.*",
+                "**/__pycache__/**",
+                "**/node_modules/**",
+                "**/venv/**",
+                "**/.venv/**",
+                "**/build/**",
+                "**/dist/**",
+            ]
+
+        return DefIndex.build(
+            root=root_path,
+            max_files=max_files,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+        )
 
     def all_functions(self) -> Iterator[FnDecl]:
         """Iterate over all function declarations.
@@ -662,3 +667,4 @@ class DefIndex:
             return (from_mod, sym)
 
         return (None, None)
+

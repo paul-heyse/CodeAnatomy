@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
 from obs.diagnostics import DiagnosticsCollector
 from tests.test_helpers.optional_deps import require_datafusion
 
@@ -31,7 +31,9 @@ def df_profile(
     require_datafusion()
     if diagnostics is None:
         return DataFusionRuntimeProfile()
-    return DataFusionRuntimeProfile(diagnostics_sink=diagnostics)
+    return DataFusionRuntimeProfile(
+        diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+    )
 
 
 def df_ctx(

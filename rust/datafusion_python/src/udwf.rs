@@ -19,10 +19,10 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
-use datafusion::error::{DataFusionError, Result};
+use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType};
+use datafusion::error::Result;
 use datafusion::logical_expr::function::{PartitionEvaluatorArgs, WindowUDFFieldArgs};
 use datafusion::logical_expr::ptr_eq::PtrEq;
 use datafusion::logical_expr::window_state::WindowAggState;
@@ -36,9 +36,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
 
 use crate::common::data_type::PyScalarValue;
-use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionResult};
+use crate::errors::{py_datafusion_err, pyerr_to_dferr, to_datafusion_err, PyDataFusionResult};
 use crate::expr::PyExpr;
-use crate::utils::{parse_volatility, validate_pycapsule};
+use crate::utils::{parse_volatility, to_pyarrow_array, validate_pycapsule};
 
 #[derive(Debug)]
 struct RustPartitionEvaluator {
@@ -54,7 +54,7 @@ impl RustPartitionEvaluator {
 impl PartitionEvaluator for RustPartitionEvaluator {
     fn memoize(&mut self, _state: &mut WindowAggState) -> Result<()> {
         Python::attach(|py| self.evaluator.bind(py).call_method0("memoize").map(|_| ()))
-            .map_err(|e| DataFusionError::Execution(format!("{e}")))
+            .map_err(|err| pyerr_to_dferr("PartitionEvaluator.memoize failed", err))
     }
 
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
@@ -74,13 +74,13 @@ impl PartitionEvaluator for RustPartitionEvaluator {
                         )));
                     }
 
-                    let start: usize = tuple.get_item(0).unwrap().extract()?;
-                    let end: usize = tuple.get_item(1).unwrap().extract()?;
+                    let start: usize = tuple.get_item(0)?.extract()?;
+                    let end: usize = tuple.get_item(1)?.extract()?;
 
                     Ok(Range { start, end })
                 })
         })
-        .map_err(|e| DataFusionError::Execution(format!("{e}")))
+        .map_err(|err| pyerr_to_dferr("PartitionEvaluator.get_range failed", err))
     }
 
     fn is_causal(&self) -> bool {
@@ -94,24 +94,21 @@ impl PartitionEvaluator for RustPartitionEvaluator {
     }
 
     fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
-        println!("evaluate all called with number of values {}", values.len());
         Python::attach(|py| {
             let py_values = PyList::new(
                 py,
                 values
                     .iter()
-                    .map(|arg| arg.into_data().to_pyarrow(py).unwrap()),
+                    .map(|arg| to_pyarrow_array(py, arg).map_err(py_datafusion_err))
+                    .collect::<PyResult<Vec<_>>>()?,
             )?;
             let py_num_rows = num_rows.into_pyobject(py)?;
             let py_args = PyTuple::new(py, vec![py_values.as_any(), &py_num_rows])?;
 
-            self.evaluator
-                .bind(py)
-                .call_method1("evaluate_all", py_args)
-                .map(|v| {
-                    let array_data = ArrayData::from_pyarrow_bound(&v).unwrap();
-                    make_array(array_data)
-                })
+            let value = self.evaluator.bind(py).call_method1("evaluate_all", py_args)?;
+            let array_data =
+                ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
+            Ok::<ArrayRef, pyo3::PyErr>(make_array(array_data))
         })
         .map_err(to_datafusion_err)
     }
@@ -122,7 +119,8 @@ impl PartitionEvaluator for RustPartitionEvaluator {
                 py,
                 values
                     .iter()
-                    .map(|arg| arg.into_data().to_pyarrow(py).unwrap()),
+                    .map(|arg| to_pyarrow_array(py, arg).map_err(py_datafusion_err))
+                    .collect::<PyResult<Vec<_>>>()?,
             )?;
             let range_tuple = PyTuple::new(py, vec![range.start, range.end])?;
             let py_args = PyTuple::new(py, vec![py_values.as_any(), range_tuple.as_any()])?;
@@ -156,13 +154,13 @@ impl PartitionEvaluator for RustPartitionEvaluator {
             let py_args = PyTuple::new(py, py_args)?;
 
             // 2. call function
-            self.evaluator
+            let value = self
+                .evaluator
                 .bind(py)
-                .call_method1("evaluate_all_with_rank", py_args)
-                .map(|v| {
-                    let array_data = ArrayData::from_pyarrow_bound(&v).unwrap();
-                    make_array(array_data)
-                })
+                .call_method1("evaluate_all_with_rank", py_args)?;
+            let array_data =
+                ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
+            Ok::<ArrayRef, pyo3::PyErr>(make_array(array_data))
         })
         .map_err(to_datafusion_err)
     }
@@ -203,7 +201,7 @@ pub fn to_rust_partition_evaluator(evaluator: Py<PyAny>) -> PartitionEvaluatorFa
         let evaluator = Python::attach(|py| {
             evaluator
                 .call0(py)
-                .map_err(|e| DataFusionError::Execution(e.to_string()))
+                .map_err(|err| pyerr_to_dferr("PartitionEvaluator factory failed", err))
         })?;
         Ok(Box::new(RustPartitionEvaluator::new(evaluator)))
     })

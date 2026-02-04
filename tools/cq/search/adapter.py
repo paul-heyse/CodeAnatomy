@@ -14,6 +14,37 @@ if TYPE_CHECKING:
     from tools.cq.search.profiles import SearchLimits
 
 from tools.cq.search.profiles import DEFAULT
+from tools.cq.search.timeout import search_sync_with_timeout
+
+
+def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
+    """Find all def/async def lines in a file with their indentation.
+
+    Parameters
+    ----------
+    file_path
+        Path to the Python file to scan.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        List of (line_number, indent_level) tuples. Line numbers are 1-indexed.
+    """
+    if not file_path.exists():
+        return []
+
+    results: list[tuple[int, int]] = []
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        for i, line in enumerate(content.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith(("def ", "async def ")):
+                indent = len(line) - len(stripped)
+                results.append((i, indent))
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    return results
 
 
 def find_files_with_pattern(
@@ -59,6 +90,10 @@ def find_files_with_pattern(
         .set_working_directory(root)
         .add_pattern(pattern)
         .case_sensitive(True)
+        .max_count(limits.max_matches_per_file)
+        .max_depth(limits.max_depth)
+        .max_file_size(limits.max_file_size_bytes)
+        .add_safe_defaults()
         .as_json()
     )
 
@@ -71,8 +106,15 @@ def find_files_with_pattern(
         searcher = searcher.exclude_glob(glob)
 
     # Collect unique file paths (convert to absolute)
+    try:
+        results = search_sync_with_timeout(
+            lambda: list(searcher.run()),
+            limits.timeout_seconds,
+        )
+    except TimeoutError:
+        return []
     seen_files: set[Path] = set()
-    for result in searcher.run():
+    for result in results:
         if len(seen_files) >= limits.max_files:
             break
         # rpygrep returns paths relative to working_directory
@@ -122,13 +164,29 @@ def find_call_candidates(
         .add_pattern(pattern)
         .include_type("py")
         .case_sensitive(True)
+        .max_count(limits.max_matches_per_file)
+        .max_depth(limits.max_depth)
+        .max_file_size(limits.max_file_size_bytes)
+        .add_safe_defaults()
         .as_json()
     )
 
     candidates: list[tuple[Path, int]] = []
-    for result in searcher.run():
+    seen_files: set[Path] = set()
+    try:
+        results = search_sync_with_timeout(
+            lambda: list(searcher.run()),
+            limits.timeout_seconds,
+        )
+    except TimeoutError:
+        return []
+    for result in results:
         # rpygrep returns paths relative to working_directory
         abs_path = (root / result.path).resolve()
+        if abs_path not in seen_files:
+            if len(seen_files) >= limits.max_files:
+                break
+            seen_files.add(abs_path)
         for match in result.matches:
             if len(candidates) >= limits.max_total_matches:
                 break
@@ -209,6 +267,10 @@ def search_content(
         .set_working_directory(root)
         .add_pattern(pattern)
         .case_sensitive(True)
+        .max_count(limits.max_matches_per_file)
+        .max_depth(limits.max_depth)
+        .max_file_size(limits.max_file_size_bytes)
+        .add_safe_defaults()
         .as_json()
     )
 
@@ -218,10 +280,22 @@ def search_content(
 
     matches: list[tuple[Path, int, str]] = []
     file_match_counts: dict[Path, int] = {}
+    seen_files: set[Path] = set()
 
-    for result in searcher.run():
+    try:
+        results = search_sync_with_timeout(
+            lambda: list(searcher.run()),
+            limits.timeout_seconds,
+        )
+    except TimeoutError:
+        return []
+    for result in results:
         # rpygrep returns paths relative to working_directory
         file_path = (root / result.path).resolve()
+        if file_path not in seen_files:
+            if len(seen_files) >= limits.max_files:
+                break
+            seen_files.add(file_path)
 
         for match in result.matches:
             # Enforce per-file limit

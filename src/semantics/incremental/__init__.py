@@ -28,7 +28,7 @@ from semantics.incremental.cdf_joins import (
     merge_incremental_results,
 )
 from semantics.incremental.cdf_reader import CdfReadOptions, CdfReadResult, read_cdf_changes
-from semantics.incremental.config import IncrementalConfig
+from semantics.incremental.config import SemanticIncrementalConfig
 
 __all__ = [
     "DEFAULT_CDF_COLUMN",
@@ -38,7 +38,7 @@ __all__ = [
     "CdfCursorStore",
     "CdfReadOptions",
     "CdfReadResult",
-    "IncrementalConfig",
+    "SemanticIncrementalConfig",
     "apply_cdf_merge",
     "build_incremental_join",
     "incremental_join_enabled",

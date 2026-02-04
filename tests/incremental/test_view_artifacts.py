@@ -12,7 +12,11 @@ from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.plan.udf_analysis import extract_udfs_from_plan_bundle
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, record_view_definition
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DiagnosticsConfig,
+    record_view_definition,
+)
 from datafusion_engine.views.artifacts import (
     ViewArtifactLineage,
     ViewArtifactRequest,
@@ -60,7 +64,9 @@ class _DiagnosticsSink(DiagnosticsSink):
 
 def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     sink = _DiagnosticsSink()
-    df_profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
+    df_profile = DataFusionRuntimeProfile(
+        diagnostics=DiagnosticsConfig(diagnostics_sink=sink),
+    )
     runtime = IncrementalRuntime.build(profile=df_profile)
     return runtime, sink
 

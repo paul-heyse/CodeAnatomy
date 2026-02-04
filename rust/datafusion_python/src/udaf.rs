@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef};
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::{PyArrowType, ToPyArrow};
+use datafusion::arrow::pyarrow::PyArrowType;
 use datafusion::common::ScalarValue;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::logical_expr::{
     create_udaf, Accumulator, AccumulatorFactoryFunction, AggregateUDF,
 };
@@ -30,9 +30,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyTuple};
 
 use crate::common::data_type::PyScalarValue;
-use crate::errors::{py_datafusion_err, to_datafusion_err, PyDataFusionResult};
+use crate::errors::{py_datafusion_err, pyerr_to_dferr, to_datafusion_err, PyDataFusionResult};
 use crate::expr::PyExpr;
-use crate::utils::{parse_volatility, validate_pycapsule};
+use crate::utils::{parse_volatility, to_pyarrow_array, validate_pycapsule};
 
 #[derive(Debug)]
 struct RustAccumulator {
@@ -54,7 +54,7 @@ impl Accumulator for RustAccumulator {
                 .extract::<Vec<PyScalarValue>>()
         })
         .map(|v| v.into_iter().map(|x| x.0).collect())
-        .map_err(|e| DataFusionError::Execution(format!("{e}")))
+        .map_err(|err| pyerr_to_dferr("Accumulator.state failed", err))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -65,7 +65,7 @@ impl Accumulator for RustAccumulator {
                 .extract::<PyScalarValue>()
         })
         .map(|v| v.0)
-        .map_err(|e| DataFusionError::Execution(format!("{e}")))
+        .map_err(|err| pyerr_to_dferr("Accumulator.evaluate failed", err))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -73,15 +73,15 @@ impl Accumulator for RustAccumulator {
             // 1. cast args to Pyarrow array
             let py_args = values
                 .iter()
-                .map(|arg| arg.into_data().to_pyarrow(py).unwrap())
-                .collect::<Vec<_>>();
+                .map(|arg| to_pyarrow_array(py, arg))
+                .collect::<Result<Vec<_>>>()?;
             let py_args = PyTuple::new(py, py_args).map_err(to_datafusion_err)?;
 
             // 2. call function
             self.accum
                 .bind(py)
                 .call_method1("update", py_args)
-                .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
+                .map_err(|err| pyerr_to_dferr("Accumulator.update failed", err))?;
 
             Ok(())
         })
@@ -90,21 +90,16 @@ impl Accumulator for RustAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         Python::attach(|py| {
             // // 1. cast states to Pyarrow arrays
-            let py_states: Result<Vec<Bound<'_, PyAny>>> = states
+            let py_states = states
                 .iter()
-                .map(|state| {
-                    state
-                        .into_data()
-                        .to_pyarrow(py)
-                        .map_err(|e| DataFusionError::Execution(format!("{e}")))
-                })
-                .collect();
+                .map(|state| to_pyarrow_array(py, state))
+                .collect::<Result<Vec<_>>>()?;
 
             // 2. call merge
             self.accum
                 .bind(py)
-                .call_method1("merge", (py_states?,))
-                .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
+                .call_method1("merge", (py_states,))
+                .map_err(|err| pyerr_to_dferr("Accumulator.merge failed", err))?;
 
             Ok(())
         })
@@ -119,15 +114,15 @@ impl Accumulator for RustAccumulator {
             // 1. cast args to Pyarrow array
             let py_args = values
                 .iter()
-                .map(|arg| arg.into_data().to_pyarrow(py).unwrap())
-                .collect::<Vec<_>>();
+                .map(|arg| to_pyarrow_array(py, arg))
+                .collect::<Result<Vec<_>>>()?;
             let py_args = PyTuple::new(py, py_args).map_err(to_datafusion_err)?;
 
             // 2. call function
             self.accum
                 .bind(py)
                 .call_method1("retract_batch", py_args)
-                .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
+                .map_err(|err| pyerr_to_dferr("Accumulator.retract_batch failed", err))?;
 
             Ok(())
         })
@@ -148,7 +143,7 @@ pub fn to_rust_accumulator(accum: Py<PyAny>) -> AccumulatorFactoryFunction {
         let accum = Python::attach(|py| {
             accum
                 .call0(py)
-                .map_err(|e| DataFusionError::Execution(format!("{e}")))
+                .map_err(|err| pyerr_to_dferr("Accumulator factory failed", err))
         })?;
         Ok(Box::new(RustAccumulator::new(accum)))
     })

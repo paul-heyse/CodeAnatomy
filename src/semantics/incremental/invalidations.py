@@ -245,7 +245,7 @@ def check_state_store_invalidation(
 def _incremental_metadata_hash(runtime: IncrementalRuntime) -> str | None:
     runtime_snapshot = runtime_profile_snapshot(
         runtime.profile,
-        name=runtime.profile.config_policy_name,
+        name=runtime.profile.policies.config_policy_name,
         determinism_tier=runtime.determinism_tier,
     )
     payload = {
@@ -258,7 +258,7 @@ def _incremental_metadata_hash(runtime: IncrementalRuntime) -> str | None:
 def _runtime_profile_hash(runtime: IncrementalRuntime) -> str | None:
     return runtime_profile_snapshot(
         runtime.profile,
-        name=runtime.profile.config_policy_name,
+        name=runtime.profile.policies.config_policy_name,
         determinism_tier=runtime.determinism_tier,
     ).profile_hash
 

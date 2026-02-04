@@ -83,7 +83,10 @@ impl PySubstraitSerializer {
         py: Python,
     ) -> PyDataFusionResult<PyPlan> {
         PySubstraitSerializer::serialize_bytes(sql, ctx, py).and_then(|proto_bytes| {
-            let proto_bytes = proto_bytes.bind(py).downcast::<PyBytes>().unwrap();
+            let proto_bytes = proto_bytes
+                .bind(py)
+                .downcast::<PyBytes>()
+                .map_err(py_datafusion_err)?;
             PySubstraitSerializer::deserialize_bytes(proto_bytes.as_bytes().to_vec(), py)
         })
     }

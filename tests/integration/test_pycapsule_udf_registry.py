@@ -9,7 +9,11 @@ import pytest
 
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import TREE_SITTER_CHECK_VIEWS
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    DiagnosticsConfig,
+    PolicyBundleConfig,
+)
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -31,8 +35,8 @@ def test_udf_registry_snapshot_includes_capsule_payload() -> None:
     """Record UDF registry payloads while executing a UDF query."""
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
-            diagnostics_sink=diagnostics,
-            input_plugins=(_seed_tree_sitter_check_views,),
+            diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+            policies=PolicyBundleConfig(input_plugins=(_seed_tree_sitter_check_views,)),
         )
     )
     ctx = profile.session_context()

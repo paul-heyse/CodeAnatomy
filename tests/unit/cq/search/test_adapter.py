@@ -191,6 +191,26 @@ class TestFindFilesWithPattern:
         files = find_files_with_pattern(sample_repo, pattern=r"nonexistent_pattern_xyz")
         assert len(files) == 0
 
+    def test_respects_max_files(self, sample_repo: Path) -> None:
+        """Test max_files limit is respected."""
+        limits = SearchLimits(max_files=1, max_total_matches=100)
+        files = find_files_with_pattern(sample_repo, pattern=r"def ", limits=limits)
+        assert len(files) <= 1
+
+    def test_timeout_returns_empty(
+        self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test timeout handling returns empty results."""
+        from tools.cq.search import adapter as adapter_module
+
+        def _raise_timeout(*args: object, **kwargs: object) -> list[object]:
+            raise TimeoutError("timeout")
+
+        monkeypatch.setattr(adapter_module, "search_sync_with_timeout", _raise_timeout)
+        limits = SearchLimits(timeout_seconds=0.001)
+        files = find_files_with_pattern(sample_repo, pattern=r"def ", limits=limits)
+        assert files == []
+
 
 class TestFindCallCandidates:
     """Test function call candidate detection."""

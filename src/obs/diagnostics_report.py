@@ -6,6 +6,8 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import mean
+from typing import TextIO
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,14 @@ class DiagnosticsReport:
     idle_gaps: Sequence[Mapping[str, object]]
     metrics: Mapping[str, object]
     log_summary: Mapping[str, object]
+    dataset_readiness: Mapping[str, object]
+    provider_modes: Mapping[str, object]
+    delta_log_health: Mapping[str, object]
+    plan_execution_diff: Mapping[str, object]
+    plan_phase_summary: Mapping[str, object]
+    datafusion_execution: Mapping[str, object]
+    scan_pruning: Mapping[str, object]
+    diagnostic_categories: Mapping[str, object]
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -25,7 +35,28 @@ class DiagnosticsReport:
             "idle_gaps": list(self.idle_gaps),
             "metrics": dict(self.metrics),
             "log_summary": dict(self.log_summary),
+            "dataset_readiness": dict(self.dataset_readiness),
+            "provider_modes": dict(self.provider_modes),
+            "delta_log_health": dict(self.delta_log_health),
+            "plan_execution_diff": dict(self.plan_execution_diff),
+            "plan_phase_summary": dict(self.plan_phase_summary),
+            "datafusion_execution": dict(self.datafusion_execution),
+            "scan_pruning": dict(self.scan_pruning),
+            "diagnostic_categories": dict(self.diagnostic_categories),
         }
+
+
+@dataclass(frozen=True)
+class _LogSections:
+    log_summary: Mapping[str, object]
+    dataset_readiness: Mapping[str, object]
+    provider_modes: Mapping[str, object]
+    delta_log_health: Mapping[str, object]
+    plan_execution_diff: Mapping[str, object]
+    plan_phase_summary: Mapping[str, object]
+    datafusion_execution: Mapping[str, object]
+    scan_pruning: Mapping[str, object]
+    diagnostic_categories: Mapping[str, object]
 
 
 def _span_stage(span: Mapping[str, object]) -> str | None:
@@ -68,29 +99,26 @@ def build_diagnostics_report(snapshot: Mapping[str, object]) -> DiagnosticsRepor
     """
     spans = snapshot.get("spans")
     span_rows: list[Mapping[str, object]] = list(spans) if isinstance(spans, Sequence) else []
-    sorted_spans = sorted(span_rows, key=_span_duration, reverse=True)
-    slow_spans = [_slow_span_payload(span) for span in sorted_spans[:10]]
-    stage_totals: dict[str, float] = {}
-    for span in span_rows:
-        _accumulate_stage_duration(stage_totals, span)
-    stage_breakdown = [
-        {"stage": stage, "duration_s": duration}
-        for stage, duration in sorted(stage_totals.items(), key=lambda item: item[1], reverse=True)
-    ]
-    ordered = sorted(span_rows, key=_span_start)
-    idle_gaps = [gap for gap in _idle_gaps(ordered) if gap is not None]
-    metrics = snapshot.get("gauges")
-    metrics_payload = dict(metrics) if isinstance(metrics, Mapping) else {}
-    logs = snapshot.get("logs")
-    log_summary = {
-        "count": len(logs) if isinstance(logs, Sequence) else 0,
-    }
+    slow_spans, stage_breakdown, idle_gaps = _span_sections(span_rows)
+    metrics_payload = (
+        dict(metrics) if isinstance(metrics := snapshot.get("gauges"), Mapping) else {}
+    )
+    log_rows = list(logs) if isinstance(logs := snapshot.get("logs"), Sequence) else []
+    log_sections = _build_log_sections(log_rows)
     return DiagnosticsReport(
         slow_spans=slow_spans,
         stage_breakdown=stage_breakdown,
         idle_gaps=idle_gaps,
         metrics=metrics_payload,
-        log_summary=log_summary,
+        log_summary=log_sections.log_summary,
+        dataset_readiness=log_sections.dataset_readiness,
+        provider_modes=log_sections.provider_modes,
+        delta_log_health=log_sections.delta_log_health,
+        plan_execution_diff=log_sections.plan_execution_diff,
+        plan_phase_summary=log_sections.plan_phase_summary,
+        datafusion_execution=log_sections.datafusion_execution,
+        scan_pruning=log_sections.scan_pruning,
+        diagnostic_categories=log_sections.diagnostic_categories,
     )
 
 
@@ -114,31 +142,187 @@ def write_run_diagnostics_report(
     with json_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
     with md_path.open("w", encoding="utf-8") as handle:
-        handle.write("# Run Diagnostics Report\n\n")
-        handle.write("## Slowest Spans\n")
-        for span in report.slow_spans:
-            handle.write(
-                f"- {span.get('name')} (stage={span.get('stage')}, "
-                f"duration_s={span.get('duration_s')})\n"
-            )
-        handle.write("\n## Stage Breakdown\n")
-        for row in report.stage_breakdown:
-            handle.write(f"- {row.get('stage')}: {row.get('duration_s')}s\n")
-        handle.write("\n## Idle Gaps\n")
-        if report.idle_gaps:
-            for gap in report.idle_gaps:
-                handle.write(
-                    f"- {gap.get('gap_s')}s between {gap.get('prev_span')} "
-                    f"and {gap.get('next_span')}\n"
-                )
-        else:
-            handle.write("- None detected\n")
-        handle.write("\n## Metrics Snapshot\n")
-        for key, value in report.metrics.items():
-            handle.write(f"- {key}: {value}\n")
-        handle.write("\n## Log Summary\n")
-        handle.write(f"- count: {report.log_summary.get('count')}\n")
+        _write_report_header(handle)
+        _write_slow_spans(handle, report.slow_spans)
+        _write_stage_breakdown(handle, report.stage_breakdown)
+        _write_idle_gaps(handle, report.idle_gaps)
+        _write_metrics_snapshot(handle, report.metrics)
+        _write_log_summary(handle, report.log_summary)
+        _write_dataset_readiness(handle, report.dataset_readiness)
+        _write_provider_modes(handle, report.provider_modes)
+        _write_delta_log_health(handle, report.delta_log_health)
+        _write_plan_execution(handle, report.plan_execution_diff)
+        _write_plan_phase_summary(handle, report.plan_phase_summary)
+        _write_datafusion_execution(handle, report.datafusion_execution)
+        _write_scan_pruning(handle, report.scan_pruning)
+        _write_diagnostic_categories(handle, report.diagnostic_categories)
     return md_path
+
+
+def _write_report_header(handle: TextIO) -> None:
+    handle.write("# Run Diagnostics Report\n\n")
+
+
+def _write_slow_spans(
+    handle: TextIO,
+    spans: Sequence[Mapping[str, object]],
+) -> None:
+    handle.write("## Slowest Spans\n")
+    for span in spans:
+        handle.write(
+            f"- {span.get('name')} (stage={span.get('stage')}, "
+            f"duration_s={span.get('duration_s')})\n"
+        )
+
+
+def _write_stage_breakdown(
+    handle: TextIO,
+    stage_breakdown: Sequence[Mapping[str, object]],
+) -> None:
+    handle.write("\n## Stage Breakdown\n")
+    for row in stage_breakdown:
+        handle.write(f"- {row.get('stage')}: {row.get('duration_s')}s\n")
+
+
+def _write_idle_gaps(
+    handle: TextIO,
+    idle_gaps: Sequence[Mapping[str, object]],
+) -> None:
+    handle.write("\n## Idle Gaps\n")
+    if not idle_gaps:
+        handle.write("- None detected\n")
+        return
+    for gap in idle_gaps:
+        handle.write(
+            f"- {gap.get('gap_s')}s between {gap.get('prev_span')} and {gap.get('next_span')}\n"
+        )
+
+
+def _write_metrics_snapshot(handle: TextIO, metrics: Mapping[str, object]) -> None:
+    handle.write("\n## Metrics Snapshot\n")
+    for key, value in metrics.items():
+        handle.write(f"- {key}: {value}\n")
+
+
+def _write_log_summary(handle: TextIO, log_summary: Mapping[str, object]) -> None:
+    handle.write("\n## Log Summary\n")
+    handle.write(f"- count: {log_summary.get('count')}\n")
+
+
+def _write_dataset_readiness(handle: TextIO, dataset_readiness: Mapping[str, object]) -> None:
+    handle.write("\n## Dataset Readiness\n")
+    handle.write(f"- total: {dataset_readiness.get('total', 0)}\n")
+    handle.write(f"- issues: {dataset_readiness.get('issues', 0)}\n")
+    handle.write("\n### Issue Breakdown\n")
+    issue_counts = dataset_readiness.get("issue_counts", {})
+    if isinstance(issue_counts, Mapping) and issue_counts:
+        for status, count in issue_counts.items():
+            handle.write(f"- {status}: {count}\n")
+        return
+    handle.write("- None detected\n")
+
+
+def _write_provider_modes(handle: TextIO, provider_modes: Mapping[str, object]) -> None:
+    handle.write("\n## Provider Modes\n")
+    handle.write(f"- total: {provider_modes.get('total', 0)}\n")
+    handle.write(f"- warnings: {provider_modes.get('warnings', 0)}\n")
+    modes = provider_modes.get("modes")
+    if isinstance(modes, Mapping) and modes:
+        for name, count in sorted(modes.items()):
+            handle.write(f"- {name}: {count}\n")
+        return
+    handle.write("- None detected\n")
+
+
+def _write_delta_log_health(handle: TextIO, delta_log_health: Mapping[str, object]) -> None:
+    handle.write("\n## Delta Log Health\n")
+    handle.write(f"- total: {delta_log_health.get('total', 0)}\n")
+    handle.write(f"- missing_log: {delta_log_health.get('missing_log', 0)}\n")
+    handle.write(f"- protocol_incompatible: {delta_log_health.get('protocol_incompatible', 0)}\n")
+
+
+def _write_plan_execution(handle: TextIO, plan_execution_diff: Mapping[str, object]) -> None:
+    handle.write("\n## Plan vs Execution\n")
+    handle.write(f"- expected_tasks: {plan_execution_diff.get('expected_task_count', 0)}\n")
+    handle.write(f"- executed_tasks: {plan_execution_diff.get('executed_task_count', 0)}\n")
+    handle.write(f"- missing_tasks: {plan_execution_diff.get('missing_task_count', 0)}\n")
+    handle.write(f"- unexpected_tasks: {plan_execution_diff.get('unexpected_task_count', 0)}\n")
+    plan_signature = plan_execution_diff.get("plan_signature")
+    if isinstance(plan_signature, str) and plan_signature:
+        handle.write(f"- plan_signature: {plan_signature}\n")
+    blocked_datasets = plan_execution_diff.get("blocked_datasets")
+    if isinstance(blocked_datasets, Sequence) and not isinstance(
+        blocked_datasets, (str, bytes, bytearray)
+    ):
+        handle.write(f"- blocked_datasets: {len(blocked_datasets)}\n")
+    blocked_scan_units = plan_execution_diff.get("blocked_scan_units")
+    if isinstance(blocked_scan_units, Sequence) and not isinstance(
+        blocked_scan_units, (str, bytes, bytearray)
+    ):
+        handle.write(f"- blocked_scan_units: {len(blocked_scan_units)}\n")
+
+
+def _write_plan_phase_summary(handle: TextIO, plan_phase_summary: Mapping[str, object]) -> None:
+    handle.write("\n## DataFusion Plan Phases\n")
+    phases = plan_phase_summary.get("phases")
+    if not isinstance(phases, Mapping) or not phases:
+        handle.write("- None detected\n")
+        return
+    for phase, stats in sorted(phases.items()):
+        if not isinstance(stats, Mapping):
+            continue
+        avg_ms = stats.get("avg_duration_ms")
+        count = stats.get("count", 0)
+        if isinstance(avg_ms, (int, float)):
+            handle.write(f"- {phase}: count={count}, avg_ms={avg_ms:.2f}\n")
+        else:
+            handle.write(f"- {phase}: count={count}\n")
+
+
+def _write_datafusion_execution(
+    handle: TextIO,
+    datafusion_execution: Mapping[str, object],
+) -> None:
+    handle.write("\n## DataFusion Execution\n")
+    handle.write(f"- executions: {datafusion_execution.get('total', 0)}\n")
+    handle.write(f"- errors: {datafusion_execution.get('errors', 0)}\n")
+    avg_ms = datafusion_execution.get("avg_duration_ms")
+    if isinstance(avg_ms, (int, float)):
+        handle.write(f"- avg_duration_ms: {avg_ms:.2f}\n")
+
+
+def _write_scan_pruning(handle: TextIO, scan_pruning: Mapping[str, object]) -> None:
+    handle.write("\n## Scan Pruning\n")
+    handle.write(f"- total_scans: {scan_pruning.get('total', 0)}\n")
+    avg_ratio = scan_pruning.get("avg_pruned_ratio")
+    if isinstance(avg_ratio, (int, float)):
+        handle.write(f"- avg_pruned_ratio: {avg_ratio:.2f}\n")
+    top = scan_pruning.get("top_pruned")
+    if isinstance(top, Sequence) and top:
+        handle.write("### Top Pruned Datasets\n")
+        for row in top:
+            if not isinstance(row, Mapping):
+                continue
+            dataset = row.get("dataset")
+            ratio = row.get("pruned_ratio")
+            if isinstance(dataset, str) and isinstance(ratio, (int, float)):
+                handle.write(f"- {dataset}: {ratio:.2f}\n")
+
+
+def _write_diagnostic_categories(
+    handle: TextIO,
+    diagnostic_categories: Mapping[str, object],
+) -> None:
+    handle.write("\n## Diagnostic Categories\n")
+    severity_counts = diagnostic_categories.get("severity_counts")
+    if isinstance(severity_counts, Mapping) and severity_counts:
+        for severity, count in sorted(severity_counts.items()):
+            handle.write(f"- {severity}: {count}\n")
+    category_counts = diagnostic_categories.get("category_counts")
+    if isinstance(category_counts, Mapping) and category_counts:
+        handle.write("### By Category\n")
+        for category, count in sorted(category_counts.items()):
+            handle.write(f"- {category}: {count}\n")
 
 
 def _slow_span_payload(span: Mapping[str, object]) -> dict[str, object]:
@@ -181,6 +365,341 @@ def _idle_gaps(
             }
         )
     return gaps
+
+
+def _span_sections(
+    spans: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    sorted_spans = sorted(spans, key=_span_duration, reverse=True)
+    slow_spans: list[dict[str, object]] = [_slow_span_payload(span) for span in sorted_spans[:10]]
+    stage_totals: dict[str, float] = {}
+    for span in spans:
+        _accumulate_stage_duration(stage_totals, span)
+    stage_breakdown: list[dict[str, object]] = [
+        {"stage": stage, "duration_s": duration}
+        for stage, duration in sorted(stage_totals.items(), key=lambda item: item[1], reverse=True)
+    ]
+    ordered = sorted(spans, key=_span_start)
+    idle_gaps: list[dict[str, object]] = [gap for gap in _idle_gaps(ordered) if gap is not None]
+    return slow_spans, stage_breakdown, idle_gaps
+
+
+def _build_log_sections(logs: Sequence[Mapping[str, object]]) -> _LogSections:
+    (
+        log_summary,
+        dataset_readiness,
+        provider_modes,
+        delta_log_health,
+        plan_execution_diff,
+        plan_phase_summary,
+        datafusion_execution,
+        scan_pruning,
+        diagnostic_categories,
+    ) = _log_sections(logs)
+    return _LogSections(
+        log_summary=log_summary,
+        dataset_readiness=dataset_readiness,
+        provider_modes=provider_modes,
+        delta_log_health=delta_log_health,
+        plan_execution_diff=plan_execution_diff,
+        plan_phase_summary=plan_phase_summary,
+        datafusion_execution=datafusion_execution,
+        scan_pruning=scan_pruning,
+        diagnostic_categories=diagnostic_categories,
+    )
+
+
+def _log_sections(
+    logs: Sequence[Mapping[str, object]],
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    log_summary: dict[str, object] = {"count": len(logs)}
+    dataset_readiness = _dataset_readiness_summary(logs)
+    provider_modes = _provider_mode_summary(logs)
+    delta_log_health = _delta_log_health_summary(logs)
+    plan_execution_diff = _plan_execution_diff_summary(logs, dataset_readiness)
+    plan_phase_summary = _plan_phase_summary(logs)
+    datafusion_execution = _datafusion_execution_summary(logs)
+    scan_pruning = _scan_pruning_summary(logs)
+    diagnostic_categories = _diagnostic_category_summary(logs)
+    return (
+        log_summary,
+        dataset_readiness,
+        provider_modes,
+        delta_log_health,
+        plan_execution_diff,
+        plan_phase_summary,
+        datafusion_execution,
+        scan_pruning,
+        diagnostic_categories,
+    )
+
+
+def _event_rows(logs: Sequence[Mapping[str, object]], name: str) -> list[Mapping[str, object]]:
+    rows: list[Mapping[str, object]] = []
+    for record in logs:
+        attrs = record.get("attributes")
+        if not isinstance(attrs, Mapping):
+            continue
+        if attrs.get("event.name") != name:
+            continue
+        rows.append(attrs)
+    return rows
+
+
+def _dataset_readiness_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "dataset_readiness_v1")
+    issues: list[Mapping[str, object]] = []
+    for row in rows:
+        status = row.get("status")
+        if status not in {"ok", "remote_path"}:
+            issues.append(row)
+    issue_counts: dict[str, int] = {}
+    for row in issues:
+        status = row.get("status")
+        if isinstance(status, str):
+            issue_counts[status] = issue_counts.get(status, 0) + 1
+    issue_datasets = [row.get("dataset") for row in issues if isinstance(row.get("dataset"), str)]
+    return {
+        "total": len(rows),
+        "issues": len(issues),
+        "issue_counts": issue_counts,
+        "issue_datasets": issue_datasets,
+    }
+
+
+def _provider_mode_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "dataset_provider_mode_v1")
+    modes: dict[str, int] = {}
+    warnings = 0
+    for row in rows:
+        mode = row.get("provider_mode")
+        if isinstance(mode, str):
+            modes[mode] = modes.get(mode, 0) + 1
+        severity = row.get("diagnostic.severity")
+        if severity == "warn":
+            warnings += 1
+    return {"total": len(rows), "warnings": warnings, "modes": modes}
+
+
+def _delta_log_health_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "delta_log_health_v1")
+    missing_log = 0
+    protocol_incompatible = 0
+    for row in rows:
+        if row.get("delta_log_present") is False:
+            missing_log += 1
+        if row.get("protocol_compatible") is False:
+            protocol_incompatible += 1
+    return {
+        "total": len(rows),
+        "missing_log": missing_log,
+        "protocol_incompatible": protocol_incompatible,
+    }
+
+
+def _plan_phase_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "datafusion_plan_phase_v1")
+    durations_by_phase: dict[str, list[float]] = {}
+    for row in rows:
+        phase = row.get("phase")
+        if not isinstance(phase, str):
+            continue
+        duration = row.get("duration_ms")
+        if not isinstance(duration, (int, float)):
+            continue
+        durations_by_phase.setdefault(phase, []).append(float(duration))
+    phases: dict[str, dict[str, object]] = {}
+    for phase, durations in durations_by_phase.items():
+        avg = mean(durations) if durations else None
+        phases[phase] = {
+            "count": len(durations),
+            "avg_duration_ms": avg,
+        }
+    return {"total": len(rows), "phases": phases}
+
+
+def _scan_pruning_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "scan_unit_pruning_v1")
+    ratios: list[tuple[str, float]] = []
+    ratio_values: list[float] = []
+    for row in rows:
+        dataset = row.get("dataset")
+        total_files = row.get("total_files")
+        pruned_files = row.get("pruned_files")
+        if not isinstance(dataset, str):
+            continue
+        if not isinstance(total_files, (int, float)) or total_files <= 0:
+            continue
+        if not isinstance(pruned_files, (int, float)):
+            continue
+        ratio = float(pruned_files) / float(total_files)
+        ratios.append((dataset, ratio))
+        ratio_values.append(ratio)
+    top = [
+        {"dataset": dataset, "pruned_ratio": ratio}
+        for dataset, ratio in sorted(ratios, key=lambda item: item[1], reverse=True)[:5]
+    ]
+    avg_ratio = mean(ratio_values) if ratio_values else None
+    return {"total": len(rows), "avg_pruned_ratio": avg_ratio, "top_pruned": top}
+
+
+def _diagnostic_category_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    severity_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    category_by_severity: dict[str, dict[str, int]] = {}
+    for record in logs:
+        attrs = record.get("attributes")
+        if not isinstance(attrs, Mapping):
+            continue
+        severity = attrs.get("diagnostic.severity")
+        category = attrs.get("diagnostic.category")
+        if not isinstance(severity, str) or not isinstance(category, str):
+            continue
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        category_counts[category] = category_counts.get(category, 0) + 1
+        by_severity = category_by_severity.setdefault(category, {})
+        by_severity[severity] = by_severity.get(severity, 0) + 1
+    return {
+        "severity_counts": severity_counts,
+        "category_counts": category_counts,
+        "category_by_severity": category_by_severity,
+    }
+
+
+def _plan_execution_diff_summary(
+    logs: Sequence[Mapping[str, object]],
+    dataset_readiness: Mapping[str, object],
+) -> dict[str, object]:
+    from_event = _plan_execution_diff_from_event(logs, dataset_readiness)
+    if from_event is not None:
+        return from_event
+    return _plan_execution_diff_from_tasks(logs, dataset_readiness)
+
+
+def _plan_execution_diff_from_event(
+    logs: Sequence[Mapping[str, object]],
+    dataset_readiness: Mapping[str, object],
+) -> dict[str, object] | None:
+    diff_rows = _event_rows(logs, "plan_execution_diff_v1")
+    if not diff_rows:
+        return None
+    latest = diff_rows[-1]
+    blocked_datasets = _coerce_str_list(latest.get("blocked_datasets"))
+    if not blocked_datasets:
+        blocked_datasets = _coerce_str_list(dataset_readiness.get("issue_datasets"))
+    blocked_scan_units = _coerce_str_list(latest.get("blocked_scan_units"))
+    missing_task_fingerprints = _coerce_str_mapping(latest.get("missing_task_fingerprints"))
+    missing_task_signatures = _coerce_str_mapping(latest.get("missing_task_signatures"))
+    return {
+        "expected_task_count": latest.get("expected_task_count", 0),
+        "executed_task_count": latest.get("executed_task_count", 0),
+        "missing_task_count": latest.get("missing_task_count", 0),
+        "unexpected_task_count": latest.get("unexpected_task_count", 0),
+        "missing_tasks": latest.get("missing_tasks", []),
+        "unexpected_tasks": latest.get("unexpected_tasks", []),
+        "blocked_datasets": blocked_datasets,
+        "blocked_scan_units": blocked_scan_units,
+        "missing_task_fingerprints": missing_task_fingerprints,
+        "missing_task_signatures": missing_task_signatures,
+        "plan_signature": latest.get("plan_signature"),
+        "task_dependency_signature": latest.get("task_dependency_signature"),
+        "reduced_task_dependency_signature": latest.get("reduced_task_dependency_signature"),
+    }
+
+
+def _plan_execution_diff_from_tasks(
+    logs: Sequence[Mapping[str, object]],
+    dataset_readiness: Mapping[str, object],
+) -> dict[str, object]:
+    expected_rows = _event_rows(logs, "plan_expected_tasks_v1")
+    task_rows = _event_rows(logs, "task_execution_v1")
+    expected_tasks = _expected_tasks_from_logs(expected_rows)
+    executed_tasks, status_counts = _executed_tasks_from_logs(task_rows)
+    missing = sorted(expected_tasks - executed_tasks)
+    unexpected = sorted(executed_tasks - expected_tasks)
+    blocked_by = dataset_readiness.get("issue_datasets")
+    return {
+        "expected_task_count": len(expected_tasks),
+        "executed_task_count": len(executed_tasks),
+        "missing_task_count": len(missing),
+        "unexpected_task_count": len(unexpected),
+        "missing_tasks": missing,
+        "unexpected_tasks": unexpected,
+        "execution_status_counts": status_counts,
+        "blocked_datasets": blocked_by if isinstance(blocked_by, list) else [],
+        "blocked_scan_units": [],
+    }
+
+
+def _expected_tasks_from_logs(expected_rows: Sequence[Mapping[str, object]]) -> set[str]:
+    if not expected_rows:
+        return set()
+    latest = expected_rows[-1]
+    tasks = latest.get("tasks")
+    if isinstance(tasks, Sequence) and not isinstance(tasks, (str, bytes, bytearray)):
+        return {task for task in tasks if isinstance(task, str)}
+    return set()
+
+
+def _executed_tasks_from_logs(
+    task_rows: Sequence[Mapping[str, object]],
+) -> tuple[set[str], dict[str, int]]:
+    executed_tasks: set[str] = set()
+    status_counts: dict[str, int] = {}
+    for row in task_rows:
+        name = row.get("task_name")
+        if not isinstance(name, str):
+            continue
+        executed_tasks.add(name)
+        status = row.get("status")
+        if isinstance(status, str):
+            status_counts[status] = status_counts.get(status, 0) + 1
+    return executed_tasks, status_counts
+
+
+def _coerce_str_list(value: object) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _coerce_str_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: item for key, item in value.items() if isinstance(key, str) and isinstance(item, str)
+    }
+
+
+def _datafusion_execution_summary(
+    logs: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    rows = _event_rows(logs, "datafusion_plan_execution_v1")
+    durations: list[float] = []
+    errors = 0
+    for row in rows:
+        duration = row.get("duration_ms")
+        if isinstance(duration, (int, float)):
+            durations.append(float(duration))
+        status = row.get("status")
+        if status == "error":
+            errors += 1
+    avg_duration = mean(durations) if durations else None
+    return {
+        "total": len(rows),
+        "errors": errors,
+        "avg_duration_ms": avg_duration,
+    }
 
 
 __all__ = ["build_diagnostics_report", "write_run_diagnostics_report"]

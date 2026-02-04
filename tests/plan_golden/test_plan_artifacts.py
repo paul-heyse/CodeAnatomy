@@ -258,13 +258,15 @@ def _write_golden(path: Path, payload: Mapping[str, object]) -> None:
 
 def test_plan_artifact_golden_fixture() -> None:
     """Compare plan artifacts to the golden fixture for regressions."""
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 
     profile = DataFusionRuntimeProfile(
-        enable_schema_registry=False,
-        enable_schema_evolution_adapter=False,
-        enable_function_factory=False,
-        enable_udfs=False,
+        features=FeatureGatesConfig(
+            enable_schema_registry=False,
+            enable_schema_evolution_adapter=False,
+            enable_function_factory=False,
+            enable_udfs=False,
+        ),
     )
     ctx = profile.session_context()
     session_runtime = profile.session_runtime()

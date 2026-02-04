@@ -18,7 +18,6 @@ def q(
     query_string: Annotated[str, Parameter(help='Query string (e.g., "entity=function name=foo")')],
     *,
     explain_files: Annotated[bool, Parameter(name="--explain-files", help="Include file filtering diagnostics")] = False,
-    no_cache: Annotated[bool, Parameter(name="--no-cache", help="Disable query result caching")] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
     include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
     exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
@@ -50,10 +49,7 @@ def q(
         cq q "entity=class in=src/relspec/ fields=def,imports"
     """
     from tools.cq.cli_app.context import CliResult, FilterConfig
-    from tools.cq.cache.diskcache_profile import default_cq_diskcache_profile
     from tools.cq.core.schema import mk_result, mk_runmeta, ms
-    from tools.cq.index.diskcache_query_cache import QueryCache
-    from tools.cq.index.diskcache_index_cache import IndexCache
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -84,38 +80,13 @@ def q(
 
     # Compile and execute
     plan = compile_query(parsed_query)
-    use_cache = not no_cache
-    index_cache: IndexCache | None = None
-    query_cache: QueryCache | None = None
-
-    if use_cache:
-        rule_version = ctx.toolchain.sgpy_version or "unknown"
-        profile = default_cq_diskcache_profile()
-        index_cache = IndexCache(ctx.root, rule_version, profile=profile)
-        index_cache.initialize()
-        query_cache = QueryCache(ctx.root, profile=profile)
-
-    if index_cache is None or query_cache is None:
-        result = execute_plan(
-            plan=plan,
-            query=parsed_query,
-            tc=ctx.toolchain,
-            root=ctx.root,
-            argv=ctx.argv,
-            use_cache=False,
-        )
-    else:
-        with index_cache, query_cache:
-            result = execute_plan(
-                plan=plan,
-                query=parsed_query,
-                tc=ctx.toolchain,
-                root=ctx.root,
-                argv=ctx.argv,
-                index_cache=index_cache,
-                query_cache=query_cache,
-                use_cache=use_cache,
-            )
+    result = execute_plan(
+        plan=plan,
+        query=parsed_query,
+        tc=ctx.toolchain,
+        root=ctx.root,
+        argv=ctx.argv,
+    )
 
     filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
     return CliResult(result=result, context=ctx, filters=filters)

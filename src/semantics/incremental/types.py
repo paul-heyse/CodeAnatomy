@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from semantics.incremental.config import IncrementalConfig
+from semantics.incremental.config import SemanticIncrementalConfig
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class IncrementalFileChanges:
 
 
 __all__ = [
-    "IncrementalConfig",
     "IncrementalFileChanges",
     "IncrementalImpact",
+    "SemanticIncrementalConfig",
 ]

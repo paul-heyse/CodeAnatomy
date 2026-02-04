@@ -56,7 +56,7 @@ def write_incremental_metadata(
     state_store.ensure_dirs()
     runtime_snapshot = runtime_profile_snapshot(
         runtime.profile,
-        name=runtime.profile.config_policy_name,
+        name=runtime.profile.policies.config_policy_name,
         determinism_tier=runtime.determinism_tier,
     )
     payload = IncrementalMetadataSnapshot(
@@ -153,7 +153,7 @@ class ArtifactWriteContext:
         """
         storage, log_storage = resolve_delta_store_policy(
             table_uri=table_uri,
-            policy=self.runtime.profile.delta_store_policy,
+            policy=self.runtime.profile.policies.delta_store_policy,
             storage_options=self.storage_options,
             log_storage_options=self.log_storage_options,
         )
@@ -317,7 +317,7 @@ def _write_artifact_table(
     path: Path,
     context: ArtifactWriteContext,
 ) -> str | None:
-    sink = context.runtime.profile.diagnostics_sink
+    sink = context.runtime.profile.diagnostics.diagnostics_sink
     if sink is None:
         return None
     artifacts = sink.artifacts_snapshot().get(name)

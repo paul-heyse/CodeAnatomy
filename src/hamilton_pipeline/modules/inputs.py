@@ -34,7 +34,7 @@ from hamilton_pipeline.types import (
 )
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
-from semantics.incremental import IncrementalConfig
+from semantics.incremental import SemanticIncrementalConfig
 from semantics.runtime import SemanticRuntimeConfig
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc_utils import IpcWriteConfig
@@ -51,7 +51,9 @@ else:
     DatasetCatalog = object
 
 
-def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
+def _incremental_pipeline_enabled(
+    config: SemanticIncrementalConfig | None = None,
+) -> bool:
     if config is not None:
         return bool(config.enabled)
     mode = (env_value("CODEANATOMY_PIPELINE_MODE") or "").lower()
@@ -133,7 +135,7 @@ def runtime_profile_spec(
     catalog_name, registry_catalogs = _semantic_output_catalog(
         output_config=output_config,
         semantic_root=semantic_root,
-        existing_catalogs=resolved.datafusion.registry_catalogs,
+        existing_catalogs=resolved.datafusion.catalog.registry_catalogs,
     )
     extract_root = _extract_output_root(output_config)
     extract_catalog_name, registry_catalogs = _extract_output_catalog(
@@ -143,7 +145,7 @@ def runtime_profile_spec(
     )
     cache_root = _cache_output_root(
         output_config=output_config,
-        existing=resolved.datafusion.cache_output_root,
+        existing=resolved.datafusion.policies.cache_output_root,
     )
     if not _requires_profile_update(
         (
@@ -160,13 +162,22 @@ def runtime_profile_spec(
     resolved_extract_catalog_name = extract_catalog_name
     updated_profile = replace(
         resolved.datafusion,
-        normalize_output_root=normalize_root,
-        semantic_output_root=semantic_root,
-        semantic_output_catalog_name=resolved_semantic_catalog_name,
-        extract_output_root=extract_root,
-        extract_output_catalog_name=resolved_extract_catalog_name,
-        cache_output_root=cache_root,
-        registry_catalogs=registry_catalogs,
+        data_sources=replace(
+            resolved.datafusion.data_sources,
+            normalize_output_root=normalize_root,
+            semantic_output_root=semantic_root,
+            semantic_output_catalog_name=resolved_semantic_catalog_name,
+            extract_output_root=extract_root,
+            extract_output_catalog_name=resolved_extract_catalog_name,
+        ),
+        policies=replace(
+            resolved.datafusion.policies,
+            cache_output_root=cache_root,
+        ),
+        catalog=replace(
+            resolved.datafusion.catalog,
+            registry_catalogs=registry_catalogs,
+        ),
     )
     return RuntimeProfileSpec(
         name=resolved.name,
@@ -407,7 +418,9 @@ def semantic_runtime_config(
 
 @cache(behavior="ignore")
 @apply_tag(TagPolicy(layer="inputs", kind="runtime"))
-def streaming_table_provider(incremental_config: IncrementalConfig) -> object | None:
+def streaming_table_provider(
+    incremental_config: SemanticIncrementalConfig,
+) -> object | None:
     """Return an optional streaming table provider (placeholder).
 
     This hook is reserved for Rust-backed StreamingTable providers. It is
@@ -787,7 +800,7 @@ def repo_scan_config(
     repo_root: str,
     repo_scope_config: RepoScopeConfig,
     max_files: int,
-    incremental_config: IncrementalConfig | None = None,
+    incremental_config: SemanticIncrementalConfig | None = None,
 ) -> RepoScanConfig:
     """Bundle repository scan configuration.
 
@@ -1089,12 +1102,12 @@ def incremental_config(
     repo_root: str,
     incremental_overrides: IncrementalOverrides,
     incremental_git_overrides: IncrementalGitOverrides,
-) -> IncrementalConfig:
+) -> SemanticIncrementalConfig:
     """Bundle incremental configuration values.
 
     Returns
     -------
-    IncrementalConfig
+    SemanticIncrementalConfig
         Incremental configuration bundle.
 
     Raises
@@ -1135,7 +1148,7 @@ def incremental_config(
             resolved_state_dir = Path(repo_root) / Path(state_dir)
         else:
             resolved_state_dir = Path(repo_root) / "build" / "state"
-    return IncrementalConfig(
+    return SemanticIncrementalConfig(
         enabled=enabled,
         state_dir=resolved_state_dir,
         repo_id=repo_id,

@@ -3,20 +3,31 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, BooleanArray, Float64Array, Int32Array, Int64Array, LargeStringArray, ListArray,
-    StringArray, StringViewArray, StructArray, UInt64Array, UInt8Array,
+    ListBuilder, MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
+    UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::Result;
+use datafusion_catalog_listing::ListingTable;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_fn::col;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{lit, Expr, TableProviderFilterPushDown};
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
+use parquet::arrow::ArrowWriter;
 use tokio::runtime::Runtime;
 
 use datafusion_ext::{
-    install_expr_planners_native, install_sql_macro_factory_native, registry_snapshot, udf_registry,
+    install_expr_planners_native, install_sql_macro_factory_native, registry_snapshot, udf_expr,
+    udf_registry,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -56,6 +67,34 @@ fn write_temp_csv(contents: &str) -> PathBuf {
     path.push(filename);
     fs::write(&path, contents).expect("write csv file");
     path
+}
+
+fn write_temp_parquet() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("timestamp")
+        .as_nanos();
+    let filename = format!("datafusion_ext_read_parquet_{nanos}.parquet");
+    path.push(filename);
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int64, false)]));
+    let values = Arc::new(Int64Array::from(vec![1_i64, 2, 3])) as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![values]).expect("record batch");
+    let file = fs::File::create(&path).expect("create parquet file");
+    let mut writer = ArrowWriter::try_new(file, schema, None).expect("parquet writer");
+    writer.write(&batch).expect("write parquet batch");
+    writer.close().expect("close parquet writer");
+    path
+}
+
+fn schema_to_ipc(schema: &Schema) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
+    let mut writer =
+        StreamWriter::try_new(&mut buffer, schema).expect("create schema ipc writer");
+    writer.write(&batch).expect("write schema batch");
+    writer.finish().expect("finish schema ipc writer");
+    buffer
 }
 
 fn normalize_type_name(value: &str) -> String {
@@ -145,6 +184,22 @@ fn stable_hash64_matches_expected() -> Result<()> {
         .downcast_ref::<Int64Array>()
         .expect("int64 column");
     assert_eq!(array.value(0), hash64_value("alpha"));
+    Ok(())
+}
+
+#[test]
+fn stable_hash64_coerce_types() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let state = ctx.state();
+    let udf = state
+        .scalar_functions()
+        .get("stable_hash64")
+        .expect("stable_hash64 udf");
+    let coerced = udf.inner().coerce_types(&[DataType::Utf8])?;
+    assert_eq!(coerced, vec![DataType::Utf8]);
+    assert!(udf.inner().coerce_types(&[]).is_err());
+    assert!(udf.inner().coerce_types(&[DataType::Utf8, DataType::Utf8]).is_err());
     Ok(())
 }
 
@@ -265,6 +320,97 @@ fn map_get_default_reports_short_circuit() -> Result<()> {
         .get("map_get_default")
         .expect("map_get_default udf");
     assert!(udf.short_circuits());
+    Ok(())
+}
+
+#[test]
+fn simplify_span_len_constant_folds() -> Result<()> {
+    let udf = datafusion_ext::udf::span_len_udf();
+    let fields = Fields::from(vec![
+        Field::new("bstart", DataType::Int64, true),
+        Field::new("bend", DataType::Int64, true),
+        Field::new("line_base", DataType::Int32, true),
+        Field::new("col_unit", DataType::Utf8, true),
+        Field::new("end_exclusive", DataType::Boolean, true),
+    ]);
+    let span = StructArray::new(
+        fields,
+        vec![
+            Arc::new(Int64Array::from(vec![Some(10)])),
+            Arc::new(Int64Array::from(vec![Some(25)])),
+            Arc::new(Int32Array::from(vec![Some(0)])),
+            Arc::new(StringArray::from(vec![Some("byte")])),
+            Arc::new(BooleanArray::from(vec![Some(true)])),
+        ],
+        None,
+    );
+    let expr = lit(ScalarValue::Struct(Arc::new(span)));
+    let info = SimplifyContext::new(&ExecutionProps::new());
+    let result = udf.inner().simplify(vec![expr], &info)?;
+    let ExprSimplifyResult::Simplified(expr) = result else {
+        panic!("span_len did not simplify");
+    };
+    match expr {
+        Expr::Literal(ScalarValue::Int64(Some(value)), _) => {
+            assert_eq!(value, 15);
+        }
+        other => panic!("unexpected simplified expr: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn simplify_list_unique_sorted_constant_folds() -> Result<()> {
+    let udf = datafusion_ext::udf::list_unique_sorted_udf();
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    builder.values().append_value("b");
+    builder.values().append_value("a");
+    builder.values().append_value("b");
+    builder.append(true);
+    let list_array = builder.finish();
+    let expr = lit(ScalarValue::List(Arc::new(list_array)));
+    let info = SimplifyContext::new(&ExecutionProps::new());
+    let result = udf.inner().simplify(vec![expr], &info)?;
+    let ExprSimplifyResult::Simplified(expr) = result else {
+        panic!("list_unique_sorted did not simplify");
+    };
+    let Expr::Literal(ScalarValue::List(array), _) = expr else {
+        panic!("unexpected simplified expr");
+    };
+    let values = array
+        .value(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("list values");
+    let collected: Vec<_> = values.iter().map(|v| v.unwrap()).collect();
+    assert_eq!(collected, vec!["a", "b"]);
+    Ok(())
+}
+
+#[test]
+fn simplify_map_get_default_constant_folds() -> Result<()> {
+    let udf = datafusion_ext::udf::map_get_default_udf();
+    let mut builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    builder.keys().append_value("alpha");
+    builder.values().append_value("bravo");
+    builder.append(true)?;
+    let map_array = builder.finish();
+    let map_expr = lit(ScalarValue::Map(Arc::new(map_array)));
+    let key_expr = lit(ScalarValue::Utf8(Some("alpha".to_string())));
+    let default_expr = lit(ScalarValue::Utf8(Some("fallback".to_string())));
+    let info = SimplifyContext::new(&ExecutionProps::new());
+    let result = udf
+        .inner()
+        .simplify(vec![map_expr, key_expr, default_expr], &info)?;
+    let ExprSimplifyResult::Simplified(expr) = result else {
+        panic!("map_get_default did not simplify");
+    };
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(Some(value)), _) => {
+            assert_eq!(value, "bravo");
+        }
+        other => panic!("unexpected simplified expr: {other:?}"),
+    }
     Ok(())
 }
 
@@ -580,10 +726,10 @@ fn arrow_metadata_extracts_key() -> Result<()> {
 }
 
 #[test]
-fn range_table_generates_series() -> Result<()> {
+fn range_generates_series() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let batches = run_query(&ctx, "SELECT value FROM range_table(1, 4) ORDER BY value")?;
+    let batches = run_query(&ctx, "SELECT value FROM range(1, 4) ORDER BY value")?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -1087,6 +1233,100 @@ fn read_csv_constant_folding_respects_limit() -> Result<()> {
         .expect("int64 column");
     assert_eq!(array.value(0), 2);
     let _ = fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn read_csv_udtf_returns_listing_provider() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let path = write_temp_csv("value\n1\n2\n3\n");
+    let table_functions = ctx.state().table_functions();
+    let table_fn = table_functions
+        .get("read_csv")
+        .expect("read_csv table function");
+    let provider = table_fn.create_table_provider(&[lit(path.to_string_lossy().to_string())])?;
+    assert!(
+        provider.as_any().is::<ListingTable>(),
+        "read_csv should return a ListingTable provider"
+    );
+    let filter = col("value").gt(lit(1_i64));
+    let pushdowns = provider.supports_filters_pushdown(&[&filter])?;
+    assert!(
+        matches!(
+            pushdowns.first(),
+            Some(TableProviderFilterPushDown::Exact | TableProviderFilterPushDown::Inexact)
+        ),
+        "read_csv should support filter pushdown"
+    );
+    let _ = fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn read_parquet_udtf_returns_listing_provider() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let path = write_temp_parquet();
+    let table_functions = ctx.state().table_functions();
+    let table_fn = table_functions
+        .get("read_parquet")
+        .expect("read_parquet table function");
+    let provider = table_fn.create_table_provider(&[lit(path.to_string_lossy().to_string())])?;
+    assert!(
+        provider.as_any().is::<ListingTable>(),
+        "read_parquet should return a ListingTable provider"
+    );
+    let filter = col("value").gt(lit(1_i64));
+    let pushdowns = provider.supports_filters_pushdown(&[&filter])?;
+    assert!(
+        matches!(
+            pushdowns.first(),
+            Some(TableProviderFilterPushDown::Exact | TableProviderFilterPushDown::Inexact)
+        ),
+        "read_parquet should support filter pushdown"
+    );
+    let _ = fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn read_parquet_accepts_base64_schema_ipc() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let path = write_temp_parquet();
+    let schema = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
+    let schema_ipc = schema_to_ipc(&schema);
+    let schema_b64 = STANDARD.encode(schema_ipc);
+    let options = format!(r#"{{"schema_ipc":"base64:{schema_b64}"}}"#);
+    let sql = format!(
+        "SELECT COUNT(*) AS value FROM read_parquet('{}', 2, '{}')",
+        path.to_string_lossy(),
+        options
+    );
+    let batches = run_query(&ctx, &sql)?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("int64 column");
+    assert_eq!(array.value(0), 2);
+    let _ = fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn udf_expr_registry_first_resolves_builtin_registry() -> Result<()> {
+    let ctx = SessionContext::new();
+    let registry = ctx.state().function_registry();
+    let expr = udf_expr::expr_from_registry_or_specs(
+        registry.as_ref(),
+        "sqrt",
+        vec![lit(4_f64)],
+        None,
+    )?;
+    assert!(format!("{expr}").to_lowercase().contains("sqrt"));
+    assert!(udf_expr::expr_from_name("sqrt", vec![lit(4_f64)], None).is_err());
     Ok(())
 }
 

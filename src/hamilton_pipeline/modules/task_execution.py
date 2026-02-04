@@ -31,6 +31,8 @@ from datafusion_engine.plan.execution import (
 from datafusion_engine.session.facade import ExecutionResult
 from datafusion_engine.views.registration import ensure_view_graph
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
+from obs.otel.scopes import SCOPE_EXTRACT
+from obs.otel.tracing import stage_span
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
     from extract.extractors.scip.extract import ScipExtractOptions
     from extract.session import ExtractSession
     from hamilton_pipeline.types import RepoScanConfig
-    from semantics.incremental.config import IncrementalConfig
+    from semantics.incremental.config import SemanticIncrementalConfig
 else:
     DataFrame = object
     DataFusionPlanBundle = object
@@ -52,7 +54,7 @@ else:
     ExtractSession = object
     ScipExtractOptions = object
     RepoScanConfig = object
-    IncrementalConfig = object
+    SemanticIncrementalConfig = object
     try:
         from engine.session import EngineSession
     except ImportError:
@@ -76,7 +78,7 @@ class TaskExecutionInputs:
     scan_unit_results_by_key: Mapping[str, TableLike]
     scan_units_hash: str | None
     repo_scan_config: RepoScanConfig
-    incremental_config: IncrementalConfig | None
+    incremental_config: SemanticIncrementalConfig | None
     cache_salt: str
     scip_index_path: str | None
     scip_extract_options: ScipExtractOptions
@@ -88,7 +90,7 @@ class TaskExecutionRuntimeConfig:
 
     engine_session: EngineSession
     repo_scan_config: RepoScanConfig
-    incremental_config: IncrementalConfig | None
+    incremental_config: SemanticIncrementalConfig | None
     cache_salt: str
     scip_config: ScipExecutionConfig
 
@@ -408,7 +410,7 @@ def task_execution_inputs(
 def task_execution_runtime_config(
     engine_session: EngineSession,
     repo_scan_config: RepoScanConfig,
-    incremental_config: IncrementalConfig | None,
+    incremental_config: SemanticIncrementalConfig | None,
     cache_salt: str,
     scip_execution_config: ScipExecutionConfig,
 ) -> TaskExecutionRuntimeConfig:
@@ -544,13 +546,12 @@ def _execute_view(
 
 
 def _execute_scan_task(
-    runtime: RuntimeArtifacts,
+    _runtime: RuntimeArtifacts,
     *,
     scan_task_name: str,
     scan_unit: ScanUnit,
     scan_context: PlanScanInputs,
 ) -> ExecutionResult:
-    _ensure_scan_overrides(runtime, scan_context=scan_context)
     metadata: dict[bytes, bytes] = {
         b"scan_task_name": scan_task_name.encode("utf-8"),
         b"scan_unit_key": scan_unit.key.encode("utf-8"),
@@ -558,6 +559,8 @@ def _execute_scan_task(
     }
     if scan_unit.delta_version is not None:
         metadata[b"scan_delta_version"] = str(scan_unit.delta_version).encode("utf-8")
+    if scan_context.scan_units_hash is not None:
+        metadata[b"scan_units_hash"] = scan_context.scan_units_hash.encode("utf-8")
     schema = pa.schema([], metadata=metadata)
     table = empty_table(schema)
     return ExecutionResult.from_table(table)
@@ -680,12 +683,22 @@ def _extract_repo_scan(
         cache_salt=inputs.cache_salt,
     )
     exec_ctx = ExtractExecutionContext(session=extract_session, profile=profile_name)
-    return scan_repo_tables(
-        inputs.repo_scan_config.repo_root,
-        options=options,
-        context=exec_ctx,
-        prefer_reader=False,
-    )
+    with stage_span(
+        "extract.repo_scan",
+        stage="extract.repo_scan",
+        scope_name=SCOPE_EXTRACT,
+        attributes={
+            "codeanatomy.repo_root": inputs.repo_scan_config.repo_root,
+            "codeanatomy.max_files": inputs.repo_scan_config.max_files,
+            "codeanatomy.changed_only": inputs.repo_scan_config.changed_only,
+        },
+    ):
+        return scan_repo_tables(
+            inputs.repo_scan_config.repo_root,
+            options=options,
+            context=exec_ctx,
+            prefer_reader=False,
+        )
 
 
 def _extract_scip(
@@ -896,14 +909,12 @@ def _execute_extract_task(
     inputs: TaskExecutionInputs,
     *,
     spec: TaskExecutionSpec,
-    scan_context: PlanScanInputs,
 ) -> dict[str, TableLike]:
     runtime = inputs.runtime
     session_runtime = runtime.execution
     if session_runtime is None:
         msg = "RuntimeArtifacts.execution must be configured for extract execution."
         raise ValueError(msg)
-    _ensure_scan_overrides(runtime, scan_context=scan_context)
     from extract.session import ExtractSession
     from relspec.extract_plan import extract_output_task_map
 
@@ -913,7 +924,9 @@ def _execute_extract_task(
         msg = f"Unknown extract task output {spec.task_output!r}."
         raise ValueError(msg)
     extract_session = ExtractSession(engine_session=inputs.engine_session)
-    profile_name = inputs.engine_session.datafusion_profile.config_policy_name or "default"
+    profile_name = (
+        inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
+    )
     try:
         outputs = _extract_outputs_for_template(
             inputs,
@@ -1049,7 +1062,7 @@ def _execute_and_record(
             scan_context=scan_context,
         )
     elif spec.task_kind == "extract":
-        outputs = _execute_extract_task(inputs, spec=spec, scan_context=scan_context)
+        outputs = _execute_extract_task(inputs, spec=spec)
         _record_extract_outputs(
             inputs=inputs,
             outputs=outputs,

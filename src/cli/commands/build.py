@@ -29,7 +29,7 @@ from hamilton_pipeline.types import (
     ScipIdentityOverrides,
     ScipIndexConfig,
 )
-from semantics.incremental import IncrementalConfig
+from semantics.incremental import SemanticIncrementalConfig
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -1052,11 +1052,11 @@ def _build_incremental_config(
     repo_root: Path,
     *,
     overrides: _IncrementalOverrides,
-) -> IncrementalConfig | None:
+) -> SemanticIncrementalConfig | None:
     if not overrides.incremental:
         return None
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
-    return IncrementalConfig(
+    return SemanticIncrementalConfig(
         enabled=True,
         state_dir=resolved_state_dir,
         repo_id=overrides.incremental_repo_id,

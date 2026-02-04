@@ -82,11 +82,6 @@ class TestQueryCommandParsing:
         _cmd, bound, _extra = app.parse_args(["q", "entity=function", "--explain-files"])
         assert bound.kwargs["explain_files"] is True
 
-    def test_query_with_no_cache(self) -> None:
-        """Test parsing query command with no-cache option."""
-        _cmd, bound, _extra = app.parse_args(["q", "entity=function", "--no-cache"])
-        assert bound.kwargs["no_cache"] is True
-
 
 class TestSigImpactCommandParsing:
     """Tests for sig-impact command argument parsing."""
@@ -106,36 +101,27 @@ class TestSigImpactCommandParsing:
 
 
 class TestIndexCommandParsing:
-    """Tests for index command argument parsing."""
+    """Tests for index command argument parsing.
 
-    def test_index_rebuild(self) -> None:
-        """Test parsing index command with rebuild option."""
-        _cmd, bound, _extra = app.parse_args(["index", "--rebuild"])
-        assert bound.kwargs["rebuild"] is True
+    Note: index command is deprecated and no longer has options.
+    """
 
-    def test_index_stats(self) -> None:
-        """Test parsing index command with stats option."""
-        _cmd, bound, _extra = app.parse_args(["index", "--stats"])
-        assert bound.kwargs["stats"] is True
-
-    def test_index_clear(self) -> None:
-        """Test parsing index command with clear option."""
-        _cmd, bound, _extra = app.parse_args(["index", "--clear"])
-        assert bound.kwargs["clear"] is True
+    def test_index_basic(self) -> None:
+        """Test parsing deprecated index command."""
+        _cmd, _bound, _extra = app.parse_args(["index"])
+        # Deprecated command just prints a message
 
 
 class TestCacheCommandParsing:
-    """Tests for cache command argument parsing."""
+    """Tests for cache command argument parsing.
 
-    def test_cache_stats(self) -> None:
-        """Test parsing cache command with stats option."""
-        _cmd, bound, _extra = app.parse_args(["cache", "--stats"])
-        assert bound.kwargs["stats"] is True
+    Note: cache command is deprecated and no longer has options.
+    """
 
-    def test_cache_clear(self) -> None:
-        """Test parsing cache command with clear option."""
-        _cmd, bound, _extra = app.parse_args(["cache", "--clear"])
-        assert bound.kwargs["clear"] is True
+    def test_cache_basic(self) -> None:
+        """Test parsing deprecated cache command."""
+        _cmd, _bound, _extra = app.parse_args(["cache"])
+        # Deprecated command just prints a message
 
 
 class TestOutputFormatParsing:

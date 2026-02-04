@@ -38,12 +38,6 @@ def _get_default_root() -> Path | None:
     return Path(env_root) if env_root else None
 
 
-def _get_cache_root() -> Path | None:
-    """Get DiskCache root from environment."""
-    env_root = os.environ.get("CQ_DISKCACHE_DIR")
-    return Path(env_root) if env_root else None
-
-
 @dataclass
 class CommonOptions:
     """Common options shared by most commands.
@@ -164,77 +158,3 @@ class FilterOptions:
         )
 
 
-@dataclass
-class CacheOptions:
-    """Cache control options."""
-
-    no_cache: Annotated[
-        bool,
-        Parameter(
-            name="--no-cache",
-            help="Disable query result caching",
-        ),
-    ] = False
-
-    @property
-    def use_cache(self) -> bool:
-        """Return True if caching is enabled."""
-        return not self.no_cache
-
-
-@dataclass
-class DiskCacheOptions:
-    """DiskCache override options for CQ caches."""
-
-    cache_dir: Annotated[
-        Path | None,
-        Parameter(
-            name="--cache-dir",
-            help="DiskCache root directory (default: $CQ_DISKCACHE_DIR or ~/.cache/codeanatomy/cq)",
-        ),
-    ] = field(default_factory=_get_cache_root)
-
-    cache_query_ttl: Annotated[
-        float | None,
-        Parameter(
-            name="--cache-query-ttl",
-            help="Query cache TTL in seconds (default: $CQ_DISKCACHE_QUERY_TTL_SECONDS)",
-        ),
-    ] = None
-
-    cache_query_size: Annotated[
-        int | None,
-        Parameter(
-            name="--cache-query-size",
-            help="Query cache size limit in bytes (default: $CQ_DISKCACHE_QUERY_SIZE_LIMIT)",
-        ),
-    ] = None
-
-    cache_index_size: Annotated[
-        int | None,
-        Parameter(
-            name="--cache-index-size",
-            help="Index cache size limit in bytes (default: $CQ_DISKCACHE_INDEX_SIZE_LIMIT)",
-        ),
-    ] = None
-
-    cache_query_shards: Annotated[
-        int | None,
-        Parameter(
-            name="--cache-query-shards",
-            help="Query cache shard count (default: $CQ_DISKCACHE_QUERY_SHARDS)",
-        ),
-    ] = None
-
-    def apply_env(self) -> None:
-        """Apply overrides by setting environment variables for the process."""
-        if self.cache_dir is not None:
-            os.environ["CQ_DISKCACHE_DIR"] = str(self.cache_dir)
-        if self.cache_query_ttl is not None:
-            os.environ["CQ_DISKCACHE_QUERY_TTL_SECONDS"] = str(self.cache_query_ttl)
-        if self.cache_query_size is not None:
-            os.environ["CQ_DISKCACHE_QUERY_SIZE_LIMIT"] = str(self.cache_query_size)
-        if self.cache_index_size is not None:
-            os.environ["CQ_DISKCACHE_INDEX_SIZE_LIMIT"] = str(self.cache_index_size)
-        if self.cache_query_shards is not None:
-            os.environ["CQ_DISKCACHE_QUERY_SHARDS"] = str(self.cache_query_shards)

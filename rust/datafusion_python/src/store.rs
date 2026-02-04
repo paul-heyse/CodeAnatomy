@@ -50,18 +50,17 @@ pub struct PyLocalFileSystemContext {
 impl PyLocalFileSystemContext {
     #[pyo3(signature = (prefix=None))]
     #[new]
-    fn new(prefix: Option<String>) -> Self {
+    fn new(prefix: Option<String>) -> PyResult<Self> {
         if let Some(prefix) = prefix {
-            Self {
-                inner: Arc::new(
-                    LocalFileSystem::new_with_prefix(prefix)
-                        .expect("Could not create local LocalFileSystem"),
-                ),
-            }
+            let fs = LocalFileSystem::new_with_prefix(prefix)
+                .map_err(|err| PyValueError::new_err(format!("Failed to create LocalFileSystem: {err}")))?;
+            Ok(Self {
+                inner: Arc::new(fs),
+            })
         } else {
-            Self {
+            Ok(Self {
                 inner: Arc::new(LocalFileSystem::new()),
-            }
+            })
         }
     }
 }
@@ -89,7 +88,7 @@ impl PyMicrosoftAzureContext {
         sas_query_pairs: Option<Vec<(String, String)>>,
         use_emulator: Option<bool>,
         allow_http: Option<bool>,
-    ) -> Self {
+    ) -> PyResult<Self> {
         let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(&container_name);
 
         if let Some(account) = account {
@@ -111,7 +110,9 @@ impl PyMicrosoftAzureContext {
             }
             (None, None, None) => {}
             _ => {
-                panic!("client_id, client_secret, tenat_id must be all set or all None");
+                return Err(PyValueError::new_err(
+                    "client_id, client_secret, tenant_id must be all set or all None",
+                ));
             }
         }
 
@@ -127,14 +128,13 @@ impl PyMicrosoftAzureContext {
             builder = builder.with_allow_http(allow_http);
         }
 
-        Self {
-            inner: Arc::new(
-                builder
-                    .build()
-                    .expect("Could not create Azure Storage context"), //TODO: change these to PyErr
-            ),
+        let storage = builder
+            .build()
+            .map_err(|err| PyValueError::new_err(format!("Could not create Azure Storage context: {err}")))?;
+        Ok(Self {
+            inner: Arc::new(storage),
             container_name,
-        }
+        })
     }
 }
 
@@ -150,21 +150,20 @@ impl PyGoogleCloudContext {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (bucket_name, service_account_path=None))]
     #[new]
-    fn new(bucket_name: String, service_account_path: Option<String>) -> Self {
+    fn new(bucket_name: String, service_account_path: Option<String>) -> PyResult<Self> {
         let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(&bucket_name);
 
         if let Some(credential_path) = service_account_path {
             builder = builder.with_service_account_path(credential_path);
         }
 
-        Self {
-            inner: Arc::new(
-                builder
-                    .build()
-                    .expect("Could not create Google Cloud Storage"),
-            ),
+        let storage = builder
+            .build()
+            .map_err(|err| PyValueError::new_err(format!("Could not create Google Cloud Storage: {err}")))?;
+        Ok(Self {
+            inner: Arc::new(storage),
             bucket_name,
-        }
+        })
     }
 }
 
@@ -190,7 +189,7 @@ impl PyAmazonS3Context {
         //retry_config: RetryConfig,
         allow_http: bool,
         imdsv1_fallback: bool,
-    ) -> Self {
+    ) -> PyResult<Self> {
         // start w/ the options that come directly from the environment
         let mut builder = AmazonS3Builder::from_env();
 
@@ -223,12 +222,12 @@ impl PyAmazonS3Context {
             //.with_retry_config(retry_config) #TODO: add later
             .with_allow_http(allow_http)
             .build()
-            .expect("failed to build AmazonS3");
+            .map_err(|err| PyValueError::new_err(format!("Failed to build AmazonS3: {err}")))?;
 
-        Self {
+        Ok(Self {
             inner: Arc::new(store),
             bucket_name,
-        }
+        })
     }
 }
 

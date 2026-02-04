@@ -57,7 +57,7 @@ def _cache_event_reporter(
 ) -> Callable[[Mapping[str, object]], None] | None:
     if runtime_profile is None:
         return None
-    diagnostics = runtime_profile.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics.diagnostics_sink
     if diagnostics is None:
         return None
     record_events = diagnostics.record_events
@@ -333,7 +333,7 @@ def build_view_product(
     if view_artifact is not None:
         semantic_cache_policy = view_artifact.cache_policy
     else:
-        semantic_cache_policy = profile.semantic_cache_overrides.get(view_name)
+        semantic_cache_policy = profile.data_sources.semantic_cache_overrides.get(view_name)
     prefer_reader = _resolve_prefer_reader(policy=policy)
     cache_decision = resolve_materialization_cache_decision(
         policy=policy,

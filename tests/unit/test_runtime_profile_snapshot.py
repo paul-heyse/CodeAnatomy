@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import cast
 
-from datafusion_engine.session.runtime import DataFusionJoinPolicy, DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionJoinPolicy,
+    DataFusionRuntimeProfile,
+    ExecutionConfig,
+    FeatureGatesConfig,
+    PolicyBundleConfig,
+)
 from engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 from tests.test_helpers.datafusion_runtime import df_profile
 
@@ -32,7 +38,9 @@ def test_runtime_profile_hash_changes_with_join_policy() -> None:
     base = df_profile()
     snapshot_base = runtime_profile_snapshot(base, name="test")
     modified = DataFusionRuntimeProfile(
-        join_policy=DataFusionJoinPolicy(enable_hash_join=False),
+        policies=PolicyBundleConfig(
+            join_policy=DataFusionJoinPolicy(enable_hash_join=False),
+        ),
     )
     snapshot_modified = runtime_profile_snapshot(modified, name="test")
     assert snapshot_base.profile_hash != snapshot_modified.profile_hash
@@ -47,8 +55,10 @@ def test_schema_evolution_adapter_enabled_by_default() -> None:
 def test_force_disable_ident_normalization_overrides() -> None:
     """Disable identifier normalization when forced."""
     profile = DataFusionRuntimeProfile(
-        enable_ident_normalization=True,
-        force_disable_ident_normalization=True,
+        features=FeatureGatesConfig(
+            enable_ident_normalization=True,
+            force_disable_ident_normalization=True,
+        ),
     )
     settings = profile.settings_payload()
     assert settings["datafusion.sql_parser.enable_ident_normalization"] == "false"
@@ -57,8 +67,10 @@ def test_force_disable_ident_normalization_overrides() -> None:
 def test_delta_runtime_env_telemetry_payload() -> None:
     """Expose Delta runtime env options in telemetry payloads."""
     profile = DataFusionRuntimeProfile(
-        delta_max_spill_size=DELTA_MAX_SPILL_SIZE,
-        delta_max_temp_directory_size=DELTA_MAX_TEMP_DIRECTORY_SIZE,
+        execution=ExecutionConfig(
+            delta_max_spill_size=DELTA_MAX_SPILL_SIZE,
+            delta_max_temp_directory_size=DELTA_MAX_TEMP_DIRECTORY_SIZE,
+        ),
     )
     payload = profile.telemetry_payload_v1()
     extensions = cast("dict[str, object]", payload["extensions"])

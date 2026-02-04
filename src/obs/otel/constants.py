@@ -51,6 +51,7 @@ class ScopeName(StrEnum):
     PLANNING = "codeanatomy.planning"
     SCHEDULING = "codeanatomy.scheduling"
     DATAFUSION = "codeanatomy.datafusion"
+    STORAGE = "codeanatomy.storage"
     HAMILTON = "codeanatomy.hamilton"
     CPG = "codeanatomy.cpg"
     OBS = "codeanatomy.obs"

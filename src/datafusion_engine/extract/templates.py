@@ -441,6 +441,7 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
         },
         {
             **base,
+            "bundles": [],
             "name": "python_extensions_v1",
             "fields": ["extension", "source", "repo_root"],
             "derived": None,
@@ -456,6 +457,7 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
         },
         {
             **base,
+            "bundles": [],
             "name": "scope_manifest_v1",
             "fields": [
                 "path",
@@ -496,6 +498,7 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
         {
             **base,
             "name": "file_line_index_v1",
+            "bundles": ["file_identity_no_sha"],
             "fields": [
                 "file_id",
                 "path",

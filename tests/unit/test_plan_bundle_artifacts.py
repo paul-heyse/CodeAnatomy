@@ -273,14 +273,20 @@ def test_plan_bundle_captures_async_udf_settings() -> None:
         importlib.import_module("datafusion_ext")
     except ImportError:
         pytest.skip("datafusion_ext is required for plan bundle construction.")
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.session.runtime import (
+        DataFusionRuntimeProfile,
+        FeatureGatesConfig,
+        PolicyBundleConfig,
+    )
 
     async_timeout_ms = 2500
     async_batch_size = 128
     profile = DataFusionRuntimeProfile(
-        enable_async_udfs=True,
-        async_udf_timeout_ms=async_timeout_ms,
-        async_udf_batch_size=async_batch_size,
+        features=FeatureGatesConfig(enable_async_udfs=True),
+        policies=PolicyBundleConfig(
+            async_udf_timeout_ms=async_timeout_ms,
+            async_udf_batch_size=async_batch_size,
+        ),
     )
     runtime = profile.session_runtime()
     ctx = runtime.ctx

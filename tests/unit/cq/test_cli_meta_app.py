@@ -69,16 +69,19 @@ class TestCommandRegistration:
         )
 
     def test_admin_commands_parse(self) -> None:
-        """Test that admin commands can be parsed."""
-        # Index command
+        """Test that admin commands can be parsed.
+
+        Note: index and cache commands are deprecated stubs that print deprecation notices.
+        """
+        # Index command (deprecated)
         _cmd, _bound, _ignored = app.parse_args(
-            ["index", "--stats"],
+            ["index"],
             exit_on_error=False,
             print_error=False,
         )
-        # Cache command
+        # Cache command (deprecated)
         _cmd, _bound, _ignored = app.parse_args(
-            ["cache", "--stats"],
+            ["cache"],
             exit_on_error=False,
             print_error=False,
         )
@@ -99,18 +102,24 @@ class TestContextInjection:
         assert "ctx" in ignored
 
     def test_admin_index_has_ctx_param(self) -> None:
-        """Test that index command has ctx parameter."""
+        """Test that index command has ctx parameter.
+
+        Note: index command is deprecated and no longer takes --stats.
+        """
         _cmd, _bound, ignored = app.parse_args(
-            ["index", "--stats"],
+            ["index"],
             exit_on_error=False,
             print_error=False,
         )
         assert "ctx" in ignored
 
     def test_admin_cache_has_ctx_param(self) -> None:
-        """Test that cache command has ctx parameter."""
+        """Test that cache command has ctx parameter.
+
+        Note: cache command is deprecated and no longer takes --stats.
+        """
         _cmd, _bound, ignored = app.parse_args(
-            ["cache", "--stats"],
+            ["cache"],
             exit_on_error=False,
             print_error=False,
         )

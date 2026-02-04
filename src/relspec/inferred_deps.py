@@ -124,7 +124,7 @@ def infer_deps_from_plan_bundle(
     )
 
     # Map lineage to InferredDeps format
-    tables = lineage.referenced_tables
+    tables = _expand_nested_inputs(lineage.referenced_tables)
     columns_by_table = dict(lineage.required_columns_by_dataset)
 
     # Compute required types and metadata from registry
@@ -172,6 +172,27 @@ def infer_deps_from_plan_bundle(
         required_rewrite_tags=lineage.required_rewrite_tags,
         scans=lineage.scans,
     )
+
+
+def _expand_nested_inputs(inputs: Sequence[str]) -> tuple[str, ...]:
+    expanded: list[str] = []
+    seen: set[str] = set()
+    if not inputs:
+        return ()
+    from datafusion_engine.schema.registry import nested_path_for
+
+    for name in inputs:
+        if name not in seen:
+            expanded.append(name)
+            seen.add(name)
+        try:
+            root, _path = nested_path_for(name)
+        except KeyError:
+            continue
+        if root not in seen:
+            expanded.append(root)
+            seen.add(root)
+    return tuple(expanded)
 
 
 def infer_deps_from_view_nodes(

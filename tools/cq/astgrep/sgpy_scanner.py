@@ -92,6 +92,49 @@ class SgRecord:
         return f"{self.file}:{self.start_line}:{self.start_col}"
 
 
+def _is_full_config(config: dict[str, Any]) -> bool:
+    """Check if config needs full dict form (has rule/utils/constraints/transform).
+
+    Parameters
+    ----------
+    config
+        Rule configuration dict.
+
+    Returns
+    -------
+    bool
+        True if config has top-level wrapper keys.
+    """
+    return any(k in config for k in ("rule", "utils", "constraints", "transform"))
+
+
+def _has_complex_rule_keys(config: dict[str, Any]) -> bool:
+    """Check if inner rule has complex keys needing full config.
+
+    Parameters
+    ----------
+    config
+        Inner rule configuration dict.
+
+    Returns
+    -------
+    bool
+        True if config has complex keys requiring {"rule": config} wrapper.
+    """
+    complex_keys = {
+        "regex",
+        "not",
+        "has",
+        "all",
+        "any",
+        "inside",
+        "follows",
+        "precedes",
+        "nthChild",
+    }
+    return any(k in config for k in complex_keys)
+
+
 def scan_files(
     files: list[Path],
     rules: tuple[RuleSpec, ...],
@@ -125,15 +168,24 @@ def scan_files(
         node = sg_root.root()
 
         for rule in rules:
-            config = rule.to_config()
-            # Use kwargs-based find_all when config has pattern key
-            if "pattern" in config:
-                matches = node.find_all(pattern=config["pattern"])
-            elif "kind" in config:
-                matches = node.find_all(kind=config["kind"])
+            inner_config = rule.to_config()
+
+            # Route based on config complexity
+            if _is_full_config(rule.config):
+                # Already has rule/utils/constraints wrapper
+                matches = node.find_all(rule.config)  # type: ignore[arg-type]
+            elif _has_complex_rule_keys(inner_config):
+                # Wrap in full config for complex rules
+                matches = node.find_all({"rule": inner_config})  # type: ignore[arg-type]
+            elif "pattern" in inner_config and len(inner_config) == 1:
+                # Simple pattern-only
+                matches = node.find_all(pattern=inner_config["pattern"])
+            elif "kind" in inner_config and len(inner_config) == 1:
+                # Simple kind-only
+                matches = node.find_all(kind=inner_config["kind"])
             else:
-                # For complex configs, use dict form
-                matches = node.find_all(config)  # type: ignore[arg-type]
+                # Kwargs for simple multi-key rules without complex constraints
+                matches = node.find_all(**inner_config)
 
             for match in matches:
                 record = _match_to_record(match, file_path, rule, root)

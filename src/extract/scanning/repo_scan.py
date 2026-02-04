@@ -13,6 +13,7 @@ from core_types import PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.registry import dataset_query, normalize_options
+from datafusion_engine.hashing import stable_id
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.git.history import blame_hunks, diff_paths
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -341,6 +342,7 @@ def _build_repo_file_row(
             file_sha256 = _sha256_path(abs_path)
         except OSError:
             return None
+    file_id = stable_id("file", options.repo_id, rel_posix)
     encoding: str | None = None
     if options.include_encoding:
         encoding = _detect_file_encoding(
@@ -348,7 +350,7 @@ def _build_repo_file_row(
             sample_bytes=options.encoding_sample_bytes,
         )
     return {
-        "file_id": None,
+        "file_id": file_id,
         "path": rel_posix,
         "abs_path": str(abs_path),
         "size_bytes": size_bytes,
@@ -697,6 +699,7 @@ def _with_repo_scan_cache_key(
         "repo_scan",
         {
             "repo_root": str(repo_root_path),
+            "schema_version": SCHEMA_VERSION,
             "schema_identity_hash": repo_files_fingerprint(),
             "options": to_builtins(options),
             "scope_signature": scope_signature,

@@ -28,7 +28,7 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  commands/analysis.py → impact, calls, imports, etc.             │
 │  commands/query.py → q command                                   │
 │  commands/report.py → report command                             │
-│  commands/admin.py → index, cache                                │
+│  commands/admin.py → index (deprecated), cache (deprecated), schema │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -36,14 +36,16 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │                         Macro Layer                               │
 │  macros/{impact,calls,imports,exceptions,sig_impact,...}.py       │
 │  Each macro: Request dataclass → analysis → CqResult              │
+│  calls: on-demand signature lookup (no full index build)          │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Index Layer                               │
-│  index/def_index.py   - Repo-wide symbol index (FnDecl, ClassDecl)│
-│  index/call_resolver.py - Multi-strategy call target resolution  │
+│                    Index Layer (Optional)                         │
+│  index/def_index.py   - Repo-wide symbol index (impact, sig-impact)│
+│  index/call_resolver.py - Call target resolution (impact, sig-impact)│
 │  index/arg_binder.py  - Argument → parameter binding              │
+│  Note: calls uses on-demand lookup, bypasses full index build     │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -199,6 +201,8 @@ Based on evidence quality:
 | Evidence Kind | Score | Description |
 |---------------|-------|-------------|
 | `resolved_ast` | 0.95 | Full AST analysis with symbol resolution |
+| `resolved_ast_bytecode` | 0.92 | AST resolution with bytecode enrichment |
+| `resolved_ast_closure` | 0.90 | AST resolution with closure detection |
 | `bytecode` | 0.90 | Bytecode inspection |
 | `resolved_ast_heuristic` | 0.75 | AST with heuristic matching |
 | `bytecode_heuristic` | 0.75 | Bytecode with heuristics |
@@ -264,36 +268,80 @@ Traces data flow from a function parameter to identify downstream consumers.
 
 ### calls - Call Site Census
 
-Finds all call sites for a function with argument shape analysis.
+Finds all call sites for a function with argument shape analysis and context enrichment.
 
 ```bash
 /cq calls <FUNCTION_NAME>
 ```
 
 **How it works:**
-1. Uses ripgrep to find candidate lines matching `function_name(`
-2. Parses candidate files with AST
-3. `CallFinder` visitor matches calls by name or qualified name
-4. Analyzes each call for:
+1. Uses ripgrep to pre-filter files containing `function_name(`
+2. Uses on-demand signature lookup (parses only the definition file, not full repo)
+3. Parses candidate files with AST via ast-grep
+4. `CallFinder` visitor matches calls by name or qualified name
+5. Analyzes each call for:
    - Number of positional/keyword arguments
    - Keyword argument names used
    - `*args`/`**kwargs` forwarding
    - Calling context (containing function)
    - Argument preview string
+   - Context window with source snippet
+
+**Performance:** The on-demand signature lookup avoids a full repository scan. Instead of parsing all Python files to build a complete index, cq finds only the file containing the function definition and extracts the signature from that single file.
 
 **Output sections:**
 - Summary: total sites, files, signature preview
 - Argument Shape Histogram: distribution of arg patterns
 - Keyword Argument Usage: which kwargs used how often
 - Calling Contexts: which functions call this one
-- Call Sites: detailed list with previews
+- Hazards: dynamic dispatch and forwarding patterns
+- Call Sites: detailed list with previews and context
 - Evidence
 
 **Example:**
 ```bash
-/cq calls DefIndex.build
+/cq calls build_graph_product
 /cq calls render_markdown
 ```
+
+**Enrichment Fields:**
+
+Each call site includes enrichment data for deeper analysis:
+
+| Field | Description |
+|-------|-------------|
+| `context_window` | Line range of containing function (`start_line`, `end_line`) |
+| `context_snippet` | Source code of the containing function (truncated if >30 lines) |
+| `symtable_info` | Symbol table analysis for the containing scope |
+| `bytecode_info` | Bytecode-level analysis of the call site |
+
+**context_window structure:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `start_line` | int | First line of containing function definition |
+| `end_line` | int | Last line of containing function definition |
+
+**context_snippet:**
+
+The context snippet provides the actual source code of the containing function, making it easy to understand how each call site is used without reading the full file. Snippets longer than 30 lines are truncated with a `# ... truncated (N more lines) ...` marker, showing the first 15 and last 5 lines.
+
+**symtable_info structure:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `is_closure` | bool | Whether the containing function is a closure |
+| `free_vars` | list[str] | Variables captured from enclosing scope |
+| `globals_used` | list[str] | Global variable references |
+| `nested_scopes` | int | Count of nested function definitions |
+
+**bytecode_info structure:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `load_globals` | list[str] | Global names loaded near the call |
+| `load_attrs` | list[str] | Attribute accesses near the call |
+| `call_functions` | list[str] | Other function calls in the context |
 
 ---
 
@@ -772,7 +820,9 @@ cargo install ast-grep
 
 ## Definition Index (DefIndex)
 
-The `DefIndex` is cq's core data structure for repo-wide symbol resolution.
+The `DefIndex` is cq's data structure for repo-wide symbol resolution, used by commands that require full symbol lookup (`impact`, `sig-impact`).
+
+**Note:** The `calls` command bypasses the full index build for performance. It uses on-demand signature lookup, parsing only the file containing the function definition.
 
 ### What it captures:
 
@@ -1780,63 +1830,6 @@ dot -Tpng graph.dot -o graph.png
 # Export full call graph
 /cq q "entity=function in=src/semantics/ expand=callees" --format dot
 ```
-
----
-
-## Cache Management
-
-cq uses intelligent caching to speed up repeated queries.
-
-### Cache Architecture
-
-- Query results cached by query fingerprint + file modification times
-- Cache invalidated when source files change
-- SQLite-based storage in `.cq/cache/`
-
-### Cache Commands
-
-```bash
-# Show cache statistics
-/cq cache --stats
-
-# Clear the cache
-/cq cache --clear
-```
-
-### Cache Stats Output
-
-```
-Cache Statistics:
-  Location: .cq/cache/query_cache.db
-  Entries: 1,247
-  Size: 12.3 MB
-  Hit rate: 78.4%
-  Last pruned: 2024-01-15 14:23:00
-```
-
-### Bypassing Cache
-
-```bash
-# Run query without using cache
-/cq q "entity=function" --no-cache
-```
-
-### Cache Invalidation
-
-The cache is automatically invalidated when:
-- Source files are modified (based on mtime)
-- File hashes change
-- Query parameters change
-
-### Cache Configuration
-
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CQ_CACHE_DIR` | `.cq/cache` | Cache directory location |
-| `CQ_CACHE_TTL` | `3600` | Cache TTL in seconds |
-| `CQ_CACHE_DISABLED` | `false` | Disable caching entirely |
 
 ---
 

@@ -107,7 +107,7 @@ def register_table(
                 raise ValueError(msg) from exc
     location = apply_delta_store_policy(
         request.location,
-        policy=request.runtime_profile.delta_store_policy,
+        policy=request.runtime_profile.policies.delta_store_policy,
     )
     from datafusion_engine.dataset.registry import resolve_dataset_schema
 

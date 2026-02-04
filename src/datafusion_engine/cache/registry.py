@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import col, lit
 
 from datafusion_engine.cache.inventory import (
@@ -15,7 +16,7 @@ from datafusion_engine.cache.inventory import (
     record_cache_inventory_entry,
 )
 from datafusion_engine.delta.contracts import enforce_schema_evolution
-from storage.deltalake import DeltaSchemaRequest, delta_table_version
+from storage.deltalake import DeltaSchemaRequest
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -82,8 +83,8 @@ def resolve_cache_hit(
         return None
     if record.cache_path != request.cache_path:
         return None
-    current_version = delta_table_version(
-        request.cache_path,
+    current_version = profile.delta_service().table_version(
+        path=request.cache_path,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,
     )
@@ -153,7 +154,11 @@ def register_cached_delta_table(
 
     pinned = location
     if snapshot_version is not None:
-        pinned = replace(location, delta_version=snapshot_version, delta_timestamp=None)
+        pinned = msgspec.structs.replace(
+            location,
+            delta_version=snapshot_version,
+            delta_timestamp=None,
+        )
     register_dataset_df(
         ctx,
         name=name,

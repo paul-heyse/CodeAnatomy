@@ -473,14 +473,14 @@ This is the exact DataFusion expression shape you want for these columns (pseudo
 
 ```python
 from datafusion import col, lit, functions as f
-from datafusion_engine.udf.shims import stable_id_parts, span_make
+from datafusion_engine.udf.expr import udf_expr
 
 def _nullable_stable_id(ns: str, path_c: str, start_c: str, end_c: str, guard_cols=()):
     cond = col(start_c).is_null() | col(end_c).is_null()
     for g in guard_cols:
         cond = cond | col(g).is_null()
     return f.when(cond, lit(None)).otherwise(
-        stable_id_parts(ns, col(path_c), col(start_c), col(end_c))
+        udf_expr("stable_id_parts", ns, col(path_c), col(start_c), col(end_c))
     )
 
 def normalize_from_spec(ctx, spec: SemanticTableSpec):
@@ -493,7 +493,11 @@ def normalize_from_spec(ctx, spec: SemanticTableSpec):
         .with_column(spec.primary_span.canonical_end, col(spec.primary_span.end_col))
         .with_column(
             spec.primary_span.canonical_span,
-            span_make(col(spec.primary_span.canonical_start), col(spec.primary_span.canonical_end)),
+            udf_expr(
+                "span_make",
+                col(spec.primary_span.canonical_start),
+                col(spec.primary_span.canonical_end),
+            ),
         )
     )
 

@@ -35,7 +35,7 @@ from serde_msgspec import (
     validation_error_payload,
 )
 from serde_msgspec_ext import SubstraitBytes
-from storage.deltalake import DeltaSchemaRequest, delta_table_schema, delta_table_version
+from storage.deltalake import DeltaSchemaRequest
 from utils.hashing import hash_json_default, hash_sha256_hex
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ def ensure_plan_artifacts_table(
     if location is None:
         return None
     table_path = Path(location.path)
-    existing_version = delta_table_version(str(table_path))
+    existing_version = profile.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
             _reset_artifacts_table_path(
@@ -169,7 +169,7 @@ def ensure_plan_artifacts_table(
                 reason="delta_table_version_unavailable",
             )
         _bootstrap_plan_artifacts_table(ctx, profile, table_path)
-    elif not _delta_schema_available(location):
+    elif not _delta_schema_available(location, profile=profile):
         _reset_artifacts_table_path(
             profile,
             table_path,
@@ -196,7 +196,7 @@ def ensure_hamilton_events_table(
     if location is None:
         return None
     table_path = Path(location.path)
-    existing_version = delta_table_version(str(table_path))
+    existing_version = profile.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
             _reset_artifacts_table_path(
@@ -206,7 +206,7 @@ def ensure_hamilton_events_table(
                 reason="delta_table_version_unavailable",
             )
         _bootstrap_hamilton_events_table(ctx, profile, table_path)
-    elif not _delta_schema_available(location):
+    elif not _delta_schema_available(location, profile=profile):
         _reset_artifacts_table_path(
             profile,
             table_path,
@@ -661,7 +661,7 @@ def _write_artifact_table(
     )
     if result.delta_result is not None and result.delta_result.version is not None:
         return result.delta_result.version
-    return delta_table_version(str(request.table_path))
+    return profile.delta_service().table_version(path=str(request.table_path))
 
 
 def persist_plan_artifact_rows(
@@ -944,16 +944,20 @@ def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
         if overrides is None:
             overrides = DatasetLocationOverrides(delta_scan=resolved_scan)
         else:
-            overrides = replace(overrides, delta_scan=resolved_scan)
-    return replace(
+            overrides = msgspec.structs.replace(overrides, delta_scan=resolved_scan)
+    return msgspec.structs.replace(
         location,
         overrides=overrides,
         delta_log_storage_options=dict(resolved_log or {}),
     )
 
 
-def _delta_schema_available(location: DatasetLocation) -> bool:
-    schema = delta_table_schema(
+def _delta_schema_available(
+    location: DatasetLocation,
+    *,
+    profile: DataFusionRuntimeProfile,
+) -> bool:
+    schema = profile.delta_service().table_schema(
         DeltaSchemaRequest(
             path=str(location.path),
             storage_options=location.storage_options or None,

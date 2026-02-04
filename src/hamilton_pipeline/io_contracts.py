@@ -44,7 +44,7 @@ from serde_artifacts import (
     RunManifestEnvelope,
 )
 from serde_msgspec import convert, dumps_msgpack, to_builtins
-from storage.deltalake import DeltaWritePolicy, delta_table_version
+from storage.deltalake import DeltaWritePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, ParquetWriterPolicy
 from storage.ipc_utils import payload_hash
 from utils.uuid_factory import uuid7_hex
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from core_types import JsonDict, JsonValue
     from datafusion_engine.io.write import WriteResult
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
-    from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from hamilton_pipeline.types import CacheRuntimeContext
 
     type DataSaverDict = dict[str, JsonValue]
@@ -565,13 +565,14 @@ def _delta_output_version(
     target_dir: Path,
     output_config: OutputConfig,
     dataset_name: str,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> int:
     final_version = (
         write_result.delta_result.version if write_result.delta_result is not None else None
     )
     if final_version is None:
-        final_version = delta_table_version(
-            str(target_dir),
+        final_version = runtime_profile.delta_service().table_version(
+            path=str(target_dir),
             storage_options=output_config.delta_storage_options,
         )
     if final_version is None:
@@ -627,6 +628,7 @@ def _delta_write(
         target_dir=target_dir,
         output_config=output_config,
         dataset_name=details.dataset_name,
+        runtime_profile=runtime_profile,
     )
     spec = delta_output_spec_for(details.dataset_name)
     if spec is None:

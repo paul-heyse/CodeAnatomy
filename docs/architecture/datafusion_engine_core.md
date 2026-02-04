@@ -953,7 +953,7 @@ This prevents accidental mutation and enables safe sharing across threads and pr
 - **`udf/parity.py`**: UDF parity validation
   - Information schema parity checks
 
-- **`udf/shims.py`**: Python shims for Rust UDFs
+- **`udf/expr.py`**: Generic UDF expression helper for Rust-backed UDFs
   - Python-side UDF wrappers for testing
 
 ### View Registration and Graph Management

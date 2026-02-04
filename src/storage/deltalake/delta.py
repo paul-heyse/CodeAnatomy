@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -26,6 +26,7 @@ from utils.value_coercion import coerce_int, coerce_str_list
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from opentelemetry.trace import Span
 
     from datafusion_engine.delta.control_plane import (
         DeltaAppTransaction,
@@ -108,6 +109,25 @@ def _storage_span_attributes(
     if extra:
         attrs.update({key: value for key, value in extra.items() if value is not None})
     return attrs
+
+
+def _feature_control_span(
+    options: DeltaFeatureMutationOptions,
+    *,
+    operation: str,
+) -> Iterator[Span]:
+    attrs = _storage_span_attributes(
+        operation="feature_control",
+        table_path=options.path,
+        dataset_name=options.dataset_name,
+        extra={"codeanatomy.feature_name": operation},
+    )
+    return stage_span(
+        "storage.feature_control",
+        stage="storage",
+        scope_name=SCOPE_STORAGE,
+        attributes=attrs,
+    )
 
 
 def query_delta_sql(
@@ -745,42 +765,43 @@ def enable_delta_features(
     properties = {key: str(value) for key, value in resolved.items() if value is not None}
     if not properties:
         return {}
-    profile = _runtime_profile_for_delta(options.runtime_profile)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaCommitOptions,
-            DeltaSetPropertiesRequest,
-            delta_set_properties,
-        )
+    with _feature_control_span(options, operation="set_properties"):
+        profile = _runtime_profile_for_delta(options.runtime_profile)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaCommitOptions,
+                DeltaSetPropertiesRequest,
+                delta_set_properties,
+            )
 
-        report = delta_set_properties(
-            ctx,
-            request=DeltaSetPropertiesRequest(
-                table_uri=options.path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                properties=properties,
-                gate=options.gate,
-                commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
-            ),
+            report = delta_set_properties(
+                ctx,
+                request=DeltaSetPropertiesRequest(
+                    table_uri=options.path,
+                    storage_options=storage or None,
+                    version=None,
+                    timestamp=None,
+                    properties=properties,
+                    gate=options.gate,
+                    commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to set Delta table properties via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="set_properties",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to set Delta table properties via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="set_properties",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return properties
 
 
@@ -838,44 +859,45 @@ def delta_add_constraints(
     if not constraints:
         return {}
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
-    profile = _runtime_profile_for_delta(options.runtime_profile)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaAddConstraintsRequest,
-            DeltaCommitOptions,
-        )
-        from datafusion_engine.delta.control_plane import (
-            delta_add_constraints as add_constraints,
-        )
+    with _feature_control_span(options, operation="add_constraints"):
+        profile = _runtime_profile_for_delta(options.runtime_profile)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaAddConstraintsRequest,
+                DeltaCommitOptions,
+            )
+            from datafusion_engine.delta.control_plane import (
+                delta_add_constraints as add_constraints,
+            )
 
-        report = add_constraints(
-            ctx,
-            request=DeltaAddConstraintsRequest(
-                table_uri=options.path,
-                storage_options=storage or None,
-                version=options.version,
-                timestamp=options.timestamp,
-                constraints=dict(constraints),
-                gate=options.gate,
-                commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
-            ),
+            report = add_constraints(
+                ctx,
+                request=DeltaAddConstraintsRequest(
+                    table_uri=options.path,
+                    storage_options=storage or None,
+                    version=options.version,
+                    timestamp=options.timestamp,
+                    constraints=dict(constraints),
+                    gate=options.gate,
+                    commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to add Delta constraints via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="add_constraints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to add Delta constraints via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="add_constraints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -900,45 +922,46 @@ def delta_drop_constraints(
     if not constraints:
         return {}
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
-    profile = _runtime_profile_for_delta(options.runtime_profile)
-    ctx = profile.delta_runtime_ctx()
-    try:
-        from datafusion_engine.delta.control_plane import (
-            DeltaCommitOptions,
-            DeltaDropConstraintsRequest,
-        )
-        from datafusion_engine.delta.control_plane import (
-            delta_drop_constraints as drop_constraints,
-        )
+    with _feature_control_span(options, operation="drop_constraints"):
+        profile = _runtime_profile_for_delta(options.runtime_profile)
+        ctx = profile.delta_runtime_ctx()
+        try:
+            from datafusion_engine.delta.control_plane import (
+                DeltaCommitOptions,
+                DeltaDropConstraintsRequest,
+            )
+            from datafusion_engine.delta.control_plane import (
+                delta_drop_constraints as drop_constraints,
+            )
 
-        report = drop_constraints(
-            ctx,
-            request=DeltaDropConstraintsRequest(
-                table_uri=options.path,
-                storage_options=storage or None,
-                version=options.version,
-                timestamp=options.timestamp,
-                constraints=list(constraints),
-                raise_if_not_exists=raise_if_not_exists,
-                gate=options.gate,
-                commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
-            ),
+            report = drop_constraints(
+                ctx,
+                request=DeltaDropConstraintsRequest(
+                    table_uri=options.path,
+                    storage_options=storage or None,
+                    version=options.version,
+                    timestamp=options.timestamp,
+                    constraints=list(constraints),
+                    raise_if_not_exists=raise_if_not_exists,
+                    gate=options.gate,
+                    commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
+                ),
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to drop Delta constraints via Rust control plane: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="drop_constraints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to drop Delta constraints via Rust control plane: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="drop_constraints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -960,31 +983,32 @@ def enable_delta_column_mapping(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_column_mapping
+    with _feature_control_span(options, operation="enable_column_mapping"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_column_mapping
 
-        report = delta_enable_column_mapping(
-            ctx,
-            request=request,
-            mode=mode,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_column_mapping(
+                ctx,
+                request=request,
+                mode=mode,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta column mapping: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_column_mapping",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta column mapping: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_column_mapping",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1005,30 +1029,31 @@ def enable_delta_deletion_vectors(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_deletion_vectors
+    with _feature_control_span(options, operation="enable_deletion_vectors"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_deletion_vectors
 
-        report = delta_enable_deletion_vectors(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_deletion_vectors(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta deletion vectors: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_deletion_vectors",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta deletion vectors: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_deletion_vectors",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1049,30 +1074,31 @@ def enable_delta_row_tracking(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_row_tracking
+    with _feature_control_span(options, operation="enable_row_tracking"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_row_tracking
 
-        report = delta_enable_row_tracking(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_row_tracking(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta row tracking: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_row_tracking",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta row tracking: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_row_tracking",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1093,30 +1119,31 @@ def enable_delta_change_data_feed(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_change_data_feed
+    with _feature_control_span(options, operation="enable_change_data_feed"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_change_data_feed
 
-        report = delta_enable_change_data_feed(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_change_data_feed(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta change data feed: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_change_data_feed",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta change data feed: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_change_data_feed",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1137,30 +1164,31 @@ def enable_delta_generated_columns(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_generated_columns
+    with _feature_control_span(options, operation="enable_generated_columns"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_generated_columns
 
-        report = delta_enable_generated_columns(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_generated_columns(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta generated columns: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_generated_columns",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta generated columns: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_generated_columns",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1181,30 +1209,31 @@ def enable_delta_invariants(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_invariants
+    with _feature_control_span(options, operation="enable_invariants"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_invariants
 
-        report = delta_enable_invariants(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_invariants(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta invariants: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_invariants",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta invariants: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_invariants",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1225,30 +1254,31 @@ def enable_delta_check_constraints(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_check_constraints
+    with _feature_control_span(options, operation="enable_check_constraints"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_check_constraints
 
-        report = delta_enable_check_constraints(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_check_constraints(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta check constraints: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_check_constraints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta check constraints: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_check_constraints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1270,31 +1300,32 @@ def enable_delta_in_commit_timestamps(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_in_commit_timestamps
+    with _feature_control_span(options, operation="enable_in_commit_timestamps"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_in_commit_timestamps
 
-        report = delta_enable_in_commit_timestamps(
-            ctx,
-            request=request,
-            enablement_version=enablement_version,
-            enablement_timestamp=enablement_timestamp,
+            report = delta_enable_in_commit_timestamps(
+                ctx,
+                request=request,
+                enablement_version=enablement_version,
+                enablement_timestamp=enablement_timestamp,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta in-commit timestamps: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_in_commit_timestamps",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta in-commit timestamps: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_in_commit_timestamps",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1315,30 +1346,31 @@ def enable_delta_v2_checkpoints(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_v2_checkpoints
+    with _feature_control_span(options, operation="enable_v2_checkpoints"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_v2_checkpoints
 
-        report = delta_enable_v2_checkpoints(
-            ctx,
-            request=request,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            report = delta_enable_v2_checkpoints(
+                ctx,
+                request=request,
+                allow_protocol_versions_increase=allow_protocol_versions_increase,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta v2 checkpoints: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_v2_checkpoints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta v2 checkpoints: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_v2_checkpoints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1357,26 +1389,29 @@ def enable_delta_vacuum_protocol_check(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_vacuum_protocol_check
+    with _feature_control_span(options, operation="enable_vacuum_protocol_check"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import (
+                delta_enable_vacuum_protocol_check,
+            )
 
-        report = delta_enable_vacuum_protocol_check(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta vacuum protocol check: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_vacuum_protocol_check",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_enable_vacuum_protocol_check(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta vacuum protocol check: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_vacuum_protocol_check",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1395,26 +1430,27 @@ def enable_delta_checkpoint_protection(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_enable_checkpoint_protection
+    with _feature_control_span(options, operation="enable_checkpoint_protection"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_enable_checkpoint_protection
 
-        report = delta_enable_checkpoint_protection(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to enable Delta checkpoint protection: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="enable_checkpoint_protection",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_enable_checkpoint_protection(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to enable Delta checkpoint protection: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="enable_checkpoint_protection",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1433,26 +1469,27 @@ def disable_delta_change_data_feed(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_change_data_feed
+    with _feature_control_span(options, operation="disable_change_data_feed"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_change_data_feed
 
-        report = delta_disable_change_data_feed(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta change data feed: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_change_data_feed",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_change_data_feed(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta change data feed: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_change_data_feed",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1471,26 +1508,27 @@ def disable_delta_deletion_vectors(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_deletion_vectors
+    with _feature_control_span(options, operation="disable_deletion_vectors"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_deletion_vectors
 
-        report = delta_disable_deletion_vectors(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta deletion vectors: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_deletion_vectors",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_deletion_vectors(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta deletion vectors: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_deletion_vectors",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1509,26 +1547,27 @@ def disable_delta_row_tracking(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_row_tracking
+    with _feature_control_span(options, operation="disable_row_tracking"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_row_tracking
 
-        report = delta_disable_row_tracking(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta row tracking: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_row_tracking",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_row_tracking(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta row tracking: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_row_tracking",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1547,26 +1586,27 @@ def disable_delta_in_commit_timestamps(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_in_commit_timestamps
+    with _feature_control_span(options, operation="disable_in_commit_timestamps"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_in_commit_timestamps
 
-        report = delta_disable_in_commit_timestamps(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta in-commit timestamps: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_in_commit_timestamps",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_in_commit_timestamps(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta in-commit timestamps: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_in_commit_timestamps",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1585,26 +1625,29 @@ def disable_delta_vacuum_protocol_check(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_vacuum_protocol_check
+    with _feature_control_span(options, operation="disable_vacuum_protocol_check"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import (
+                delta_disable_vacuum_protocol_check,
+            )
 
-        report = delta_disable_vacuum_protocol_check(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta vacuum protocol check: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_vacuum_protocol_check",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_vacuum_protocol_check(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta vacuum protocol check: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_vacuum_protocol_check",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 
@@ -1623,29 +1666,30 @@ def disable_delta_column_mapping(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_column_mapping
+    with _feature_control_span(options, operation="disable_column_mapping"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_column_mapping
 
-        report = _require_feature_report(
-            delta_disable_column_mapping(ctx, request=request),
-            operation="disable_column_mapping",
+            report = _require_feature_report(
+                delta_disable_column_mapping(ctx, request=request),
+                operation="disable_column_mapping",
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta column mapping: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_column_mapping",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta column mapping: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_column_mapping",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1664,29 +1708,30 @@ def disable_delta_generated_columns(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_generated_columns
+    with _feature_control_span(options, operation="disable_generated_columns"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_generated_columns
 
-        report = _require_feature_report(
-            delta_disable_generated_columns(ctx, request=request),
-            operation="disable_generated_columns",
+            report = _require_feature_report(
+                delta_disable_generated_columns(ctx, request=request),
+                operation="disable_generated_columns",
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta generated columns: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_generated_columns",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta generated columns: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_generated_columns",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1705,29 +1750,30 @@ def disable_delta_invariants(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_invariants
+    with _feature_control_span(options, operation="disable_invariants"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_invariants
 
-        report = _require_feature_report(
-            delta_disable_invariants(ctx, request=request),
-            operation="disable_invariants",
+            report = _require_feature_report(
+                delta_disable_invariants(ctx, request=request),
+                operation="disable_invariants",
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta invariants: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_invariants",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta invariants: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_invariants",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1746,29 +1792,30 @@ def disable_delta_check_constraints(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_check_constraints
+    with _feature_control_span(options, operation="disable_check_constraints"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_check_constraints
 
-        report = _require_feature_report(
-            delta_disable_check_constraints(ctx, request=request),
-            operation="disable_check_constraints",
+            report = _require_feature_report(
+                delta_disable_check_constraints(ctx, request=request),
+                operation="disable_check_constraints",
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta check constraints: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_check_constraints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta check constraints: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_check_constraints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1787,29 +1834,30 @@ def disable_delta_v2_checkpoints(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_v2_checkpoints
+    with _feature_control_span(options, operation="disable_v2_checkpoints"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_v2_checkpoints
 
-        report = _require_feature_report(
-            delta_disable_v2_checkpoints(ctx, request=request),
-            operation="disable_v2_checkpoints",
+            report = _require_feature_report(
+                delta_disable_v2_checkpoints(ctx, request=request),
+                operation="disable_v2_checkpoints",
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta v2 checkpoints: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_v2_checkpoints",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta v2 checkpoints: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_v2_checkpoints",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
-        )
-    )
     return report
 
 
@@ -1828,26 +1876,27 @@ def disable_delta_checkpoint_protection(
     RuntimeError
         Raised when the Rust control-plane call fails.
     """
-    ctx, request = _feature_enable_request(options)
-    try:
-        from datafusion_engine.delta.control_plane import delta_disable_checkpoint_protection
+    with _feature_control_span(options, operation="disable_checkpoint_protection"):
+        ctx, request = _feature_enable_request(options)
+        try:
+            from datafusion_engine.delta.control_plane import delta_disable_checkpoint_protection
 
-        report = delta_disable_checkpoint_protection(ctx, request=request)
-    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to disable Delta checkpoint protection: {exc}"
-        raise RuntimeError(msg) from exc
-    _record_delta_feature_mutation(
-        _DeltaFeatureMutationRecord(
-            runtime_profile=options.runtime_profile,
-            report=report,
-            operation="disable_checkpoint_protection",
-            path=options.path,
-            storage_options=options.storage_options,
-            log_storage_options=options.log_storage_options,
-            dataset_name=options.dataset_name,
-            commit_metadata=options.commit_metadata,
+            report = delta_disable_checkpoint_protection(ctx, request=request)
+        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to disable Delta checkpoint protection: {exc}"
+            raise RuntimeError(msg) from exc
+        _record_delta_feature_mutation(
+            _DeltaFeatureMutationRecord(
+                runtime_profile=options.runtime_profile,
+                report=report,
+                operation="disable_checkpoint_protection",
+                path=options.path,
+                storage_options=options.storage_options,
+                log_storage_options=options.log_storage_options,
+                dataset_name=options.dataset_name,
+                commit_metadata=options.commit_metadata,
+            )
         )
-    )
     return report
 
 

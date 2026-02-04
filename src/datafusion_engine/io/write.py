@@ -55,6 +55,7 @@ from datafusion_engine.dataset.registry import (
     resolve_delta_schema_policy,
     resolve_delta_write_policy,
 )
+from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.contracts import delta_constraints_for_location
@@ -67,12 +68,7 @@ from datafusion_engine.sql.options import sql_options_for_profile
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
-from storage.deltalake import (
-    DeltaWriteResult,
-    delta_history_snapshot,
-    delta_table_version,
-    idempotent_commit_properties,
-)
+from storage.deltalake import DeltaWriteResult, idempotent_commit_properties
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -81,19 +77,7 @@ from storage.deltalake.config import (
     delta_write_configuration,
     resolve_stats_columns,
 )
-from storage.deltalake.delta import (
-    DeltaFeatureMutationOptions,
-    IdempotentWriteOptions,
-    delta_add_constraints,
-    enable_delta_change_data_feed,
-    enable_delta_check_constraints,
-    enable_delta_column_mapping,
-    enable_delta_deletion_vectors,
-    enable_delta_features,
-    enable_delta_in_commit_timestamps,
-    enable_delta_row_tracking,
-    enable_delta_v2_checkpoints,
-)
+from storage.deltalake.delta import DeltaFeatureMutationOptions, IdempotentWriteOptions
 from utils.hashing import hash_sha256_hex
 from utils.storage_options import normalize_storage_options
 
@@ -575,12 +559,12 @@ def _delta_feature_mutation_options(
     DeltaFeatureMutationOptions
         Options used by feature mutation routines.
     """
-    return DeltaFeatureMutationOptions(
+    service = delta_service_for_profile(runtime_profile)
+    return service.feature_mutation_options(
         path=spec.table_uri,
         storage_options=spec.storage_options,
         log_storage_options=spec.log_storage_options,
         commit_metadata=spec.commit_metadata,
-        runtime_profile=runtime_profile,
         dataset_name=spec.commit_key,
         gate=spec.feature_gate,
     )
@@ -602,23 +586,24 @@ def _apply_explicit_delta_features(
     """
     if not spec.enable_features:
         return
+    service = delta_service_for_profile(runtime_profile)
     options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
     for feature in spec.enable_features:
         if feature == "change_data_feed":
-            enable_delta_change_data_feed(options)
+            service.enable_change_data_feed(options)
         elif feature == "deletion_vectors":
-            enable_delta_deletion_vectors(options)
+            service.enable_deletion_vectors(options)
         elif feature == "row_tracking":
-            enable_delta_row_tracking(options)
+            service.enable_row_tracking(options)
         elif feature == "in_commit_timestamps":
-            enable_delta_in_commit_timestamps(options)
+            service.enable_in_commit_timestamps(options)
         elif feature == "column_mapping":
-            enable_delta_column_mapping(
+            service.enable_column_mapping(
                 options,
                 mode=spec.table_properties.get("delta.columnMapping.mode", "name"),
             )
         elif feature == "v2_checkpoints":
-            enable_delta_v2_checkpoints(options)
+            service.enable_v2_checkpoints(options)
 
 
 def _delta_constraint_name(expression: str) -> str:
@@ -626,9 +611,14 @@ def _delta_constraint_name(expression: str) -> str:
     return f"ck_{digest}"
 
 
-def _existing_delta_constraints(spec: DeltaWriteSpec) -> dict[str, str]:
-    snapshot = delta_history_snapshot(
-        spec.table_uri,
+def _existing_delta_constraints(
+    spec: DeltaWriteSpec,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> dict[str, str]:
+    service = delta_service_for_profile(runtime_profile)
+    snapshot = service.history_snapshot(
+        path=spec.table_uri,
         storage_options=spec.storage_options,
         log_storage_options=spec.log_storage_options,
         gate=spec.feature_gate,
@@ -675,12 +665,13 @@ def _apply_delta_check_constraints(
 ) -> str:
     if not spec.extra_constraints:
         return "skipped"
+    service = delta_service_for_profile(runtime_profile)
     options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
-    enable_delta_check_constraints(options)
-    existing = _existing_delta_constraints(spec)
+    service.enable_check_constraints(options)
+    existing = _existing_delta_constraints(spec, runtime_profile=runtime_profile)
     to_add = _delta_constraints_to_add(spec.extra_constraints, existing=existing)
     if to_add:
-        delta_add_constraints(options, constraints=to_add)
+        service.add_constraints(options, constraints=to_add)
         return "added"
     return "present"
 
@@ -1550,8 +1541,9 @@ class WritePipeline:
             Raised when ERROR mode encounters an existing destination.
         """
         local_path = Path(spec.table_uri)
-        existing_version = delta_table_version(
-            spec.table_uri,
+        delta_service = delta_service_for_profile(self.runtime_profile)
+        existing_version = delta_service.table_version(
+            path=spec.table_uri,
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
         )
@@ -1569,16 +1561,16 @@ class WritePipeline:
         )
         _ = existing_version
         delta_result = self._write_delta_bootstrap(result, spec=spec)
-        enabled_features = enable_delta_features(
-            DeltaFeatureMutationOptions(
-                path=spec.table_uri,
-                storage_options=spec.storage_options,
-                log_storage_options=spec.log_storage_options,
-                commit_metadata=spec.commit_metadata,
-                runtime_profile=self.runtime_profile,
-                dataset_name=spec.commit_key,
-                gate=spec.feature_gate,
-            ),
+        feature_options = delta_service.feature_mutation_options(
+            path=spec.table_uri,
+            storage_options=spec.storage_options,
+            log_storage_options=spec.log_storage_options,
+            commit_metadata=spec.commit_metadata,
+            dataset_name=spec.commit_key,
+            gate=spec.feature_gate,
+        )
+        enabled_features = delta_service.enable_features(
+            feature_options,
             features=spec.table_properties,
         )
         _apply_explicit_delta_features(
@@ -1597,8 +1589,8 @@ class WritePipeline:
         )
         if not enabled_features:
             enabled_features = dict(spec.table_properties)
-        final_version = delta_table_version(
-            spec.table_uri,
+        final_version = delta_service.table_version(
+            path=spec.table_uri,
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
         )
@@ -1926,10 +1918,10 @@ def _validate_delta_protocol_support(
         return
     from datafusion_engine.delta.protocol import delta_protocol_compatibility
     from serde_msgspec import to_builtins
-    from storage.deltalake.delta import delta_protocol_snapshot
 
-    snapshot = delta_protocol_snapshot(
-        table_uri,
+    service = delta_service_for_profile(runtime_profile)
+    snapshot = service.protocol_snapshot(
+        path=table_uri,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
         gate=gate,

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 
+import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
@@ -69,8 +70,8 @@ from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
     resolve_datafusion_scan_options,
+    resolve_dataset_location,
     resolve_dataset_schema,
-    resolve_delta_cdf_policy,
 )
 from datafusion_engine.dataset.resolution import (
     DatasetResolution,
@@ -550,8 +551,8 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
     if overrides is None:
         overrides = DatasetLocationOverrides(datafusion_scan=defaults)
     else:
-        overrides = replace(overrides, datafusion_scan=defaults)
-    return replace(updated, overrides=overrides)
+        overrides = msgspec.structs.replace(overrides, datafusion_scan=defaults)
+    return msgspec.structs.replace(updated, overrides=overrides)
 
 
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
@@ -567,11 +568,12 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     DataFusionRegistryOptions
         Registration options derived from the dataset location.
     """
-    scan = resolve_datafusion_scan_options(location)
-    schema = resolve_dataset_schema(location)
-    provider = location.datafusion_provider
+    resolved = resolve_dataset_location(location)
+    scan = resolved.datafusion_scan
+    schema = resolved.schema
+    provider = resolved.datafusion_provider
     format_name = location.format or "delta"
-    cdf_policy = resolve_delta_cdf_policy(location)
+    cdf_policy = resolved.delta_cdf_policy
     if provider == "dataset":
         msg = "DataFusion dataset providers are not supported; use listing or native formats."
         raise ValueError(msg)
@@ -583,12 +585,6 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     if provider == "delta_cdf" and format_name != "delta":
         msg = "Delta CDF provider requires delta-format datasets."
         raise ValueError(msg)
-    if (
-        provider is None
-        and location.dataset_spec is not None
-        and location.dataset_spec.dataset_kind == "delta_cdf"
-    ):
-        provider = "delta_cdf"
     if provider is None and format_name == "delta" and location.delta_cdf_options is not None:
         provider = "delta_cdf"
     if provider is None and format_name != "delta":
@@ -1098,11 +1094,12 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
 
 
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
-    if location.dataset_spec is not None:
-        return location.dataset_spec
-    if location.overrides is not None and location.overrides.table_spec is not None:
-        return make_dataset_spec(table_spec=location.overrides.table_spec)
-    schema = resolve_dataset_schema(location)
+    resolved = resolve_dataset_location(location)
+    if resolved.dataset_spec is not None:
+        return resolved.dataset_spec
+    if resolved.table_spec is not None:
+        return make_dataset_spec(table_spec=resolved.table_spec)
+    schema = resolved.schema
     if schema is None:
         return None
     return dataset_spec_from_schema(name, schema)
@@ -2429,8 +2426,8 @@ def apply_projection_scan_overrides(
         if overrides is None:
             overrides = DatasetLocationOverrides(datafusion_scan=updated_scan)
         else:
-            overrides = replace(overrides, datafusion_scan=updated_scan)
-        updated_location = replace(location, overrides=overrides)
+            overrides = msgspec.structs.replace(overrides, datafusion_scan=updated_scan)
+        updated_location = msgspec.structs.replace(location, overrides=overrides)
         adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
         with suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(table_name)

@@ -25,7 +25,7 @@ from semantics.incremental.cdf_types import CdfFilterPolicy
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import TempTableRegistry
-from storage.deltalake import DeltaCdfOptions, StorageOptions, delta_table_version
+from storage.deltalake import DeltaCdfOptions, StorageOptions
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -100,8 +100,8 @@ def _resolve_cdf_inputs(
         )
         resolved_scan = resolve_delta_scan_options(profile_location)
         cdf_policy = resolve_delta_cdf_policy(profile_location)
-    current_version = delta_table_version(
-        str(path),
+    current_version = runtime.profile.delta_service().table_version(
+        path=str(path),
         storage_options=resolved_storage,
         log_storage_options=resolved_log_storage,
     )

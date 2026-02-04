@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pyarrow.dataset as ds
 
+from serde_msgspec import StructBaseStrict
 from utils.hashing import hash_json_canonical
-from utils.registry_protocol import MutableRegistry
+from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -27,8 +28,7 @@ if TYPE_CHECKING:
     from datafusion_engine.tables.spec import TableSpec
 
 
-@dataclass(frozen=True)
-class RegistrationMetadata:
+class RegistrationMetadata(StructBaseStrict, frozen=True):
     """Metadata for a table registration event.
 
     Parameters
@@ -69,7 +69,9 @@ class RegistrationMetadata:
 
 
 @dataclass
-class ProviderRegistry:
+class ProviderRegistry(
+    Registry[str, RegistrationMetadata], SnapshotRegistry[str, RegistrationMetadata]
+):
     """Unified registry for DataFusion table providers.
 
     Centralizes table registration, UDF tracking, and metadata collection.

@@ -23,12 +23,7 @@ from semantics.incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
     write_delta_table_via_pipeline,
 )
-from storage.deltalake import (
-    DeltaWriteResult,
-    delta_table_version,
-    idempotent_commit_properties,
-)
-from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
+from storage.deltalake import DeltaWriteResult, idempotent_commit_properties
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import TableLike
@@ -80,8 +75,8 @@ def read_repo_snapshot(
     if not path.exists():
         return None
     storage = context.resolve_storage(table_uri=str(path))
-    version = delta_table_version(
-        str(path),
+    version = context.runtime.profile.delta_service().table_version(
+        path=str(path),
         storage_options=storage.storage_options,
         log_storage_options=storage.log_storage_options,
     )
@@ -117,8 +112,8 @@ def write_repo_snapshot(
         "dataset": str(target),
     }
     storage = context.resolve_storage(table_uri=str(target))
-    existing_version = delta_table_version(
-        str(target),
+    existing_version = context.runtime.profile.delta_service().table_version(
+        path=str(target),
         storage_options=storage.storage_options,
         log_storage_options=storage.log_storage_options,
     )
@@ -220,22 +215,20 @@ def _merge_repo_snapshot(
         run=commit_run,
         metadata={"operation": "merge", "rows_affected": snapshot.num_rows},
     )
-    enabled_features = enable_delta_features(
-        DeltaFeatureMutationOptions(
-            path=str(target),
-            storage_options=storage.storage_options,
-            log_storage_options=storage.log_storage_options,
-            runtime_profile=context.runtime.profile,
-            dataset_name="repo_snapshot",
-        )
+    feature_options = delta_service.feature_mutation_options(
+        path=str(target),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+        dataset_name="repo_snapshot",
     )
+    enabled_features = delta_service.enable_features(feature_options)
     from datafusion_engine.delta.observability import (
         DeltaFeatureStateArtifact,
         record_delta_feature_state,
     )
 
-    final_version = delta_table_version(
-        str(target),
+    final_version = context.runtime.profile.delta_service().table_version(
+        path=str(target),
         storage_options=storage.storage_options,
         log_storage_options=storage.log_storage_options,
     )

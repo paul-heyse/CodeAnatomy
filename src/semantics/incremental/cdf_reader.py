@@ -18,17 +18,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.delta.service import delta_service_for_profile
 from semantics.incremental.cdf_cursors import CdfCursorStore
-from storage.deltalake import (
-    DeltaCdfOptions,
-    StorageOptions,
-    delta_cdf_enabled,
-    delta_table_version,
-    read_delta_cdf,
-)
+from storage.deltalake import DeltaCdfOptions, StorageOptions
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
+
+    from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
     ArrowToDataFrame = Callable[[SessionContext, TableLike], DataFrame]
 
@@ -84,6 +82,8 @@ class CdfReadOptions:
         Optional cursor store for version tracking.
     dataset_name
         Dataset name for cursor lookup. Required if ``cursor_store`` is set.
+    runtime_profile
+        Optional runtime profile used to resolve Delta store policy defaults.
     storage_options
         Optional storage options for Delta table access.
     log_storage_options
@@ -106,6 +106,7 @@ class CdfReadOptions:
     end_version: int | None = None
     cursor_store: CdfCursorStore | None = None
     dataset_name: str | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
     columns: list[str] | None = None
@@ -114,6 +115,118 @@ class CdfReadOptions:
     delta_cdf_enabled_fn: DeltaCdfEnabledFn | None = None
     read_delta_cdf_fn: CdfTableReader | None = None
     arrow_table_to_dataframe_fn: ArrowToDataFrame | None = None
+
+
+def _validate_cdf_options(opts: CdfReadOptions) -> None:
+    if opts.cursor_store is not None and opts.dataset_name is None:
+        msg = "dataset_name is required when cursor_store is provided"
+        raise ValueError(msg)
+
+
+def _resolve_cdf_callbacks(
+    opts: CdfReadOptions,
+    *,
+    service: DeltaService,
+) -> tuple[DeltaVersionFn, DeltaCdfEnabledFn, CdfTableReader, ArrowToDataFrame]:
+    def _table_version(
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+    ) -> int | None:
+        return service.table_version(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+
+    def _cdf_enabled(
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+    ) -> bool:
+        return service.cdf_enabled(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+
+    def _read_cdf(
+        path: str,
+        *,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions | None = None,
+    ) -> TableLike:
+        return service.read_cdf(
+            table_path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            cdf_options=cdf_options,
+        )
+
+    table_version_fn = opts.delta_table_version_fn or _table_version
+    cdf_enabled_fn = opts.delta_cdf_enabled_fn or _cdf_enabled
+    read_delta_fn = opts.read_delta_cdf_fn or _read_cdf
+    arrow_to_df = opts.arrow_table_to_dataframe_fn or _arrow_table_to_dataframe
+    return table_version_fn, cdf_enabled_fn, read_delta_fn, arrow_to_df
+
+
+def _resolve_cdf_version_range(
+    path: str,
+    opts: CdfReadOptions,
+    *,
+    table_version_fn: DeltaVersionFn,
+    cdf_enabled_fn: DeltaCdfEnabledFn,
+) -> tuple[int, int] | None:
+    if not _table_exists(
+        path,
+        opts.storage_options,
+        opts.log_storage_options,
+        table_version_fn=table_version_fn,
+    ):
+        return None
+    if not cdf_enabled_fn(
+        path,
+        storage_options=opts.storage_options,
+        log_storage_options=opts.log_storage_options,
+    ):
+        return None
+    current_version = table_version_fn(
+        path,
+        storage_options=opts.storage_options,
+        log_storage_options=opts.log_storage_options,
+    )
+    if current_version is None:
+        return None
+    resolved_start = _resolve_start_version(
+        start_version=opts.start_version,
+        cursor_store=opts.cursor_store,
+        dataset_name=opts.dataset_name,
+    )
+    resolved_end = opts.end_version if opts.end_version is not None else current_version
+    if resolved_start > resolved_end:
+        return None
+    return resolved_start, resolved_end
+
+
+def _safe_read_cdf(
+    path: str,
+    opts: CdfReadOptions,
+    *,
+    read_delta_fn: CdfTableReader,
+    cdf_options: DeltaCdfOptions,
+) -> TableLike | None:
+    try:
+        return read_delta_fn(
+            path,
+            storage_options=opts.storage_options,
+            log_storage_options=opts.log_storage_options,
+            cdf_options=cdf_options,
+        )
+    except ValueError:
+        return None
 
 
 def read_cdf_changes(
@@ -139,6 +252,8 @@ def read_cdf_changes(
         Optional read options including version range, cursor tracking,
         storage options, and column/predicate filters. If not provided,
         defaults are used (start from version 0, read to latest).
+        Validation may raise ``ValueError`` if ``cursor_store`` is set
+        without ``dataset_name``.
 
     Returns
     -------
@@ -149,11 +264,6 @@ def read_cdf_changes(
         - CDF is not enabled on the table
         - The table version could not be determined
         - The start version is greater than the end version (no changes)
-
-    Raises
-    ------
-    ValueError
-        If ``cursor_store`` is provided without ``dataset_name`` in options.
 
     Examples
     --------
@@ -178,55 +288,23 @@ def read_cdf_changes(
     >>> result = read_cdf_changes(ctx, "/path/to/delta/table", options)
     """
     opts = options or CdfReadOptions()
-
-    if opts.cursor_store is not None and opts.dataset_name is None:
-        msg = "dataset_name is required when cursor_store is provided"
-        raise ValueError(msg)
+    _validate_cdf_options(opts)
 
     path_str = str(table_path)
-    table_version_fn = opts.delta_table_version_fn or delta_table_version
-    cdf_enabled_fn = opts.delta_cdf_enabled_fn or delta_cdf_enabled
-    read_delta_fn = opts.read_delta_cdf_fn or read_delta_cdf
-    arrow_to_df = opts.arrow_table_to_dataframe_fn or _arrow_table_to_dataframe
-
-    # Check if table exists and has CDF enabled
-    if not _table_exists(
+    service = delta_service_for_profile(opts.runtime_profile)
+    table_version_fn, cdf_enabled_fn, read_delta_fn, arrow_to_df = _resolve_cdf_callbacks(
+        opts,
+        service=service,
+    )
+    version_range = _resolve_cdf_version_range(
         path_str,
-        opts.storage_options,
-        opts.log_storage_options,
+        opts,
         table_version_fn=table_version_fn,
-    ):
-        return None
-
-    if not cdf_enabled_fn(
-        path_str,
-        storage_options=opts.storage_options,
-        log_storage_options=opts.log_storage_options,
-    ):
-        return None
-
-    # Resolve the current table version
-    current_version = table_version_fn(
-        path_str,
-        storage_options=opts.storage_options,
-        log_storage_options=opts.log_storage_options,
+        cdf_enabled_fn=cdf_enabled_fn,
     )
-    if current_version is None:
+    if version_range is None:
         return None
-
-    # Resolve start version from cursor if not explicitly provided
-    resolved_start = _resolve_start_version(
-        start_version=opts.start_version,
-        cursor_store=opts.cursor_store,
-        dataset_name=opts.dataset_name,
-    )
-
-    # Resolve end version (default to latest)
-    resolved_end = opts.end_version if opts.end_version is not None else current_version
-
-    # No changes if start > end
-    if resolved_start > resolved_end:
-        return None
+    resolved_start, resolved_end = version_range
 
     # Build CDF options
     cdf_options = DeltaCdfOptions(
@@ -238,15 +316,13 @@ def read_cdf_changes(
     )
 
     # Read CDF data
-    try:
-        arrow_table = read_delta_fn(
-            path_str,
-            storage_options=opts.storage_options,
-            log_storage_options=opts.log_storage_options,
-            cdf_options=cdf_options,
-        )
-    except ValueError:
-        # CDF read failed (e.g., CDF not available for version range)
+    arrow_table = _safe_read_cdf(
+        path_str,
+        opts,
+        read_delta_fn=read_delta_fn,
+        cdf_options=cdf_options,
+    )
+    if arrow_table is None:
         return None
 
     # Convert Arrow table to DataFrame via session context

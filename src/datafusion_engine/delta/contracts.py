@@ -18,7 +18,7 @@ from datafusion_engine.delta.scan_config import (
     resolve_delta_scan_options,
 )
 from datafusion_engine.identity import schema_identity_hash
-from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
+from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest
 from utils.storage_options import merged_storage_options
 
 if TYPE_CHECKING:
@@ -232,7 +232,9 @@ def delta_schema_identity_hash(request: DeltaSchemaRequest) -> str | None:
     str | None
         Schema identity hash when available.
     """
-    schema = delta_table_schema(request)
+    from datafusion_engine.delta.service import delta_service_for_profile
+
+    schema = delta_service_for_profile(None).table_schema(request)
     if schema is None:
         return None
     return schema_identity_hash(schema)

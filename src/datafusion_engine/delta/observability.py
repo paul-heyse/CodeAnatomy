@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from opentelemetry import trace
 
 from datafusion_engine.arrow.field_builders import (
     binary_field,
@@ -141,6 +142,16 @@ class _AppendObservabilityRequest:
     commit_metadata: Mapping[str, str] | None
 
 
+def _trace_span_ids() -> tuple[str | None, str | None]:
+    span = trace.get_current_span()
+    if span is None:
+        return None, None
+    context = span.get_span_context()
+    if context is None or not context.is_valid:
+        return None, None
+    return f"{context.trace_id:032x}", f"{context.span_id:016x}"
+
+
 def record_delta_snapshot(
     profile: DataFusionRuntimeProfile | None,
     *,
@@ -165,10 +176,13 @@ def record_delta_snapshot(
     if location is None:
         return None
     snapshot = artifact.snapshot
+    trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "delta_version": coerce_int(snapshot.get("version")),
         "snapshot_timestamp": coerce_int(snapshot.get("snapshot_timestamp")),
         "min_reader_version": coerce_int(snapshot.get("min_reader_version")),
@@ -220,10 +234,13 @@ def record_delta_mutation(
     report = artifact.report
     snapshot_payload = _snapshot_payload(report)
     table_properties = _snapshot_table_properties(snapshot_payload)
+    trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "operation": artifact.operation,
         "mode": artifact.mode,
         "delta_version": coerce_int(report.get("version")),
@@ -261,10 +278,13 @@ def record_delta_feature_state(
     """Record Delta feature state adoption in diagnostics."""
     if profile is None:
         return
+    trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "delta_version": artifact.delta_version,
         "enabled_features": string_map(dict(artifact.enabled_features)),
         "commit_metadata": string_map(dict(artifact.commit_metadata or {})),
@@ -298,10 +318,13 @@ def record_delta_scan_plan(
     )
     if location is None:
         return None
+    trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "delta_version": artifact.delta_version,
         "snapshot_timestamp": artifact.snapshot_timestamp,
         "total_files": artifact.total_files,
@@ -354,10 +377,13 @@ def record_delta_maintenance(
     checkpoint_interval = table_properties.get("delta.checkpointInterval")
     checkpoint_retention = table_properties.get("delta.checkpointRetentionDuration")
     checkpoint_protection = table_properties.get("delta.checkpointProtection")
+    trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "operation": artifact.operation,
         "delta_version": coerce_int(report.get("version")),
         "min_reader_version": coerce_int(snapshot_payload.get("min_reader_version")),
@@ -515,6 +541,8 @@ def _delta_snapshot_schema() -> pa.Schema:
             int64_field("event_time_unix_ms", nullable=False),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
+            string_field("trace_id"),
+            string_field("span_id"),
             int64_field("delta_version"),
             int64_field("snapshot_timestamp"),
             int32_field("min_reader_version"),
@@ -536,6 +564,8 @@ def _delta_mutation_schema() -> pa.Schema:
             int64_field("event_time_unix_ms", nullable=False),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
+            string_field("trace_id"),
+            string_field("span_id"),
             string_field("operation", nullable=False),
             string_field("mode"),
             int64_field("delta_version"),
@@ -561,6 +591,8 @@ def _delta_scan_plan_schema() -> pa.Schema:
             int64_field("event_time_unix_ms", nullable=False),
             string_field("dataset_name", nullable=False),
             string_field("table_uri", nullable=False),
+            string_field("trace_id"),
+            string_field("span_id"),
             int64_field("delta_version"),
             int64_field("snapshot_timestamp"),
             int64_field("total_files", nullable=False),
@@ -579,6 +611,8 @@ def _delta_maintenance_schema() -> pa.Schema:
             int64_field("event_time_unix_ms", nullable=False),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
+            string_field("trace_id"),
+            string_field("span_id"),
             string_field("operation", nullable=False),
             int64_field("delta_version"),
             int32_field("min_reader_version"),

@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
-from storage.deltalake.delta import DeltaSchemaRequest, delta_table_schema
+from storage.deltalake.delta import DeltaSchemaRequest
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation, resolve_delta_feature_gate
@@ -106,7 +106,9 @@ def enforce_schema_policy(
         timestamp=dataset_location.delta_timestamp,
         gate=resolve_delta_feature_gate(dataset_location),
     )
-    existing_schema = delta_table_schema(request)
+    from datafusion_engine.delta.service import delta_service_for_profile
+
+    existing_schema = delta_service_for_profile(None).table_schema(request)
     expected_hash = schema_identity_hash(expected_schema)
     if existing_schema is None:
         return expected_hash

@@ -18,6 +18,7 @@ from datafusion_engine.delta.control_plane import (
     delta_provider_from_session,
     delta_restore,
 )
+from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
@@ -25,12 +26,7 @@ from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, Wr
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
 from serde_msgspec import JSON_ENCODER_SORTED, StructBaseCompat, json_default
-from storage.deltalake import (
-    DeltaVacuumOptions,
-    cleanup_delta_log,
-    create_delta_checkpoint,
-    vacuum_delta,
-)
+from storage.deltalake import DeltaVacuumOptions
 from utils.uuid_factory import uuid7_hex
 
 
@@ -258,7 +254,12 @@ def vacuum_command(
         keep_versions=keep_versions_list,
         commit_metadata=commit_payload or None,
     )
-    files = vacuum_delta(path, options=vacuum_options, storage_options=storage_options or None)
+    service = delta_service_for_profile(None)
+    files = service.vacuum(
+        path=path,
+        options=vacuum_options,
+        storage_options=storage_options or None,
+    )
     vacuum_report = VacuumReport(
         retention_hours=options.retention_hours,
         dry_run=not options.apply,
@@ -292,7 +293,11 @@ def checkpoint_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    create_delta_checkpoint(path, storage_options=storage_options or None)
+    service = delta_service_for_profile(None)
+    service.create_checkpoint(
+        path=path,
+        storage_options=storage_options or None,
+    )
     report = MaintenanceReport(
         path=path,
         vacuum=None,
@@ -316,7 +321,11 @@ def cleanup_log_command(
         Exit status code.
     """
     storage_options: dict[str, str] = parse_kv_pairs(storage_option) if storage_option else {}
-    cleanup_delta_log(path, storage_options=storage_options or None)
+    service = delta_service_for_profile(None)
+    service.cleanup_log(
+        path=path,
+        storage_options=storage_options or None,
+    )
     report = MaintenanceReport(
         path=path,
         vacuum=None,

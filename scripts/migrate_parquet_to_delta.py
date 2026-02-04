@@ -16,7 +16,6 @@ import pyarrow.parquet as pq
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from storage.deltalake import delta_table_version
 from utils.uuid_factory import uuid7_hex
 
 
@@ -187,8 +186,8 @@ def migrate_parquet_to_delta(
             format_options=options_payload or None,
         )
         pipeline.write(request)
-        version = delta_table_version(
-            target,
+        version = profile.delta_service().table_version(
+            path=target,
             storage_options=options.storage_options,
             log_storage_options=options.log_storage_options,
         )

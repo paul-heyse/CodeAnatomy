@@ -29,36 +29,6 @@ static UDF_DOCS_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     .build()
 });
 
-static READ_CSV_DOC: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_TABLE,
-        "Read CSV files into a table provider.",
-        "read_csv(path [, limit] [, options_json])",
-    )
-    .with_argument("path", "Path or URL to CSV files.")
-    .with_argument("limit", "Optional maximum rows to return.")
-    .with_argument(
-        "options_json",
-        "Optional JSON string for schema, partitioning, compression, and sort options.",
-    )
-    .build()
-});
-
-static READ_PARQUET_DOC: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_TABLE,
-        "Read Parquet files into a table provider.",
-        "read_parquet(path [, limit] [, options_json])",
-    )
-    .with_argument("path", "Path or URL to Parquet files.")
-    .with_argument("limit", "Optional maximum rows to return.")
-    .with_argument(
-        "options_json",
-        "Optional JSON string for schema, partitioning, pruning, and sort options.",
-    )
-    .build()
-});
-
 static LIST_FILES_CACHE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_TABLE,
@@ -99,8 +69,6 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
     vec![
         ("udf_registry", &UDF_REGISTRY_DOC),
         ("udf_docs", &UDF_DOCS_DOC),
-        ("read_csv", &READ_CSV_DOC),
-        ("read_parquet", &READ_PARQUET_DOC),
         ("list_files_cache", &LIST_FILES_CACHE_DOC),
         ("metadata_cache", &METADATA_CACHE_DOC),
         ("predicate_cache", &PREDICATE_CACHE_DOC),

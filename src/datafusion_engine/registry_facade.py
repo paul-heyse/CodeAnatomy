@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from datafusion_engine.catalog.provider_registry import RegistrationMetadata
@@ -46,6 +47,74 @@ class RegistrationResult(StructBaseStrict, frozen=True):
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class RegistrationPhase:
+    """Registration phase with ordering requirements and optional validation."""
+
+    name: str
+    requires: tuple[str, ...] = ()
+    validate: Callable[[], None] | None = None
+
+
+class RegistrationPhaseOrchestrator:
+    """Enforce registration phase ordering and execute validations."""
+
+    @staticmethod
+    def run(phases: Sequence[RegistrationPhase]) -> None:
+        """Run registration phases in order, enforcing prerequisites.
+
+        Parameters
+        ----------
+        phases
+            Ordered registration phases to validate and execute.
+
+        Raises
+        ------
+        ValueError
+            Raised when phases are duplicated or prerequisites are missing.
+        """
+        seen: set[str] = set()
+        for phase in phases:
+            if phase.name in seen:
+                msg = f"Duplicate registration phase: {phase.name!r}."
+                raise ValueError(msg)
+            missing = tuple(req for req in phase.requires if req not in seen)
+            if missing:
+                msg = f"Registration phase {phase.name!r} requires prior phases {missing!r}."
+                raise ValueError(msg)
+            if phase.validate is not None:
+                phase.validate()
+            seen.add(phase.name)
+
+
+def _default_registry_adapters() -> dict[str, Registry[object, object]]:
+    from datafusion_engine.schema.registry import (
+        base_extract_schema_registry,
+        nested_dataset_registry,
+        relationship_schema_registry,
+        root_identity_registry,
+    )
+    from semantics.registry import (
+        semantic_normalization_registry,
+        semantic_relationship_registry,
+        semantic_table_registry,
+    )
+
+    return {
+        "semantic_tables": cast("Registry[object, object]", semantic_table_registry()),
+        "semantic_normalization": cast(
+            "Registry[object, object]", semantic_normalization_registry()
+        ),
+        "semantic_relationships": cast(
+            "Registry[object, object]", semantic_relationship_registry()
+        ),
+        "schema_relationships": cast("Registry[object, object]", relationship_schema_registry()),
+        "schema_extract_base": cast("Registry[object, object]", base_extract_schema_registry()),
+        "schema_nested": cast("Registry[object, object]", nested_dataset_registry()),
+        "schema_root_identity": cast("Registry[object, object]", root_identity_registry()),
+    }
+
+
 class RegistryFacade:
     """Unified registry facade with optional checkpoint/rollback semantics."""
 
@@ -62,6 +131,7 @@ class RegistryFacade:
         self._udfs = udf_registry
         self._views = view_registry
         self._checkpoints: dict[str, dict[str, Mapping[object, object]]] = {}
+        self._extra_registries = _default_registry_adapters()
 
     def register_dataset_df(
         self,
@@ -77,19 +147,46 @@ class RegistryFacade:
         -------
         DataFrame
             DataFrame for the registered dataset.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when the provider registry does not return a DataFrame.
         """
         checkpoint = self._checkpoint_optional()
-        try:
+        df: DataFrame | None = None
+
+        def _register_dataset() -> None:
             self._datasets.register(name, location, overwrite=overwrite)
-            return self._providers.register_location(
+
+        def _register_provider() -> None:
+            nonlocal df
+            df = self._providers.register_location(
                 name=name,
                 location=location,
                 overwrite=overwrite,
                 cache_policy=cache_policy,
             )
+
+        try:
+            RegistrationPhaseOrchestrator().run(
+                (
+                    RegistrationPhase(name="dataset_catalog", validate=_register_dataset),
+                    RegistrationPhase(
+                        name="provider_registry",
+                        requires=("dataset_catalog",),
+                        validate=_register_provider,
+                    ),
+                )
+            )
         except Exception:
             self._rollback_optional(checkpoint)
             raise
+        if df is None:
+            self._rollback_optional(checkpoint)
+            msg = "Provider registry did not return a DataFrame."
+            raise RuntimeError(msg)
+        return df
 
     def register_dataset(
         self,
@@ -147,8 +244,16 @@ class RegistryFacade:
                 timestamp=start,
                 error="UDF registry unavailable.",
             )
+        udf_registry = self._udfs
+        assert udf_registry is not None
+
+        def _register_udf() -> None:
+            udf_registry.register(key, spec)
+
         try:
-            self._udfs.register(key, spec)
+            RegistrationPhaseOrchestrator().run(
+                (RegistrationPhase(name="udf_registry", validate=_register_udf),)
+            )
         except Exception as exc:  # noqa: BLE001
             return RegistrationResult(
                 success=False,
@@ -182,8 +287,16 @@ class RegistryFacade:
                 timestamp=start,
                 error="View registry unavailable.",
             )
+        view_registry = self._views
+        assert view_registry is not None
+
+        def _register_view() -> None:
+            view_registry.register(name, artifact)
+
         try:
-            self._views.register(name, artifact)
+            RegistrationPhaseOrchestrator().run(
+                (RegistrationPhase(name="view_registry", validate=_register_view),)
+            )
         except Exception as exc:  # noqa: BLE001
             return RegistrationResult(
                 success=False,
@@ -230,6 +343,7 @@ class RegistryFacade:
             registries["udfs"] = cast("Registry[object, object]", self._udfs)
         if self._views is not None:
             registries["views"] = cast("Registry[object, object]", self._views)
+        registries.update(self._extra_registries)
         return registries
 
 
@@ -256,7 +370,10 @@ def registry_facade_for_context(
     except (ValueError, RuntimeError, TypeError):
         udf_registry = None
     else:
-        udf_registry = UdfCatalogAdapter(udf_catalog)
+        udf_registry = UdfCatalogAdapter(
+            udf_catalog,
+            function_factory_hash=runtime_profile.function_factory_policy_hash(ctx),
+        )
     view_registry = runtime_profile.view_registry
     return RegistryFacade(
         dataset_catalog=dataset_catalog,
@@ -266,4 +383,10 @@ def registry_facade_for_context(
     )
 
 
-__all__ = ["RegistrationResult", "RegistryFacade", "registry_facade_for_context"]
+__all__ = [
+    "RegistrationPhase",
+    "RegistrationPhaseOrchestrator",
+    "RegistrationResult",
+    "RegistryFacade",
+    "registry_facade_for_context",
+]

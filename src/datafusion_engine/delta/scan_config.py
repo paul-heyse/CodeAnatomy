@@ -11,7 +11,7 @@ from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from schema_spec.system import DeltaScanOptions
+    from schema_spec.system import DeltaScanOptions, ScanPolicyConfig
     from serde_artifacts import DeltaScanConfigSnapshot
 
 
@@ -23,7 +23,11 @@ class DeltaScanConfigIdentity:
     schema_payload: Mapping[str, object] | None
 
 
-def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | None:
+def resolve_delta_scan_options(
+    location: DatasetLocation,
+    *,
+    scan_policy: ScanPolicyConfig | None = None,
+) -> DeltaScanOptions | None:
     """Return Delta scan options for a dataset location.
 
     Returns
@@ -31,9 +35,12 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
     """
-    from datafusion_engine.dataset.registry import resolve_dataset_location
+    options = location.resolved.delta_scan
+    if scan_policy is None:
+        return options
+    from schema_spec.system import apply_delta_scan_policy
 
-    return resolve_dataset_location(location).delta_scan
+    return apply_delta_scan_policy(options, policy=scan_policy)
 
 
 def delta_scan_config_snapshot(

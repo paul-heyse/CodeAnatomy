@@ -65,7 +65,7 @@ from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.udf.expr import udf_expr
 from schema_spec.file_identity import FILE_ID_FIELD, FILE_SHA256_FIELD, PATH_FIELD
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-from utils.registry_protocol import ImmutableRegistry
+from utils.registry_protocol import ImmutableRegistry, MappingRegistryAdapter
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
@@ -2131,6 +2131,67 @@ ROOT_IDENTITY_FIELDS: ImmutableRegistry[str, tuple[str, ...]] = ImmutableRegistr
     }
 )
 
+
+def _mapping_from_registry[T](registry: ImmutableRegistry[str, T]) -> dict[str, T]:
+    return {key: value for key in registry if (value := registry.get(key)) is not None}
+
+
+def relationship_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
+    """Return a registry adapter for relationship schemas.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, pa.Schema]
+        Read-only registry adapter for relationship schemas.
+    """
+    return MappingRegistryAdapter.from_mapping(
+        _mapping_from_registry(RELATIONSHIP_SCHEMA_BY_NAME),
+        read_only=True,
+    )
+
+
+def base_extract_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
+    """Return a registry adapter for base extract schemas.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, pa.Schema]
+        Read-only registry adapter for base extract schemas.
+    """
+    return MappingRegistryAdapter.from_mapping(
+        _mapping_from_registry(_BASE_EXTRACT_SCHEMA_BY_NAME),
+        read_only=True,
+    )
+
+
+def nested_dataset_registry() -> MappingRegistryAdapter[str, NestedDatasetSpec]:
+    """Return a registry adapter for nested dataset specs.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, NestedDatasetSpec]
+        Read-only registry adapter for nested dataset specs.
+    """
+    return MappingRegistryAdapter.from_mapping(
+        _mapping_from_registry(NESTED_DATASET_INDEX),
+        read_only=True,
+    )
+
+
+def root_identity_registry() -> MappingRegistryAdapter[str, tuple[str, ...]]:
+    """Return a registry adapter for root identity field specs.
+
+    Returns
+    -------
+    MappingRegistryAdapter[str, tuple[str, ...]]
+        Read-only registry adapter for root identity field specs.
+    """
+    return MappingRegistryAdapter.from_mapping(
+        _mapping_from_registry(ROOT_IDENTITY_FIELDS),
+        read_only=True,
+    )
+
+
 AST_CORE_VIEW_NAMES: tuple[str, ...] = (
     "ast_nodes",
     "ast_edges",
@@ -3988,6 +4049,7 @@ __all__ = [
     "TREE_SITTER_CHECK_VIEWS",
     "TREE_SITTER_FILES_SCHEMA",
     "TREE_SITTER_VIEW_NAMES",
+    "base_extract_schema_registry",
     "datasets_for_path",
     "default_attrs_value",
     "extract_base_schema_for",
@@ -4011,6 +4073,7 @@ __all__ = [
     "nested_base_df",
     "nested_context_for",
     "nested_dataset_names",
+    "nested_dataset_registry",
     "nested_path_for",
     "nested_role_for",
     "nested_schema_names",
@@ -4019,6 +4082,8 @@ __all__ = [
     "registered_table_names",
     "relationship_schema_for",
     "relationship_schema_names",
+    "relationship_schema_registry",
+    "root_identity_registry",
     "schema_contract_for_table",
     "struct_for_path",
     "validate_ast_views",

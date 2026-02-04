@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 
+from serde_msgspec import StructBaseStrict
 from utils.hashing import CacheKeyBuilder
 
 
-@dataclass(frozen=True)
-class FingerprintComponent:
+class FingerprintComponent(StructBaseStrict, frozen=True):
     """Single component of a composite fingerprint."""
 
     name: str
@@ -18,8 +17,7 @@ class FingerprintComponent:
     truncated: bool = False
 
 
-@dataclass(frozen=True)
-class CompositeFingerprint:
+class CompositeFingerprint(StructBaseStrict, frozen=True):
     """Composite fingerprint with canonical cache-key encoding."""
 
     version: int

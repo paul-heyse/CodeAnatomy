@@ -29,6 +29,8 @@ _SCAN_ROW_GROUPS = MetricName.SCAN_ROW_GROUPS
 _SCAN_FRAGMENTS = MetricName.SCAN_FRAGMENTS
 _CACHE_OPERATION_COUNT = MetricName.CACHE_OPERATION_COUNT
 _CACHE_OPERATION_DURATION = MetricName.CACHE_OPERATION_DURATION
+_STORAGE_OPERATION_COUNT = MetricName.STORAGE_OPERATION_COUNT
+_STORAGE_OPERATION_DURATION = MetricName.STORAGE_OPERATION_DURATION
 
 _DEFAULT_BUCKETS_S = (
     0.005,
@@ -110,6 +112,8 @@ class MetricsRegistry:
     scan_fragments: GaugeStore
     cache_operation_count: metrics.Counter
     cache_operation_duration: metrics.Histogram
+    storage_operation_count: metrics.Counter
+    storage_operation_duration: metrics.Histogram
     dataset_rows_gauge: metrics.ObservableGauge
     dataset_columns_gauge: metrics.ObservableGauge
     scan_row_groups_gauge: metrics.ObservableGauge
@@ -217,6 +221,23 @@ def metric_views() -> list[View]:
                 AttributeName.CACHE_SCOPE.value,
                 AttributeName.CACHE_OPERATION.value,
                 AttributeName.CACHE_RESULT.value,
+            },
+        ),
+        View(
+            instrument_name=_STORAGE_OPERATION_COUNT,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.STATUS.value,
+                AttributeName.STORAGE_OPERATION.value,
+            },
+        ),
+        View(
+            instrument_name=_STORAGE_OPERATION_DURATION,
+            aggregation=histogram,
+            attribute_keys={
+                AttributeName.RUN_ID.value,
+                AttributeName.STATUS.value,
+                AttributeName.STORAGE_OPERATION.value,
             },
         ),
         View(
@@ -348,6 +369,16 @@ def _registry() -> MetricsRegistry:
             _CACHE_OPERATION_DURATION,
             unit="s",
             description="Cache operation duration by policy/scope/result.",
+        ),
+        storage_operation_count=meter.create_counter(
+            _STORAGE_OPERATION_COUNT,
+            unit="1",
+            description="Storage operation count by operation and status.",
+        ),
+        storage_operation_duration=meter.create_histogram(
+            _STORAGE_OPERATION_DURATION,
+            unit="s",
+            description="Storage operation duration by operation and status.",
         ),
         dataset_rows_gauge=dataset_rows_gauge,
         dataset_columns_gauge=dataset_columns_gauge,
@@ -560,6 +591,34 @@ def record_cache_event(
     )
 
 
+def record_storage_operation(
+    *,
+    operation: str,
+    status: str,
+    duration_s: float | None = None,
+    attributes: Mapping[str, object] | None = None,
+) -> None:
+    """Record a storage operation as metrics."""
+    registry = _registry()
+    base = {
+        AttributeName.STORAGE_OPERATION.value: operation,
+        AttributeName.STATUS.value: status,
+    }
+    if duration_s is not None:
+        _emit_metric(
+            registry.storage_operation_duration.record,
+            value=duration_s,
+            base_attributes=base,
+            attributes=attributes,
+        )
+    _emit_metric(
+        registry.storage_operation_count.add,
+        value=1.0,
+        base_attributes=base,
+        attributes=attributes,
+    )
+
+
 def metrics_snapshot() -> dict[str, object]:
     """Return a snapshot of gauge metrics for diagnostics.
 
@@ -585,6 +644,7 @@ __all__ = [
     "record_datafusion_duration",
     "record_error",
     "record_stage_duration",
+    "record_storage_operation",
     "record_task_duration",
     "record_write_duration",
     "reset_metrics_registry",

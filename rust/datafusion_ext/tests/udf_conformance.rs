@@ -7,31 +7,22 @@ use arrow::array::{
     UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_catalog_listing::ListingTable;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr_fn::col;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::{lit, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{lit, Expr};
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
-use parquet::arrow::ArrowWriter;
 use tokio::runtime::Runtime;
 
 use datafusion_ext::{
     install_expr_planners_native, install_sql_macro_factory_native, registry_snapshot, udf_expr,
     udf_registry,
 };
-use std::fs;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn hash64_value(value: &str) -> i64 {
     let mut hasher = Blake2bVar::new(8).expect("blake2b supports 8-byte output");
@@ -55,46 +46,6 @@ fn run_query(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     let runtime = Runtime::new().expect("tokio runtime");
     let df = runtime.block_on(ctx.sql(sql))?;
     runtime.block_on(df.collect())
-}
-
-fn write_temp_csv(contents: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("timestamp")
-        .as_nanos();
-    let filename = format!("datafusion_ext_read_csv_{nanos}.csv");
-    path.push(filename);
-    fs::write(&path, contents).expect("write csv file");
-    path
-}
-
-fn write_temp_parquet() -> PathBuf {
-    let mut path = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("timestamp")
-        .as_nanos();
-    let filename = format!("datafusion_ext_read_parquet_{nanos}.parquet");
-    path.push(filename);
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int64, false)]));
-    let values = Arc::new(Int64Array::from(vec![1_i64, 2, 3])) as Arc<dyn Array>;
-    let batch = RecordBatch::try_new(schema.clone(), vec![values]).expect("record batch");
-    let file = fs::File::create(&path).expect("create parquet file");
-    let mut writer = ArrowWriter::try_new(file, schema, None).expect("parquet writer");
-    writer.write(&batch).expect("write parquet batch");
-    writer.close().expect("close parquet writer");
-    path
-}
-
-fn schema_to_ipc(schema: &Schema) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
-    let mut writer =
-        StreamWriter::try_new(&mut buffer, schema).expect("create schema ipc writer");
-    writer.write(&batch).expect("write schema batch");
-    writer.finish().expect("finish schema ipc writer");
-    buffer
 }
 
 fn normalize_type_name(value: &str) -> String {
@@ -502,17 +453,6 @@ fn async_echo_handles_remainder_batches() -> Result<()> {
 }
 
 #[test]
-fn udtf_rejects_non_literal_args() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    let err = run_query(&ctx, "SELECT * FROM read_csv(random())");
-    assert!(err.is_err());
-    let err = run_query(&ctx, "SELECT * FROM read_parquet(random())");
-    assert!(err.is_err());
-    Ok(())
-}
-
-#[test]
 fn information_schema_parameters_match_snapshot() -> Result<()> {
     let config = SessionConfig::new().with_information_schema(true);
     let ctx = SessionContext::new_with_config(config);
@@ -897,31 +837,6 @@ fn sql_macro_window_alias_executes() -> Result<()> {
 }
 
 #[test]
-fn sql_macro_table_alias_reads_csv() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    install_sql_macro_factory_native(&ctx)?;
-    let path = write_temp_csv("value\n1\n2\n3\n");
-    run_query(
-        &ctx,
-        "CREATE FUNCTION read_csv_alias(path STRING) RETURNS STRING LANGUAGE table RETURN 'read_csv'",
-    )?;
-    let sql = format!(
-        "SELECT COUNT(*) AS value FROM read_csv_alias('{}')",
-        path.to_string_lossy()
-    );
-    let batches = run_query(&ctx, &sql)?;
-    let array = batches[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("int64 column");
-    assert_eq!(array.value(0), 3);
-    let _ = fs::remove_file(&path);
-    Ok(())
-}
-
-#[test]
 fn arrow_operator_rewrites_to_get_field() -> Result<()> {
     let ctx = SessionContext::new();
     install_expr_planners_native(&ctx, &["codeanatomy_domain"])?;
@@ -1213,105 +1128,6 @@ fn count_distinct_window_uses_sliding_accumulator() -> Result<()> {
         .expect("int64 column");
     let values: Vec<i64> = array.iter().flatten().collect();
     assert_eq!(values, vec![1, 2, 2, 1]);
-    Ok(())
-}
-
-#[test]
-fn read_csv_constant_folding_respects_limit() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    let path = write_temp_csv("value\n1\n2\n3\n4\n");
-    let sql = format!(
-        "SELECT COUNT(*) AS value FROM read_csv('{}', 1 + 1)",
-        path.to_string_lossy()
-    );
-    let batches = run_query(&ctx, &sql)?;
-    let array = batches[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("int64 column");
-    assert_eq!(array.value(0), 2);
-    let _ = fs::remove_file(&path);
-    Ok(())
-}
-
-#[test]
-fn read_csv_udtf_returns_listing_provider() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    let path = write_temp_csv("value\n1\n2\n3\n");
-    let table_functions = ctx.state().table_functions();
-    let table_fn = table_functions
-        .get("read_csv")
-        .expect("read_csv table function");
-    let provider = table_fn.create_table_provider(&[lit(path.to_string_lossy().to_string())])?;
-    assert!(
-        provider.as_any().is::<ListingTable>(),
-        "read_csv should return a ListingTable provider"
-    );
-    let filter = col("value").gt(lit(1_i64));
-    let pushdowns = provider.supports_filters_pushdown(&[&filter])?;
-    assert!(
-        matches!(
-            pushdowns.first(),
-            Some(TableProviderFilterPushDown::Exact | TableProviderFilterPushDown::Inexact)
-        ),
-        "read_csv should support filter pushdown"
-    );
-    let _ = fs::remove_file(&path);
-    Ok(())
-}
-
-#[test]
-fn read_parquet_udtf_returns_listing_provider() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    let path = write_temp_parquet();
-    let table_functions = ctx.state().table_functions();
-    let table_fn = table_functions
-        .get("read_parquet")
-        .expect("read_parquet table function");
-    let provider = table_fn.create_table_provider(&[lit(path.to_string_lossy().to_string())])?;
-    assert!(
-        provider.as_any().is::<ListingTable>(),
-        "read_parquet should return a ListingTable provider"
-    );
-    let filter = col("value").gt(lit(1_i64));
-    let pushdowns = provider.supports_filters_pushdown(&[&filter])?;
-    assert!(
-        matches!(
-            pushdowns.first(),
-            Some(TableProviderFilterPushDown::Exact | TableProviderFilterPushDown::Inexact)
-        ),
-        "read_parquet should support filter pushdown"
-    );
-    let _ = fs::remove_file(&path);
-    Ok(())
-}
-
-#[test]
-fn read_parquet_accepts_base64_schema_ipc() -> Result<()> {
-    let ctx = SessionContext::new();
-    udf_registry::register_all(&ctx)?;
-    let path = write_temp_parquet();
-    let schema = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
-    let schema_ipc = schema_to_ipc(&schema);
-    let schema_b64 = STANDARD.encode(schema_ipc);
-    let options = format!(r#"{{"schema_ipc":"base64:{schema_b64}"}}"#);
-    let sql = format!(
-        "SELECT COUNT(*) AS value FROM read_parquet('{}', 2, '{}')",
-        path.to_string_lossy(),
-        options
-    );
-    let batches = run_query(&ctx, &sql)?;
-    let array = batches[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("int64 column");
-    assert_eq!(array.value(0), 2);
-    let _ = fs::remove_file(&path);
     Ok(())
 }
 

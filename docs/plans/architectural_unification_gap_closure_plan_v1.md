@@ -2,7 +2,7 @@
 
 > **Purpose**: Close the remaining gaps between `architectural_unification_deep_dive.md` and the current implementation.
 > 
-> **Status**: Draft for implementation
+> **Status**: Implementation mostly complete; remaining items called out below.
 > 
 > **Assumptions**: Design‑phase, breaking changes are acceptable; remove legacy surfaces rather than shim.
 
@@ -46,9 +46,9 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
 - Any direct ad‑hoc `resolve_*` calls outside `ResolvedDatasetLocation` (convert to `location.resolved.*`).
 
 ### Implementation checklist
-- [ ] Add `cached_property` for `DatasetLocation.resolved`.
-- [ ] Update call sites to use `location.resolved` for resolved values.
-- [ ] Ensure resolution precedence remains unchanged (tests updated/added).
+- [x] Add `cached_property` for `DatasetLocation.resolved`.
+- [x] Update call sites to use `location.resolved` for resolved values.
+- [x] Ensure resolution precedence remains unchanged (tests updated/added).
 
 ---
 
@@ -82,9 +82,9 @@ class CompositeFingerprint:
 - Dataclass versions of `FingerprintComponent` / `CompositeFingerprint`.
 
 ### Implementation checklist
-- [ ] Convert dataclasses to msgspec structs.
-- [ ] Ensure existing `CacheKeyBuilder` semantics are preserved.
-- [ ] Update tests for msgspec round‑trip if needed.
+- [x] Convert dataclasses to msgspec structs.
+- [x] Ensure existing `CacheKeyBuilder` semantics are preserved.
+- [x] Update tests for msgspec round‑trip if needed (no changes required).
 
 ---
 
@@ -118,9 +118,9 @@ class RegistrationPhaseOrchestrator:
 - Implicit phase‑ordering in call‑site chains without validation gates.
 
 ### Implementation checklist
-- [ ] Implement `RegistrationPhaseOrchestrator` with ordering + validation.
-- [ ] Integrate into RegistryFacade/registration entry points.
-- [ ] Add tests for ordering violations and validation failures.
+- [x] Implement `RegistrationPhaseOrchestrator` with ordering + validation.
+- [x] Integrate into RegistryFacade/registration entry points.
+- [x] Add tests for ordering violations and validation failures.
 
 ---
 
@@ -149,9 +149,9 @@ class ViewGraphRegistryAdapter(Registry[str, ViewNode]):
 - Direct use of bespoke registry APIs in favor of adapters or RegistryFacade.
 
 ### Implementation checklist
-- [ ] Add adapters for view graph + semantic registries.
-- [ ] Integrate adapters into RegistryFacade construction.
-- [ ] Update call sites to use registry protocol interfaces where feasible.
+- [x] Add adapters for view graph + semantic registries.
+- [x] Integrate adapters into RegistryFacade construction.
+- [x] Update call sites to use registry protocol interfaces where feasible.
 
 ---
 
@@ -181,9 +181,9 @@ ctx.register_table_provider("read_csv", Arc::new(ListingTableProvider::new(...))
 - `read_csv` / `read_parquet` UDTFs and their docs/registry snapshot entries.
 
 ### Implementation checklist
-- [ ] Remove UDTF registrations (or replace with provider factories).
-- [ ] Update Rust doc registry snapshots accordingly.
-- [ ] Ensure parity tests/doc references are updated.
+- [x] Remove UDTF registrations (or replace with provider factories).
+- [x] Update Rust doc registry snapshots accordingly.
+- [x] Ensure parity tests/doc references are updated (rust UDTF conformance tests updated).
 
 ---
 
@@ -217,9 +217,9 @@ def snapshot(self) -> Mapping[str, object]:
 - Snapshot payloads that omit the FunctionFactory policy hash.
 
 ### Implementation checklist
-- [ ] Extend UdfCatalog snapshot payload with function factory hash.
-- [ ] Validate hash equality on restore/refresh.
-- [ ] Add tests for deterministic snapshots.
+- [x] Extend UdfCatalog snapshot payload with function factory hash.
+- [x] Validate hash equality on restore/refresh.
+- [x] Add tests for deterministic snapshots.
 
 ---
 
@@ -252,9 +252,9 @@ def apply_scan_policy(
 - Hard‑coded defaults spread across call sites.
 
 ### Implementation checklist
-- [ ] Introduce `ScanPolicyConfig` (or extend existing policy bundle).
-- [ ] Apply policy defaults during dataset resolution.
-- [ ] Add coverage for delta vs non‑delta defaults.
+- [x] Introduce `ScanPolicyConfig` (or extend existing policy bundle).
+- [x] Apply policy defaults during dataset resolution.
+- [x] Add coverage for delta vs non‑delta defaults.
 
 ---
 
@@ -282,9 +282,15 @@ with stage_span(...):
 - Ad‑hoc metrics payloads without OTel integration (if any).
 
 ### Implementation checklist
-- [ ] Add metric emission for Tier‑1/Tier‑2 storage ops.
-- [ ] Extend artifact payloads for dashboard correlation.
-- [ ] Document metric names + units in docs.
+- [x] Add metric emission for Tier‑1/Tier‑2 storage ops.
+- [x] Extend artifact payloads for dashboard correlation.
+- [x] Document metric names + units in docs.
+
+---
+
+## Remaining Scope
+
+All scope items are implemented. Pending only repo-wide validation runs (ruff/pyrefly/pyright).
 
 ---
 
@@ -299,4 +305,3 @@ The gap‑closure work is complete when:
 - UDF snapshots include and validate FunctionFactory policy hash.
 - Scan‑option defaults are policy‑driven and centralized.
 - Storage observability includes metrics + dashboard‑ready payloads.
-

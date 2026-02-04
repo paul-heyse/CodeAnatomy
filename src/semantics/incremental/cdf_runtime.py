@@ -98,7 +98,10 @@ def _resolve_cdf_inputs(
         resolved_log_storage = (
             resolve_delta_log_storage_options(profile_location) or resolved_log_storage
         )
-        resolved_scan = resolve_delta_scan_options(profile_location)
+        resolved_scan = resolve_delta_scan_options(
+            profile_location,
+            scan_policy=runtime.profile.policies.scan_policy,
+        )
         cdf_policy = resolve_delta_cdf_policy(profile_location)
     current_version = runtime.profile.delta_service().table_version(
         path=str(path),

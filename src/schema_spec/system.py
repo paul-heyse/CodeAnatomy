@@ -291,6 +291,232 @@ class DataFusionScanOptions:
 
 
 @dataclass(frozen=True)
+class ScanPolicyDefaults:
+    """Policy defaults for DataFusion listing scans."""
+
+    collect_statistics: bool | None = None
+    list_files_cache_ttl: str | None = None
+    list_files_cache_limit: str | None = None
+    meta_fetch_concurrency: int | None = None
+
+    def has_any(self) -> bool:
+        """Return True when any default is configured.
+
+        Returns
+        -------
+        bool
+            ``True`` when any default is set.
+        """
+        return any(
+            value is not None
+            for value in (
+                self.collect_statistics,
+                self.list_files_cache_ttl,
+                self.list_files_cache_limit,
+                self.meta_fetch_concurrency,
+            )
+        )
+
+    def apply(self, options: DataFusionScanOptions) -> DataFusionScanOptions:
+        """Apply defaults to DataFusion scan options.
+
+        Returns
+        -------
+        DataFusionScanOptions
+            Scan options with policy defaults applied.
+        """
+        return replace(
+            options,
+            collect_statistics=(
+                options.collect_statistics
+                if options.collect_statistics is not None
+                else self.collect_statistics
+            ),
+            list_files_cache_ttl=(
+                options.list_files_cache_ttl
+                if options.list_files_cache_ttl is not None
+                else self.list_files_cache_ttl
+            ),
+            list_files_cache_limit=(
+                options.list_files_cache_limit
+                if options.list_files_cache_limit is not None
+                else self.list_files_cache_limit
+            ),
+            meta_fetch_concurrency=(
+                options.meta_fetch_concurrency
+                if options.meta_fetch_concurrency is not None
+                else self.meta_fetch_concurrency
+            ),
+        )
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return a fingerprint payload for policy defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Serializable fingerprint payload.
+        """
+        return {
+            "collect_statistics": self.collect_statistics,
+            "list_files_cache_ttl": self.list_files_cache_ttl,
+            "list_files_cache_limit": self.list_files_cache_limit,
+            "meta_fetch_concurrency": self.meta_fetch_concurrency,
+        }
+
+
+@dataclass(frozen=True)
+class DeltaScanPolicyDefaults:
+    """Policy defaults for Delta scan options."""
+
+    enable_parquet_pushdown: bool | None = None
+    schema_force_view_types: bool | None = None
+    wrap_partition_values: bool | None = None
+    file_column_name: str | None = None
+
+    def has_any(self) -> bool:
+        """Return True when any default is configured.
+
+        Returns
+        -------
+        bool
+            ``True`` when any default is set.
+        """
+        return any(
+            value is not None
+            for value in (
+                self.enable_parquet_pushdown,
+                self.schema_force_view_types,
+                self.wrap_partition_values,
+                self.file_column_name,
+            )
+        )
+
+    def apply(self, options: DeltaScanOptions) -> DeltaScanOptions:
+        """Apply defaults to Delta scan options.
+
+        Returns
+        -------
+        DeltaScanOptions
+            Delta scan options with policy defaults applied.
+        """
+        return replace(
+            options,
+            enable_parquet_pushdown=(
+                self.enable_parquet_pushdown
+                if self.enable_parquet_pushdown is not None
+                else options.enable_parquet_pushdown
+            ),
+            schema_force_view_types=(
+                self.schema_force_view_types
+                if self.schema_force_view_types is not None
+                else options.schema_force_view_types
+            ),
+            wrap_partition_values=(
+                self.wrap_partition_values
+                if self.wrap_partition_values is not None
+                else options.wrap_partition_values
+            ),
+            file_column_name=(
+                self.file_column_name
+                if self.file_column_name is not None
+                else options.file_column_name
+            ),
+        )
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return a fingerprint payload for policy defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Serializable fingerprint payload.
+        """
+        return {
+            "enable_parquet_pushdown": self.enable_parquet_pushdown,
+            "schema_force_view_types": self.schema_force_view_types,
+            "wrap_partition_values": self.wrap_partition_values,
+            "file_column_name": self.file_column_name,
+        }
+
+
+@dataclass(frozen=True)
+class ScanPolicyConfig(FingerprintableConfig):
+    """Policy defaults for scan options by dataset format."""
+
+    listing: ScanPolicyDefaults = field(default_factory=ScanPolicyDefaults)
+    delta_listing: ScanPolicyDefaults = field(default_factory=ScanPolicyDefaults)
+    delta_scan: DeltaScanPolicyDefaults = field(default_factory=DeltaScanPolicyDefaults)
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return a fingerprint payload for scan policies.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Serializable fingerprint payload.
+        """
+        return {
+            "listing": self.listing.fingerprint_payload(),
+            "delta_listing": self.delta_listing.fingerprint_payload(),
+            "delta_scan": self.delta_scan.fingerprint_payload(),
+        }
+
+    def fingerprint(self) -> str:
+        """Return the fingerprint hash for the scan policy config.
+
+        Returns
+        -------
+        str
+            Deterministic fingerprint hash.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
+
+def apply_scan_policy(
+    options: DataFusionScanOptions | None,
+    *,
+    policy: ScanPolicyConfig | None,
+    dataset_format: str | None,
+) -> DataFusionScanOptions | None:
+    """Apply policy defaults to DataFusion scan options.
+
+    Returns
+    -------
+    DataFusionScanOptions | None
+        Scan options with defaults applied, or ``None`` when unchanged.
+    """
+    if policy is None:
+        return options
+    defaults = policy.delta_listing if dataset_format == "delta" else policy.listing
+    if options is None and not defaults.has_any():
+        return None
+    base = options or DataFusionScanOptions()
+    return defaults.apply(base)
+
+
+def apply_delta_scan_policy(
+    options: DeltaScanOptions | None,
+    *,
+    policy: ScanPolicyConfig | None,
+) -> DeltaScanOptions | None:
+    """Apply policy defaults to Delta scan options.
+
+    Returns
+    -------
+    DeltaScanOptions | None
+        Delta scan options with defaults applied, or ``None`` when unchanged.
+    """
+    if policy is None:
+        return options
+    defaults = policy.delta_scan
+    if options is None and not defaults.has_any():
+        return None
+    base = options or DeltaScanOptions()
+    return defaults.apply(base)
+
+
+@dataclass(frozen=True)
 class DeltaScanOptions:
     """Delta-specific scan configuration.
 
@@ -1397,13 +1623,18 @@ __all__ = [
     "DeltaCdfPolicy",
     "DeltaMaintenancePolicy",
     "DeltaScanOptions",
+    "DeltaScanPolicyDefaults",
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
     "ParquetColumnOptions",
+    "ScanPolicyConfig",
+    "ScanPolicyDefaults",
     "SortKeySpec",
     "TableSchemaContract",
     "TableSpecConstraints",
     "VirtualFieldSpec",
+    "apply_delta_scan_policy",
+    "apply_scan_policy",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",

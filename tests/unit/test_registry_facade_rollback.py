@@ -8,7 +8,11 @@ import pytest
 
 from datafusion_engine.catalog.provider_registry import RegistrationMetadata
 from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
-from datafusion_engine.registry_facade import RegistryFacade
+from datafusion_engine.registry_facade import (
+    RegistrationPhase,
+    RegistrationPhaseOrchestrator,
+    RegistryFacade,
+)
 from utils.registry_protocol import MutableRegistry
 
 if TYPE_CHECKING:
@@ -76,3 +80,37 @@ def test_registry_facade_rolls_back_on_provider_failure() -> None:
 
     assert "events" not in dataset_catalog
     assert "events" not in provider_registry
+
+
+def test_registration_phase_orchestrator_enforces_order() -> None:
+    """Ensure phase ordering violations raise errors."""
+    orchestrator = RegistrationPhaseOrchestrator()
+    with pytest.raises(ValueError, match="requires prior phases"):
+        orchestrator.run(
+            (
+                RegistrationPhase(
+                    name="provider_registry",
+                    requires=("dataset_catalog",),
+                ),
+            )
+        )
+
+
+def test_registration_phase_orchestrator_runs_validation() -> None:
+    """Ensure validation hooks run in order."""
+    calls: list[str] = []
+
+    def _phase_a() -> None:
+        calls.append("a")
+
+    def _phase_b() -> None:
+        calls.append("b")
+
+    orchestrator = RegistrationPhaseOrchestrator()
+    orchestrator.run(
+        (
+            RegistrationPhase(name="a", validate=_phase_a),
+            RegistrationPhase(name="b", requires=("a",), validate=_phase_b),
+        )
+    )
+    assert calls == ["a", "b"]

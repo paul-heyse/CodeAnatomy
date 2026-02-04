@@ -246,28 +246,6 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
         Field::new("config_ttl", DataType::Utf8, true),
         Field::new("config_limit", DataType::Utf8, true),
     ]));
-    signatures.insert(
-        "read_parquet".to_string(),
-        TableSignature {
-            inputs: vec![
-                vec![DataType::Utf8],
-                vec![DataType::Utf8, DataType::Int64],
-                vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
-            ],
-            return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
-        },
-    );
-    signatures.insert(
-        "read_csv".to_string(),
-        TableSignature {
-            inputs: vec![
-                vec![DataType::Utf8],
-                vec![DataType::Utf8, DataType::Int64],
-                vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
-            ],
-            return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
-        },
-    );
     for name in [
         "list_files_cache",
         "metadata_cache",

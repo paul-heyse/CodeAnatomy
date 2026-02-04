@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
+from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
 from datafusion_engine.views.graph import (
     SchemaContractViolationError,
     ViewGraphRuntimeOptions,
     register_view_graph,
+    view_graph_registry,
 )
 from datafusion_engine.views.registry_specs import view_graph_nodes
 
@@ -18,7 +21,148 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.platform import RustUdfPlatformOptions
+    from datafusion_engine.views.graph import ViewNode
     from semantics.ir import SemanticIR
+
+
+@dataclass
+class _ViewGraphRegistrationContext:
+    ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile
+    scan_units: Sequence[ScanUnit]
+    semantic_ir: SemanticIR
+    snapshot: Mapping[str, object] | None = None
+    nodes: Sequence[ViewNode] = ()
+
+    @staticmethod
+    def validate_extract_metadata() -> None:
+        from datafusion_engine.extract.metadata import extract_metadata_specs
+
+        if not extract_metadata_specs():
+            msg = "Extract metadata registry is empty."
+            raise ValueError(msg)
+
+    @staticmethod
+    def validate_semantic_registry() -> None:
+        from semantics.registry import semantic_table_registry
+
+        if len(semantic_table_registry()) == 0:
+            msg = "Semantic table registry is empty."
+            raise ValueError(msg)
+
+    def install_udf_platform(self) -> None:
+        from datafusion_engine.udf.platform import install_rust_udf_platform
+        from datafusion_engine.udf.runtime import rust_udf_snapshot
+
+        options = _platform_options(self.runtime_profile)
+        platform = install_rust_udf_platform(self.ctx, options=options)
+        self.snapshot = platform.snapshot or rust_udf_snapshot(self.ctx)
+        if self.snapshot is None:
+            msg = "Rust UDF snapshot is required for view registration."
+            raise RuntimeError(msg)
+
+    def apply_scan_overrides(self) -> None:
+        if not self.scan_units:
+            return
+        from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
+
+        apply_scan_unit_overrides(
+            self.ctx,
+            scan_units=self.scan_units,
+            runtime_profile=self.runtime_profile,
+        )
+
+    def build_view_nodes(self) -> None:
+        if self.snapshot is None:
+            msg = "UDF snapshot is required before building view nodes."
+            raise RuntimeError(msg)
+        self.nodes = view_graph_nodes(
+            self.ctx,
+            snapshot=self.snapshot,
+            runtime_profile=self.runtime_profile,
+            semantic_ir=self.semantic_ir,
+        )
+        _ = view_graph_registry(self.nodes)
+
+    def register_view_graph(self) -> None:
+        if self.snapshot is None:
+            msg = "UDF snapshot is required before view graph registration."
+            raise RuntimeError(msg)
+        try:
+            register_view_graph(
+                self.ctx,
+                nodes=self.nodes,
+                snapshot=self.snapshot,
+                runtime_options=ViewGraphRuntimeOptions(
+                    runtime_profile=self.runtime_profile,
+                    require_artifacts=True,
+                ),
+            )
+        except Exception as exc:
+            if isinstance(exc, SchemaContractViolationError):
+                from datafusion_engine.lineage.diagnostics import record_artifact
+
+                payload = {
+                    "view": exc.table_name,
+                    "violations": [
+                        {
+                            "violation_type": violation.violation_type.value,
+                            "column_name": violation.column_name,
+                            "expected": violation.expected,
+                            "actual": violation.actual,
+                        }
+                        for violation in exc.violations
+                    ],
+                }
+                record_artifact(self.runtime_profile, "view_contract_violations_v1", payload)
+            raise
+
+
+def _view_graph_phases(
+    registration: _ViewGraphRegistrationContext,
+) -> tuple[RegistrationPhase, ...]:
+    phases: list[RegistrationPhase] = [
+        RegistrationPhase(
+            name="extract_metadata",
+            validate=registration.validate_extract_metadata,
+        ),
+        RegistrationPhase(
+            name="semantic_registry",
+            requires=("extract_metadata",),
+            validate=registration.validate_semantic_registry,
+        ),
+        RegistrationPhase(
+            name="udf_platform",
+            requires=("semantic_registry",),
+            validate=registration.install_udf_platform,
+        ),
+    ]
+    if registration.scan_units:
+        phases.append(
+            RegistrationPhase(
+                name="scan_overrides",
+                requires=("udf_platform",),
+                validate=registration.apply_scan_overrides,
+            )
+        )
+        view_nodes_requires = ("scan_overrides",)
+    else:
+        view_nodes_requires = ("udf_platform",)
+    phases.append(
+        RegistrationPhase(
+            name="view_nodes",
+            requires=view_nodes_requires,
+            validate=registration.build_view_nodes,
+        )
+    )
+    phases.append(
+        RegistrationPhase(
+            name="view_registration",
+            requires=("view_nodes",),
+            validate=registration.register_view_graph,
+        )
+    )
+    return tuple(phases)
 
 
 def ensure_view_graph(
@@ -51,58 +195,22 @@ def ensure_view_graph(
     ------
     ValueError
         Raised when the runtime profile is unavailable.
+    RuntimeError
+        Raised when required UDF snapshots are missing during registration.
     """
     if runtime_profile is None:
         msg = "Runtime profile is required for view registration."
         raise ValueError(msg)
-    from datafusion_engine.udf.platform import install_rust_udf_platform
-    from datafusion_engine.udf.runtime import rust_udf_snapshot
-
-    options = _platform_options(runtime_profile)
-    platform = install_rust_udf_platform(ctx, options=options)
-    snapshot = platform.snapshot or rust_udf_snapshot(ctx)
-    if scan_units:
-        from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
-
-        apply_scan_unit_overrides(
-            ctx,
-            scan_units=scan_units,
-            runtime_profile=runtime_profile,
-        )
-    nodes = view_graph_nodes(
-        ctx,
-        snapshot=snapshot,
+    registration = _ViewGraphRegistrationContext(
+        ctx=ctx,
         runtime_profile=runtime_profile,
+        scan_units=scan_units,
         semantic_ir=semantic_ir,
     )
-    try:
-        register_view_graph(
-            ctx,
-            nodes=nodes,
-            snapshot=snapshot,
-            runtime_options=ViewGraphRuntimeOptions(
-                runtime_profile=runtime_profile,
-                require_artifacts=True,
-            ),
-        )
-    except Exception as exc:
-        if isinstance(exc, SchemaContractViolationError):
-            from datafusion_engine.lineage.diagnostics import record_artifact
-
-            payload = {
-                "view": exc.table_name,
-                "violations": [
-                    {
-                        "violation_type": violation.violation_type.value,
-                        "column_name": violation.column_name,
-                        "expected": violation.expected,
-                        "actual": violation.actual,
-                    }
-                    for violation in exc.violations
-                ],
-            }
-            record_artifact(runtime_profile, "view_contract_violations_v1", payload)
-        raise
+    RegistrationPhaseOrchestrator().run(_view_graph_phases(registration))
+    if registration.snapshot is None:
+        msg = "UDF snapshot is required for view registration."
+        raise RuntimeError(msg)
     from datafusion_engine.lineage.diagnostics import (
         record_artifact,
         rust_udf_snapshot_payload,
@@ -113,19 +221,23 @@ def ensure_view_graph(
     record_artifact(
         runtime_profile,
         "rust_udf_snapshot_v1",
-        rust_udf_snapshot_payload(snapshot),
+        rust_udf_snapshot_payload(registration.snapshot),
     )
     record_artifact(
         runtime_profile,
         "view_udf_parity_v1",
-        view_udf_parity_payload(snapshot=snapshot, view_nodes=nodes, ctx=ctx),
+        view_udf_parity_payload(
+            snapshot=registration.snapshot,
+            view_nodes=registration.nodes,
+            ctx=ctx,
+        ),
     )
     record_artifact(
         runtime_profile,
         "view_fingerprints_v1",
-        view_fingerprint_payload(view_nodes=nodes),
+        view_fingerprint_payload(view_nodes=registration.nodes),
     )
-    return snapshot
+    return registration.snapshot
 
 
 def _platform_options(

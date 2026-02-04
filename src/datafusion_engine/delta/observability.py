@@ -38,6 +38,7 @@ from datafusion_engine.io.write import (
     WritePipeline,
     WriteRequest,
 )
+from obs.otel.run_context import get_run_id
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
@@ -176,9 +177,11 @@ def record_delta_snapshot(
     if location is None:
         return None
     snapshot = artifact.snapshot
+    run_id = get_run_id()
     trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": run_id,
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "trace_id": trace_id,
@@ -234,9 +237,11 @@ def record_delta_mutation(
     report = artifact.report
     snapshot_payload = _snapshot_payload(report)
     table_properties = _snapshot_table_properties(snapshot_payload)
+    run_id = get_run_id()
     trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": run_id,
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "trace_id": trace_id,
@@ -278,9 +283,11 @@ def record_delta_feature_state(
     """Record Delta feature state adoption in diagnostics."""
     if profile is None:
         return
+    run_id = get_run_id()
     trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": run_id,
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "trace_id": trace_id,
@@ -318,9 +325,11 @@ def record_delta_scan_plan(
     )
     if location is None:
         return None
+    run_id = get_run_id()
     trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": run_id,
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "trace_id": trace_id,
@@ -377,9 +386,11 @@ def record_delta_maintenance(
     checkpoint_interval = table_properties.get("delta.checkpointInterval")
     checkpoint_retention = table_properties.get("delta.checkpointRetentionDuration")
     checkpoint_protection = table_properties.get("delta.checkpointProtection")
+    run_id = get_run_id()
     trace_id, span_id = _trace_span_ids()
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": run_id,
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "trace_id": trace_id,
@@ -539,6 +550,7 @@ def _delta_snapshot_schema() -> pa.Schema:
     return pa.schema(
         [
             int64_field("event_time_unix_ms", nullable=False),
+            string_field("run_id"),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
             string_field("trace_id"),
@@ -562,6 +574,7 @@ def _delta_mutation_schema() -> pa.Schema:
     return pa.schema(
         [
             int64_field("event_time_unix_ms", nullable=False),
+            string_field("run_id"),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
             string_field("trace_id"),
@@ -589,6 +602,7 @@ def _delta_scan_plan_schema() -> pa.Schema:
     return pa.schema(
         [
             int64_field("event_time_unix_ms", nullable=False),
+            string_field("run_id"),
             string_field("dataset_name", nullable=False),
             string_field("table_uri", nullable=False),
             string_field("trace_id"),
@@ -609,6 +623,7 @@ def _delta_maintenance_schema() -> pa.Schema:
     return pa.schema(
         [
             int64_field("event_time_unix_ms", nullable=False),
+            string_field("run_id"),
             string_field("dataset_name"),
             string_field("table_uri", nullable=False),
             string_field("trace_id"),

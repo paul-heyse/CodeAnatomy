@@ -239,8 +239,109 @@ class ImmutableRegistry[K, V]:
         return cls(tuple(data.items()))
 
 
+@dataclass
+class MappingRegistryAdapter[K, V]:
+    """Adapter for mapping-backed registries with optional read-only mode."""
+
+    entries: dict[K, V] = field(default_factory=dict)
+    read_only: bool = False
+    allow_overwrite: bool = False
+
+    def register(self, key: K, value: V) -> None:
+        """Register a value for the provided key.
+
+        Raises
+        ------
+        ValueError
+            Raised when the registry is read-only or the key is already registered.
+        """
+        if self.read_only:
+            msg = "Registry is read-only."
+            raise ValueError(msg)
+        if key in self.entries and not self.allow_overwrite:
+            msg = f"Key {key!r} already registered. Use allow_overwrite=True."
+            raise ValueError(msg)
+        self.entries[key] = value
+
+    def get(self, key: K) -> V | None:
+        """Retrieve a value by key.
+
+        Returns
+        -------
+        V | None
+            Registered value, or ``None`` when missing.
+        """
+        return self.entries.get(key)
+
+    def __contains__(self, key: K) -> bool:
+        """Check whether a key is registered.
+
+        Returns
+        -------
+        bool
+            ``True`` when the key is registered.
+        """
+        return key in self.entries
+
+    def __iter__(self) -> Iterator[K]:
+        """Iterate over registered keys.
+
+        Returns
+        -------
+        Iterator[K]
+            Iterator over registered keys.
+        """
+        return iter(self.entries)
+
+    def __len__(self) -> int:
+        """Return the count of registered entries.
+
+        Returns
+        -------
+        int
+            Count of registered entries.
+        """
+        return len(self.entries)
+
+    def snapshot(self) -> Mapping[K, V]:
+        """Return immutable snapshot of current state.
+
+        Returns
+        -------
+        Mapping[K, V]
+            Snapshot of registry entries.
+        """
+        return dict(self.entries)
+
+    def restore(self, snapshot: Mapping[K, V]) -> None:
+        """Restore registry entries from a snapshot."""
+        self.entries = dict(snapshot)
+
+    @classmethod
+    def from_mapping(
+        cls,
+        mapping: Mapping[K, V],
+        *,
+        read_only: bool = False,
+        allow_overwrite: bool = False,
+    ) -> MappingRegistryAdapter[K, V]:
+        """Create a registry adapter from a mapping.
+
+        Returns
+        -------
+        MappingRegistryAdapter[K, V]
+            Registry adapter initialized from the mapping.
+        """
+        return cls(
+            entries=dict(mapping),
+            read_only=read_only,
+            allow_overwrite=allow_overwrite,
+        )
+
+
 __all__ = [
     "ImmutableRegistry",
+    "MappingRegistryAdapter",
     "MutableRegistry",
     "Registry",
     "SnapshotRegistry",

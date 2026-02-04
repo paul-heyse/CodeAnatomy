@@ -20,6 +20,8 @@ class MetricName(StrEnum):
     SCAN_FRAGMENTS = "codeanatomy.scan.fragments"
     CACHE_OPERATION_COUNT = "codeanatomy.cache.operation.count"
     CACHE_OPERATION_DURATION = "codeanatomy.cache.operation.duration"
+    STORAGE_OPERATION_COUNT = "codeanatomy.storage.operation.count"
+    STORAGE_OPERATION_DURATION = "codeanatomy.storage.operation.duration"
 
 
 class AttributeName(StrEnum):
@@ -39,6 +41,7 @@ class AttributeName(StrEnum):
     CACHE_SCOPE = "cache.scope"
     CACHE_OPERATION = "cache.operation"
     CACHE_RESULT = "cache.result"
+    STORAGE_OPERATION = "storage.operation"
 
 
 class ScopeName(StrEnum):

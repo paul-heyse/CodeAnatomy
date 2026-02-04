@@ -456,7 +456,7 @@ class DataFusionExecutionFacade:
         if (
             self.runtime_profile is None
             or request.view_name is None
-            or not self.runtime_profile.capture_plan_artifacts
+            or not self.runtime_profile.diagnostics.capture_plan_artifacts
         ):
             return
         from datafusion_engine.plan.artifact_store import (

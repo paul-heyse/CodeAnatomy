@@ -222,7 +222,7 @@ def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, Datase
             name,
             apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
         )
-    for name, location in profile.data_sources.scip_dataset_locations.items():
+    for name, location in profile.data_sources.extract_output.scip_dataset_locations.items():
         locations.setdefault(
             name,
             apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),

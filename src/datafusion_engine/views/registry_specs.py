@@ -309,6 +309,9 @@ def _nested_view_nodes(
         msg = "Runtime profile is required for nested view planning."
         raise ValueError(msg)
 
+    if not callable(getattr(ctx, "table_exist", None)):
+        return []
+
     view_specs = nested_view_specs(ctx)
     if not view_specs:
         return []

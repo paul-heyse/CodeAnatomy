@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hamilton.caching.cache_key import decode_key
 from hamilton.lifecycle import api as lifecycle_api
@@ -121,7 +121,16 @@ class CacheLineageHook(lifecycle_api.GraphExecutionHook):
         driver = self._driver
         if driver is None:
             return
-        if not bool(self.config.get("enable_cache_lineage", True)):
+        hamilton_config = self.config.get("hamilton")
+        hamilton_payload = (
+            cast("Mapping[str, JsonValue]", hamilton_config)
+            if isinstance(hamilton_config, Mapping)
+            else dict[str, JsonValue]()
+        )
+        enable_cache_lineage = hamilton_payload.get("enable_cache_lineage")
+        if not isinstance(enable_cache_lineage, bool):
+            enable_cache_lineage = True
+        if not enable_cache_lineage:
             return
         out_path = _lineage_path(self.config, run_id=run_id)
         summary = export_cache_lineage_artifacts(
@@ -148,10 +157,22 @@ class CacheLineageHook(lifecycle_api.GraphExecutionHook):
 
 
 def _lineage_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
-    explicit = config.get("cache_lineage_path")
+    hamilton_config = config.get("hamilton")
+    hamilton_payload = (
+        cast("Mapping[str, JsonValue]", hamilton_config)
+        if isinstance(hamilton_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    explicit = hamilton_payload.get("cache_lineage_path")
     if isinstance(explicit, str) and explicit:
         return Path(explicit).expanduser()
-    cache_path = config.get("cache_path")
+    cache_config = config.get("cache")
+    cache_payload = (
+        cast("Mapping[str, JsonValue]", cache_config)
+        if isinstance(cache_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    cache_path = cache_payload.get("path")
     if not isinstance(cache_path, str) or not cache_path:
         return Path("build") / "structured_logs" / _CACHE_LINEAGE_DIRNAME / run_id
     base = Path(cache_path).expanduser()

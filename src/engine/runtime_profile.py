@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -169,6 +168,15 @@ def _coalesce_diagnostics_sink(
     return cast("DiagnosticsSink | None", value)
 
 
+def _coalesce_unset_text(
+    value: str | msgspec.UnsetType | None,
+    default: str | None,
+) -> str | None:
+    if value is msgspec.UNSET:
+        return default
+    return value
+
+
 def _profile_hash_payload(
     *,
     name: str,
@@ -281,15 +289,15 @@ def _apply_named_profile_overrides(
 ) -> DataFusionRuntimeProfile:
     cpu_count = _cpu_count()
     if name == "dev_debug":
-        return replace(
+        return msgspec.structs.replace(
             profile,
-            policies=replace(profile.policies, config_policy_name="dev"),
-            execution=replace(
+            policies=msgspec.structs.replace(profile.policies, config_policy_name="dev"),
+            execution=msgspec.structs.replace(
                 profile.execution,
                 target_partitions=min(cpu_count, 8),
                 batch_size=4096,
             ),
-            diagnostics=replace(
+            diagnostics=msgspec.structs.replace(
                 profile.diagnostics,
                 capture_explain=True,
                 explain_verbose=True,
@@ -298,10 +306,10 @@ def _apply_named_profile_overrides(
             ),
         )
     if name == "prod_fast":
-        return replace(
+        return msgspec.structs.replace(
             profile,
-            policies=replace(profile.policies, config_policy_name="prod"),
-            diagnostics=replace(
+            policies=msgspec.structs.replace(profile.policies, config_policy_name="prod"),
+            diagnostics=msgspec.structs.replace(
                 profile.diagnostics,
                 capture_explain=False,
                 explain_verbose=False,
@@ -310,15 +318,15 @@ def _apply_named_profile_overrides(
             ),
         )
     if name == "memory_tight":
-        return replace(
+        return msgspec.structs.replace(
             profile,
-            policies=replace(profile.policies, config_policy_name="symtable"),
-            execution=replace(
+            policies=msgspec.structs.replace(profile.policies, config_policy_name="symtable"),
+            execution=msgspec.structs.replace(
                 profile.execution,
                 target_partitions=min(cpu_count, 4),
                 batch_size=4096,
             ),
-            diagnostics=replace(
+            diagnostics=msgspec.structs.replace(
                 profile.diagnostics,
                 capture_explain=False,
                 explain_verbose=False,
@@ -343,9 +351,9 @@ def _apply_memory_overrides(
     memory_pool = profile.execution.memory_pool
     if memory_limit is not None and memory_pool == "greedy":
         memory_pool = "fair"
-    return replace(
+    return msgspec.structs.replace(
         profile,
-        execution=replace(
+        execution=msgspec.structs.replace(
             profile.execution,
             spill_dir=spill_dir,
             memory_limit_bytes=memory_limit,
@@ -356,19 +364,19 @@ def _apply_memory_overrides(
 
 def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
     patch = _runtime_profile_env_patch()
-    return replace(
+    return msgspec.structs.replace(
         profile,
-        policies=replace(
+        policies=msgspec.structs.replace(
             profile.policies,
-            config_policy_name=coalesce_unset(
+            config_policy_name=_coalesce_unset_text(
                 patch.config_policy_name,
                 profile.policies.config_policy_name,
             ),
-            cache_output_root=coalesce_unset(
+            cache_output_root=_coalesce_unset_text(
                 patch.cache_output_root,
                 profile.policies.cache_output_root,
             ),
-            runtime_artifact_cache_root=coalesce_unset(
+            runtime_artifact_cache_root=_coalesce_unset_text(
                 patch.runtime_artifact_cache_root,
                 profile.policies.runtime_artifact_cache_root,
             ),
@@ -381,18 +389,18 @@ def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntime
                 profile.policies.metadata_cache_snapshot_enabled,
             ),
         ),
-        catalog=replace(
+        catalog=msgspec.structs.replace(
             profile.catalog,
-            catalog_auto_load_location=coalesce_unset(
+            catalog_auto_load_location=_coalesce_unset_text(
                 patch.catalog_auto_load_location,
                 profile.catalog.catalog_auto_load_location,
             ),
-            catalog_auto_load_format=coalesce_unset(
+            catalog_auto_load_format=_coalesce_unset_text(
                 patch.catalog_auto_load_format,
                 profile.catalog.catalog_auto_load_format,
             ),
         ),
-        diagnostics=replace(
+        diagnostics=msgspec.structs.replace(
             profile.diagnostics,
             diagnostics_sink=_coalesce_diagnostics_sink(
                 patch.diagnostics_sink,

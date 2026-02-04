@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from datafusion_engine.dataset.registration import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
@@ -66,7 +69,7 @@ def build_engine_session(
     resource_overrides["codeanatomy.runtime_profile"] = runtime_spec.name
     configure_otel(
         service_name="codeanatomy",
-        options=replace(effective_otel, resource_overrides=resource_overrides),
+        options=dataclass_replace(effective_otel, resource_overrides=resource_overrides),
     )
     engine_runtime = build_engine_runtime(
         runtime_profile=runtime_spec.datafusion,
@@ -93,13 +96,16 @@ def build_engine_session(
         plugin = dataset_input_plugin(datasets, runtime_profile=df_profile)
         registry_catalogs = dict(df_profile.catalog.registry_catalogs)
         registry_catalogs.setdefault(df_profile.catalog.default_schema, datasets)
-        df_profile = replace(
+        df_profile = msgspec.structs.replace(
             df_profile,
-            policies=replace(
+            policies=msgspec.structs.replace(
                 df_profile.policies,
                 input_plugins=(*df_profile.policies.input_plugins, plugin),
             ),
-            catalog=replace(df_profile.catalog, registry_catalogs=registry_catalogs),
+            catalog=msgspec.structs.replace(
+                df_profile.catalog,
+                registry_catalogs=registry_catalogs,
+            ),
         )
         engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
         input_plugin_names = [plugin.__name__]

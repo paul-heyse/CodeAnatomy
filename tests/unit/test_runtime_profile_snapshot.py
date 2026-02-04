@@ -49,7 +49,7 @@ def test_runtime_profile_hash_changes_with_join_policy() -> None:
 def test_schema_evolution_adapter_enabled_by_default() -> None:
     """Enable schema evolution adapter in the default profile."""
     profile = df_profile()
-    assert profile.enable_schema_evolution_adapter is True
+    assert profile.features.enable_schema_evolution_adapter is True
 
 
 def test_force_disable_ident_normalization_overrides() -> None:

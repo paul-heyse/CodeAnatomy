@@ -45,7 +45,16 @@ class GraphSnapshotHook(lifecycle_api.GraphExecutionHook):
 
     def run_before_graph_execution(self, **kwargs: object) -> None:
         """Emit a graph snapshot before graph execution."""
-        if not bool(self.config.get("enable_graph_snapshot", True)):
+        hamilton_config = self.config.get("hamilton")
+        hamilton_payload = (
+            cast("Mapping[str, JsonValue]", hamilton_config)
+            if isinstance(hamilton_config, Mapping)
+            else dict[str, JsonValue]()
+        )
+        enable_snapshot = hamilton_payload.get("enable_graph_snapshot")
+        if not isinstance(enable_snapshot, bool):
+            enable_snapshot = True
+        if not enable_snapshot:
             return
         driver = self._driver
         if driver is None:
@@ -98,13 +107,27 @@ def _graph_snapshot_path(
     *,
     plan_signature: str,
 ) -> Path:
-    explicit = config.get("graph_snapshot_path") or config.get("hamilton_graph_snapshot_path")
+    hamilton_config = config.get("hamilton")
+    hamilton_payload = (
+        cast("Mapping[str, JsonValue]", hamilton_config)
+        if isinstance(hamilton_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    explicit = hamilton_payload.get("graph_snapshot_path") or hamilton_payload.get(
+        "graph_snapshot_hamilton_path"
+    )
     if isinstance(explicit, str) and explicit:
         base = Path(explicit).expanduser()
         if base.suffix:
             return base
         return base / f"{plan_signature}.png"
-    cache_path = config.get("cache_path")
+    cache_config = config.get("cache")
+    cache_payload = (
+        cast("Mapping[str, JsonValue]", cache_config)
+        if isinstance(cache_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    cache_path = cache_payload.get("path")
     if isinstance(cache_path, str) and cache_path:
         return Path(cache_path).expanduser() / _GRAPH_SNAPSHOT_DIRNAME / f"{plan_signature}.png"
     return Path("build") / "structured_logs" / _GRAPH_SNAPSHOT_DIRNAME / f"{plan_signature}.png"

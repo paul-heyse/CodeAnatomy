@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
-CACHE_VERSION: int = 1
+CACHE_VERSION: int = 2
 LOCK_EXPIRE_SECONDS: float = 60.0
 
 

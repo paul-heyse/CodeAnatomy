@@ -22,7 +22,7 @@ def test_runtime_profile_builds_semantic_output_catalog(tmp_path: Path) -> None:
         output_config=output_config,
     )
     profile = spec.datafusion
-    assert profile.data_sources.semantic_output_catalog_name == "semantic_outputs"
+    assert profile.data_sources.semantic_output.output_catalog_name == "semantic_outputs"
     catalog = profile.catalog.registry_catalogs.get("semantic_outputs")
     assert catalog is not None
     expected_outputs = {spec.name for spec in SEMANTIC_MODEL.outputs}
@@ -47,7 +47,7 @@ def test_runtime_profile_respects_custom_catalog_name(tmp_path: Path) -> None:
         output_config=output_config,
     )
     profile = spec.datafusion
-    assert profile.data_sources.semantic_output_catalog_name == "custom_semantic_outputs"
+    assert profile.data_sources.semantic_output.output_catalog_name == "custom_semantic_outputs"
     catalog = profile.catalog.registry_catalogs.get("custom_semantic_outputs")
     assert catalog is not None
     expected_outputs = {spec.name for spec in SEMANTIC_MODEL.outputs}

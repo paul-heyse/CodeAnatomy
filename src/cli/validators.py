@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,8 @@ from cyclopts import ArgumentCollection
 from cyclopts.utils import UNSET
 
 _LOGGER = logging.getLogger(__name__)
+_MAPPING_ARGS_LEN = 2
+_SINGLE_ARG_LEN = 1
 
 
 def _resolve_params(
@@ -18,9 +21,13 @@ def _resolve_params(
 ) -> dict[str, Any]:
     if resolved_params:
         return resolved_params
-    if len(args) != 1:
+    if len(args) == _MAPPING_ARGS_LEN and isinstance(args[1], Mapping):
+        return dict(args[1])
+    if len(args) != _SINGLE_ARG_LEN:
         return {}
     collection = args[0]
+    if isinstance(collection, Mapping):
+        return dict(collection)
     if not isinstance(collection, ArgumentCollection):
         return {}
     values: dict[str, Any] = {}

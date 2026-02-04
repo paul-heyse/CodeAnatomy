@@ -10,6 +10,7 @@ from datafusion_engine.extract.registry import dataset_spec as extract_dataset_s
 from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     DataSourceConfig,
+    ExtractOutputConfig,
     extract_output_locations_for_profile,
 )
 from tests.test_helpers.optional_deps import require_datafusion
@@ -32,7 +33,9 @@ def test_build_extract_output_catalog_registers_metadata(tmp_path: Path) -> None
 def test_extract_output_locations_for_profile_uses_root(tmp_path: Path) -> None:
     """Ensure runtime profile helper builds locations from extract output root."""
     profile = DataFusionRuntimeProfile(
-        data_sources=DataSourceConfig(extract_output_root=str(tmp_path)),
+        data_sources=DataSourceConfig(
+            extract_output=ExtractOutputConfig(output_root=str(tmp_path))
+        ),
     )
     locations = extract_output_locations_for_profile(profile)
     rows = extract_metadata_specs()

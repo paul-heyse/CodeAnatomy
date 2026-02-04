@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hamilton.lifecycle import api as lifecycle_api
 
@@ -93,13 +93,25 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
 
 
 def _resolve_log_path(config: Mapping[str, JsonValue], *, run_id: str) -> Path:
-    explicit = config.get("structured_log_path") or config.get("hamilton_run_log_path")
+    hamilton_config = config.get("hamilton")
+    hamilton_payload = (
+        cast("Mapping[str, JsonValue]", hamilton_config)
+        if isinstance(hamilton_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    explicit = hamilton_payload.get("structured_log_path") or hamilton_payload.get("run_log_path")
     if isinstance(explicit, str) and explicit:
         base = Path(explicit).expanduser()
         if base.suffix:
             return base
         return base / f"{run_id}.jsonl"
-    cache_path = config.get("cache_path")
+    cache_config = config.get("cache")
+    cache_payload = (
+        cast("Mapping[str, JsonValue]", cache_config)
+        if isinstance(cache_config, Mapping)
+        else dict[str, JsonValue]()
+    )
+    cache_path = cache_payload.get("path")
     if isinstance(cache_path, str) and cache_path:
         return Path(cache_path).expanduser() / "structured_logs" / f"{run_id}.jsonl"
     return Path("build") / "structured_logs" / f"{run_id}.jsonl"

@@ -139,7 +139,7 @@ enable_metric_scheduling: bool | None = None  # NOT prefixed!
 
 Users can set the same config via TWO paths, creating silent conflicts.
 
-**Additional Constraint**: `cli/config_loader.normalize_config_contents()` currently flattens nested sections into flat keys used by the driver. Removing flattened fields must include a legacy normalization layer (or explicit deprecation window) to avoid breaking existing config files.
+**Additional Constraint (Design Phase)**: `cli/config_loader.normalize_config_contents()` preserves nested sections. Flat keys are **not** supported; configs must be updated to nested-only sections. No legacy normalization or compatibility adapters are retained.
 
 ### 1.3 Duplicate Class Names
 
@@ -242,9 +242,9 @@ class DataFusionRuntimeProfile(FingerprintableConfig):
 
 **Target**: Reduce from 158 flat fields to ~70 fields across 6 structured sub-configs.
 
-**Compatibility Layer (Required)**:
+**Compatibility Layer (Removed in Design Phase)**:
 - Preserve `telemetry_payload_hash()` and `settings_hash()` by delegating their payload construction to the new sub-configs.
-- Add a temporary adapter that synthesizes legacy flat fields (e.g., `ast_*`, `bytecode_*`) from structured sub-configs to avoid a wide break during migration.
+- Do **not** synthesize legacy flat fields (e.g., `ast_*`, `bytecode_*`). Migration requires updating configs and call sites to nested-only usage.
 
 #### RootConfig Simplification
 
@@ -279,7 +279,7 @@ class RootConfig:
 **Phase 3**: Hierarchical refactor
 1. Extract sub-configs from DataFusionRuntimeProfile
 2. Remove flattened fields from RootConfig
-3. Add a legacy normalization layer for flattened RootConfig keys (deprecate in stages)
+3. Require nested-only RootConfig usage (no legacy normalization or adapters)
 4. Update all call sites (estimated 50-100 files)
 
 ---

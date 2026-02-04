@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from utils.registry_protocol import Registry, SnapshotRegistry
+from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataFusionViewRegistry
     from datafusion_engine.udf.catalog import DataFusionUdfSpec, UdfCatalogAdapter
+    from datafusion_engine.views.artifacts import DataFusionViewArtifact
 
 
 @dataclass(frozen=True)
@@ -66,13 +67,12 @@ class RegistryFacade:
         checkpoint = self._checkpoint_optional()
         try:
             self._datasets.register(name, location, overwrite=overwrite)
-            df = self._providers.register_location(
+            return self._providers.register_location(
                 name=name,
                 location=location,
                 overwrite=overwrite,
                 cache_policy=cache_policy,
             )
-            return df
         except Exception:
             self._rollback_optional(checkpoint)
             raise
@@ -100,7 +100,7 @@ class RegistryFacade:
                 cache_policy=cache_policy,
                 overwrite=overwrite,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return RegistrationResult(
                 success=False,
                 key=name,
@@ -108,12 +108,13 @@ class RegistryFacade:
                 timestamp=start,
                 error=str(exc),
             )
-        return RegistrationResult(
-            success=True,
-            key=name,
-            phase="dataset",
-            timestamp=start,
-        )
+        else:
+            return RegistrationResult(
+                success=True,
+                key=name,
+                phase="dataset",
+                timestamp=start,
+            )
 
     def register_udf(self, *, key: str, spec: DataFusionUdfSpec) -> RegistrationResult:
         """Register a custom UDF spec in the metadata registry.
@@ -134,7 +135,7 @@ class RegistryFacade:
             )
         try:
             self._udfs.register(key, spec)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return RegistrationResult(
                 success=False,
                 key=key,
@@ -142,14 +143,15 @@ class RegistryFacade:
                 timestamp=start,
                 error=str(exc),
             )
-        return RegistrationResult(
-            success=True,
-            key=key,
-            phase="udf",
-            timestamp=start,
-        )
+        else:
+            return RegistrationResult(
+                success=True,
+                key=key,
+                phase="udf",
+                timestamp=start,
+            )
 
-    def register_view(self, *, name: str, artifact: object) -> RegistrationResult:
+    def register_view(self, *, name: str, artifact: DataFusionViewArtifact) -> RegistrationResult:
         """Register a view artifact when a view registry is available.
 
         Returns
@@ -168,7 +170,7 @@ class RegistryFacade:
             )
         try:
             self._views.register(name, artifact)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return RegistrationResult(
                 success=False,
                 key=name,
@@ -176,12 +178,13 @@ class RegistryFacade:
                 timestamp=start,
                 error=str(exc),
             )
-        return RegistrationResult(
-            success=True,
-            key=name,
-            phase="view",
-            timestamp=start,
-        )
+        else:
+            return RegistrationResult(
+                success=True,
+                key=name,
+                phase="view",
+                timestamp=start,
+            )
 
     def _checkpoint_optional(self) -> str | None:
         snapshot: dict[str, Mapping[object, object]] = {}
@@ -190,7 +193,7 @@ class RegistryFacade:
                 snapshot[label] = registry.snapshot()
         if not snapshot:
             return None
-        checkpoint_id = str(uuid.uuid4())
+        checkpoint_id = uuid7_str()
         self._checkpoints[checkpoint_id] = snapshot
         return checkpoint_id
 
@@ -206,13 +209,13 @@ class RegistryFacade:
 
     def _registries(self) -> Mapping[str, Registry[object, object]]:
         registries: dict[str, Registry[object, object]] = {
-            "datasets": self._datasets,
-            "providers": self._providers,
+            "datasets": cast("Registry[object, object]", self._datasets),
+            "providers": cast("Registry[object, object]", self._providers),
         }
         if self._udfs is not None:
-            registries["udfs"] = self._udfs
+            registries["udfs"] = cast("Registry[object, object]", self._udfs)
         if self._views is not None:
-            registries["views"] = self._views
+            registries["views"] = cast("Registry[object, object]", self._views)
         return registries
 
 

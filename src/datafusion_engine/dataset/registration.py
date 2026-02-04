@@ -626,10 +626,10 @@ def _scan_hardening_defaults(
 
 
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:
-    hardening = runtime_profile.schema_hardening
+    hardening = runtime_profile.policies.schema_hardening
     if hardening is not None:
         return hardening.enable_view_types
-    return runtime_profile.schema_hardening_name == "arrow_performance"
+    return runtime_profile.policies.schema_hardening_name == "arrow_performance"
 
 
 def _prefers_listing_table(
@@ -1808,7 +1808,10 @@ def _delta_log_health_payload(
     reader_features = _snapshot_features(snapshot, "reader_features")
     writer_features = _snapshot_features(snapshot, "writer_features")
     table_features = sorted(set(reader_features) | set(writer_features))
-    compatibility = delta_protocol_compatibility(snapshot, runtime_profile.delta_protocol_support)
+    compatibility = delta_protocol_compatibility(
+        snapshot,
+        runtime_profile.policies.delta_protocol_support,
+    )
     protocol_compatible = compatibility.compatible
     severity = _delta_health_severity(
         delta_log_present=delta_log_present,

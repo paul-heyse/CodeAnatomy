@@ -190,10 +190,10 @@ def _resolve_delta_scan(
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile | None) -> bool:
     if runtime_profile is None:
         return False
-    hardening = runtime_profile.schema_hardening
+    hardening = runtime_profile.policies.schema_hardening
     if hardening is not None:
         return hardening.enable_view_types
-    return runtime_profile.schema_hardening_name == "arrow_performance"
+    return runtime_profile.policies.schema_hardening_name == "arrow_performance"
 
 
 def _profile_settings(runtime_profile: DataFusionRuntimeProfile | None) -> Mapping[str, str]:

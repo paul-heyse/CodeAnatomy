@@ -31,6 +31,10 @@ class CacheConfig(StructBaseStrict, frozen=True):
     path: str | None = None
     log_to_file: bool | None = None
     opt_in: bool | None = None
+    default_behavior: str | None = None
+    default_loader_behavior: str | None = None
+    default_saver_behavior: str | None = None
+    default_nodes: tuple[str, ...] | None = None
 
 
 class IncrementalConfig(StructBaseStrict, frozen=True):
@@ -146,8 +150,6 @@ class HamiltonConfig(StructBaseStrict, frozen=True):
     enable_tracker: bool | None = None
     enable_type_checker: bool | None = None
     enable_node_diagnostics: bool | None = None
-    graph_adapter_kind: str | None = None
-    graph_adapter_options: dict[str, object] | None = None
     enable_structured_run_logs: bool | None = None
     structured_log_path: str | None = None
     run_log_path: str | None = None
@@ -156,7 +158,6 @@ class HamiltonConfig(StructBaseStrict, frozen=True):
     graph_snapshot_hamilton_path: str | None = None
     enable_cache_lineage: bool | None = None
     cache_lineage_path: str | None = None
-    cache_path: str | None = None
     capture_data_statistics: bool | None = None
     max_list_length_capture: int | None = None
     max_dict_length_capture: int | None = None
@@ -180,21 +181,6 @@ class RootConfig(StructBaseStrict, frozen=True):
     docstrings: DocstringsConfig | None = None
     otel: OtelConfig | None = None
     hamilton: HamiltonConfig | None = None
-
-    runtime_profile_name: str | None = None
-    diagnostics_profile: str | None = None
-    log_level: str | None = None
-    determinism_override: str | None = None
-    repo_root: str | None = None
-    output_dir: str | None = None
-    work_dir: str | None = None
-    execution_mode: str | None = None
-
-    runtime_environment: str | None = None
-    runtime_team: str | None = None
-
-    disable_scip: bool | None = None
-    scip_output_dir: str | None = None
 
 
 __all__ = [

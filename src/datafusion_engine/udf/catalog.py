@@ -465,6 +465,20 @@ class UdfCatalog:
         """
         self._udf_specs[spec.func_id] = spec
 
+    def custom_specs(self) -> Mapping[str, DataFusionUdfSpec]:
+        """Return registered custom UDF specifications.
+
+        Returns
+        -------
+        Mapping[str, DataFusionUdfSpec]
+            Mapping of UDF identifiers to their specifications.
+        """
+        return self._udf_specs
+
+    def replace_custom_specs(self, specs: Mapping[str, DataFusionUdfSpec]) -> None:
+        """Replace custom UDF specifications with a snapshot."""
+        self._udf_specs = dict(specs)
+
     def adapter(self) -> UdfCatalogAdapter:
         """Return a Registry-compatible adapter for custom UDF specs.
 
@@ -677,7 +691,7 @@ class UdfCatalogAdapter:
         DataFusionUdfSpec | None
             Custom UDF spec when available.
         """
-        return self.catalog._udf_specs.get(key)
+        return self.catalog.custom_specs().get(key)
 
     def __contains__(self, key: str) -> bool:
         """Return True when a custom UDF spec is registered.
@@ -687,7 +701,7 @@ class UdfCatalogAdapter:
         bool
             True when a custom UDF spec is registered.
         """
-        return key in self.catalog._udf_specs
+        return key in self.catalog.custom_specs()
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over custom UDF identifiers.
@@ -697,7 +711,7 @@ class UdfCatalogAdapter:
         Iterator[str]
             Iterator over custom UDF identifiers.
         """
-        return iter(self.catalog._udf_specs)
+        return iter(self.catalog.custom_specs())
 
     def __len__(self) -> int:
         """Return the number of registered custom UDF specs.
@@ -707,7 +721,7 @@ class UdfCatalogAdapter:
         int
             Number of registered custom UDF specs.
         """
-        return len(self.catalog._udf_specs)
+        return len(self.catalog.custom_specs())
 
     def snapshot(self) -> Mapping[str, DataFusionUdfSpec]:
         """Return a snapshot of custom UDF specs.
@@ -717,11 +731,11 @@ class UdfCatalogAdapter:
         Mapping[str, DataFusionUdfSpec]
             Snapshot of custom UDF specifications.
         """
-        return dict(self.catalog._udf_specs)
+        return dict(self.catalog.custom_specs())
 
     def restore(self, snapshot: Mapping[str, DataFusionUdfSpec]) -> None:
         """Restore custom UDF specs from a snapshot."""
-        self.catalog._udf_specs = dict(snapshot)
+        self.catalog.replace_custom_specs(snapshot)
 
 
 def create_default_catalog(

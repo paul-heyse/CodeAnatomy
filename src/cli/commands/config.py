@@ -26,27 +26,59 @@ requested_tasks = []
 impacted_tasks = []
 enable_metric_scheduling = true
 enable_plan_diagnostics = true
+enable_plan_task_submission_hook = true
+enable_plan_task_grouping_hook = true
+enforce_plan_task_submission = false
 
 [cache]
 policy_profile = "default"
-path = ""
+path = "build/cache"
 log_to_file = false
-
-[graph_adapter]
-kind = ""
-options = {}
+opt_in = true
 
 [incremental]
 enabled = false
 state_dir = "build/state"
-repo_id = ""
 impact_strategy = "hybrid"
+git_changed_only = false
 
-[scip]
-output_dir = "build/scip"
-scip_python_bin = "scip-python"
-scip_cli_bin = "scip"
-extra_args = []
+# [graph_adapter]
+# kind = "threadpool"
+# options = {}
+
+# [delta.restore]
+# version = 0
+# timestamp = ""
+
+# [delta.export]
+# version = 0
+# timestamp = ""
+
+# [docstrings.policy]
+# coverage-threshold = 0.85
+# coverage-action = "warn"
+# missing-params-action = "warn"
+# missing-returns-action = "warn"
+
+# [otel]
+# enable_node_tracing = false
+# enable_plan_tracing = false
+# endpoint = "http://localhost:4317"
+# protocol = "grpc"
+# sampler = "parentbased_always_on"
+# sampler_arg = 1
+
+# [hamilton]
+# enable_tracker = false
+# enable_type_checker = false
+# enable_node_diagnostics = false
+# enable_structured_run_logs = false
+# enable_graph_snapshot = false
+# enable_cache_lineage = false
+# capture_data_statistics = false
+# max_list_length_capture = 256
+# max_dict_length_capture = 256
+# tags = {}
 """
 
 

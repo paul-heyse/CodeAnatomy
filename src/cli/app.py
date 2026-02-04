@@ -6,7 +6,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
 from cyclopts.config import Toml
@@ -284,6 +284,16 @@ def _config_str(config: Mapping[str, JsonValue], key: str) -> str | None:
     return None
 
 
+def _config_section(
+    config: Mapping[str, JsonValue],
+    key: str,
+) -> dict[str, JsonValue]:
+    value = config.get(key)
+    if isinstance(value, Mapping):
+        return dict(cast("Mapping[str, JsonValue]", value))
+    return {}
+
+
 def _config_bool(config: Mapping[str, JsonValue], key: str) -> bool | None:
     value = config.get(key)
     return value if isinstance(value, bool) else None
@@ -313,14 +323,25 @@ def _apply_cli_overrides(
     if not overrides:
         return sources
     for key, (value, _location) in overrides.items():
-        config_contents[key] = value
+        existing = config_contents.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, Mapping):
+            merged = dict(cast("Mapping[str, JsonValue]", existing))
+            merged.update(cast("Mapping[str, JsonValue]", value))
+            config_contents[key] = merged
+        else:
+            config_contents[key] = value
     if sources is None:
         return None
     values = dict(sources.values)
     for key, (value, location) in overrides.items():
+        existing = config_contents.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, Mapping):
+            resolved_value = cast("Mapping[str, JsonValue]", existing)
+        else:
+            resolved_value = value
         values[key] = ConfigValue(
             key=key,
-            value=value,
+            value=resolved_value,
             source=ConfigSource.CLI,
             location=location,
         )
@@ -358,86 +379,89 @@ def _build_otel_cli_overrides(
     observability: ObservabilityOptions,
 ) -> dict[str, tuple[JsonValue, str]]:
     overrides: dict[str, tuple[JsonValue, str]] = {}
+    otel_payload: dict[str, JsonValue] = {}
+    location: str | None = None
     specs: tuple[tuple[str, JsonValue | None, str, bool], ...] = (
-        ("otel_endpoint", observability.otel_endpoint, "--otel-endpoint", True),
-        ("otel_protocol", observability.otel_protocol, "--otel-protocol", False),
-        ("otel_sampler", observability.otel_sampler, "--otel-sampler", True),
-        ("otel_sampler_arg", observability.otel_sampler_arg, "--otel-sampler-arg", False),
+        ("endpoint", observability.otel_endpoint, "--otel-endpoint", True),
+        ("protocol", observability.otel_protocol, "--otel-protocol", False),
+        ("sampler", observability.otel_sampler, "--otel-sampler", True),
+        ("sampler_arg", observability.otel_sampler_arg, "--otel-sampler-arg", False),
         (
-            "otel_log_correlation",
+            "log_correlation",
             observability.otel_log_correlation,
             "--otel-log-correlation",
             False,
         ),
         (
-            "otel_metric_export_interval_ms",
+            "metric_export_interval_ms",
             observability.otel_metric_export_interval_ms,
             "--otel-metric-export-interval-ms",
             False,
         ),
         (
-            "otel_metric_export_timeout_ms",
+            "metric_export_timeout_ms",
             observability.otel_metric_export_timeout_ms,
             "--otel-metric-export-timeout-ms",
             False,
         ),
         (
-            "otel_bsp_schedule_delay_ms",
+            "bsp_schedule_delay_ms",
             observability.otel_bsp_schedule_delay_ms,
             "--otel-bsp-schedule-delay-ms",
             False,
         ),
         (
-            "otel_bsp_export_timeout_ms",
+            "bsp_export_timeout_ms",
             observability.otel_bsp_export_timeout_ms,
             "--otel-bsp-export-timeout-ms",
             False,
         ),
         (
-            "otel_bsp_max_queue_size",
+            "bsp_max_queue_size",
             observability.otel_bsp_max_queue_size,
             "--otel-bsp-max-queue-size",
             False,
         ),
         (
-            "otel_bsp_max_export_batch_size",
+            "bsp_max_export_batch_size",
             observability.otel_bsp_max_export_batch_size,
             "--otel-bsp-max-export-batch-size",
             False,
         ),
         (
-            "otel_blrp_schedule_delay_ms",
+            "blrp_schedule_delay_ms",
             observability.otel_blrp_schedule_delay_ms,
             "--otel-blrp-schedule-delay-ms",
             False,
         ),
         (
-            "otel_blrp_export_timeout_ms",
+            "blrp_export_timeout_ms",
             observability.otel_blrp_export_timeout_ms,
             "--otel-blrp-export-timeout-ms",
             False,
         ),
         (
-            "otel_blrp_max_queue_size",
+            "blrp_max_queue_size",
             observability.otel_blrp_max_queue_size,
             "--otel-blrp-max-queue-size",
             False,
         ),
         (
-            "otel_blrp_max_export_batch_size",
+            "blrp_max_export_batch_size",
             observability.otel_blrp_max_export_batch_size,
             "--otel-blrp-max-export-batch-size",
             False,
         ),
     )
     for key, value, flag, require_non_empty in specs:
-        _append_cli_override(
-            overrides,
-            key=key,
-            value=value,
-            flag=flag,
-            require_non_empty=require_non_empty,
-        )
+        if value is None:
+            continue
+        if require_non_empty and isinstance(value, str) and not value.strip():
+            continue
+        otel_payload[key] = value
+        location = location or flag
+    if otel_payload:
+        overrides["otel"] = (otel_payload, location or "--otel")
     return overrides
 
 
@@ -445,33 +469,24 @@ def _build_otel_options(
     config_contents: Mapping[str, JsonValue],
     observability: ObservabilityOptions,
 ) -> OtelBootstrapOptions | None:
-    otlp_endpoint = _config_str(config_contents, "otel_endpoint")
-    otlp_protocol = _config_str(config_contents, "otel_protocol")
-    sampler = _config_str(config_contents, "otel_sampler")
-    sampler_arg = _config_float(config_contents, "otel_sampler_arg")
-    log_correlation = _config_bool(config_contents, "otel_log_correlation")
-    metric_export_interval_ms = _config_int(
-        config_contents,
-        "otel_metric_export_interval_ms",
-    )
-    metric_export_timeout_ms = _config_int(
-        config_contents,
-        "otel_metric_export_timeout_ms",
-    )
-    bsp_schedule_delay_ms = _config_int(config_contents, "otel_bsp_schedule_delay_ms")
-    bsp_export_timeout_ms = _config_int(config_contents, "otel_bsp_export_timeout_ms")
-    bsp_max_queue_size = _config_int(config_contents, "otel_bsp_max_queue_size")
-    bsp_max_export_batch_size = _config_int(
-        config_contents,
-        "otel_bsp_max_export_batch_size",
-    )
-    blrp_schedule_delay_ms = _config_int(config_contents, "otel_blrp_schedule_delay_ms")
-    blrp_export_timeout_ms = _config_int(config_contents, "otel_blrp_export_timeout_ms")
-    blrp_max_queue_size = _config_int(config_contents, "otel_blrp_max_queue_size")
-    blrp_max_export_batch_size = _config_int(
-        config_contents,
-        "otel_blrp_max_export_batch_size",
-    )
+    otel_config = _config_section(config_contents, "otel")
+    otel_values = {
+        "otlp_endpoint": _config_str(otel_config, "endpoint"),
+        "otlp_protocol": _config_str(otel_config, "protocol"),
+        "sampler": _config_str(otel_config, "sampler"),
+        "sampler_arg": _config_float(otel_config, "sampler_arg"),
+        "log_correlation": _config_bool(otel_config, "log_correlation"),
+        "metric_export_interval_ms": _config_int(otel_config, "metric_export_interval_ms"),
+        "metric_export_timeout_ms": _config_int(otel_config, "metric_export_timeout_ms"),
+        "bsp_schedule_delay_ms": _config_int(otel_config, "bsp_schedule_delay_ms"),
+        "bsp_export_timeout_ms": _config_int(otel_config, "bsp_export_timeout_ms"),
+        "bsp_max_queue_size": _config_int(otel_config, "bsp_max_queue_size"),
+        "bsp_max_export_batch_size": _config_int(otel_config, "bsp_max_export_batch_size"),
+        "blrp_schedule_delay_ms": _config_int(otel_config, "blrp_schedule_delay_ms"),
+        "blrp_export_timeout_ms": _config_int(otel_config, "blrp_export_timeout_ms"),
+        "blrp_max_queue_size": _config_int(otel_config, "blrp_max_queue_size"),
+        "blrp_max_export_batch_size": _config_int(otel_config, "blrp_max_export_batch_size"),
+    }
 
     if not any(
         value is not None
@@ -481,21 +496,7 @@ def _build_otel_options(
             observability.enable_logs,
             observability.otel_test_mode,
             observability.otel_log_correlation,
-            otlp_endpoint,
-            otlp_protocol,
-            sampler,
-            sampler_arg,
-            log_correlation,
-            metric_export_interval_ms,
-            metric_export_timeout_ms,
-            bsp_schedule_delay_ms,
-            bsp_export_timeout_ms,
-            bsp_max_queue_size,
-            bsp_max_export_batch_size,
-            blrp_schedule_delay_ms,
-            blrp_export_timeout_ms,
-            blrp_max_queue_size,
-            blrp_max_export_batch_size,
+            *otel_values.values(),
         )
     ):
         return None
@@ -505,22 +506,22 @@ def _build_otel_options(
         enable_logs=observability.enable_logs,
         enable_log_correlation=observability.otel_log_correlation
         if observability.otel_log_correlation is not None
-        else log_correlation,
+        else otel_values["log_correlation"],
         test_mode=observability.otel_test_mode,
-        otlp_endpoint=otlp_endpoint,
-        otlp_protocol=otlp_protocol,
-        sampler=sampler,
-        sampler_arg=sampler_arg,
-        metric_export_interval_ms=metric_export_interval_ms,
-        metric_export_timeout_ms=metric_export_timeout_ms,
-        bsp_schedule_delay_ms=bsp_schedule_delay_ms,
-        bsp_export_timeout_ms=bsp_export_timeout_ms,
-        bsp_max_queue_size=bsp_max_queue_size,
-        bsp_max_export_batch_size=bsp_max_export_batch_size,
-        blrp_schedule_delay_ms=blrp_schedule_delay_ms,
-        blrp_export_timeout_ms=blrp_export_timeout_ms,
-        blrp_max_queue_size=blrp_max_queue_size,
-        blrp_max_export_batch_size=blrp_max_export_batch_size,
+        otlp_endpoint=otel_values["otlp_endpoint"],
+        otlp_protocol=otel_values["otlp_protocol"],
+        sampler=otel_values["sampler"],
+        sampler_arg=otel_values["sampler_arg"],
+        metric_export_interval_ms=otel_values["metric_export_interval_ms"],
+        metric_export_timeout_ms=otel_values["metric_export_timeout_ms"],
+        bsp_schedule_delay_ms=otel_values["bsp_schedule_delay_ms"],
+        bsp_export_timeout_ms=otel_values["bsp_export_timeout_ms"],
+        bsp_max_queue_size=otel_values["bsp_max_queue_size"],
+        bsp_max_export_batch_size=otel_values["bsp_max_export_batch_size"],
+        blrp_schedule_delay_ms=otel_values["blrp_schedule_delay_ms"],
+        blrp_export_timeout_ms=otel_values["blrp_export_timeout_ms"],
+        blrp_max_queue_size=otel_values["blrp_max_queue_size"],
+        blrp_max_export_batch_size=otel_values["blrp_max_export_batch_size"],
     )
 
 

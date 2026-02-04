@@ -551,7 +551,7 @@ def _delta_protocol_compatibility(
 ) -> DeltaProtocolCompatibility | None:
     if runtime_profile is None:
         return None
-    support = runtime_profile.delta_protocol_support
+    support = runtime_profile.policies.delta_protocol_support
     return delta_protocol_compatibility(protocol, support)
 
 
@@ -570,7 +570,7 @@ def _enforce_protocol_compatibility(
 ) -> None:
     if runtime_profile is None or protocol_compatible is not False:
         return
-    mode = runtime_profile.delta_protocol_mode
+    mode = runtime_profile.policies.delta_protocol_mode
     if mode == "ignore":
         return
     compatibility_payload: dict[str, object]
@@ -619,7 +619,7 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
     )
     compatibility = delta_protocol_compatibility(
         request.payload.delta_protocol,
-        request.runtime_profile.delta_protocol_support,
+        request.runtime_profile.policies.delta_protocol_support,
     )
     protocol_compatible = compatibility.compatible
     severity = "info" if protocol_compatible is not False else "warn"

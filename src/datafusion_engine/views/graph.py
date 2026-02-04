@@ -469,7 +469,7 @@ def _persist_plan_artifacts(
     lineage_by_view: Mapping[str, LineageReport | None],
 ) -> None:
     runtime_profile = context.runtime.runtime_profile
-    if runtime_profile is None or not runtime_profile.capture_plan_artifacts:
+    if runtime_profile is None or not runtime_profile.diagnostics.capture_plan_artifacts:
         return
     from datafusion_engine.plan.artifact_store import (
         PlanArtifactsForViewsRequest,

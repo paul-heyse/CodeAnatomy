@@ -8,7 +8,6 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from core_types import JsonValue
     from datafusion_engine.arrow.interop import TableLike
 
 type SimpleViewRef = str
@@ -35,9 +34,9 @@ class ExecutorConfig:
     remote_kind: ExecutorKind | None = None
     remote_max_tasks: int | None = None
     cost_threshold: float | None = None
-    ray_init_config: Mapping[str, JsonValue] | None = None
+    ray_init_config: Mapping[str, object] | None = None
     dask_scheduler: str | None = None
-    dask_client_kwargs: Mapping[str, JsonValue] | None = None
+    dask_client_kwargs: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,7 @@ class GraphAdapterConfig:
     """Graph adapter configuration for non-dynamic execution backends."""
 
     kind: GraphAdapterKind
-    options: Mapping[str, JsonValue] | None = None
+    options: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)

@@ -855,27 +855,47 @@ def build_command(
     return 0
 
 
-def _apply_plan_overrides(
+def _apply_plan_overrides(  # noqa: C901
     config_contents: Mapping[str, JsonValue],
     overrides: _PlanOverrides,
 ) -> dict[str, JsonValue]:
     payload = dict(config_contents)
+    plan_section = payload.get("plan")
+    plan_payload: dict[str, JsonValue]
+    if isinstance(plan_section, dict):
+        plan_payload = dict(cast("Mapping[str, JsonValue]", plan_section))
+        updated = True
+    else:
+        plan_payload = dict[str, JsonValue]()
+        updated = False
     if overrides.plan_allow_partial is not None:
-        payload["plan_allow_partial"] = overrides.plan_allow_partial
+        plan_payload["allow_partial"] = overrides.plan_allow_partial
+        updated = True
     if overrides.plan_requested_tasks:
-        payload["plan_requested_tasks"] = list(overrides.plan_requested_tasks)
+        plan_payload["requested_tasks"] = list(overrides.plan_requested_tasks)
+        updated = True
     if overrides.plan_impacted_tasks:
-        payload["plan_impacted_tasks"] = list(overrides.plan_impacted_tasks)
+        plan_payload["impacted_tasks"] = list(overrides.plan_impacted_tasks)
+        updated = True
     if overrides.enable_metric_scheduling is not None:
-        payload["enable_metric_scheduling"] = overrides.enable_metric_scheduling
+        plan_payload["enable_metric_scheduling"] = overrides.enable_metric_scheduling
+        updated = True
     if overrides.enable_plan_diagnostics is not None:
-        payload["enable_plan_diagnostics"] = overrides.enable_plan_diagnostics
+        plan_payload["enable_plan_diagnostics"] = overrides.enable_plan_diagnostics
+        updated = True
     if overrides.enable_plan_task_submission_hook is not None:
-        payload["enable_plan_task_submission_hook"] = overrides.enable_plan_task_submission_hook
+        plan_payload["enable_plan_task_submission_hook"] = (
+            overrides.enable_plan_task_submission_hook
+        )
+        updated = True
     if overrides.enable_plan_task_grouping_hook is not None:
-        payload["enable_plan_task_grouping_hook"] = overrides.enable_plan_task_grouping_hook
+        plan_payload["enable_plan_task_grouping_hook"] = overrides.enable_plan_task_grouping_hook
+        updated = True
     if overrides.enforce_plan_task_submission is not None:
-        payload["enforce_plan_task_submission"] = overrides.enforce_plan_task_submission
+        plan_payload["enforce_plan_task_submission"] = overrides.enforce_plan_task_submission
+        updated = True
+    if updated:
+        payload["plan"] = plan_payload
     return payload
 
 
@@ -920,80 +940,94 @@ def _apply_cli_config_overrides(
         key="determinism_override",
         value=determinism_value,
     )
-    payload["incremental_enabled"] = overrides.incremental
+    incremental_section = payload.get("incremental")
+    incremental_payload: dict[str, JsonValue]
+    if isinstance(incremental_section, dict):
+        incremental_payload = dict(cast("Mapping[str, JsonValue]", incremental_section))
+    else:
+        incremental_payload = dict[str, JsonValue]()
+    incremental_payload["enabled"] = overrides.incremental
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
     state_dir_value = str(resolved_state_dir) if resolved_state_dir is not None else None
     _apply_optional_value(
-        payload,
-        key="incremental_state_dir",
+        incremental_payload,
+        key="state_dir",
         value=state_dir_value,
     )
     _apply_optional_str(
-        payload,
-        key="incremental_repo_id",
+        incremental_payload,
+        key="repo_id",
         value=overrides.incremental_repo_id,
     )
     _apply_optional_value(
-        payload,
-        key="incremental_impact_strategy",
+        incremental_payload,
+        key="impact_strategy",
         value=overrides.incremental_impact_strategy,
     )
     _apply_optional_str(
-        payload,
-        key="incremental_git_base_ref",
+        incremental_payload,
+        key="git_base_ref",
         value=overrides.git_base_ref,
     )
     _apply_optional_str(
-        payload,
-        key="incremental_git_head_ref",
+        incremental_payload,
+        key="git_head_ref",
         value=overrides.git_head_ref,
     )
-    payload["incremental_git_changed_only"] = overrides.git_changed_only
+    incremental_payload["git_changed_only"] = overrides.git_changed_only
+    payload["incremental"] = incremental_payload
+    hamilton_section = payload.get("hamilton")
+    hamilton_payload: dict[str, JsonValue]
+    if isinstance(hamilton_section, dict):
+        hamilton_payload = dict(cast("Mapping[str, JsonValue]", hamilton_section))
+    else:
+        hamilton_payload = dict[str, JsonValue]()
     _apply_optional_value(
-        payload,
-        key="enable_hamilton_tracker",
+        hamilton_payload,
+        key="enable_tracker",
         value=overrides.enable_hamilton_tracker,
     )
     _apply_optional_value(
-        payload,
-        key="hamilton_project_id",
+        hamilton_payload,
+        key="project_id",
         value=overrides.hamilton_project_id,
     )
     _apply_optional_str(
-        payload,
-        key="hamilton_username",
+        hamilton_payload,
+        key="username",
         value=overrides.hamilton_username,
     )
     _apply_optional_str(
-        payload,
-        key="hamilton_dag_name",
+        hamilton_payload,
+        key="dag_name",
         value=overrides.hamilton_dag_name,
     )
     _apply_optional_str(
-        payload,
-        key="hamilton_api_url",
+        hamilton_payload,
+        key="api_url",
         value=overrides.hamilton_api_url,
     )
     _apply_optional_str(
-        payload,
-        key="hamilton_ui_url",
+        hamilton_payload,
+        key="ui_url",
         value=overrides.hamilton_ui_url,
     )
     _apply_optional_value(
-        payload,
-        key="hamilton_capture_data_statistics",
+        hamilton_payload,
+        key="capture_data_statistics",
         value=overrides.hamilton_capture_data_statistics,
     )
     _apply_optional_value(
-        payload,
-        key="hamilton_max_list_length_capture",
+        hamilton_payload,
+        key="max_list_length_capture",
         value=overrides.hamilton_max_list_length_capture,
     )
     _apply_optional_value(
-        payload,
-        key="hamilton_max_dict_length_capture",
+        hamilton_payload,
+        key="max_dict_length_capture",
         value=overrides.hamilton_max_dict_length_capture,
     )
+    payload["hamilton"] = hamilton_payload
     return payload
 
 

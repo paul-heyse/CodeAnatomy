@@ -69,7 +69,6 @@ from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
     DatasetLocationOverrides,
-    resolve_datafusion_scan_options,
     resolve_dataset_schema,
 )
 from datafusion_engine.dataset.resolution import (
@@ -536,7 +535,7 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
         Dataset location with default scan options applied.
     """
     updated = location
-    if resolve_datafusion_scan_options(location) is not None:
+    if location.resolved.datafusion_scan is not None:
         return updated
     schema: SchemaLike | None = None
     try:
@@ -1163,7 +1162,7 @@ def register_dataset_df(
             runtime_profile=resolved.runtime_profile,
         ),
     )
-    scan = resolve_datafusion_scan_options(location)
+    scan = location.resolved.datafusion_scan
     if (
         existing
         and scan is not None
@@ -2414,7 +2413,7 @@ def apply_projection_scan_overrides(
         location = runtime_profile.dataset_location(table_name)
         if location is None:
             continue
-        scan = resolve_datafusion_scan_options(location)
+        scan = location.resolved.datafusion_scan
         if scan is None:
             continue
         projection_exprs = tuple(str(name) for name in columns if str(name))
@@ -3186,10 +3185,8 @@ def _dataset_cache_partition_by(
     *,
     location: DatasetLocation,
 ) -> tuple[str, ...]:
-    from datafusion_engine.dataset.registry import resolve_delta_write_policy
-
     policy_partition_by: tuple[str, ...] = ()
-    policy = resolve_delta_write_policy(location)
+    policy = location.resolved.delta_write_policy
     if policy is not None:
         policy_partition_by = tuple(str(name) for name in policy.partition_by)
     available = set(schema.names)

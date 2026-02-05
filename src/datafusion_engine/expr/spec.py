@@ -80,11 +80,14 @@ ScalarLiteralSpec: TypeAlias = (
     | ScalarStringLiteral
     | ScalarBytesLiteral
 )
+ScalarLiteralInput: TypeAlias = (
+    ScalarLiteralSpec | ScalarLike | bool | int | float | str | bytes | None
+)
 ScalarSpecValue: TypeAlias = ScalarLiteralSpec
 
 
 def scalar_literal(
-    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+    value: ScalarLiteralInput,
 ) -> ScalarLiteralSpec:
     """Return a tagged scalar literal spec for primitive values."""
     if isinstance(value, ScalarLiteralBase):
@@ -108,7 +111,7 @@ def scalar_literal(
 
 
 def scalar_literal_value(
-    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+    value: ScalarLiteralInput,
 ) -> bool | int | float | str | bytes | None:
     """Return the Python scalar value for a literal spec."""
     literal = scalar_literal(value)
@@ -757,6 +760,7 @@ class ExprSpec(StructBaseStrict, frozen=True):
 __all__ = [
     "ExprIR",
     "ExprSpec",
+    "ScalarLiteralInput",
     "ScalarLiteralSpec",
     "ScalarSpecValue",
     "scalar_literal",

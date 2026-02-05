@@ -13,14 +13,14 @@ from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from obs.otel.run_context import get_run_id
 from obs.otel.tracing import set_span_attributes
-from serde_msgspec import StructBaseCompat, to_builtins
+from serde_msgspec import StructBaseHotPath, to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
-class PlanBundleDiagnostics(StructBaseCompat, frozen=True):
+class PlanBundleDiagnostics(StructBaseHotPath, frozen=True):
     """Serializable diagnostics payload for plan bundle artifacts."""
 
     plan_hash: str
@@ -34,7 +34,7 @@ class PlanBundleDiagnostics(StructBaseCompat, frozen=True):
     run_id: str | None = None
 
 
-class PlanExecutionDiagnosticsPayload(StructBaseCompat, frozen=True):
+class PlanExecutionDiagnosticsPayload(StructBaseHotPath, frozen=True):
     """Serializable diagnostics payload for plan execution artifacts."""
 
     plan_hash: str
@@ -55,7 +55,7 @@ class PlanExecutionDiagnosticsPayload(StructBaseCompat, frozen=True):
     explain_analyze_output_rows: int | None = None
 
 
-class PlanPhaseDiagnosticsPayload(StructBaseCompat, frozen=True):
+class PlanPhaseDiagnosticsPayload(StructBaseHotPath, frozen=True):
     """Serializable diagnostics payload for plan phase artifacts."""
 
     plan_hash: str

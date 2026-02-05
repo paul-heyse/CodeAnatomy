@@ -173,7 +173,17 @@ PY_FROM_IMPORT = RuleSpec(
     config={
         "rule": {
             "kind": "import_from_statement",
-            "not": {"has": {"kind": "aliased_import"}},
+            # Match single-name from-imports only. Multi-imports (comma) and
+            # parenthesized imports are handled by dedicated rules to avoid
+            # duplicate findings for the same statement.
+            "not": {
+                "any": [
+                    {"has": {"kind": "aliased_import"}},
+                    # Multi-import (comma-separated) or parenthesized import list.
+                    {"regex": r"import\s+[^\n#]*,"},
+                    {"regex": r"import\s*\("},
+                ]
+            },
             "has": {"kind": "dotted_name", "field": "name"},
         }
     },
@@ -198,8 +208,14 @@ PY_FROM_IMPORT_MULTI = RuleSpec(
     config={
         "rule": {
             "kind": "import_from_statement",
-            "regex": r"import [A-Za-z_]+, [A-Za-z_]+",
-            "not": {"regex": r"\("},
+            # Any comma-separated import list (non-parenthesized, non-aliased).
+            "regex": r"import\s+[^\n#]*,",
+            "not": {
+                "any": [
+                    {"regex": r"import\s*\("},
+                    {"has": {"kind": "aliased_import"}},
+                ]
+            },
         }
     },
 )
@@ -211,7 +227,8 @@ PY_FROM_IMPORT_PAREN = RuleSpec(
     config={
         "rule": {
             "kind": "import_from_statement",
-            "regex": r"\(",
+            "regex": r"import\s*\(",
+            "not": {"has": {"kind": "aliased_import"}},
         }
     },
 )

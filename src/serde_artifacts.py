@@ -12,6 +12,8 @@ from core_types import (
     HashStr,
     IdentifierStr,
     JsonValueLax,
+    NonNegativeFloat,
+    NonNegativeInt,
     RunIdStr,
     StatusStr,
 )
@@ -30,8 +32,6 @@ from utils.hashing import hash_msgpack_canonical
 
 # JsonValueLax is required to model arbitrary JSON payloads in schema exports.
 
-NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
-NonNegFloat = Annotated[float, msgspec.Meta(ge=0)]
 NonEmptyStr = Annotated[
     str,
     msgspec.Meta(
@@ -164,8 +164,8 @@ class PlanArtifacts(StructBaseCompat, frozen=True):
 
     explain_tree_rows: tuple[dict[str, JsonValueLax], ...] | None
     explain_verbose_rows: tuple[dict[str, JsonValueLax], ...] | None
-    explain_analyze_duration_ms: NonNegFloat | None
-    explain_analyze_output_rows: NonNegInt | None
+    explain_analyze_duration_ms: NonNegativeFloat | None
+    explain_analyze_output_rows: NonNegativeInt | None
     df_settings: dict[str, str]
     planning_env_snapshot: dict[str, JsonValueLax]
     planning_env_hash: HashValue
@@ -202,7 +202,7 @@ class DeltaStatsDecision(StructBaseCompat, frozen=True):
     lineage_columns: tuple[str, ...]
     partition_by: tuple[str, ...] = ()
     zorder_by: tuple[str, ...] = ()
-    stats_max_columns: NonNegInt | None = None
+    stats_max_columns: NonNegativeInt | None = None
 
 
 class ViewCacheArtifact(StructBaseHotPath, frozen=True):
@@ -261,7 +261,7 @@ class DeltaScanConfigSnapshot(StructBaseCompat, frozen=True):
 class PlanArtifactRow(StructBaseCompat, frozen=True):
     """Serializable plan artifact row persisted to the Delta store."""
 
-    event_time_unix_ms: NonNegInt
+    event_time_unix_ms: NonNegativeInt
     profile_name: ProfileName | None
     event_kind: EventKind
     view_name: ViewName
@@ -286,8 +286,8 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     execution_plan_proto_msgpack: bytes | None
     explain_tree_rows_msgpack: bytes | None
     explain_verbose_rows_msgpack: bytes | None
-    explain_analyze_duration_ms: NonNegFloat | None
-    explain_analyze_output_rows: NonNegInt | None
+    explain_analyze_duration_ms: NonNegativeFloat | None
+    explain_analyze_output_rows: NonNegativeInt | None
     substrait_validation_msgpack: bytes | None
     lineage_msgpack: bytes
     scan_units_msgpack: bytes
@@ -297,7 +297,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     udf_planner_snapshot_msgpack: bytes | None
     udf_compatibility_ok: bool
     udf_compatibility_detail_msgpack: bytes
-    execution_duration_ms: NonNegFloat | None = None
+    execution_duration_ms: NonNegativeFloat | None = None
     execution_status: str | None = None
     execution_error: str | None = None
 
@@ -355,7 +355,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
 class WriteArtifactRow(StructBaseCompat, frozen=True):
     """Serializable write artifact row persisted to the Delta store."""
 
-    event_time_unix_ms: NonNegInt
+    event_time_unix_ms: NonNegativeInt
     profile_name: ProfileName | None
     event_kind: EventKind
     destination: str
@@ -373,8 +373,8 @@ class WriteArtifactRow(StructBaseCompat, frozen=True):
     table_properties: dict[str, str]
     commit_metadata: dict[str, str]
     delta_stats_decision_msgpack: msgspec.Raw
-    duration_ms: NonNegFloat | None
-    row_count: NonNegInt | None
+    duration_ms: NonNegativeFloat | None
+    row_count: NonNegativeInt | None
     status: str | None
     error: str | None
 
@@ -435,7 +435,7 @@ class ViewArtifactPayload(StructBaseCompat, frozen=True):
 class RuntimeProfileSnapshot(StructBaseCompat, frozen=True):
     """Unified runtime profile snapshot for reproducibility."""
 
-    version: NonNegInt
+    version: NonNegativeInt
     name: ProfileName
     determinism_tier: NonEmptyStr
     datafusion_settings_hash: HashValue
@@ -475,7 +475,7 @@ class RunManifest(StructBaseHotPath, frozen=True):
 
     run_id: RunId
     status: ArtifactStatus
-    event_time_unix_ms: NonNegInt
+    event_time_unix_ms: NonNegativeInt
     plan_signature: PlanSignature | None
     plan_fingerprints: dict[str, PlanFingerprint]
     delta_inputs: tuple[dict[str, JsonValueLax], ...]
@@ -495,21 +495,21 @@ class RunManifest(StructBaseHotPath, frozen=True):
 class NormalizeOutputsArtifact(StructBaseCompat, frozen=True):
     """Normalize outputs summary artifact."""
 
-    event_time_unix_ms: NonNegInt
+    event_time_unix_ms: NonNegativeInt
     run_id: RunId
     output_dir: str
     outputs: tuple[str, ...]
-    row_count: NonNegInt
+    row_count: NonNegativeInt
 
 
 class ExtractErrorsArtifact(StructBaseCompat, frozen=True):
     """Extract error summary artifact."""
 
-    event_time_unix_ms: NonNegInt
+    event_time_unix_ms: NonNegativeInt
     run_id: RunId
     output_dir: str
     errors: tuple[str, ...]
-    error_count: NonNegInt
+    error_count: NonNegativeInt
 
 
 class ArtifactEnvelopeBase(StructBaseHotPath, frozen=True, tag=True, tag_field="kind"):
@@ -542,15 +542,15 @@ class PlanScheduleArtifact(StructBaseCompat, frozen=True):
     run_id: RunId
     plan_signature: PlanSignature
     reduced_plan_signature: PlanSignature
-    task_count: NonNegInt
+    task_count: NonNegativeInt
     ordered_tasks: tuple[str, ...]
     generations: tuple[tuple[str, ...], ...]
     critical_path_tasks: tuple[str, ...]
-    critical_path_length_weighted: NonNegFloat | None
-    task_costs: dict[str, NonNegFloat]
-    bottom_level_costs: dict[str, NonNegFloat]
-    slack_by_task: dict[str, NonNegFloat] | None = None
-    task_centrality: dict[str, NonNegFloat] | None = None
+    critical_path_length_weighted: NonNegativeFloat | None
+    task_costs: dict[str, NonNegativeFloat]
+    bottom_level_costs: dict[str, NonNegativeFloat]
+    slack_by_task: dict[str, NonNegativeFloat] | None = None
+    task_centrality: dict[str, NonNegativeFloat] | None = None
     task_dominators: dict[str, str | None] | None = None
     bridge_edges: tuple[tuple[str, str], ...] = ()
     articulation_tasks: tuple[str, ...] = ()
@@ -568,12 +568,12 @@ class PlanValidationArtifact(StructBaseCompat, frozen=True):
     run_id: RunId
     plan_signature: PlanSignature
     reduced_plan_signature: PlanSignature
-    total_tasks: NonNegInt
-    valid_tasks: NonNegInt
-    invalid_tasks: NonNegInt
-    total_edges: NonNegInt
-    valid_edges: NonNegInt
-    invalid_edges: NonNegInt
+    total_tasks: NonNegativeInt
+    valid_tasks: NonNegativeInt
+    invalid_tasks: NonNegativeInt
+    total_edges: NonNegativeInt
+    valid_edges: NonNegativeInt
+    invalid_edges: NonNegativeInt
     task_results: tuple[dict[str, JsonValueLax], ...]
 
 

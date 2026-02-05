@@ -559,6 +559,10 @@ class CompositeFingerprint:
 - For runtime profiles, compose fingerprints from `settings_hash()` and `telemetry_payload_hash()` rather than re-hashing the raw profile fields.
 - Keep a read-path for legacy cache keys while writing new composite keys (dual-read, single-write).
 
+**Schema evolution note (array-like structs)**:
+- `array_like=True` makes field ordering part of the wire format. Reordering fields is a breaking change.
+- Current array-like hot-path structs: `PlanCacheKey`, `PlanCacheEntry`, `PlanProtoCacheEntry`, `PlanBundleDiagnostics`, `PlanExecutionDiagnosticsPayload`, `PlanPhaseDiagnosticsPayload`.
+
 ### 3.5 Migration Path
 
 **Phase 1**: Fix immediate collision risks

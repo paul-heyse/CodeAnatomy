@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+import re
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
@@ -11,6 +12,9 @@ from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ValidationPolicySpec
+
+if TYPE_CHECKING:
+    from datafusion_engine.lineage.diagnostics import DiagnosticsSink
 
 
 def _arrow_to_pandas_dtype(dtype: pa.DataType) -> object:
@@ -21,6 +25,104 @@ def _arrow_to_pandas_dtype(dtype: pa.DataType) -> object:
         except (TypeError, ValueError):
             return object
     return object
+
+
+def _model_name(spec: TableSchemaSpec) -> str:
+    import re
+
+    safe = re.sub(r"\W+", "_", spec.name).strip("_")
+    if not safe:
+        safe = "SchemaSpec"
+    return f"{safe}Model"
+
+
+_CONSTRAINT_NOT_NULL_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NOT\s+NULL\s*$",
+    re.IGNORECASE,
+)
+_CONSTRAINT_NULL_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL\s*$",
+    re.IGNORECASE,
+)
+
+
+def _constraints_required_non_null(constraints: Iterable[str] | None) -> set[str]:
+    if not constraints:
+        return set()
+    required: set[str] = set()
+    for constraint in constraints:
+        match = _CONSTRAINT_NOT_NULL_RE.match(constraint)
+        if match is not None:
+            required.add(match.group(1))
+    return required
+
+
+def _constraints_force_null(constraints: Iterable[str] | None) -> set[str]:
+    if not constraints:
+        return set()
+    forced: set[str] = set()
+    for constraint in constraints:
+        match = _CONSTRAINT_NULL_RE.match(constraint)
+        if match is not None:
+            forced.add(match.group(1))
+    return forced
+
+
+def _constraint_sets(
+    spec: TableSchemaSpec,
+    constraints: Iterable[str] | None,
+) -> tuple[set[str], set[str]]:
+    required = set(spec.required_non_null)
+    required |= _constraints_required_non_null(constraints)
+    force_null = _constraints_force_null(constraints)
+    required -= force_null
+    return required, force_null
+
+
+def dataframe_model_for_spec(
+    spec: TableSchemaSpec,
+    *,
+    strict: bool | str = True,
+    coerce: bool = False,
+    constraints: Iterable[str] | None = None,
+) -> type[Any] | None:
+    """Return a pandera DataFrameModel for the schema spec when possible.
+
+    Returns
+    -------
+    type[Any] | None
+        Generated DataFrameModel class when column names are valid identifiers.
+    """
+    import pandera.pandas as pa_schema
+    import pandera.typing as pa_typing
+
+    if any(not field.name.isidentifier() for field in spec.fields):
+        return None
+    required_non_null, force_null = _constraint_sets(spec, constraints)
+    annotations: dict[str, object] = {}
+    attrs: dict[str, object] = {}
+    for field in spec.fields:
+        annotations[field.name] = pa_typing.Series[object]
+        if field.name in force_null:
+            nullable = True
+        else:
+            nullable = field.nullable and field.name not in required_non_null
+        checks = None
+        if field.name in force_null:
+            checks = [pa_schema.Check(lambda s: s.isna().all(), element_wise=False)]
+        attrs[field.name] = pa_schema.Field(
+            dtype=field_to_pandera_dtype(field),
+            nullable=nullable,
+            required=True,
+            checks=checks,
+        )
+    attrs["__annotations__"] = annotations
+    attrs["Config"] = type(
+        "Config",
+        (),
+        {"strict": strict, "coerce": coerce, "ordered": True},
+    )
+    return type(_model_name(spec), (pa_schema.DataFrameModel,), attrs)
 
 
 def field_to_pandera_dtype(field: FieldSpec) -> object:
@@ -52,6 +154,7 @@ def to_pandera_schema(
     spec: TableSchemaSpec,
     *,
     policy: ValidationPolicySpec | None = None,
+    constraints: Iterable[str] | None = None,
 ) -> Any:
     """Build a pandera DataFrameSchema from a table schema spec.
 
@@ -61,6 +164,8 @@ def to_pandera_schema(
         Table schema specification to convert.
     policy
         Optional validation policy (unused beyond configuration).
+    constraints
+        Optional constraint expressions for minimal checks.
 
     Returns
     -------
@@ -69,18 +174,36 @@ def to_pandera_schema(
     """
     import pandera.pandas as pa_schema
 
-    columns = {
-        field.name: pa_schema.Column(
+    required_non_null, force_null = _constraint_sets(spec, constraints)
+    columns = {}
+    for field in spec.fields:
+        if field.name in force_null:
+            nullable = True
+        else:
+            nullable = field.nullable and field.name not in required_non_null
+        checks = None
+        if field.name in force_null:
+            checks = [pa_schema.Check(lambda s: s.isna().all(), element_wise=False)]
+        columns[field.name] = pa_schema.Column(
             dtype=field_to_pandera_dtype(field),
-            nullable=field.nullable,
+            nullable=nullable,
             required=True,
+            checks=checks,
         )
-        for field in spec.fields
-    }
+    strict = True
+    coerce = False
+    if policy is not None:
+        if policy.strict is not None:
+            strict = policy.strict
+        if policy.coerce is not None:
+            coerce = policy.coerce
+    unique = tuple(spec.key_fields) if spec.key_fields else None
     return pa_schema.DataFrameSchema(
         columns,
-        strict=True,
+        strict=strict,
         ordered=True,
+        coerce=coerce,
+        unique=unique,
     )
 
 
@@ -110,6 +233,7 @@ def validate_dataframe(
     *,
     schema_spec: TableSchemaSpec,
     policy: ValidationPolicySpec | None,
+    constraints: Iterable[str] | None = None,
 ) -> object:
     """Validate a dataframe-like object with pandera when enabled.
 
@@ -121,6 +245,8 @@ def validate_dataframe(
         Table schema specification to enforce.
     policy
         Validation policy controlling whether to validate.
+    constraints
+        Optional constraint expressions for minimal checks.
 
     Returns
     -------
@@ -129,7 +255,6 @@ def validate_dataframe(
     """
     if policy is None or not policy.enabled:
         return df
-    schema = to_pandera_schema(schema_spec, policy=policy)
     original, pandas_df = _maybe_to_pandas(df)
     validate_kwargs: dict[str, object] = {"lazy": policy.lazy}
     if policy.sample is not None:
@@ -138,8 +263,71 @@ def validate_dataframe(
         validate_kwargs["head"] = policy.head
     if policy.tail is not None:
         validate_kwargs["tail"] = policy.tail
+    strict = True
+    coerce = False
+    if policy is not None:
+        if policy.strict is not None:
+            strict = policy.strict
+        if policy.coerce is not None:
+            coerce = policy.coerce
+    model = dataframe_model_for_spec(
+        schema_spec,
+        strict=strict,
+        coerce=coerce,
+        constraints=constraints,
+    )
+    if model is not None:
+        import pandera.typing as pa_typing
+        from pandera.decorators import check_types
+
+        def _validate_model(
+            data: pa_typing.DataFrame[model],
+        ) -> pa_typing.DataFrame[model]:
+            return data
+
+        validator = check_types(**validate_kwargs)(_validate_model)
+        validator(pandas_df)
+    schema = to_pandera_schema(schema_spec, policy=policy, constraints=constraints)
     schema.validate(pandas_df, **validate_kwargs)
     return original
+
+
+def validate_with_policy(
+    df: object,
+    *,
+    schema_spec: TableSchemaSpec,
+    policy: ValidationPolicySpec | None,
+    constraints: Iterable[str] | None = None,
+    diagnostics: DiagnosticsSink | None,
+    name: str,
+) -> object:
+    """Validate a dataframe-like object and emit diagnostics on failure.
+
+    Returns
+    -------
+    object
+        Original dataframe-like object after validation.
+    """
+    if policy is None or not policy.enabled:
+        return df
+    try:
+        return validate_dataframe(
+            df,
+            schema_spec=schema_spec,
+            policy=policy,
+            constraints=constraints,
+        )
+    except Exception as exc:
+        if diagnostics is not None:
+            from obs.diagnostics import record_dataframe_validation_error
+
+            record_dataframe_validation_error(
+                diagnostics,
+                name=name,
+                error=exc,
+                policy=policy,
+            )
+        raise
 
 
 def validation_policy_payload(policy: ValidationPolicySpec | None) -> Mapping[str, object] | None:
@@ -163,12 +351,16 @@ def validation_policy_payload(policy: ValidationPolicySpec | None) -> Mapping[st
         "sample": policy.sample,
         "head": policy.head,
         "tail": policy.tail,
+        "strict": policy.strict,
+        "coerce": policy.coerce,
     }
 
 
 __all__ = [
+    "dataframe_model_for_spec",
     "field_to_pandera_dtype",
     "to_pandera_schema",
     "validate_dataframe",
+    "validate_with_policy",
     "validation_policy_payload",
 ]

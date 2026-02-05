@@ -14,6 +14,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 | Skill | When to Use | Why |
 |-------|-------------|-----|
+| `/cq search` | Finding code patterns, symbols, identifiers | Fast semantic search with classification |
 | `/cq` | Before ANY refactor, rename, or signature change | Finds all callsites, impact, and breaking changes |
 | `/cq q "entity=..."` | Finding functions/classes/imports | Entity-based code discovery |
 | `/cq q "pattern=..."` | Structural code patterns | Zero false positives from strings/comments |
@@ -27,6 +28,8 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/datafusion-stack` | DataFusion/Delta/UDF operations | Don't guess APIs - probe versions |
 
 ### Mandatory cq Usage
+
+**Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function.
 
 **Before modifying a function:** Run `/cq calls <function>` to find all call sites.
 

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import msgspec
 import pyarrow as pa
 
+from datafusion_engine.dataset.policies import apply_scan_policy_defaults
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    apply_scan_policy_to_location,
     resolve_dataset_location,
+    resolve_dataset_policies,
 )
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
@@ -28,6 +30,27 @@ def _table_spec(name: str, field_name: str) -> TableSchemaSpec:
         name=name,
         fields=[FieldSpec(name=field_name, dtype=pa.int64(), nullable=False)],
     )
+
+
+def _apply_scan_policy(location: DatasetLocation, *, policy: ScanPolicyConfig) -> DatasetLocation:
+    policies = resolve_dataset_policies(location, overrides=location.overrides)
+    datafusion_scan, delta_scan = apply_scan_policy_defaults(
+        dataset_format=location.format or "delta",
+        datafusion_scan=policies.datafusion_scan,
+        delta_scan=policies.delta_scan,
+        policy=policy,
+    )
+    overrides = location.overrides or DatasetLocationOverrides()
+    if datafusion_scan is not None:
+        overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
+    if delta_scan is not None:
+        delta_bundle = policies.delta_bundle
+        if delta_bundle is None:
+            delta_bundle = DeltaPolicyBundle(scan=delta_scan)
+        else:
+            delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
+        overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
+    return msgspec.structs.replace(location, overrides=overrides)
 
 
 def test_resolved_location_prefers_overrides() -> None:
@@ -88,7 +111,7 @@ def test_scan_policy_applies_listing_defaults() -> None:
     )
     location = DatasetLocation(path="/tmp/events", format="parquet")
 
-    resolved = apply_scan_policy_to_location(location, policy=policy)
+    resolved = _apply_scan_policy(location, policy=policy)
 
     scan = resolved.resolved.datafusion_scan
     assert scan is not None
@@ -105,7 +128,7 @@ def test_scan_policy_applies_delta_defaults() -> None:
     )
     location = DatasetLocation(path="/tmp/events", format="delta")
 
-    resolved = apply_scan_policy_to_location(location, policy=policy)
+    resolved = _apply_scan_policy(location, policy=policy)
 
     scan = resolved.resolved.datafusion_scan
     delta_scan = resolved.resolved.delta_scan

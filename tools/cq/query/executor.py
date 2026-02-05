@@ -1454,6 +1454,9 @@ def _extract_simple_import(text: str) -> str | None:
     str | None
         Imported module name when found.
     """
+    # Import statements don't contain string literals; stripping inline comments
+    # prevents commas/parentheses in comments from affecting extraction.
+    text = text.split("#", maxsplit=1)[0].strip()
     match = re.match(r"import\s+([\w.]+)", text)
     return match.group(1) if match else None
 
@@ -1466,6 +1469,7 @@ def _extract_import_alias(text: str) -> str | None:
     str | None
         Alias name when found.
     """
+    text = text.split("#", maxsplit=1)[0].strip()
     match = re.match(r"import\s+[\w.]+\s+as\s+(\w+)", text)
     return match.group(1) if match else None
 
@@ -1478,6 +1482,7 @@ def _extract_from_import(text: str) -> str | None:
     str | None
         Imported name or module name when extractable.
     """
+    text = text.split("#", maxsplit=1)[0].strip()
     if "," not in text:
         match = re.search(r"import\s+(\w+)\s*$", text)
         if match:
@@ -1494,6 +1499,7 @@ def _extract_from_import_alias(text: str) -> str | None:
     str | None
         Alias name when found.
     """
+    text = text.split("#", maxsplit=1)[0].strip()
     match = re.search(r"as\s+(\w+)\s*$", text)
     return match.group(1) if match else None
 
@@ -1506,6 +1512,7 @@ def _extract_from_module(text: str) -> str | None:
     str | None
         Module name when found.
     """
+    text = text.split("#", maxsplit=1)[0].strip()
     match = re.match(r"from\s+([\w.]+)", text)
     return match.group(1) if match else None
 

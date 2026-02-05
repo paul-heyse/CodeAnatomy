@@ -23,6 +23,7 @@ import pyarrow.dataset as ds
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
 from core.config_base import config_fingerprint
+from core_types import IdentifierStr, NonNegativeInt
 from datafusion_engine.arrow.build import register_schema_extensions
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
@@ -733,7 +734,7 @@ def _validate_view_specs(view_specs: Sequence[ViewSpec], *, label: str) -> None:
 class ContractSpec(StructBaseStrict, frozen=True):
     """Output contract specification."""
 
-    name: str
+    name: IdentifierStr
     table_schema: TableSchemaSpec
 
     dedupe: DedupeSpecSpec | None = None
@@ -801,9 +802,11 @@ class ValidationPolicySpec(StructBaseStrict, frozen=True):
 
     enabled: bool = True
     lazy: bool = True
-    sample: int | None = None
-    head: int | None = None
-    tail: int | None = None
+    sample: NonNegativeInt | None = None
+    head: NonNegativeInt | None = None
+    tail: NonNegativeInt | None = None
+    strict: bool | Literal["filter"] | None = None
+    coerce: bool | None = None
 
 
 class DatasetPolicies(StructBaseStrict, frozen=True):

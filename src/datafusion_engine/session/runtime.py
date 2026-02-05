@@ -4814,12 +4814,36 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
                 location,
                 policy=self.policies.delta_store_policy,
             )
-            from datafusion_engine.dataset.registry import apply_scan_policy_to_location
+            if self.policies.scan_policy is None:
+                return resolved
+            from datafusion_engine.dataset.policies import apply_scan_policy_defaults
+            from datafusion_engine.dataset.registry import (
+                DatasetLocationOverrides,
+                resolve_dataset_policies,
+            )
 
-            return apply_scan_policy_to_location(
-                resolved,
+            policies = resolve_dataset_policies(resolved, overrides=resolved.overrides)
+            datafusion_scan, delta_scan = apply_scan_policy_defaults(
+                dataset_format=resolved.format or "delta",
+                datafusion_scan=policies.datafusion_scan,
+                delta_scan=policies.delta_scan,
                 policy=self.policies.scan_policy,
             )
+            if datafusion_scan is None and delta_scan is None:
+                return resolved
+            overrides = resolved.overrides or DatasetLocationOverrides()
+            if datafusion_scan is not None:
+                overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
+            if delta_scan is not None:
+                delta_bundle = policies.delta_bundle
+                if delta_bundle is None:
+                    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+
+                    delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
+                else:
+                    delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
+                overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
+            return msgspec.structs.replace(resolved, overrides=overrides)
         from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 
         catalog = dataset_catalog_from_profile(self)

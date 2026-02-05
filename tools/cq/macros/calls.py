@@ -941,17 +941,27 @@ def _add_sites_section(
         Scoring metadata.
     """
     sites_section = Section(title="Call Sites")
-    for site in all_sites[:50]:
+    for site in all_sites:
         details = {
             "context": site.context,
+            "callee": site.callee,
+            "receiver": site.receiver,
+            "resolution_confidence": site.resolution_confidence,
+            "resolution_path": site.resolution_path,
+            "binding": site.binding,
+            "target_names": site.target_names,
             "num_args": site.num_args,
             "num_kwargs": site.num_kwargs,
             "kwargs": site.kwargs,
+            "has_star_args": site.has_star_args,
+            "has_star_kwargs": site.has_star_kwargs,
             "forwarding": site.has_star_args or site.has_star_kwargs,
             "call_id": site.call_id,
             "hazards": site.hazards,
             "context_window": site.context_window,
             "context_snippet": site.context_snippet,
+            "symtable": site.symtable_info,
+            "bytecode": site.bytecode_info,
         }
         sites_section.findings.append(
             Finding(
@@ -963,45 +973,6 @@ def _add_sites_section(
             )
         )
     result.sections.append(sites_section)
-
-
-def _add_evidence(
-    result: CqResult,
-    function_name: str,
-    all_sites: list[CallSite],
-    score: ScoreDetails | None,
-) -> None:
-    """Add evidence findings for each call site.
-
-    Parameters
-    ----------
-    result : CqResult
-        The result to add to.
-    function_name : str
-        Name of the function.
-    all_sites : list[CallSite]
-        All call sites.
-    score : ScoreDetails | None
-        Scoring metadata.
-    """
-    for site in all_sites:
-        details: dict[str, object] = {
-            "preview": site.arg_preview,
-            "call_id": site.call_id,
-            "hazards": site.hazards,
-            "context_window": site.context_window,
-            "context_snippet": site.context_snippet,
-            "symtable": site.symtable_info,
-            "bytecode": site.bytecode_info,
-        }
-        result.evidence.append(
-            Finding(
-                category="call_site",
-                message=f"{site.context} calls {function_name}",
-                anchor=Anchor(file=site.file, line=site.line),
-                details=build_detail_payload(score=score, data=details),
-            )
-        )
 
 
 @dataclass(frozen=True)
@@ -1189,7 +1160,6 @@ def _append_calls_findings(
     _add_context_section(result, analysis.contexts, score)
     _add_hazard_section(result, analysis.hazard_counts, score)
     _add_sites_section(result, function_name, all_sites, score)
-    _add_evidence(result, function_name, all_sites, score)
 
 
 def _build_calls_result(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -11,7 +12,8 @@ import msgspec
 from cli.config_models import RootConfigSpec
 from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from core_types import JsonValue
-from runtime_models.root import ROOT_CONFIG_ADAPTER
+from runtime_models.adapters import ROOT_CONFIG_ADAPTER
+from runtime_models.root import RootConfigRuntime
 from serde_msgspec import validation_error_payload
 
 
@@ -232,13 +234,25 @@ def _config_to_mapping(config: RootConfigSpec) -> dict[str, JsonValue]:
 def _validate_root_runtime(config: RootConfigSpec, *, location: str) -> None:
     payload = msgspec.to_builtins(config, str_keys=True)
     try:
-        ROOT_CONFIG_ADAPTER.validate_python(payload)
+        ROOT_CONFIG_ADAPTER.validate_strings(payload)
     except Exception as exc:
         msg = f"Config validation failed for {location}: {exc}"
         raise ValueError(msg) from exc
 
 
 def _resolve_explicit_payload(path: Path) -> tuple[Mapping[str, JsonValue], str]:
+    if path.suffix == ".json":
+        raw_text = path.read_text(encoding="utf-8")
+        try:
+            RootConfigRuntime.model_validate_json(raw_text)
+        except Exception as exc:
+            msg = f"Config validation failed for {path}: {exc}"
+            raise ValueError(msg) from exc
+        raw = json.loads(raw_text)
+        if not isinstance(raw, dict):
+            msg = f"Config validation failed for {path}: JSON root must be an object."
+            raise ValueError(msg)
+        return cast("Mapping[str, JsonValue]", raw), str(path)
     raw = _read_toml(path)
     if _is_pyproject_config(path):
         nested = _extract_tool_config(raw)

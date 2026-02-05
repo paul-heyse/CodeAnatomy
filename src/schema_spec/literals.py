@@ -2,31 +2,19 @@
 
 from __future__ import annotations
 
-from arrow_utils.core.expr_types import ScalarValue
-from datafusion_engine.arrow.interop import ScalarLike
+from datafusion_engine.expr.spec import ScalarLiteralSpec, scalar_literal
 
 
-def parse_scalar_value(value: object) -> ScalarValue:
+def parse_scalar_value(value: object) -> ScalarLiteralSpec:
     """Parse a scalar literal value.
 
     Returns
     -------
-    ScalarValue
+    ScalarLiteralSpec
         Parsed scalar literal.
 
-    Raises
-    ------
-    TypeError
-        Raised when the value is not a supported scalar type.
     """
-    if value is None:
-        return None
-    if isinstance(value, (bool, int, float, str, bytes)):
-        return value
-    if isinstance(value, ScalarLike):
-        return value
-    msg = "Scalar literal must be a supported scalar type."
-    raise TypeError(msg)
+    return scalar_literal(value)
 
 
 __all__ = ["parse_scalar_value"]

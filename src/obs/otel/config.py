@@ -32,7 +32,7 @@ from opentelemetry.sdk.trace.sampling import (
 )
 
 from core.config_base import config_fingerprint
-from runtime_models.otel import OTEL_CONFIG_ADAPTER
+from runtime_models.adapters import OTEL_CONFIG_ADAPTER
 from serde_msgspec import StructBaseStrict
 from utils.env_utils import (
     env_bool,
@@ -472,7 +472,7 @@ def _resolve_batch_settings(
 
 
 def _build_otel_config(payload: Mapping[str, object]) -> OtelConfig:
-    resolved = OTEL_CONFIG_ADAPTER.validate_python(payload)
+    resolved = OTEL_CONFIG_ADAPTER.validate_strings(payload)
     sampler = _resolve_sampler(
         sampler_name=resolved.sampler,
         sampler_arg=resolved.sampler_arg,

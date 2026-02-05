@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from core_types import IdentifierStr
 from semantics.column_types import TYPE_PATTERNS, ColumnType
 from serde_msgspec import StructBaseStrict, to_builtins
 
@@ -38,7 +39,9 @@ class SemanticConfigSpec(StructBaseStrict, frozen=True):
     """Serializable semantic configuration overrides."""
 
     type_patterns: tuple[SemanticTypePatternSpec, ...] = _DEFAULT_TYPE_PATTERN_SPECS
-    table_overrides: dict[str, dict[ColumnType, str]] = msgspec.field(default_factory=dict)
+    table_overrides: dict[IdentifierStr, dict[ColumnType, str]] = msgspec.field(
+        default_factory=dict
+    )
     disallow_entity_id_patterns: tuple[str, ...] = _DEFAULT_DISALLOW_ENTITY_ID_PATTERNS
 
 
@@ -47,7 +50,7 @@ class SemanticConfig:
     """Configuration overrides for semantic schema inference."""
 
     type_patterns: tuple[tuple[re.Pattern[str], ColumnType], ...] = TYPE_PATTERNS
-    table_overrides: dict[str, dict[ColumnType, str]] = field(default_factory=dict)
+    table_overrides: dict[IdentifierStr, dict[ColumnType, str]] = field(default_factory=dict)
     spec_registry: dict[str, SemanticTableSpec] | None = None
     disallow_entity_id_patterns: tuple[re.Pattern[str], ...] = (
         re.compile(r"^span_id$"),
@@ -91,10 +94,10 @@ def semantic_config_from_spec(
     SemanticConfig
         Runtime semantic configuration with compiled patterns.
     """
-    from runtime_models.semantic import SEMANTIC_CONFIG_ADAPTER
+    from runtime_models.adapters import SEMANTIC_CONFIG_ADAPTER
 
     payload = to_builtins(spec, str_keys=True)
-    resolved = SEMANTIC_CONFIG_ADAPTER.validate_python(payload)
+    resolved = SEMANTIC_CONFIG_ADAPTER.validate_strings(payload)
     type_patterns = tuple(
         (re.compile(entry.pattern), entry.column_type) for entry in resolved.type_patterns
     )

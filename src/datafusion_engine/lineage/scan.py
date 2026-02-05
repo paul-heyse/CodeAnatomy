@@ -13,8 +13,6 @@ from datafusion import SessionContext
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_datafusion_provider,
-    resolve_datafusion_scan_options,
-    resolve_delta_feature_gate,
 )
 from datafusion_engine.delta.contracts import build_delta_provider_contract
 from datafusion_engine.delta.control_plane import DeltaSnapshotRequest, delta_add_actions
@@ -411,7 +409,7 @@ def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
         ),
         version=pinned_version,
         timestamp=pinned_timestamp,
-        gate=resolve_delta_feature_gate(location),
+        gate=location.resolved.delta_feature_gate,
     )
 
 
@@ -658,7 +656,7 @@ def _policy_from_lineage(
 
 
 def _partition_column_names(location: DatasetLocation) -> set[str]:
-    scan = resolve_datafusion_scan_options(location)
+    scan = location.resolved.datafusion_scan
     if scan is None:
         return set()
     return {name for name, _dtype in scan.partition_cols}

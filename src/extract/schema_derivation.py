@@ -48,7 +48,7 @@ import pyarrow as pa
 
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.evidence_metadata import evidence_metadata_bundle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.file_identity import file_identity_field_specs
@@ -84,9 +84,9 @@ def _byte_span_bundle(prefix: str = "") -> FieldBundle:
         name=f"{normalized}byte_span" if normalized else "byte_span",
         fields=(
             FieldSpec(
-                name=f"{normalized}bstart", dtype=coerce_arrow_type(interop.int64())
+                name=f"{normalized}bstart", dtype=arrow_type_from_pyarrow(interop.int64())
             ),
-            FieldSpec(name=f"{normalized}bend", dtype=coerce_arrow_type(interop.int64())),
+            FieldSpec(name=f"{normalized}bend", dtype=arrow_type_from_pyarrow(interop.int64())),
         ),
     )
 
@@ -108,7 +108,7 @@ def _structured_span_bundle(prefix: str = "") -> FieldBundle:
     return FieldBundle(
         name=f"{normalized}span" if normalized else "span",
         fields=(
-            FieldSpec(name=f"{normalized}span", dtype=coerce_arrow_type(SPAN_STORAGE)),
+            FieldSpec(name=f"{normalized}span", dtype=arrow_type_from_pyarrow(SPAN_STORAGE)),
         ),
     )
 
@@ -131,16 +131,16 @@ def _line_col_span_bundle(prefix: str = "") -> FieldBundle:
         name=f"{normalized}line_col_span" if normalized else "line_col_span",
         fields=(
             FieldSpec(
-                name=f"{normalized}start_line", dtype=coerce_arrow_type(interop.int32())
+                name=f"{normalized}start_line", dtype=arrow_type_from_pyarrow(interop.int32())
             ),
             FieldSpec(
-                name=f"{normalized}start_col", dtype=coerce_arrow_type(interop.int32())
+                name=f"{normalized}start_col", dtype=arrow_type_from_pyarrow(interop.int32())
             ),
             FieldSpec(
-                name=f"{normalized}end_line", dtype=coerce_arrow_type(interop.int32())
+                name=f"{normalized}end_line", dtype=arrow_type_from_pyarrow(interop.int32())
             ),
             FieldSpec(
-                name=f"{normalized}end_col", dtype=coerce_arrow_type(interop.int32())
+                name=f"{normalized}end_col", dtype=arrow_type_from_pyarrow(interop.int32())
             ),
         ),
     )
@@ -354,7 +354,7 @@ class ExtractionSchemaBuilder:
         """
         spec = FieldSpec(
             name=name,
-            dtype=dtype,
+            dtype=arrow_type_from_pyarrow(interop.ensure_arrow_dtype(dtype)),
             nullable=nullable,
             metadata=metadata or {},
         )
@@ -503,7 +503,7 @@ def _field_spec_from_arrow_field(arrow_field: pa.Field) -> FieldSpec:
 
     return FieldSpec(
         name=arrow_field.name,
-        dtype=arrow_field.type,
+        dtype=arrow_type_from_pyarrow(arrow_field.type),
         nullable=arrow_field.nullable,
         metadata=metadata,
     )

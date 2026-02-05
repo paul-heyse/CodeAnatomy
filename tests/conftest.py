@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import faulthandler
 import json
 import os
@@ -171,9 +172,10 @@ def pytest_sessionfinish(session: object, exitstatus: int) -> None:
     """Persist diagnostics at pytest session completion."""
     _write_json(_RESOURCES_PATH, _collect_resources())
     _write_json(_EXTENSIONS_PATH, _collect_extensions())
+    _teardown_faulthandler()
     try:
         from cache.diskcache_factory import close_cache_pool
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         close_cache_pool = None
     if close_cache_pool is not None:
         close_cache_pool()
@@ -195,6 +197,21 @@ def _setup_faulthandler() -> None:
         faulthandler.register(sigabrt, file=_STATE["faulthandler_file"], all_threads=True)
     except RuntimeError:
         return
+
+
+def _teardown_faulthandler() -> None:
+    stream = _STATE.get("faulthandler_file")
+    if stream is None:
+        return
+    with contextlib.suppress(RuntimeError):
+        faulthandler.disable()
+    sigabrt = getattr(signal, "SIGABRT", None)
+    if sigabrt is not None:
+        with contextlib.suppress(RuntimeError):
+            faulthandler.unregister(sigabrt)
+    with contextlib.suppress(OSError):
+        stream.close()
+    _STATE["faulthandler_file"] = None
 
 
 @pytest.fixture

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow import interop
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle
 
@@ -48,23 +48,23 @@ def evidence_metadata_bundle() -> FieldBundle:
         fields=(
             FieldSpec(
                 name="task_name",
-                dtype=coerce_arrow_type(interop.string()),
+                dtype=arrow_type_from_pyarrow(interop.string()),
                 nullable=True,
             ),
             FieldSpec(
                 name="task_priority",
-                dtype=coerce_arrow_type(interop.int32()),
+                dtype=arrow_type_from_pyarrow(interop.int32()),
                 nullable=True,
             ),
             FieldSpec(
                 name="confidence",
-                dtype=coerce_arrow_type(interop.float64()),
+                dtype=arrow_type_from_pyarrow(interop.float64()),
                 nullable=True,
             ),
-            FieldSpec(name="score", dtype=coerce_arrow_type(interop.float64()), nullable=True),
+            FieldSpec(name="score", dtype=arrow_type_from_pyarrow(interop.float64()), nullable=True),
             FieldSpec(
                 name="resolution_method",
-                dtype=coerce_arrow_type(interop.string()),
+                dtype=arrow_type_from_pyarrow(interop.string()),
                 nullable=True,
             ),
         ),

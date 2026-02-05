@@ -18,8 +18,10 @@ Key introspection surfaces:
 from __future__ import annotations
 
 import contextlib
+import gc
 import importlib
 import re
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -1017,8 +1019,14 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Routine inventory rows including name and type.
         """
-        table = routines_snapshot_table(self.ctx, sql_options=self.sql_options)
-        rows = [dict(row) for row in table.to_pylist()]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ResourceWarning)
+                table = routines_snapshot_table(self.ctx, sql_options=self.sql_options)
+                rows = [dict(row) for row in table.to_pylist()]
+                gc.collect()
+        except (RuntimeError, TypeError, ValueError, Warning):
+            return []
         return sorted(
             rows,
             key=lambda row: _row_sort_key(
@@ -1035,10 +1043,16 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Parameter metadata rows including names and data types.
         """
-        table = parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
-        if table is None:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ResourceWarning)
+                table = parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
+                if table is None:
+                    return []
+                rows = [dict(row) for row in table.to_pylist()]
+                gc.collect()
+        except (RuntimeError, TypeError, ValueError, Warning):
             return []
-        rows = [dict(row) for row in table.to_pylist()]
         return sorted(
             rows,
             key=lambda row: (

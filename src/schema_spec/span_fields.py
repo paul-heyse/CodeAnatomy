@@ -23,7 +23,7 @@ from typing import Literal, cast, get_args
 import pyarrow as pa
 
 from datafusion_engine.arrow import interop
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 
 # Standard span prefixes used throughout the codebase
@@ -110,8 +110,8 @@ def make_span_field_specs(prefix: SpanPrefix = "") -> tuple[FieldSpec, FieldSpec
     """
     bstart_name, bend_name = span_field_names(prefix)
     return (
-        FieldSpec(name=bstart_name, dtype=coerce_arrow_type(interop.int64())),
-        FieldSpec(name=bend_name, dtype=coerce_arrow_type(interop.int64())),
+        FieldSpec(name=bstart_name, dtype=arrow_type_from_pyarrow(interop.int64())),
+        FieldSpec(name=bend_name, dtype=arrow_type_from_pyarrow(interop.int64())),
     )
 
 

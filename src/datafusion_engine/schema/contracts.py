@@ -21,6 +21,7 @@ from datafusion import SessionContext
 from core.config_base import config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema.introspection import schema_from_table
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
@@ -459,7 +460,7 @@ def _field_spec_from_arrow_field(field: pa.Field) -> FieldSpec:
     encoding = "dictionary" if encoding_value == "dictionary" else None
     return FieldSpec(
         name=field.name,
-        dtype=field.type,
+        dtype=arrow_type_from_pyarrow(field.type),
         nullable=field.nullable,
         metadata=metadata,
         default_value=metadata.get("default_value"),
@@ -570,7 +571,7 @@ class SchemaContract:
         columns = tuple(
             FieldSpec(
                 name=col.name,
-                dtype=col.arrow_type,
+                dtype=arrow_type_from_pyarrow(col.arrow_type),
                 nullable=col.is_nullable,
             )
             for col in annotated
@@ -1063,7 +1064,7 @@ def schema_contract_from_table_schema_contract(
         partition_fields = tuple(
             FieldSpec(
                 name=name,
-                dtype=dtype,
+                dtype=arrow_type_from_pyarrow(dtype),
                 nullable=False,
             )
             for name, dtype in contract.partition_cols

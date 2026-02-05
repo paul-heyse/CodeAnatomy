@@ -261,6 +261,40 @@ def test_plan_bundle_captures_udf_planner_snapshot() -> None:
     assert function.get("short_circuits") is True
 
 
+def test_plan_bundle_prefers_runtime_snapshot_when_context_differs() -> None:
+    """Ensure explicit runtime snapshots remain authoritative across contexts."""
+    _ctx, session_runtime = _session_context()
+    alt_ctx, _alt_runtime = _session_context()
+    snapshot = _udf_snapshot_payload()
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    rewrite_tags = tuple(sorted(rewrite_tag_index(snapshot)))
+    planner_names = domain_planner_names_from_snapshot(snapshot)
+    session_runtime = replace(
+        session_runtime,
+        udf_snapshot=snapshot,
+        udf_snapshot_hash=snapshot_hash,
+        udf_rewrite_tags=rewrite_tags,
+        domain_planner_names=planner_names,
+    )
+    register_arrow_table(
+        alt_ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
+    )
+    df = alt_ctx.sql("SELECT id FROM events")
+    bundle = build_plan_bundle(
+        alt_ctx,
+        df,
+        options=PlanBundleOptions(session_runtime=session_runtime),
+    )
+    planner_snapshot = bundle.artifacts.udf_planner_snapshot
+    assert isinstance(planner_snapshot, dict)
+    functions = planner_snapshot.get("functions")
+    assert isinstance(functions, list)
+    function = next(item for item in functions if item.get("name") == "my_udf")
+    assert function.get("parameter_names") == ("x", "y")
+
+
 def test_plan_bundle_captures_async_udf_settings() -> None:
     """Ensure async UDF runtime settings are captured in plan artifacts.
 

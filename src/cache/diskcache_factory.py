@@ -205,10 +205,10 @@ _CACHE_POOL: dict[str, Cache | FanoutCache] = {}
 
 def close_cache_pool() -> None:
     """Close all cached DiskCache instances and clear the pool."""
-    for cache in _CACHE_POOL.values():
+    for cache_instance in _CACHE_POOL.values():
         try:
-            cache.close()
-        except Exception:
+            cache_instance.close()
+        except (OSError, RuntimeError, ValueError):
             continue
     _CACHE_POOL.clear()
 

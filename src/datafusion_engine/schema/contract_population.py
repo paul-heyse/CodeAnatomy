@@ -40,6 +40,7 @@ from datafusion_engine.arrow.metadata import (
     schema_identity_from_metadata,
 )
 from datafusion_engine.schema.introspection import schema_from_table
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
@@ -106,7 +107,7 @@ def _field_spec_from_arrow_field(arrow_field: pa.Field) -> FieldSpec:
     encoding = "dictionary" if encoding_value == "dictionary" else None
     return FieldSpec(
         name=arrow_field.name,
-        dtype=arrow_field.type,
+        dtype=arrow_type_from_pyarrow(arrow_field.type),
         nullable=arrow_field.nullable,
         metadata=metadata,
         default_value=metadata.get("default_value"),

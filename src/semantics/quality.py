@@ -247,7 +247,7 @@ class QualityRelationshipSpec:
     Attributes
     ----------
     name
-        Output name for the relationship view (should use _v1 suffix).
+        Output name for the relationship view.
     left_view
         Left (entity) view name.
     right_view
@@ -271,7 +271,7 @@ class QualityRelationshipSpec:
     select_exprs
         Output column expressions with aliases.
     join_file_quality
-        Whether to join file_quality_v1 for quality signals.
+        Whether to join file_quality for quality signals.
     file_quality_view
         Name of file quality view to join.
 
@@ -279,9 +279,9 @@ class QualityRelationshipSpec:
     --------
     >>> from semantics.exprs import c, v, eq, is_not_null, case_eq
     >>> spec = QualityRelationshipSpec(
-    ...     name="rel_cst_docstring_owner_by_id_v1",
-    ...     left_view="cst_docstrings_norm_v1",
-    ...     right_view="cst_defs_norm_v1",
+    ...     name="rel_cst_docstring_owner_by_id",
+    ...     left_view="cst_docstrings_norm",
+    ...     right_view="cst_defs_norm",
     ...     left_on=["file_id"],
     ...     right_on=["file_id"],
     ...     how="inner",
@@ -336,7 +336,7 @@ class QualityRelationshipSpec:
 
     # File quality integration
     join_file_quality: bool = True
-    file_quality_view: str = "file_quality_v1"
+    file_quality_view: str = "file_quality"
 
 
 __all__ = [

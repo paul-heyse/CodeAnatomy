@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 
@@ -66,6 +67,12 @@ def resolve_delta_store_policy(
     ValueError
         Raised when remote Delta tables are disallowed by policy.
     """
+    parsed = urlparse(table_uri) if "://" in table_uri else None
+    if parsed is not None and parsed.scheme:
+        scheme = parsed.scheme.lower()
+        if scheme in {"s3a", "s3n"}:
+            msg = "Delta table URIs must use canonical s3:// scheme (not s3a:// or s3n://)."
+            raise ValueError(msg)
     resolved_storage = dict(policy.storage_options) if policy is not None else {}
     resolved_log = dict(policy.log_storage_options) if policy is not None else {}
     if storage_options:

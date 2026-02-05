@@ -62,7 +62,7 @@ SEMANTIC_SINGLETON_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         source_dataset="scip_occurrences",
     ),
     DatasetRegistrySpec(
-        name="file_quality_v1",
+        name="file_quality",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(

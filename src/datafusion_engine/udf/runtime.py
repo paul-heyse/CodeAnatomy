@@ -87,6 +87,9 @@ _DDL_COMPLEX_TYPE_TOKENS: tuple[str, ...] = (
     "union<",
 )
 
+_EXPECTED_PLUGIN_ABI_MAJOR = 1
+_EXPECTED_PLUGIN_ABI_MINOR = 1
+
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     try:
@@ -180,6 +183,95 @@ def _module_ctx_arg(module: ModuleType, ctx: SessionContext) -> object:
         if internal_ctx is not None:
             return internal_ctx
     return ctx
+
+
+def _extension_module_with_capabilities() -> ModuleType | None:
+    for module_name in ("datafusion._internal", "datafusion_ext"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if callable(getattr(module, "capabilities_snapshot", None)):
+            return module
+    return None
+
+
+def extension_capabilities_snapshot() -> Mapping[str, object] | None:
+    """Return the Rust extension capabilities snapshot when available.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Snapshot payload or ``None`` when unavailable.
+    """
+    module = _extension_module_with_capabilities()
+    if module is None:
+        return None
+    snapshot = module.capabilities_snapshot()
+    if isinstance(snapshot, Mapping):
+        return dict(snapshot)
+    return None
+
+
+def extension_capabilities_report() -> dict[str, object]:
+    """Return compatibility report for the Rust extension ABI snapshot.
+
+    Returns
+    -------
+    dict[str, object]
+        Compatibility report including snapshot and errors.
+    """
+    expected = {"major": _EXPECTED_PLUGIN_ABI_MAJOR, "minor": _EXPECTED_PLUGIN_ABI_MINOR}
+    snapshot = extension_capabilities_snapshot()
+    if snapshot is None:
+        return {
+            "available": False,
+            "compatible": False,
+            "expected_plugin_abi": expected,
+            "error": "Extension capabilities snapshot unavailable.",
+            "snapshot": None,
+        }
+    plugin_abi = snapshot.get("plugin_abi") if isinstance(snapshot, Mapping) else None
+    major = None
+    minor = None
+    if isinstance(plugin_abi, Mapping):
+        major = plugin_abi.get("major")
+        minor = plugin_abi.get("minor")
+    compatible = major == _EXPECTED_PLUGIN_ABI_MAJOR and minor == _EXPECTED_PLUGIN_ABI_MINOR
+    error = None
+    if not compatible:
+        error = (
+            "Extension ABI mismatch: "
+            f"expected={expected} observed={{'major': {major}, 'minor': {minor}}}."
+        )
+    return {
+        "available": True,
+        "compatible": compatible,
+        "expected_plugin_abi": expected,
+        "observed_plugin_abi": {"major": major, "minor": minor},
+        "snapshot": snapshot,
+        "error": error,
+    }
+
+
+def validate_extension_capabilities(*, strict: bool = True) -> dict[str, object]:
+    """Validate extension ABI snapshot and optionally raise on mismatch.
+
+    Returns
+    -------
+    dict[str, object]
+        Compatibility report payload.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when strict validation is enabled and the ABI is incompatible.
+    """
+    report = extension_capabilities_report()
+    if strict and not report.get("compatible", False):
+        msg = report.get("error") or "Extension ABI compatibility check failed."
+        raise RuntimeError(msg)
+    return report
 
 
 def udf_backend_available() -> bool:
@@ -1086,6 +1178,8 @@ def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
 
 __all__ = [
     "RustUdfSnapshot",
+    "extension_capabilities_report",
+    "extension_capabilities_snapshot",
     "fallback_udfs_active",
     "register_rust_udfs",
     "register_udfs_via_ddl",
@@ -1100,6 +1194,7 @@ __all__ = [
     "snapshot_return_types",
     "udf_audit_payload",
     "udf_names_from_snapshot",
+    "validate_extension_capabilities",
     "validate_required_udfs",
     "validate_rust_udf_snapshot",
 ]

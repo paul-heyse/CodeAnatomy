@@ -114,6 +114,7 @@ from datafusion_engine.udf.catalog import get_default_udf_catalog, get_strict_ud
 from datafusion_engine.udf.factory import function_factory_payloads, install_function_factory
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat, StructBaseStrict
+from storage.deltalake.config import DeltaMutationPolicy
 from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
 from utils.uuid_factory import uuid7_str
@@ -250,6 +251,7 @@ _EXTENSIONS_SCHEMA = pa.struct(
         pa.field("delta_plan_codecs_enabled", pa.bool_()),
         pa.field("delta_plan_codec_physical", pa.string()),
         pa.field("delta_plan_codec_logical", pa.string()),
+        pa.field("delta_ffi_provider_enforced", pa.bool_()),
         pa.field("expr_planners_enabled", pa.bool_()),
         pa.field("expr_planner_names", pa.list_(pa.string())),
         pa.field("physical_expr_adapter_factory", pa.bool_()),
@@ -278,6 +280,23 @@ _DELTA_STORE_POLICY_SCHEMA = pa.struct(
         pa.field("require_local_paths", pa.bool_()),
     ]
 )
+_DELTA_RETRY_POLICY_SCHEMA = pa.struct(
+    [
+        pa.field("max_attempts", pa.int64()),
+        pa.field("base_delay_s", pa.float64()),
+        pa.field("max_delay_s", pa.float64()),
+        pa.field("retryable_errors", pa.list_(pa.string())),
+        pa.field("fatal_errors", pa.list_(pa.string())),
+    ]
+)
+_DELTA_MUTATION_POLICY_SCHEMA = pa.struct(
+    [
+        pa.field("retry_policy", _DELTA_RETRY_POLICY_SCHEMA),
+        pa.field("require_locking_provider", pa.bool_()),
+        pa.field("locking_option_keys", pa.list_(pa.string())),
+        pa.field("append_only", pa.bool_()),
+    ]
+)
 _TELEMETRY_SCHEMA = pa.schema(
     [
         version_field(nullable=True),
@@ -290,6 +309,8 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("external_table_options", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("delta_store_policy_hash", pa.string()),
         pa.field("delta_store_policy", _DELTA_STORE_POLICY_SCHEMA),
+        pa.field("delta_mutation_policy_hash", pa.string()),
+        pa.field("delta_mutation_policy", _DELTA_MUTATION_POLICY_SCHEMA),
         pa.field("sql_policy", _SQL_POLICY_SCHEMA),
         pa.field("param_identifier_allowlist", pa.list_(pa.string())),
         pa.field("write_policy", _WRITE_POLICY_SCHEMA),
@@ -2376,6 +2397,25 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "allow_statements": profile.policies.sql_policy.allow_statements,
         }
     write_policy_payload = _datafusion_write_policy_payload(profile.policies.write_policy)
+    delta_mutation_policy = profile.policies.delta_mutation_policy
+    delta_mutation_policy_hash = (
+        delta_mutation_policy.fingerprint() if delta_mutation_policy is not None else None
+    )
+    delta_mutation_policy_payload = None
+    if delta_mutation_policy is not None:
+        retry_policy = delta_mutation_policy.retry_policy
+        delta_mutation_policy_payload = {
+            "retry_policy": {
+                "max_attempts": retry_policy.max_attempts,
+                "base_delay_s": retry_policy.base_delay_s,
+                "max_delay_s": retry_policy.max_delay_s,
+                "retryable_errors": list(retry_policy.retryable_errors),
+                "fatal_errors": list(retry_policy.fatal_errors),
+            },
+            "require_locking_provider": delta_mutation_policy.require_locking_provider,
+            "locking_option_keys": list(delta_mutation_policy.locking_option_keys),
+            "append_only": delta_mutation_policy.append_only,
+        }
     parquet_read = _settings_by_prefix(settings, "datafusion.execution.parquet.")
     listing_table = _settings_by_prefix(settings, "datafusion.runtime.list_files_")
     parser_dialect = settings.get("datafusion.sql_parser.dialect")
@@ -2395,6 +2435,8 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         ),
         "delta_store_policy_hash": delta_store_policy_hash(profile.policies.delta_store_policy),
         "delta_store_policy": _delta_store_policy_payload(profile.policies.delta_store_policy),
+        "delta_mutation_policy_hash": delta_mutation_policy_hash,
+        "delta_mutation_policy": delta_mutation_policy_payload,
         "sql_policy": sql_policy_payload,
         "param_identifier_allowlist": (
             list(profile.policies.param_identifier_allowlist)
@@ -2444,6 +2486,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "delta_plan_codecs_enabled": profile.features.enable_delta_plan_codecs,
             "delta_plan_codec_physical": profile.policies.delta_plan_codec_physical,
             "delta_plan_codec_logical": profile.policies.delta_plan_codec_logical,
+            "delta_ffi_provider_enforced": profile.features.enforce_delta_ffi_provider,
             "expr_planners_enabled": profile.features.enable_expr_planners,
             "expr_planner_names": list(profile.policies.expr_planner_names),
             "physical_expr_adapter_factory": bool(profile.policies.physical_expr_adapter_factory),
@@ -2695,6 +2738,33 @@ class _RuntimeDiagnosticsMixin:
             "catalog_auto_load_format": catalog.catalog_auto_load_format,
             "delta_store_policy_hash": delta_store_policy_hash(policies.delta_store_policy),
             "delta_store_policy": _delta_store_policy_payload(policies.delta_store_policy),
+            "delta_mutation_policy_hash": (
+                policies.delta_mutation_policy.fingerprint()
+                if policies.delta_mutation_policy is not None
+                else None
+            ),
+            "delta_mutation_policy": (
+                {
+                    "retry_policy": {
+                        "max_attempts": policies.delta_mutation_policy.retry_policy.max_attempts,
+                        "base_delay_s": policies.delta_mutation_policy.retry_policy.base_delay_s,
+                        "max_delay_s": policies.delta_mutation_policy.retry_policy.max_delay_s,
+                        "retryable_errors": list(
+                            policies.delta_mutation_policy.retry_policy.retryable_errors
+                        ),
+                        "fatal_errors": list(
+                            policies.delta_mutation_policy.retry_policy.fatal_errors
+                        ),
+                    },
+                    "require_locking_provider": (
+                        policies.delta_mutation_policy.require_locking_provider
+                    ),
+                    "locking_option_keys": list(policies.delta_mutation_policy.locking_option_keys),
+                    "append_only": policies.delta_mutation_policy.append_only,
+                }
+                if policies.delta_mutation_policy is not None
+                else None
+            ),
             "dataset_templates": template_payloads or None,
             "enable_information_schema": catalog.enable_information_schema,
             "enable_url_table": features.enable_url_table,
@@ -2721,6 +2791,7 @@ class _RuntimeDiagnosticsMixin:
             "delta_plan_codecs_enabled": features.enable_delta_plan_codecs,
             "delta_plan_codec_physical": policies.delta_plan_codec_physical,
             "delta_plan_codec_logical": policies.delta_plan_codec_logical,
+            "delta_ffi_provider_enforced": features.enforce_delta_ffi_provider,
             "metrics_enabled": features.enable_metrics,
             "metrics_collector": bool(diagnostics.metrics_collector),
             "tracing_enabled": features.enable_tracing,
@@ -3372,6 +3443,7 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
+    enforce_delta_ffi_provider: bool = False
     enable_metrics: bool = False
     enable_tracing: bool = False
     enforce_preflight: bool = True
@@ -3401,6 +3473,7 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
             "enable_delta_querybuilder": self.enable_delta_querybuilder,
             "enable_delta_data_checker": self.enable_delta_data_checker,
             "enable_delta_plan_codecs": self.enable_delta_plan_codecs,
+            "enforce_delta_ffi_provider": self.enforce_delta_ffi_provider,
             "enable_metrics": self.enable_metrics,
             "enable_tracing": self.enable_tracing,
             "enforce_preflight": self.enforce_preflight,
@@ -3465,6 +3538,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     delta_plan_codec_physical: str = "delta_physical"
     delta_plan_codec_logical: str = "delta_logical"
     delta_store_policy: DeltaStorePolicy | None = None
+    delta_mutation_policy: DeltaMutationPolicy | None = None
     delta_protocol_support: DeltaProtocolSupport | None = None
     delta_protocol_mode: Literal["error", "warn", "ignore"] = "error"
     diskcache_profile: DiskCacheProfile | None = msgspec.field(
@@ -3594,6 +3668,11 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
             "delta_store_policy": (
                 self.delta_store_policy.fingerprint()
                 if self.delta_store_policy is not None
+                else None
+            ),
+            "delta_mutation_policy": (
+                self.delta_mutation_policy.fingerprint()
+                if self.delta_mutation_policy is not None
                 else None
             ),
             "delta_protocol_support": (
@@ -3932,7 +4011,11 @@ class RuntimeProfileCatalog:
         return location
 
 
-class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):
+class DataFusionRuntimeProfile(  # noqa: PLR0904
+    _RuntimeDiagnosticsMixin,
+    StructBaseStrict,
+    frozen=True,
+):
     """DataFusion runtime configuration.
 
     Identifier normalization is disabled by default to preserve case-sensitive
@@ -3987,6 +4070,38 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             Catalog operations helper.
         """
         return RuntimeProfileCatalog(self)
+
+    def cache_root(self) -> str:
+        """Return the configured cache root directory.
+
+        Returns
+        -------
+        str
+            Cache root directory.
+        """
+        return self.io_ops.cache_root()
+
+    def dataset_location(self, name: str) -> DatasetLocation | None:
+        """Return a configured dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Dataset location when configured.
+        """
+        return self.catalog_ops.dataset_location(name)
+
+    def delta_service(self) -> DeltaService:
+        """Return a DeltaService bound to this runtime profile.
+
+        Returns
+        -------
+        DeltaService
+            DeltaService instance bound to this profile.
+        """
+        from datafusion_engine.delta.service import delta_service_for_profile
+
+        return delta_service_for_profile(self)
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:
@@ -5754,6 +5869,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         payload["udf_info_schema_parity"] = self._validate_udf_info_schema_parity(ctx)
         if self.diagnostics.diagnostics_sink is None:
             return
+        from datafusion_engine.udf.runtime import extension_capabilities_report
+
+        payload["extension_capabilities"] = extension_capabilities_report()
         payload["event_time_unix_ms"] = int(time.time() * 1000)
         payload["profile_name"] = self.policies.config_policy_name
         payload["settings_hash"] = self.settings_hash()
@@ -6038,6 +6156,18 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         """
         if not self.features.enable_tracing:
             return
+        from datafusion_engine.delta.observability import ensure_delta_tracing
+
+        delta_installed, delta_error = ensure_delta_tracing()
+        if self.diagnostics.diagnostics_sink is not None:
+            self.record_artifact(
+                "datafusion_delta_tracing_v1",
+                {
+                    "enabled": self.features.enable_tracing,
+                    "installed": delta_installed,
+                    "error": delta_error,
+                },
+            )
         if self.diagnostics.tracing_hook is None:
             module = _resolve_extension_module(required_attr="install_tracing")
             if module is None:
@@ -7168,12 +7298,9 @@ def read_delta_as_reader(
     from datafusion_engine.tables.metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
-    to_reader = getattr(df, "to_arrow_reader", None)
-    if callable(to_reader):
-        reader = to_reader()
-        if isinstance(reader, pa.RecordBatchReader):
-            return reader
-    return df.to_arrow_table().to_reader()
+    from arrow_utils.core.streaming import to_reader
+
+    return to_reader(df)
 
 
 def dataset_spec_from_context(

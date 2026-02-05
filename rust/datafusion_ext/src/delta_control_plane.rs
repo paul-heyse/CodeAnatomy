@@ -213,16 +213,14 @@ pub fn scan_config_from_session(
 }
 
 fn files_matching_predicate(
+    session: &dyn Session,
     log_data: LogDataHandler<'_>,
     filters: &[Expr],
 ) -> Result<Vec<Add>, DeltaTableError> {
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = SessionContext::new().create_physical_expr(
-            predicate,
-            &log_data.read_schema().to_dfschema()?,
-        )?;
+        let expr = session.create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
         let mask = pruning_predicate.prune(&log_data)?;
         Ok(log_data
@@ -285,7 +283,7 @@ pub async fn delta_provider_from_session(
     let mut predicate_error: Option<String> = None;
     if let Some(predicate) = predicate {
         match eager_snapshot.parse_predicate_expression(predicate, &session_state) {
-            Ok(expr) => match files_matching_predicate(eager_snapshot.log_data(), &[expr]) {
+            Ok(expr) => match files_matching_predicate(&session_state, eager_snapshot.log_data(), &[expr]) {
                 Ok(add_actions) => {
                     provider = provider.with_files(add_actions.clone());
                     add_payloads = Some(add_actions.into_iter().map(delta_add_payload).collect());

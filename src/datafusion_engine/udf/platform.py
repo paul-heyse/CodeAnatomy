@@ -273,6 +273,9 @@ def install_rust_udf_platform(
         Raised when strict installation is enabled and extensions fail to install.
     """
     resolved = options or RustUdfPlatformOptions()
+    from datafusion_engine.udf.runtime import validate_extension_capabilities
+
+    _ = validate_extension_capabilities(strict=resolved.strict)
     snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
     planner_names = _resolve_expr_planner_names(resolved, snapshot)
     function_factory_policy = _resolve_function_factory_policy(resolved, snapshot)

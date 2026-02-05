@@ -13,7 +13,7 @@ Usage
 -----
 >>> from semantics.quality_specs import QUALITY_RELATIONSHIP_SPECS
 
->>> spec = QUALITY_RELATIONSHIP_SPECS["rel_cst_docstring_owner_by_id_v1"]
+>>> spec = QUALITY_RELATIONSHIP_SPECS["rel_cst_docstring_owner_by_id"]
 >>> print(spec.signals.base_confidence)
 0.98
 """
@@ -54,9 +54,9 @@ from semantics.quality import (
 # -----------------------------------------------------------------------------
 
 REL_CST_DOCSTRING_OWNER_BY_ID: Final = QualityRelationshipSpec(
-    name="rel_cst_docstring_owner_by_id_v1",
-    left_view="cst_docstrings_norm_v1",
-    right_view="cst_defs_norm_v1",
+    name="rel_cst_docstring_owner_by_id",
+    left_view="cst_docstrings_norm",
+    right_view="cst_defs_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -94,9 +94,9 @@ REL_CST_DOCSTRING_OWNER_BY_ID: Final = QualityRelationshipSpec(
 )
 
 REL_CST_DOCSTRING_OWNER_BY_SPAN: Final = QualityRelationshipSpec(
-    name="rel_cst_docstring_owner_by_span_v1",
-    left_view="cst_docstrings_norm_v1",
-    right_view="cst_defs_norm_v1",
+    name="rel_cst_docstring_owner_by_span",
+    left_view="cst_docstrings_norm",
+    right_view="cst_defs_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -141,9 +141,9 @@ REL_CST_DOCSTRING_OWNER_BY_SPAN: Final = QualityRelationshipSpec(
 # -----------------------------------------------------------------------------
 
 REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_name_symbol_v1",
-    left_view="cst_refs_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_name_symbol",
+    left_view="cst_refs_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -190,9 +190,9 @@ REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
 )
 
 REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_cst_ref_to_scip_symbol_v1",
-    left_view="cst_refs_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_cst_ref_to_scip_symbol",
+    left_view="cst_refs_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -244,9 +244,9 @@ REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
 # -----------------------------------------------------------------------------
 
 REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_def_symbol_v1",
-    left_view="cst_defs_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_def_symbol",
+    left_view="cst_defs_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -293,9 +293,9 @@ REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
 )
 
 REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_import_symbol_v1",
-    left_view="cst_imports_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_import_symbol",
+    left_view="cst_imports_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -342,9 +342,9 @@ REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
 )
 
 REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_callsite_symbol_v1",
-    left_view="cst_calls_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_callsite_symbol",
+    left_view="cst_calls_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -390,9 +390,9 @@ REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
 )
 
 REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
-    name="rel_call_to_def_scip_v1",
-    left_view="cst_calls_norm_v1",
-    right_view="scip_occurrences_norm_v1",
+    name="rel_call_to_def_scip",
+    left_view="cst_calls_norm",
+    right_view="scip_occurrences_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",
@@ -430,9 +430,9 @@ REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
 )
 
 REL_CALL_TO_DEF_NAME: Final = QualityRelationshipSpec(
-    name="rel_call_to_def_name_v1",
-    left_view="cst_calls_norm_v1",
-    right_view="cst_defs_norm_v1",
+    name="rel_call_to_def_name",
+    left_view="cst_calls_norm",
+    right_view="cst_defs_norm",
     left_on=["file_id"],
     right_on=["file_id"],
     how="inner",

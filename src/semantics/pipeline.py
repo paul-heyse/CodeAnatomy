@@ -61,7 +61,6 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
-    from semantics.adapters import RelationshipProjectionOptions
     from semantics.config import SemanticConfig
     from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
@@ -178,13 +177,13 @@ def _default_semantic_cache_policy(
             else:
                 resolved[name] = "delta_staging"
             continue
-        if name in {"relation_output_v1", "dim_exported_defs_v1"}:
+        if name in {"relation_output", "dim_exported_defs"}:
             resolved[name] = "delta_staging"
             continue
-        if name in {"semantic_nodes_union_v1", "semantic_edges_union_v1"}:
+        if name in {"semantic_nodes_union", "semantic_edges_union"}:
             resolved[name] = "delta_staging"
             continue
-        if name.startswith("rel_") or name.endswith("_norm_v1"):
+        if name.startswith("rel_") or name.endswith("_norm"):
             resolved[name] = "delta_staging"
             continue
         if name.startswith("join_"):
@@ -337,65 +336,30 @@ def _relationship_builder(
     return _builder
 
 
-def _projected_relationship_builder(
-    builder: DataFrameBuilder,
-    *,
-    options: RelationshipProjectionOptions,
-) -> DataFrameBuilder:
-    def _build(inner_ctx: SessionContext) -> DataFrame:
-        from semantics.adapters import project_semantic_to_legacy
-
-        return project_semantic_to_legacy(builder(inner_ctx), options=options)
-
-    return _build
-
-
 def _relation_output_builder(
     *,
     relationship_names: Sequence[str],
     relationship_by_name: Mapping[str, QualityRelationshipSpec],
-    projection_options: Mapping[str, RelationshipProjectionOptions],
 ) -> DataFrameBuilder:
     def _builder(inner_ctx: SessionContext) -> DataFrame:
-        import pyarrow as pa
-        from datafusion import lit
-
         from semantics.catalog.projections import RelationOutputSpec, relation_output_projection
 
         frames: list[DataFrame] = []
         for rel_name in sorted(relationship_names):
-            if rel_name not in projection_options:
-                msg = f"Missing projection options for relationship {rel_name!r}."
-                raise KeyError(msg)
             rel_df = inner_ctx.table(rel_name)
-            schema_names = set(rel_df.schema().names)
-            for col_name, dtype in (
-                ("binding_kind", pa.string()),
-                ("def_site_kind", pa.string()),
-                ("use_kind", pa.string()),
-                ("reason", pa.string()),
-                ("diag_source", pa.string()),
-                ("severity", pa.string()),
-                ("ambiguity_group_id", pa.string()),
-                ("qname_source", pa.string()),
-            ):
-                if col_name not in schema_names:
-                    rel_df = rel_df.with_column(col_name, lit(None).cast(dtype))
-                    schema_names.add(col_name)
-            options = projection_options[rel_name]
             spec = relationship_by_name.get(rel_name)
             origin = spec.origin if spec is not None else "semantic_compiler"
             output_spec = RelationOutputSpec(
-                src_col=options.entity_id_alias,
+                src_col="entity_id",
                 dst_col="symbol",
-                kind=str(options.edge_kind),
+                kind=rel_name,
                 origin=origin,
                 qname_source_col="qname_source",
                 ambiguity_group_col="ambiguity_group_id",
             )
             frames.append(relation_output_projection(rel_df, output_spec))
         if not frames:
-            msg = "No relationship views available for relation_output_v1."
+            msg = "No relationship views available for relation_output."
             raise ValueError(msg)
         result = frames[0]
         for frame in frames[1:]:
@@ -707,17 +671,6 @@ def _cpg_view_specs(
         Raised when the runtime profile is unavailable.
 
     """
-    from relspec.view_defs import (
-        DEFAULT_REL_TASK_PRIORITY,
-        REL_CALLSITE_SYMBOL_OUTPUT,
-        REL_DEF_SYMBOL_OUTPUT,
-        REL_IMPORT_SYMBOL_OUTPUT,
-        REL_NAME_SYMBOL_OUTPUT,
-    )
-    from semantics.catalog.projections import (
-        SemanticProjectionConfig,
-        semantic_projection_options,
-    )
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
         SEMANTIC_NORMALIZATION_SPECS,
@@ -733,16 +686,6 @@ def _cpg_view_specs(
     join_group_by_relationship = {
         rel_name: group for group in ir.join_groups for rel_name in group.relationship_names
     }
-    projection_options = semantic_projection_options(
-        SemanticProjectionConfig(
-            default_priority=DEFAULT_REL_TASK_PRIORITY,
-            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
-            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
-            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
-            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
-            relationship_specs=RELATIONSHIP_SPECS,
-        )
-    )
 
     if request.runtime_profile is None:
         msg = "Runtime profile is required for CPG output views."
@@ -757,7 +700,6 @@ def _cpg_view_specs(
         normalization_spec_for_output=normalization_spec_for_output,
         join_groups_by_name=join_groups_by_name,
         join_group_by_relationship=join_group_by_relationship,
-        projection_options=projection_options,
         runtime_profile=request.runtime_profile,
     )
     spec_index = tuple(
@@ -785,7 +727,6 @@ class _SemanticSpecContext:
     normalization_spec_for_output: Callable[[str], SemanticNormalizationSpec | None]
     join_groups_by_name: Mapping[str, SemanticIRJoinGroup]
     join_group_by_relationship: Mapping[str, SemanticIRJoinGroup]
-    projection_options: Mapping[str, RelationshipProjectionOptions]
     runtime_profile: DataFusionRuntimeProfile
 
 
@@ -910,17 +851,12 @@ def _builder_for_relate_spec(
         msg = f"Missing relationship spec for output {spec.name!r}."
         raise KeyError(msg)
     join_group = context.join_group_by_relationship.get(spec.name)
-    builder = _relationship_builder(
+    return _relationship_builder(
         rel_spec,
         config=context.config,
         use_cdf=context.use_cdf,
         join_group=join_group,
     )
-    options = context.projection_options.get(spec.name)
-    if options is None:
-        msg = f"Missing projection options for relationship {spec.name!r}."
-        raise KeyError(msg)
-    return _projected_relationship_builder(builder, options=options)
 
 
 def _builder_for_union_edges_spec(
@@ -944,7 +880,6 @@ def _builder_for_projection_spec(
     builder = _relation_output_builder(
         relationship_names=tuple(context.relationship_by_name),
         relationship_by_name=context.relationship_by_name,
-        projection_options=context.projection_options,
     )
     return _finalize_output_builder(spec.name, builder)
 
@@ -967,7 +902,7 @@ def _builder_for_export_spec(
     context: _SemanticSpecContext,
 ) -> DataFrameBuilder:
     _ = context
-    if spec.name == "dim_exported_defs_v1":
+    if spec.name == "dim_exported_defs":
         from semantics.incremental.export_builders import exported_defs_df_builder
 
         return _finalize_output_builder(spec.name, exported_defs_df_builder)

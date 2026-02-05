@@ -9,7 +9,7 @@ from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION
 
 EXPORT_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
     DatasetRegistrySpec(
-        name="dim_exported_defs_v1",
+        name="dim_exported_defs",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -36,7 +36,7 @@ EXPORT_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         grain="per_def",
         stability="design",
         materialization="delta",
-        materialized_name="semantic.dim_exported_defs_v1",
+        materialized_name="semantic.dim_exported_defs",
     ),
 )
 

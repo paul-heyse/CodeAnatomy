@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import importlib
+import time
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
+from urllib.parse import urlparse
 
 import pyarrow as pa
 from deltalake import CommitProperties, Transaction
 
+from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
@@ -18,9 +21,10 @@ from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
-from obs.otel.run_context import get_run_id
+from obs.otel.run_context import get_query_id, get_run_id
 from obs.otel.scopes import SCOPE_STORAGE
 from obs.otel.tracing import stage_span
+from storage.deltalake.config import DeltaMutationPolicy, DeltaRetryPolicy
 from storage.ipc_utils import ipc_bytes
 from utils.storage_options import merged_storage_options
 from utils.value_coercion import coerce_int, coerce_str_list
@@ -34,6 +38,7 @@ if TYPE_CHECKING:
         DeltaCdfProviderBundle,
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
+        DeltaMergeRequest,
     )
     from datafusion_engine.delta.protocol import DeltaFeatureGate, DeltaProtocolSnapshot
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
@@ -93,6 +98,162 @@ def _runtime_profile_for_delta(
     return DataFusionRuntimeProfile()
 
 
+def _resolve_delta_mutation_policy(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DeltaMutationPolicy:
+    profile = _runtime_profile_for_delta(runtime_profile)
+    return profile.policies.delta_mutation_policy or DeltaMutationPolicy()
+
+
+def _is_s3_uri(table_uri: str) -> bool:
+    scheme = urlparse(table_uri).scheme.lower()
+    return scheme in {"s3", "s3a", "s3n"}
+
+
+def _has_locking_provider(
+    storage_options: StorageOptions | None,
+    *,
+    policy: DeltaMutationPolicy,
+) -> bool:
+    if not storage_options:
+        return False
+    normalized = {str(key).lower(): str(value) for key, value in storage_options.items()}
+    for key in policy.locking_option_keys:
+        value = normalized.get(str(key).lower())
+        if value:
+            return True
+    return False
+
+
+def _enforce_locking_provider(
+    table_uri: str,
+    storage_options: StorageOptions | None,
+    *,
+    policy: DeltaMutationPolicy,
+) -> None:
+    if not policy.require_locking_provider:
+        return
+    if not _is_s3_uri(table_uri):
+        return
+    if _has_locking_provider(storage_options, policy=policy):
+        return
+    msg = (
+        "Delta mutations on S3 require a locking provider. "
+        f"Set one of {tuple(policy.locking_option_keys)} in storage_options."
+    )
+    raise ValueError(msg)
+
+
+def _enforce_append_only_policy(
+    *,
+    policy: DeltaMutationPolicy,
+    operation: str,
+    updates_present: bool,
+) -> None:
+    if not policy.append_only:
+        return
+    if operation == "delete" or updates_present:
+        msg = "Delta mutation rejected: append_only policy forbids deletes or updates."
+        raise ValueError(msg)
+
+
+def _delta_retry_classification(
+    exc: BaseException,
+    *,
+    policy: DeltaRetryPolicy,
+) -> str:
+    signature_parts = [type(exc).__name__, str(exc)]
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        signature_parts.append(str(cause))
+    signature = " ".join(signature_parts).lower()
+    fatal = {item.lower() for item in policy.fatal_errors}
+    retryable = {item.lower() for item in policy.retryable_errors}
+    if any(token in signature for token in fatal):
+        return "fatal"
+    if any(token in signature for token in retryable):
+        return "retryable"
+    return "unknown"
+
+
+def _delta_retry_delay(attempt: int, *, policy: DeltaRetryPolicy) -> float:
+    delay = float(policy.base_delay_s) * (2**attempt)
+    return min(delay, float(policy.max_delay_s))
+
+
+def _resolve_merge_actions(
+    request: DeltaMergeArrowRequest,
+) -> tuple[str, str, dict[str, str], dict[str, str], bool]:
+    resolved_source_alias = request.source_alias or "source"
+    resolved_target_alias = request.target_alias or "target"
+    resolved_updates = dict(request.matched_updates or {})
+    resolved_inserts = dict(request.not_matched_inserts or {})
+    if request.update_all:
+        for name in request.source.schema.names:
+            resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
+    if request.insert_all:
+        for name in request.source.schema.names:
+            resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
+    updates_present = bool(
+        request.update_all or resolved_updates or request.delete_not_matched_by_source
+    )
+    return (
+        resolved_source_alias,
+        resolved_target_alias,
+        resolved_updates,
+        resolved_inserts,
+        updates_present,
+    )
+
+
+def _merge_rows_affected(metrics: Mapping[str, object] | None) -> int | None:
+    if not isinstance(metrics, Mapping):
+        return None
+    rows = 0
+    found = False
+    for key in (
+        "rows_inserted",
+        "rows_updated",
+        "rows_deleted",
+        "num_inserted",
+        "num_updated",
+        "num_deleted",
+    ):
+        value = metrics.get(key)
+        if value is None:
+            continue
+        found = True
+        rows += int(coerce_int(value) or 0)
+    return rows if found else None
+
+
+def _execute_delta_merge(
+    ctx: SessionContext,
+    *,
+    request: DeltaMergeRequest,
+    retry_policy: DeltaRetryPolicy,
+    span: Span,
+) -> tuple[Mapping[str, object], int]:
+    from datafusion_engine.delta.control_plane import delta_merge
+
+    attempts = 0
+    while True:
+        try:
+            report = delta_merge(ctx, request=request)
+        except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
+            classification = _delta_retry_classification(exc, policy=retry_policy)
+            if classification != "retryable":
+                raise
+            attempts += 1
+            if attempts >= retry_policy.max_attempts:
+                raise
+            delay = _delta_retry_delay(attempts - 1, policy=retry_policy)
+            span.set_attribute("codeanatomy.retry_attempt", attempts)
+            time.sleep(delay)
+        else:
+            return report, attempts
+
+
 def _storage_span_attributes(
     *,
     operation: str,
@@ -106,6 +267,9 @@ def _storage_span_attributes(
     run_id = get_run_id()
     if run_id:
         attrs["codeanatomy.run_id"] = run_id
+    query_id = get_query_id()
+    if query_id:
+        attrs["codeanatomy.query_id"] = query_id
     if dataset_name:
         attrs["codeanatomy.dataset_name"] = dataset_name
     if extra:
@@ -527,13 +691,13 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         return resolved_schema
 
 
-def read_delta_table(request: DeltaReadRequest) -> TableLike:
+def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
     """Read a Delta table at a specific version or timestamp.
 
     Returns
     -------
-    TableLike
-        Arrow Table containing the requested Delta snapshot.
+    RecordBatchReaderLike
+        Streaming reader containing the requested Delta snapshot.
 
     Raises
     ------
@@ -560,7 +724,7 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
         stage="storage",
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
-    ) as span:
+    ):
         storage = merged_storage_options(request.storage_options, request.log_storage_options)
         profile = _runtime_profile_for_delta(request.runtime_profile)
         ctx = profile.session_context()
@@ -611,10 +775,19 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
             from datafusion import col
 
             df = df.select(*(col(name) for name in request.columns))
-        table = cast("TableLike", df.to_arrow_table())
-        if isinstance(table, pa.Table):
-            span.set_attribute("codeanatomy.rows_read", table.num_rows)
-        return table
+        return cast("RecordBatchReaderLike", to_reader(df))
+
+
+def read_delta_table_eager(request: DeltaReadRequest) -> pa.Table:
+    """Read a Delta table and materialize into an Arrow table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Materialized Arrow table containing the requested Delta snapshot.
+    """
+    reader = read_delta_table(request)
+    return reader.read_all()
 
 
 def delta_table_features(
@@ -2255,7 +2428,7 @@ def read_delta_cdf(
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
     cdf_options: DeltaCdfOptions | None = None,
-) -> TableLike:
+) -> RecordBatchReaderLike:
     """Read change data feed from a Delta table.
 
     Parameters
@@ -2271,8 +2444,8 @@ def read_delta_cdf(
 
     Returns
     -------
-    TableLike
-        Arrow Table with CDF changes.
+    RecordBatchReaderLike
+        Streaming reader with CDF changes.
 
     Raises
     ------
@@ -2299,7 +2472,7 @@ def read_delta_cdf(
         stage="storage",
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
-    ) as span:
+    ):
         bundle = _delta_cdf_table_provider(
             table_path,
             storage_options=storage_options,
@@ -2325,10 +2498,30 @@ def read_delta_cdf(
             from datafusion import col
 
             df = df.select(*(col(name) for name in resolved_options.columns))
-        table = cast("TableLike", df.to_arrow_table())
-        if isinstance(table, pa.Table):
-            span.set_attribute("codeanatomy.rows_read", table.num_rows)
-        return table
+        return cast("RecordBatchReaderLike", to_reader(df))
+
+
+def read_delta_cdf_eager(
+    table_path: str,
+    *,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+    cdf_options: DeltaCdfOptions | None = None,
+) -> pa.Table:
+    """Read change data feed and materialize into an Arrow table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Materialized Arrow table with CDF changes.
+    """
+    reader = read_delta_cdf(
+        table_path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+        cdf_options=cdf_options,
+    )
+    return reader.read_all()
 
 
 def delta_delete_where(
@@ -2362,7 +2555,18 @@ def delta_delete_where(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
+        mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
         storage = merged_storage_options(request.storage_options, request.log_storage_options)
+        _enforce_locking_provider(
+            request.path,
+            storage,
+            policy=mutation_policy,
+        )
+        _enforce_append_only_policy(
+            policy=mutation_policy,
+            operation="delete",
+            updates_present=True,
+        )
         commit_options = _delta_commit_options(
             commit_properties=request.commit_properties,
             commit_metadata=request.commit_metadata,
@@ -2371,18 +2575,33 @@ def delta_delete_where(
         )
         from datafusion_engine.delta.control_plane import DeltaDeleteRequest, delta_delete
 
-        report = delta_delete(
-            ctx,
-            request=DeltaDeleteRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                predicate=request.predicate,
-                extra_constraints=request.extra_constraints,
-                commit_options=commit_options,
-            ),
-        )
+        attempts = 0
+        retry_policy = mutation_policy.retry_policy
+        while True:
+            try:
+                report = delta_delete(
+                    ctx,
+                    request=DeltaDeleteRequest(
+                        table_uri=request.path,
+                        storage_options=storage or None,
+                        version=None,
+                        timestamp=None,
+                        predicate=request.predicate,
+                        extra_constraints=request.extra_constraints,
+                        commit_options=commit_options,
+                    ),
+                )
+                break
+            except Exception as exc:  # pragma: no cover - retry paths depend on delta-rs
+                classification = _delta_retry_classification(exc, policy=retry_policy)
+                if classification != "retryable":
+                    raise
+                attempts += 1
+                if attempts >= retry_policy.max_attempts:
+                    raise
+                delay = _delta_retry_delay(attempts - 1, policy=retry_policy)
+                span.set_attribute("codeanatomy.retry_attempt", attempts)
+                time.sleep(delay)
         metrics = report.get("metrics") if isinstance(report, Mapping) else None
         if isinstance(metrics, Mapping):
             for key in ("rows_deleted", "deleted_rows", "num_deleted"):
@@ -2392,6 +2611,8 @@ def delta_delete_where(
                     if rows_affected is not None:
                         span.set_attribute("codeanatomy.rows_affected", rows_affected)
                     break
+        if attempts:
+            span.set_attribute("codeanatomy.retry_attempts", attempts)
         _record_mutation_artifact(
             _MutationArtifactRequest(
                 profile=request.runtime_profile,
@@ -2409,7 +2630,7 @@ def delta_delete_where(
         return report
 
 
-def delta_merge_arrow(
+def delta_merge_arrow(  # noqa: PLR0914
     ctx: SessionContext,
     *,
     request: DeltaMergeArrowRequest,
@@ -2443,17 +2664,25 @@ def delta_merge_arrow(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
+        mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
         storage = merged_storage_options(request.storage_options, request.log_storage_options)
-        resolved_source_alias = request.source_alias or "source"
-        resolved_target_alias = request.target_alias or "target"
-        resolved_updates = dict(request.matched_updates or {})
-        resolved_inserts = dict(request.not_matched_inserts or {})
-        if request.update_all:
-            for name in request.source.schema.names:
-                resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
-        if request.insert_all:
-            for name in request.source.schema.names:
-                resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
+        _enforce_locking_provider(
+            request.path,
+            storage,
+            policy=mutation_policy,
+        )
+        (
+            resolved_source_alias,
+            resolved_target_alias,
+            resolved_updates,
+            resolved_inserts,
+            updates_present,
+        ) = _resolve_merge_actions(request)
+        _enforce_append_only_policy(
+            policy=mutation_policy,
+            operation="merge",
+            updates_present=updates_present,
+        )
         source_table = register_temp_table(ctx, request.source)
         commit_options = _delta_commit_options(
             commit_properties=request.commit_properties,
@@ -2461,49 +2690,44 @@ def delta_merge_arrow(
             app_id=None,
             app_version=None,
         )
-        from datafusion_engine.delta.control_plane import DeltaMergeRequest, delta_merge
+        from datafusion_engine.delta.control_plane import DeltaMergeRequest
 
         try:
-            report = delta_merge(
-                ctx,
-                request=DeltaMergeRequest(
-                    table_uri=request.path,
-                    storage_options=storage or None,
-                    version=None,
-                    timestamp=None,
-                    source_table=source_table,
-                    predicate=request.predicate,
-                    source_alias=resolved_source_alias,
-                    target_alias=resolved_target_alias,
-                    matched_predicate=request.matched_predicate,
-                    matched_updates=resolved_updates,
-                    not_matched_predicate=request.not_matched_predicate,
-                    not_matched_inserts=resolved_inserts,
-                    not_matched_by_source_predicate=request.not_matched_by_source_predicate,
-                    delete_not_matched_by_source=request.delete_not_matched_by_source,
-                    extra_constraints=request.extra_constraints,
-                    commit_options=commit_options,
-                ),
+            retry_policy = mutation_policy.retry_policy
+            merge_request = DeltaMergeRequest(
+                table_uri=request.path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                source_table=source_table,
+                predicate=request.predicate,
+                source_alias=resolved_source_alias,
+                target_alias=resolved_target_alias,
+                matched_predicate=request.matched_predicate,
+                matched_updates=resolved_updates,
+                not_matched_predicate=request.not_matched_predicate,
+                not_matched_inserts=resolved_inserts,
+                not_matched_by_source_predicate=request.not_matched_by_source_predicate,
+                delete_not_matched_by_source=request.delete_not_matched_by_source,
+                extra_constraints=request.extra_constraints,
+                commit_options=commit_options,
             )
-            metrics = report.get("metrics") if isinstance(report, Mapping) else None
-            if isinstance(metrics, Mapping):
-                rows = 0
-                found = False
-                for key in (
-                    "rows_inserted",
-                    "rows_updated",
-                    "rows_deleted",
-                    "num_inserted",
-                    "num_updated",
-                    "num_deleted",
-                ):
-                    value = metrics.get(key)
-                    if value is None:
-                        continue
-                    found = True
-                    rows += int(coerce_int(value) or 0)
-                if found:
-                    span.set_attribute("codeanatomy.rows_affected", rows)
+            report, attempts = _execute_delta_merge(
+                ctx,
+                request=merge_request,
+                retry_policy=retry_policy,
+                span=span,
+            )
+            metrics: Mapping[str, object] | None = None
+            if isinstance(report, Mapping):
+                candidate = report.get("metrics")
+                if isinstance(candidate, Mapping):
+                    metrics = candidate
+            rows = _merge_rows_affected(metrics)
+            if rows is not None:
+                span.set_attribute("codeanatomy.rows_affected", rows)
+            if attempts:
+                span.set_attribute("codeanatomy.retry_attempts", attempts)
             _record_mutation_artifact(
                 _MutationArtifactRequest(
                     profile=request.runtime_profile,
@@ -2956,6 +3180,8 @@ __all__ = [
     "enable_delta_vacuum_protocol_check",
     "idempotent_commit_properties",
     "read_delta_cdf",
+    "read_delta_cdf_eager",
     "read_delta_table",
+    "read_delta_table_eager",
     "vacuum_delta",
 ]

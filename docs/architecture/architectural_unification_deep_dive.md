@@ -988,6 +988,18 @@ Tie `DataFusionScanOptions` and runtime settings to explicit cache/statistics po
 - `collect_statistics` defaults for large datasets
 - Policy-aware defaults for delta vs non-delta datasets
 
+### 6.6 QueryBuilder Guardrails (Ad-Hoc Only)
+
+`deltalake.QueryBuilder` uses an embedded DataFusion context that bypasses our
+runtime policies (feature gates, cache controls, diagnostics hooks, and
+object-store registration). It is appropriate for **ad-hoc** queries only.
+
+**Required guidance:**
+- Treat QueryBuilder as a debug/inspection surface, not a pipeline surface.
+- Prefer `SessionContext + Delta TableProvider` (via `datafusion_engine.dataset.registration`)
+  for production queries so that runtime policies and diagnostics are enforced.
+- Use `DataFusionExecutionFacade` for consistent plan/exec behavior.
+
 ## 7. Implementation Roadmap
 
 ### Phase 1: Quick Wins (Week 1-2)

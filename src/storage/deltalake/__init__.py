@@ -11,7 +11,9 @@ __all__ = (
     "DeltaDeleteWhereRequest",
     "DeltaFeatureMutationOptions",
     "DeltaMergeArrowRequest",
+    "DeltaMutationPolicy",
     "DeltaReadRequest",
+    "DeltaRetryPolicy",
     "DeltaSchemaPolicy",
     "DeltaSchemaRequest",
     "DeltaVacuumOptions",
@@ -71,12 +73,16 @@ __all__ = (
     "idempotent_commit_properties",
     "query_delta_sql",
     "read_delta_cdf",
+    "read_delta_cdf_eager",
     "read_delta_table",
+    "read_delta_table_eager",
     "select_candidate_files",
     "vacuum_delta",
 )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
+    "DeltaMutationPolicy": ("storage.deltalake.config", "DeltaMutationPolicy"),
+    "DeltaRetryPolicy": ("storage.deltalake.config", "DeltaRetryPolicy"),
     "DeltaSchemaPolicy": ("storage.deltalake.config", "DeltaSchemaPolicy"),
     "DeltaWritePolicy": ("storage.deltalake.config", "DeltaWritePolicy"),
     "delta_schema_configuration": ("storage.deltalake.config", "delta_schema_configuration"),
@@ -109,6 +115,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
     "delta_table_schema": ("storage.deltalake.delta", "delta_table_schema"),
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
+    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
+    "read_delta_cdf_eager": ("storage.deltalake.delta", "read_delta_cdf_eager"),
+    "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
+    "read_delta_table_eager": ("storage.deltalake.delta", "read_delta_table_eager"),
     "disable_delta_change_data_feed": (
         "storage.deltalake.delta",
         "disable_delta_change_data_feed",
@@ -181,8 +191,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "enable_delta_vacuum_protocol_check",
     ),
     "query_delta_sql": ("storage.deltalake.delta", "query_delta_sql"),
-    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
-    "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index_from_add_actions": (
@@ -208,6 +216,8 @@ if TYPE_CHECKING:
     import storage.deltalake.file_pruning as _file_pruning
     import storage.deltalake.scan_profile as _scan_profile
 
+    DeltaMutationPolicy = _delta_config.DeltaMutationPolicy
+    DeltaRetryPolicy = _delta_config.DeltaRetryPolicy
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
     DeltaWritePolicy = _delta_config.DeltaWritePolicy
     delta_schema_configuration = _delta_config.delta_schema_configuration
@@ -265,7 +275,9 @@ if TYPE_CHECKING:
     enable_delta_vacuum_protocol_check = _delta_io.enable_delta_vacuum_protocol_check
     query_delta_sql = _delta_io.query_delta_sql
     read_delta_cdf = _delta_io.read_delta_cdf
+    read_delta_cdf_eager = _delta_io.read_delta_cdf_eager
     read_delta_table = _delta_io.read_delta_table
+    read_delta_table_eager = _delta_io.read_delta_table_eager
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index_from_add_actions = _file_index.build_delta_file_index_from_add_actions

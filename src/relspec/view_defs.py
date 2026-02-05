@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Final
 
-REL_NAME_SYMBOL_OUTPUT: Final[str] = "rel_name_symbol_v1"
-REL_IMPORT_SYMBOL_OUTPUT: Final[str] = "rel_import_symbol_v1"
-REL_DEF_SYMBOL_OUTPUT: Final[str] = "rel_def_symbol_v1"
-REL_CALLSITE_SYMBOL_OUTPUT: Final[str] = "rel_callsite_symbol_v1"
-RELATION_OUTPUT_NAME: Final[str] = "relation_output_v1"
+REL_NAME_SYMBOL_OUTPUT: Final[str] = "rel_name_symbol"
+REL_IMPORT_SYMBOL_OUTPUT: Final[str] = "rel_import_symbol"
+REL_DEF_SYMBOL_OUTPUT: Final[str] = "rel_def_symbol"
+REL_CALLSITE_SYMBOL_OUTPUT: Final[str] = "rel_callsite_symbol"
+RELATION_OUTPUT_NAME: Final[str] = "relation_output"
 
 RELATION_VIEW_NAMES: Final[tuple[str, ...]] = (
     REL_NAME_SYMBOL_OUTPUT,
@@ -19,11 +19,11 @@ RELATION_VIEW_NAMES: Final[tuple[str, ...]] = (
 )
 
 # Semantic intermediate views (from semantics.naming canonical names)
-SCIP_OCCURRENCES_NORM_OUTPUT: Final[str] = "scip_occurrences_norm_v1"
-CST_REFS_NORM_OUTPUT: Final[str] = "cst_refs_norm_v1"
-CST_DEFS_NORM_OUTPUT: Final[str] = "cst_defs_norm_v1"
-CST_IMPORTS_NORM_OUTPUT: Final[str] = "cst_imports_norm_v1"
-CST_CALLS_NORM_OUTPUT: Final[str] = "cst_calls_norm_v1"
+SCIP_OCCURRENCES_NORM_OUTPUT: Final[str] = "scip_occurrences_norm"
+CST_REFS_NORM_OUTPUT: Final[str] = "cst_refs_norm"
+CST_DEFS_NORM_OUTPUT: Final[str] = "cst_defs_norm"
+CST_IMPORTS_NORM_OUTPUT: Final[str] = "cst_imports_norm"
+CST_CALLS_NORM_OUTPUT: Final[str] = "cst_calls_norm"
 
 SEMANTIC_INTERMEDIATE_VIEWS: Final[tuple[str, ...]] = (
     SCIP_OCCURRENCES_NORM_OUTPUT,

@@ -9,7 +9,7 @@ from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION
 
 DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
     DatasetRegistrySpec(
-        name="relationship_quality_metrics_v1",
+        name="relationship_quality_metrics",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -34,7 +34,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
     ),
     DatasetRegistrySpec(
-        name="relationship_ambiguity_report_v1",
+        name="relationship_ambiguity_report",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -54,7 +54,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
     ),
     DatasetRegistrySpec(
-        name="relationship_candidates_v1",
+        name="relationship_candidates",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -80,7 +80,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
     ),
     DatasetRegistrySpec(
-        name="relationship_decisions_v1",
+        name="relationship_decisions",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -106,7 +106,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
     ),
     DatasetRegistrySpec(
-        name="schema_anomalies_v1",
+        name="schema_anomalies",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(
@@ -124,7 +124,7 @@ DIAGNOSTIC_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=True,
     ),
     DatasetRegistrySpec(
-        name="file_coverage_report_v1",
+        name="file_coverage_report",
         version=SEMANTIC_SCHEMA_VERSION,
         bundles=(),
         fields=(

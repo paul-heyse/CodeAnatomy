@@ -15,7 +15,6 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
@@ -3016,7 +3015,11 @@ def nested_view_spec(
     ViewRuntimeSpec
         Runtime view specification derived from the registered base table.
     """
-    builder = partial(nested_base_df, ctx, name=name, table=table)
+    _ = ctx
+
+    def builder(runtime_ctx: SessionContext) -> DataFrame:
+        return nested_base_df(runtime_ctx, name=name, table=table)
+
     return ViewRuntimeSpec(
         name=name,
         builder=builder,

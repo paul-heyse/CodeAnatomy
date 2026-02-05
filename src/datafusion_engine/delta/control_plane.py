@@ -21,6 +21,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+from datafusion_engine.delta.object_store import register_delta_object_store
 from datafusion_engine.delta.payload import (
     cdf_options_payload,
     commit_payload,
@@ -651,6 +652,11 @@ def delta_provider_from_session(
         Provider capsule and control-plane metadata.
 
     """
+    register_delta_object_store(
+        ctx,
+        table_uri=request.table_uri,
+        storage_options=request.storage_options,
+    )
     provider_factory = _require_internal_entrypoint("delta_table_provider_from_session")
     schema_ipc = schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
@@ -712,6 +718,11 @@ def delta_provider_with_files(
         Provider capsule and control-plane metadata.
 
     """
+    register_delta_object_store(
+        ctx,
+        table_uri=request.table_uri,
+        storage_options=request.storage_options,
+    )
     provider_factory = _require_internal_entrypoint("delta_table_provider_with_files")
     schema_ipc = schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
     storage_payload = list(request.storage_options.items()) if request.storage_options else None

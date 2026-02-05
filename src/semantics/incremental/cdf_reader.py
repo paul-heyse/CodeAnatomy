@@ -159,7 +159,7 @@ def _resolve_cdf_callbacks(
         log_storage_options: StorageOptions | None = None,
         cdf_options: DeltaCdfOptions | None = None,
     ) -> TableLike:
-        return service.read_cdf(
+        return service.read_cdf_eager(
             table_path=path,
             storage_options=storage_options,
             log_storage_options=log_storage_options,

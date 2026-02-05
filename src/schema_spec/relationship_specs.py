@@ -15,6 +15,7 @@ from datafusion import SQLOptions
 
 from datafusion_engine.schema.introspection import table_constraint_rows
 from datafusion_engine.session.runtime import SessionRuntime, dataset_spec_from_context
+from schema_spec.dataset_spec_ops import dataset_spec_name
 from schema_spec.system import (
     ContractCatalogSpec,
     ContractSpec,
@@ -47,9 +48,9 @@ class RelationshipData(StructBaseStrict, frozen=True):
     name
         Short relationship name without version suffix (e.g., "rel_name_symbol").
     table_name
-        Full table name with version suffix (e.g., "rel_name_symbol_v1").
+        Full table name with version suffix (e.g., "rel_name_symbol").
     entity_id_col
-        Primary entity identifier column (e.g., "ref_id", "import_alias_id").
+        Primary entity identifier column (e.g., "entity_id").
     dedupe_keys
         Complete dedupe key tuple (overrides standard pattern if provided).
     extra_sort_keys
@@ -67,23 +68,23 @@ class RelationshipData(StructBaseStrict, frozen=True):
 RELATIONSHIP_DATA: tuple[RelationshipData, ...] = (
     RelationshipData(
         name="rel_name_symbol",
-        table_name="rel_name_symbol_v1",
-        entity_id_col="ref_id",
+        table_name="rel_name_symbol",
+        entity_id_col="entity_id",
     ),
     RelationshipData(
         name="rel_import_symbol",
-        table_name="rel_import_symbol_v1",
-        entity_id_col="import_alias_id",
+        table_name="rel_import_symbol",
+        entity_id_col="entity_id",
     ),
     RelationshipData(
         name="rel_def_symbol",
-        table_name="rel_def_symbol_v1",
-        entity_id_col="def_id",
+        table_name="rel_def_symbol",
+        entity_id_col="entity_id",
     ),
     RelationshipData(
         name="rel_callsite_symbol",
-        table_name="rel_callsite_symbol_v1",
-        entity_id_col="call_id",
+        table_name="rel_callsite_symbol",
+        entity_id_col="entity_id",
     ),
 )
 
@@ -101,7 +102,6 @@ _RELATIONSHIP_DATA_BY_TABLE: dict[str, RelationshipData] = {
 STANDARD_RELATIONSHIP_TIE_BREAKERS: tuple[SortKeySpec, ...] = (
     SortKeySpec(column="score", order="descending"),
     SortKeySpec(column="confidence", order="descending"),
-    SortKeySpec(column="task_priority", order="ascending"),
 )
 
 # Standard virtual field (identical for ALL relationships)
@@ -196,7 +196,7 @@ def generate_relationship_contract_entry(
 
 @cache
 def _rel_name_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_name_symbol_v1")
+    return dataset_spec_from_context("rel_name_symbol")
 
 
 def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -214,12 +214,12 @@ def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_name_symbol_spec_cached()
-    return dataset_spec_from_context("rel_name_symbol_v1", ctx=ctx)
+    return dataset_spec_from_context("rel_name_symbol", ctx=ctx)
 
 
 @cache
 def _rel_import_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_import_symbol_v1")
+    return dataset_spec_from_context("rel_import_symbol")
 
 
 def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -237,12 +237,12 @@ def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_import_symbol_spec_cached()
-    return dataset_spec_from_context("rel_import_symbol_v1", ctx=ctx)
+    return dataset_spec_from_context("rel_import_symbol", ctx=ctx)
 
 
 @cache
 def _rel_def_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_def_symbol_v1")
+    return dataset_spec_from_context("rel_def_symbol")
 
 
 def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -260,12 +260,12 @@ def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_def_symbol_spec_cached()
-    return dataset_spec_from_context("rel_def_symbol_v1", ctx=ctx)
+    return dataset_spec_from_context("rel_def_symbol", ctx=ctx)
 
 
 @cache
 def _rel_callsite_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_callsite_symbol_v1")
+    return dataset_spec_from_context("rel_callsite_symbol")
 
 
 def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -283,12 +283,12 @@ def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_callsite_symbol_spec_cached()
-    return dataset_spec_from_context("rel_callsite_symbol_v1", ctx=ctx)
+    return dataset_spec_from_context("rel_callsite_symbol", ctx=ctx)
 
 
 @cache
 def _relation_output_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("relation_output_v1")
+    return dataset_spec_from_context("relation_output")
 
 
 def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -306,7 +306,7 @@ def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _relation_output_spec_cached()
-    return dataset_spec_from_context("relation_output_v1", ctx=ctx)
+    return dataset_spec_from_context("relation_output", ctx=ctx)
 
 
 # =============================================================================
@@ -315,10 +315,10 @@ def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
 
 # Mapping of table names to spec accessor functions
 _SPEC_ACCESSORS: dict[str, SpecAccessor] = {
-    "rel_name_symbol_v1": rel_name_symbol_spec,
-    "rel_import_symbol_v1": rel_import_symbol_spec,
-    "rel_def_symbol_v1": rel_def_symbol_spec,
-    "rel_callsite_symbol_v1": rel_callsite_symbol_spec,
+    "rel_name_symbol": rel_name_symbol_spec,
+    "rel_import_symbol": rel_import_symbol_spec,
+    "rel_def_symbol": rel_def_symbol_spec,
+    "rel_callsite_symbol": rel_callsite_symbol_spec,
 }
 
 
@@ -342,7 +342,7 @@ def relationship_dataset_specs(ctx: SessionContext | None = None) -> tuple[Datas
         rel_callsite_symbol_spec(ctx),
         relation_output_spec(ctx),
     )
-    return tuple(sorted(specs, key=lambda spec: spec.name))
+    return tuple(sorted(specs, key=dataset_spec_name))
 
 
 def relationship_contract_spec(ctx: SessionContext | None = None) -> ContractCatalogSpec:

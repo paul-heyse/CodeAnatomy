@@ -223,11 +223,9 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     )
     builder = request.builder
     df = builder(ctx, request.table_name) if builder is not None else ctx.table(request.table_name)
-    to_reader = getattr(df, "to_arrow_reader", None)
-    reader = cast(
-        "RecordBatchReaderLike",
-        to_reader() if callable(to_reader) else df.to_arrow_table().to_reader(),
-    )
+    from arrow_utils.core.streaming import to_reader
+
+    reader = cast("RecordBatchReaderLike", to_reader(df))
     EngineEventRecorder(profile).record_delta_query(
         path=request.path,
         sql=request.query_label,

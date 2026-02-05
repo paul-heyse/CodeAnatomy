@@ -10,7 +10,7 @@ NORMALIZE_SCHEMA_VERSION: Final[int] = 1
 
 NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
     DatasetRegistrySpec(
-        name="normalize_evidence_v1",
+        name="normalize_evidence",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(
@@ -29,7 +29,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         register_view=False,
     ),
     DatasetRegistrySpec(
-        name="type_exprs_norm_v1",
+        name="type_exprs_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(
@@ -49,7 +49,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="type_exprs_df_builder",
     ),
     DatasetRegistrySpec(
-        name="type_nodes_v1",
+        name="type_nodes",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=(),
         fields=("type_id", "type_repr", "type_form", "origin"),
@@ -60,7 +60,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="type_nodes_df_builder",
     ),
     DatasetRegistrySpec(
-        name="py_bc_blocks_norm_v1",
+        name="py_bc_blocks_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=("block_id", "code_unit_id", "start_offset", "end_offset", "kind"),
@@ -72,7 +72,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="cfg_blocks_df_builder",
     ),
     DatasetRegistrySpec(
-        name="py_bc_cfg_edges_norm_v1",
+        name="py_bc_cfg_edges_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
         fields=(
@@ -92,7 +92,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="cfg_edges_df_builder",
     ),
     DatasetRegistrySpec(
-        name="py_bc_instr_norm_v1",
+        name="py_bc_instr_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
         fields=(
@@ -112,7 +112,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="instructions_df_builder",
     ),
     DatasetRegistrySpec(
-        name="py_bc_exceptions_norm_v1",
+        name="py_bc_exceptions_norm",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity",),
         fields=(
@@ -133,7 +133,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="exception_handlers_df_builder",
     ),
     DatasetRegistrySpec(
-        name="symtable_scopes_v1",
+        name="symtable_scopes",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(
@@ -165,7 +165,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="symtable_scopes_df_builder",
     ),
     DatasetRegistrySpec(
-        name="symtable_symbols_v1",
+        name="symtable_symbols",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(
@@ -190,7 +190,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="symtable_symbols_df_builder",
     ),
     DatasetRegistrySpec(
-        name="symtable_bindings_v1",
+        name="symtable_bindings",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(
@@ -216,7 +216,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="symtable_bindings_df_builder",
     ),
     DatasetRegistrySpec(
-        name="symtable_def_sites_v1",
+        name="symtable_def_sites",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=("scope_id", "binding_id", "def_id", "def_kind", "name"),
@@ -228,7 +228,7 @@ NORMALIZE_DATASETS: Final[tuple[DatasetRegistrySpec, ...]] = (
         view_builder="symtable_def_sites_df_builder",
     ),
     DatasetRegistrySpec(
-        name="scip_diagnostics_v1",
+        name="scip_diagnostics",
         version=NORMALIZE_SCHEMA_VERSION,
         bundles=("file_identity", "span"),
         fields=(

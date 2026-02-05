@@ -10,7 +10,7 @@ Usage
 
 >>> ctx = SessionContext()
 >>> # ... register relationship tables ...
->>> metrics_df = build_relationship_quality_metrics(ctx, "rel_docstring_owner_v1")
+>>> metrics_df = build_relationship_quality_metrics(ctx, "rel_docstring_owner")
 >>> print(metrics_df.to_pandas())
 """
 
@@ -92,13 +92,13 @@ def _relationship_diag_frame(
 
 
 SEMANTIC_DIAGNOSTIC_VIEW_NAMES: tuple[str, ...] = (
-    "file_quality_v1",
-    "relationship_quality_metrics_v1",
-    "relationship_ambiguity_report_v1",
-    "file_coverage_report_v1",
-    "relationship_candidates_v1",
-    "relationship_decisions_v1",
-    "schema_anomalies_v1",
+    "file_quality",
+    "relationship_quality_metrics",
+    "relationship_ambiguity_report",
+    "file_coverage_report",
+    "relationship_candidates",
+    "relationship_decisions",
+    "schema_anomalies",
 )
 
 FILE_QUALITY_SCORE_THRESHOLD: float = 800.0
@@ -154,8 +154,8 @@ def build_relationship_quality_metrics(
     ctx: SessionContext,
     relationship_name: str,
     *,
-    source_column: str = "src",
-    target_column: str = "dst",
+    source_column: str = "entity_id",
+    target_column: str = "symbol",
 ) -> DataFrame | None:
     """Build aggregate quality metrics for a compiled relationship.
 
@@ -307,9 +307,9 @@ def build_file_coverage_report(
     base = ctx.table(base_table).select(col("file_id"))
 
     # CST coverage
-    if _table_exists(ctx, "cst_defs_norm_v1"):
+    if _table_exists(ctx, "cst_defs_norm"):
         cst_files = (
-            ctx.table("cst_defs_norm_v1")
+            ctx.table("cst_defs_norm")
             .select(col("file_id").alias("cst_file_id"))
             .distinct()
             .with_column("has_cst", lit(1))
@@ -491,31 +491,11 @@ def build_relationship_candidates_view(ctx: SessionContext) -> DataFrame:
     DataFrame
         Relationship candidates view.
     """
-    from relspec.view_defs import (
-        DEFAULT_REL_TASK_PRIORITY,
-        REL_CALLSITE_SYMBOL_OUTPUT,
-        REL_DEF_SYMBOL_OUTPUT,
-        REL_IMPORT_SYMBOL_OUTPUT,
-        REL_NAME_SYMBOL_OUTPUT,
-    )
-    from semantics.catalog.projections import (
-        SemanticProjectionConfig,
-        semantic_projection_options,
-    )
+    frames: list[DataFrame] = []
     from semantics.registry import RELATIONSHIP_SPECS
 
-    projection_options = semantic_projection_options(
-        SemanticProjectionConfig(
-            default_priority=DEFAULT_REL_TASK_PRIORITY,
-            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
-            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
-            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
-            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
-            relationship_specs=RELATIONSHIP_SPECS,
-        )
-    )
-    frames: list[DataFrame] = []
-    for rel_name, options in projection_options.items():
+    for spec in RELATIONSHIP_SPECS:
+        rel_name = spec.name
         if not _table_exists(ctx, rel_name):
             continue
         df = ctx.table(rel_name)
@@ -523,7 +503,7 @@ def build_relationship_candidates_view(ctx: SessionContext) -> DataFrame:
             _relationship_diag_frame(
                 df,
                 relationship_name=rel_name,
-                entity_id_col=options.entity_id_alias,
+                entity_id_col="entity_id",
             )
         )
     if not frames:
@@ -602,13 +582,13 @@ def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], 
     )
 
     return {
-        "file_quality_v1": file_quality_df_builder,
-        "relationship_quality_metrics_v1": relationship_quality_metrics_df_builder,
-        "relationship_ambiguity_report_v1": relationship_ambiguity_report_df_builder,
-        "file_coverage_report_v1": file_coverage_report_df_builder,
-        "relationship_candidates_v1": build_relationship_candidates_view,
-        "relationship_decisions_v1": build_relationship_decisions_view,
-        "schema_anomalies_v1": build_schema_anomalies_view,
+        "file_quality": file_quality_df_builder,
+        "relationship_quality_metrics": relationship_quality_metrics_df_builder,
+        "relationship_ambiguity_report": relationship_ambiguity_report_df_builder,
+        "file_coverage_report": file_coverage_report_df_builder,
+        "relationship_candidates": build_relationship_candidates_view,
+        "relationship_decisions": build_relationship_decisions_view,
+        "schema_anomalies": build_schema_anomalies_view,
     }
 
 
@@ -648,7 +628,7 @@ def semantic_quality_issue_batches(
     Sequence[SemanticIssueBatch]
         Issue batches for diagnostics emission.
     """
-    if view_name == "file_quality_v1":
+    if view_name == "file_quality":
         issue_kind = f"file_quality_score_below_{int(FILE_QUALITY_SCORE_THRESHOLD)}"
         issue_df = df.filter(col("file_quality_score") < lit(FILE_QUALITY_SCORE_THRESHOLD)).select(
             col("file_id").alias("entity_id"),
@@ -661,7 +641,7 @@ def semantic_quality_issue_batches(
             df=issue_df,
             max_rows=max_rows,
         )
-    if view_name == "file_coverage_report_v1":
+    if view_name == "file_coverage_report":
         issue_kind = "missing_extraction_sources"
         issue_df = df.filter(col("extraction_count") < lit(MIN_EXTRACTION_COUNT)).select(
             col("file_id").alias("entity_id"),
@@ -674,7 +654,7 @@ def semantic_quality_issue_batches(
             df=issue_df,
             max_rows=max_rows,
         )
-    if view_name == "relationship_quality_metrics_v1":
+    if view_name == "relationship_quality_metrics":
         issue_kind = "low_confidence_edges"
         issue_df = df.filter(col("low_confidence_edges") > lit(0)).select(
             col("relationship_name").alias("entity_id"),
@@ -687,7 +667,7 @@ def semantic_quality_issue_batches(
             df=issue_df,
             max_rows=max_rows,
         )
-    if view_name == "relationship_ambiguity_report_v1":
+    if view_name == "relationship_ambiguity_report":
         issue_kind = "ambiguous_sources"
         issue_df = df.filter(col("ambiguous_sources") > lit(0)).select(
             col("relationship_name").alias("entity_id"),

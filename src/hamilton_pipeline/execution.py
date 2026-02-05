@@ -245,7 +245,7 @@ def _record_cache_run_summary(
         run_id=stats.run_id,
         start_time_unix_ms=stats.start_time_unix_ms,
         end_time_unix_ms=stats.end_time_unix_ms,
-        cache_root=profile.cache_root(),
+        cache_root=profile.io_ops.cache_root(),
         total_writes=stats.write_count,
         total_reads=stats.read_count,
         error_count=stats.error_count,

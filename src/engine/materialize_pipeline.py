@@ -255,7 +255,7 @@ def _plan_view_scan_units(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = runtime_profile.dataset_location(scan.dataset_name)
+        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -432,7 +432,7 @@ def write_extract_outputs(
     """
     record_schema_snapshots_for_profile(runtime_profile)
     recorder = EngineEventRecorder(runtime_profile)
-    location = runtime_profile.dataset_location(name)
+    location = runtime_profile.catalog_ops.dataset_location(name)
     if location is None:
         recorder.record_extract_quality_events(
             [

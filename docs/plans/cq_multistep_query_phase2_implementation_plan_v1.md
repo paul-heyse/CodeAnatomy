@@ -19,16 +19,16 @@ Each scope item includes representative snippets, target files, deprecations/rem
 
 ## Status Summary (2026-02-05)
 
-- Scope 1: Pending
-- Scope 2: Pending
-- Scope 3: Pending
-- Scope 4: Pending
-- Scope 5: Pending
-- Scope 6: Pending
-- Scope 7: Pending
-- Scope 8: Pending
-- Scope 9: Pending
-- Scope 10: Pending
+- Scope 1: Complete
+- Scope 2: Complete
+- Scope 3: Complete
+- Scope 4: Complete
+- Scope 5: Partial (implementation complete; relational batching tests pending)
+- Scope 6: Complete
+- Scope 7: Complete (optional example plan not added)
+- Scope 8: Partial (core tests added; equivalence + relational batching assertions and run help golden pending)
+- Scope 9: Complete
+- Scope 10: Complete
 
 ---
 
@@ -36,6 +36,9 @@ Each scope item includes representative snippets, target files, deprecations/rem
 
 **Goal**  
 Create a stable, typed plan format for multi-step execution that supports both CLI `--step` usage and `--plan` file loading.
+
+**Status**  
+Partial (implementation complete; relational batching tests still needed).
 
 **Approach**
 - Add a `RunPlan` + tagged-union `RunStep` model layer.
@@ -100,10 +103,10 @@ RunStep = QStep | SearchStep | CallsStep  # + remaining macro steps + per-step f
 - None.
 
 **Implementation checklist**
-1. Add `RunPlan` + `RunStep` tagged union with only the fields we execute.
-2. Add a helper to fill in missing step IDs deterministically.
-3. Add `msgspec.convert(..., strict=True)` conversion entrypoints for dict/TOML inputs.
-4. Add `__all__` exports for the spec types.
+- [x] Add `RunPlan` + `RunStep` tagged union with only the fields we execute.
+- [x] Add a helper to fill in missing step IDs deterministically.
+- [x] Add `msgspec.convert(..., strict=True)` conversion entrypoints for dict/TOML inputs.
+- [x] Add `__all__` exports for the spec types.
 
 ---
 
@@ -111,6 +114,9 @@ RunStep = QStep | SearchStep | CallsStep  # + remaining macro steps + per-step f
 
 **Goal**  
 Expose multi-step execution directly via the CQ CLI (Cyclopts meta-app), without requiring external scripting.
+
+**Status**  
+Complete.
 
 **Approach**
 - Add a new command module `tools/cq/cli_app/commands/run.py`.
@@ -254,13 +260,13 @@ def run(
 - (Optional) Deprecate any ad-hoc “`type:value`” step mini-grammar once JSON steps exist.
 
 **Implementation checklist**
-1. Implement Cyclopts signature for `run` with `--step` (repeatable JSON objects), `--steps` (JSON array), and `--plan`.
-2. Register the command in `tools/cq/cli_app/app.py`.
-3. Ensure global options still work (`--root`, `--format`, `--artifact-dir`, etc.).
-4. Add help text and examples for `cq run`.
-5. Add Cyclopts group validators:
-   - `run` input contract: at least one of `--plan`/`--step`/`--steps`
-   - `search`: mutual exclusion for `--regex` vs `--literal`
+- [x] Implement Cyclopts signature for `run` with `--step` (repeatable JSON objects), `--steps` (JSON array), and `--plan`.
+- [x] Register the command in `tools/cq/cli_app/app.py`.
+- [x] Ensure global options still work (`--root`, `--format`, `--artifact-dir`, etc.).
+- [x] Add help text and examples for `cq run`.
+- [x] Add Cyclopts group validators:
+  - `run` input contract: at least one of `--plan`/`--step`/`--steps`
+  - `search`: mutual exclusion for `--regex` vs `--literal`
 
 ---
 
@@ -268,6 +274,9 @@ def run(
 
 **Goal**  
 Merge multiple step results into a single `CqResult` in a consistent, high-signal way, while preserving provenance.
+
+**Status**  
+Complete.
 
 **Approach**
 - Introduce a shared merge helper used by both:
@@ -338,10 +347,10 @@ def merge_step_results(merged: CqResult, step_id: str, step_result: CqResult) ->
 - Delete/inline redundant clone helpers in `tools/cq/core/bundles.py` (after migration).
 
 **Implementation checklist**
-1. Introduce `tools/cq/core/merge.py` with `merge_step_results`.
-2. Migrate `tools/cq/core/bundles.py:merge_bundle_results` to call shared merge.
-3. Ensure `source_step`/`source_macro` are always present on merged findings.
-4. Add unit tests for merge behavior (ordering, provenance fields, section prefixing).
+- [x] Introduce `tools/cq/core/merge.py` with `merge_step_results`.
+- [x] Migrate `tools/cq/core/bundles.py:merge_bundle_results` to call shared merge.
+- [x] Ensure `source_step`/`source_macro` are always present on merged findings.
+- [x] Add unit tests for merge behavior (ordering, provenance fields, section prefixing).
 
 ---
 
@@ -352,6 +361,9 @@ Execute multiple `cq q` steps with **one**:
 - file tabulation
 - ast-grep scan (facts record collection)
 - `ScanContext` build
+
+**Status**  
+Complete.
 
 **Approach**
 - Introduce a `BatchEntityQuerySession` that owns:
@@ -424,11 +436,11 @@ def build_batch_session(
 - After migration: deprecate any ad-hoc “multi q” loops in scripts in favor of `cq run`.
 
 **Implementation checklist**
-1. Add `BatchEntityQuerySession` model + `build_batch_session`.
-2. Add an executor function that can run a single `Query` against a provided session (no scan).
-3. Ensure per-query scope constraints (`in=...`, `exclude=...`, globs) are still honored via record filtering.
-4. Reuse one `SymtableEnricher` for scope filtering across all batch queries.
-5. Add tests ensuring 2+ queries cause only **one** fact scan.
+- [x] Add `BatchEntityQuerySession` model + `build_batch_session`.
+- [x] Add an executor function that can run a single `Query` against a provided session (no scan).
+- [x] Ensure per-query scope constraints (`in=...`, `exclude=...`, globs) are still honored via record filtering.
+- [x] Reuse one `SymtableEnricher` for scope filtering across all batch queries.
+- [x] Add tests ensuring 2+ queries cause only **one** fact scan.
 
 ---
 
@@ -436,6 +448,9 @@ def build_batch_session(
 
 **Goal**  
 Preserve correctness and performance when batch-running queries that include relational constraints (which currently trigger additional scans for match-span collection).
+
+**Status**  
+Complete.
 
 **Approach**
 - Thread the shared **tabulated file list** into relational matching (avoid repeating `tabulate_files` per query).
@@ -488,12 +503,12 @@ def collect_span_filters(
 - Deprecate per-query repeated `tabulate_files` inside `_collect_match_spans` for batch runs.
 
 **Implementation checklist**
-1. Add a span-filter collector that accepts the already-tabulated `files`.
-2. Integrate span-filter usage into the batch session’s per-query execution path.
-3. Ensure metavariable filters continue to work (apply them when building span filters).
-4. Add tests for batch `inside=`/`has=` constraints that:
-   - match results identical to single-query execution
-   - avoid repeated tabulation and avoid repeated file parsing where practical
+- [x] Add a span-filter collector that accepts the already-tabulated `files`.
+- [x] Integrate span-filter usage into the batch session’s per-query execution path.
+- [x] Ensure metavariable filters continue to work (apply them when building span filters).
+- [ ] Add tests for batch `inside=`/`has=` constraints that:
+  - match results identical to single-query execution
+  - avoid repeated tabulation and avoid repeated file parsing where practical
 
 ---
 
@@ -501,6 +516,9 @@ def collect_span_filters(
 
 **Goal**  
 Execute a full mixed plan (search + q + macros) deterministically and produce a single merged output.
+
+**Status**  
+Complete.
 
 **Approach**
 - Parse/normalize the `RunPlan`.
@@ -547,12 +565,12 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext) -> CqResult:
 - None.
 
 **Implementation checklist**
-1. Implement plan loading: TOML via `tomllib`; also support inline JSON `--step` objects and `--steps` arrays.
-2. Normalize/validate steps: type-specific required fields, deterministic IDs.
-3. Execute batch `q` steps via shared session.
-4. Execute non-`q` steps via existing macro entrypoints (`smart_search`, `cmd_calls`, etc.).
-5. Merge into one `CqResult` with provenance.
-6. Add `--stop-on-error` behavior.
+- [x] Implement plan loading: TOML via `tomllib`; also support inline JSON `--step` objects and `--steps` arrays.
+- [x] Normalize/validate steps: type-specific required fields, deterministic IDs.
+- [x] Execute batch `q` steps via shared session.
+- [x] Execute non-`q` steps via existing macro entrypoints (`smart_search`, `cmd_calls`, etc.).
+- [x] Merge into one `CqResult` with provenance.
+- [x] Add `--stop-on-error` behavior.
 
 ---
 
@@ -560,6 +578,9 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext) -> CqResult:
 
 **Goal**  
 Make `cq run` discoverable and easy to use for developers/agents.
+
+**Status**  
+Complete (optional example plan not added).
 
 **Approach**
 - Update the CQ skill (`.claude/skills/cq/SKILL.md`) with:
@@ -590,14 +611,18 @@ Make `cq run` discoverable and easy to use for developers/agents.
 - None.
 
 **Implementation checklist**
-1. Document CLI usage and plan file format.
-2. Add examples covering: smart search + q + calls.
-3. Document “shared scan” behavior and its constraints.
-4. Document JSON step contract for agents (recommended) and the `cq chain` frontend.
+- [x] Document CLI usage and plan file format.
+- [x] Add examples covering: smart search + q + calls.
+- [x] Document “shared scan” behavior and its constraints.
+- [x] Document JSON step contract for agents (recommended) and the `cq chain` frontend.
+- [ ] Optional: add `docs/plans/cq_run_example.toml` example plan file.
 
 ---
 
 ## Scope 8: Test Scope (Single Query + Multi Query Assurance)
+
+**Status**  
+Partial (core unit tests + CLI parsing tests added; equivalence/relational batching assertions and run help golden snapshot pending).
 
 This scope is intentionally comprehensive: `cq run` must not regress existing single-step behavior and must provide strong confidence in correctness + performance properties.
 
@@ -681,10 +706,10 @@ No new tests are needed here beyond ensuring the existing suite stays green, but
 - None.
 
 **Implementation checklist**
-1. Add unit tests for plan parsing, batch scan call counts, and correctness equivalence.
-2. Extend CQ CLI parsing tests to include `run`.
-3. Add CQ golden snapshots for `cq run --help` and (optionally) a minimal merged summary render.
-4. Ensure existing CQ unit tests continue to pass (single-step behavior preserved).
+- [ ] Add unit tests for plan parsing, batch scan call counts, and correctness equivalence. (Plan parsing + batch scan tests added; equivalence + relational batching assertions pending.)
+- [x] Extend CQ CLI parsing tests to include `run`.
+- [ ] Add CQ golden snapshots for `cq run --help` and (optionally) a minimal merged summary render. (Test added; run help fixture not generated yet.)
+- [ ] Ensure existing CQ unit tests continue to pass (single-step behavior preserved). (Not executed yet.)
 
 ---
 
@@ -705,6 +730,9 @@ No new tests are needed here beyond ensuring the existing suite stays green, but
 
 **Goal**  
 Add a delimiter-based “command chaining” frontend that is ergonomic for agents that already know `cq` subcommands, while executing through the same high-performance multi-step engine.
+
+**Status**  
+Complete.
 
 **Approach**
 - Implement `cq chain` as a regular CQ command (not a meta launcher behavior change).
@@ -758,12 +786,12 @@ def chain(
 - None.
 
 **Implementation checklist**
-1. Define the chain delimiter contract and error handling for empty segments.
-2. Implement “segment → RunStep” compilation for `q`, `search`, and `calls` first.
-3. Add compilation support for additional CQ macros as step types are added.
-4. Add tests asserting:
-   - chaining produces the expected steps
-   - chaining executes via the shared-scan path for multiple `q` segments
+- [x] Define the chain delimiter contract and error handling for empty segments.
+- [x] Implement “segment → RunStep” compilation for `q`, `search`, and `calls` first.
+- [x] Add compilation support for additional CQ macros as step types are added.
+- [x] Add tests asserting:
+  - chaining produces the expected steps
+  - chaining executes via the shared-scan path for multiple `q` segments
 
 ---
 
@@ -771,6 +799,9 @@ def chain(
 
 **Goal**  
 Reduce cold-start time for `cq` invocations in agent loops by lazily importing command modules.
+
+**Status**  
+Complete (optional help-smoke test not added).
 
 **Approach**
 - Register commands via import-path strings instead of importing all command modules at `tools/cq/cli_app/app.py` import time.
@@ -797,6 +828,6 @@ app.command(\"tools.cq.cli_app.commands.chain:chain\", group=analysis_group)
 - Remove eager imports at the bottom of `tools/cq/cli_app/app.py` once lazy registration lands.
 
 **Implementation checklist**
-1. Convert each `app.command(...)` registration to import-path string form.
-2. Add a smoke test that resolves each command node via `app[\"...\"]`.
-3. Add a help-smoke test (optional) if root help needs to render without importing everything.
+- [x] Convert each `app.command(...)` registration to import-path string form.
+- [x] Add a smoke test that resolves each command node via `app[\"...\"]`.
+- [ ] Add a help-smoke test (optional) if root help needs to render without importing everything.

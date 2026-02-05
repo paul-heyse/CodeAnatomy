@@ -19,7 +19,9 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Find callers | `/cq calls <fn>` |
 | Trace parameter | `/cq impact <fn> --param <p>` |
 | Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
+| Report bundle | `/cq report refactor-impact --target function:foo` |
 | Multi-step run | `/cq run --steps '[{"type":"q","query":"entity=function name=foo"},{"type":"calls","function":"foo"}]'` |
+| Plan file execution | `/cq run --plan analysis.toml` |
 | Command chaining | `/cq chain q "entity=function name=foo" AND calls foo` |
 | Pattern search (AST) | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | Entity query | `/cq q "entity=function name=<name>"` |
@@ -27,6 +29,15 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Find closures | `/cq q "entity=function scope=closure"` |
 | Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
 | Security patterns | `/cq q "pattern='eval(\$X)'"` |
+
+## Decision Guide
+
+Use CQ first for code discovery and structural analysis:
+- Use `/cq search` for code discovery instead of `rg`/`grep`.
+- Use `/cq q "pattern=..."` for AST-exact matching.
+- Use `/cq calls` or `/cq impact` before refactors.
+- Use `/cq run` for multi-step workflows to avoid repeated scans.
+- Use `rg` only for non-Python assets or explicit raw text needs.
 
 ## Smart Search (Default for Code Discovery)
 
@@ -88,6 +99,87 @@ Plain queries in `/cq q` automatically use Smart Search:
 | Find in strings/comments | `/cq search --include-strings` |
 | Find AST-exact matches | `/cq q "pattern='...'"` |
 
+## Multi-Step Execution
+
+Execute multiple queries with a single repo scan for improved performance.
+
+**Run/Chain Notes**
+- `--step` and `--steps` accept JSON in a single token (quote the entire JSON).
+- `cq run` continues on error by default; `--stop-on-error` fails fast.
+- Merged results include `details.data["source_step"]` and `details.data["source_macro"]`.
+- `cq chain` uses a delimiter token (default `AND`); quote multi-word queries.
+
+### cq run (JSON/TOML Plans)
+
+```bash
+# Inline JSON steps (agent-friendly)
+/cq run --steps '[{"type":"search","query":"build_graph"},{"type":"q","query":"entity=function name=build_graph"},{"type":"calls","function":"build_graph"}]'
+
+# From TOML plan file
+/cq run --plan docs/plans/refactor_check.toml
+
+# Mixed: plan + inline steps
+/cq run --plan base.toml --step '{"type":"impact","function":"foo","param":"x"}'
+```
+
+### cq chain (Command Chaining)
+
+```bash
+# Default AND delimiter
+/cq chain q "entity=function name=build_graph" AND calls build_graph AND search build_graph
+
+# Custom delimiter
+/cq chain q "..." OR calls foo --delimiter OR
+```
+
+### Step Types
+
+| Type | Required Fields | Optional Fields |
+|------|-----------------|-----------------|
+| `q` | `query` | `id` |
+| `search` | `query` | `regex`, `literal`, `include_strings`, `in_dir`, `id` |
+| `calls` | `function` | `id` |
+| `impact` | `function`, `param` | `depth`, `id` |
+| `imports` | — | `cycles`, `module`, `id` |
+| `exceptions` | — | `function`, `id` |
+| `sig-impact` | `symbol`, `to` | `id` |
+| `side-effects` | — | `max_files`, `id` |
+| `scopes` | `target` | `max_files`, `id` |
+| `bytecode-surface` | `target` | `show`, `max_files`, `id` |
+
+### When to Use Multi-Step
+
+| Scenario | Approach |
+|----------|----------|
+| Ad-hoc multi-query | `/cq chain cmd1 AND cmd2 AND cmd3` |
+| Repeatable workflow | `/cq run --plan workflow.toml` |
+| Agent automation | `/cq run --steps '[...]'` |
+| Pre-refactoring checklist | Create TOML plan, run before changes |
+
+### TOML Plan File Format
+
+```toml
+version = 1
+in_dir = "src/"           # Optional global scope
+exclude = ["tests/"]      # Optional global excludes
+
+[[steps]]
+type = "search"
+query = "build_graph"
+
+[[steps]]
+type = "q"
+query = "entity=function name=build_graph expand=callers"
+
+[[steps]]
+type = "calls"
+function = "build_graph"
+```
+
+### Performance Benefit
+
+Multiple `q` steps share a **single repo scan** instead of scanning once per query. This provides significant speedup when running multiple entity queries against the same codebase.
+
 ## Global Options
 
 All commands support these global options:
@@ -101,6 +193,14 @@ All commands support these global options:
 | `--format FMT` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir PATH` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving artifacts |
+
+### Filters
+
+- `--include`, `--exclude` (glob or `~regex`)
+- `--impact` (low,med,high)
+- `--confidence` (low,med,high)
+- `--severity` (error,warning,info)
+- `--limit` (max findings)
 
 ### Output Formats
 

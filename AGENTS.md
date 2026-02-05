@@ -9,6 +9,7 @@ Agent operating protocol for the CodeAnatomy codebase.
 **Non-negotiables:**
 
 - **Always `uv run`** - Direct `python` calls will fail due to import issues
+- **CQ exception** - Use `./cq` or `/cq` for the CQ tool; use `uv run` for all other Python invocations
 - **Python 3.13.12** - Pinned, do not change
 - **Bootstrap first** - Run `scripts/bootstrap_codex.sh && uv sync` on fresh clones
 - **Ruff is canonical** - All style rules live in `pyproject.toml`; do not duplicate
@@ -44,6 +45,9 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq q "pattern='eval(\$X)'"` | Security pattern scan | `/cq q "pattern='eval(\$X)'"` |
 | `/cq q --format mermaid` | Visualize code structure | `/cq q "entity=function expand=callers" --format mermaid` |
 | `/cq q --format mermaid-cfg` | Control flow graphs | `/cq q "entity=function name=fn" --format mermaid-cfg` |
+| `/cq run` | Multi-step execution (shared scan) | `/cq run --steps '[{"type":"q",...},{"type":"calls",...}]'` |
+| `/cq run` | Plan file execution | `/cq run --plan analysis.toml` |
+| `/cq chain` | Command chaining | `/cq chain q "..." AND calls foo AND search foo` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
 | `/datafusion-stack` | DataFusion/Delta/UDF work | `/datafusion-stack` |
 
@@ -59,6 +63,13 @@ Smart Search automatically:
 - Groups by containing function/scope
 - Hides non-code matches (strings/comments)
 - Suggests follow-up commands
+
+**CQ-First Policy**
+- Use `/cq search` for code discovery instead of `rg`/`grep`.
+- Use `/cq q "pattern=..."` for AST-exact matching.
+- Use `/cq calls` or `/cq impact` before refactors.
+- Use `/cq run` for multi-step workflows to avoid repeated scans.
+- Use `rg` only for non-Python assets or explicit raw text needs.
 
 Only use pattern queries (`/cq q "pattern=..."`) when you need:
 - Exact AST-level structural matching
@@ -231,6 +242,40 @@ Pattern queries find structural code patterns without false positives from strin
 - Dynamic dispatch patterns → Pattern query (AST-aware)
 - Combining multiple conditions → Composite queries
 - Security pattern detection → Pattern queries (AST-based)
+
+### Multi-Step Workflows
+
+For complex analysis requiring multiple queries, use `cq run` or `cq chain`:
+
+**cq run (JSON/TOML Plans):**
+```bash
+# Agent-friendly JSON steps
+/cq run --steps '[{"type":"search","query":"build_graph"},{"type":"q","query":"entity=function name=build_graph expand=callers"},{"type":"calls","function":"build_graph"}]'
+
+# Human-friendly TOML plan file
+/cq run --plan docs/plans/refactor_check.toml
+
+# Mixed: plan + inline steps
+/cq run --plan base.toml --step '{"type":"impact","function":"foo","param":"x"}'
+```
+
+**cq chain (Command Chaining):**
+```bash
+# Default AND delimiter
+/cq chain search build_graph AND q "entity=function expand=callers" AND calls build_graph
+
+# Custom delimiter
+/cq chain q "entity=function" OR calls foo --delimiter OR
+```
+
+**When to Use:**
+| Scenario | Approach |
+|----------|----------|
+| Ad-hoc multi-query | `/cq chain cmd1 AND cmd2 AND cmd3` |
+| Repeatable workflow | `/cq run --plan workflow.toml` |
+| Agent automation | `/cq run --steps '[...]'` |
+
+**Performance:** Multiple `q` steps share a single scan for better performance.
 
 ### Global Options (All cq Commands)
 

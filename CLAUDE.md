@@ -24,6 +24,8 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/cq q "pattern='eval(\$X)'"` | Security pattern review | Identify security-sensitive constructs |
 | `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
 | `/cq q --format mermaid-cfg` | Control flow analysis | Visualize function CFGs |
+| `/cq run` | Multi-step execution with shared scan | Batch analysis workflows |
+| `/cq chain` | Command chaining frontend | Quick multi-command analysis |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
 | `/datafusion-stack` | DataFusion/Delta/UDF operations | Don't guess APIs - probe versions |
 
@@ -112,9 +114,10 @@ Config via `.cq.toml` or `CQ_*` environment variables. See `tools/cq/README.md` 
 scripts/bootstrap_codex.sh && uv sync
 
 # Quality gates (run AFTER task completion, not during implementation)
+uv run ruff format               # Auto-format
 uv run ruff check --fix          # Lint + autofix
 uv run pyrefly check             # Type/contract validation (the strict gate)
-uv run pyright --warnings --pythonversion=3.13  # IDE-level type checking (basic mode)
+uv run pyright                   # IDE-level type checking (basic mode)
 
 # Testing
 uv run pytest tests/unit/                    # Unit tests only
@@ -127,6 +130,7 @@ uv run ruff format
 ```
 
 **Critical:** Always use `uv run` for Python commands. Direct `python` calls will fail due to missing module imports.
+**Exception:** Use `./cq` or `/cq` for the CQ tool; use `uv run` for all other Python invocations.
 
 **Quality gate timing:** Complete the implementation first, then run quality checks. Don't interrupt workflow with mid-task linting or type checking.
 

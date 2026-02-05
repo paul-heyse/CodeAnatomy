@@ -756,7 +756,7 @@ def _runtime_artifact_location(
 ) -> DatasetLocation:
     from datafusion_engine.dataset.registry import DatasetLocation
 
-    cache_root = Path(runtime_profile.runtime_artifact_root())
+    cache_root = Path(runtime_profile.io_ops.runtime_artifact_root())
     cache_root.mkdir(parents=True, exist_ok=True)
     safe_name = name.replace("/", "_").replace(":", "_")
     signature = plan_task_signature or plan_signature or uuid7_hex()

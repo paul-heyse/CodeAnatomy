@@ -13,7 +13,7 @@ from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from obs.otel.run_context import get_run_id
 from obs.otel.tracing import set_span_attributes
-from serde_msgspec import StructBaseHotPath, to_builtins
+from serde_msgspec import StructBaseHotPath, to_builtins_mapping
 
 if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
@@ -47,6 +47,18 @@ class PlanExecutionDiagnosticsPayload(StructBaseHotPath, frozen=True):
     error: str | None = None
     trace_id: str | None = None
     span_id: str | None = None
+    rows_produced: int | None = None
+    bytes_scanned: int | None = None
+    partition_count: int | None = None
+    repartition_count: int | None = None
+    explain_analyze_duration_ms: float | None = None
+    explain_analyze_output_rows: int | None = None
+
+
+@dataclass(frozen=True)
+class PlanExecutionStats:
+    """Typed execution stats extracted from plan details."""
+
     rows_produced: int | None = None
     bytes_scanned: int | None = None
     partition_count: int | None = None
@@ -103,7 +115,7 @@ def record_plan_bundle_diagnostics(
     if recorder is not None:
         recorder.record_artifact(
             "datafusion_plan_bundle_v1",
-            to_builtins(payload, str_keys=True),
+            to_builtins_mapping(payload, str_keys=True),
         )
 
     span = trace.get_current_span()
@@ -168,12 +180,12 @@ def record_plan_execution_diagnostics(
         error=request.error,
         trace_id=trace_id,
         span_id=span_id,
-        rows_produced=stats.get("rows_produced"),
-        bytes_scanned=stats.get("bytes_scanned"),
-        partition_count=stats.get("partition_count"),
-        repartition_count=stats.get("repartition_count"),
-        explain_analyze_duration_ms=stats.get("explain_analyze_duration_ms"),
-        explain_analyze_output_rows=stats.get("explain_analyze_output_rows"),
+        rows_produced=stats.rows_produced,
+        bytes_scanned=stats.bytes_scanned,
+        partition_count=stats.partition_count,
+        repartition_count=stats.repartition_count,
+        explain_analyze_duration_ms=stats.explain_analyze_duration_ms,
+        explain_analyze_output_rows=stats.explain_analyze_output_rows,
     )
     recorder = recorder_for_profile(
         request.runtime_profile,
@@ -182,7 +194,7 @@ def record_plan_execution_diagnostics(
     if recorder is not None:
         recorder.record_artifact(
             "datafusion_plan_execution_v1",
-            to_builtins(payload, str_keys=True),
+            to_builtins_mapping(payload, str_keys=True),
         )
     if span is None or not span.is_recording():
         return
@@ -195,10 +207,10 @@ def record_plan_execution_diagnostics(
             "codeanatomy.execution_duration_ms": request.duration_ms,
         },
     )
-    if stats.get("rows_produced") is not None:
-        set_span_attributes(span, {"codeanatomy.rows_produced": stats["rows_produced"]})
-    if stats.get("bytes_scanned") is not None:
-        set_span_attributes(span, {"codeanatomy.bytes_scanned": stats["bytes_scanned"]})
+    if stats.rows_produced is not None:
+        set_span_attributes(span, {"codeanatomy.rows_produced": stats.rows_produced})
+    if stats.bytes_scanned is not None:
+        set_span_attributes(span, {"codeanatomy.bytes_scanned": stats.bytes_scanned})
 
 
 def record_plan_phase_diagnostics(*, request: PlanPhaseDiagnostics) -> None:
@@ -227,11 +239,11 @@ def record_plan_phase_diagnostics(*, request: PlanPhaseDiagnostics) -> None:
     if recorder is not None:
         recorder.record_artifact(
             "datafusion_plan_phase_v1",
-            to_builtins(payload, str_keys=True),
+            to_builtins_mapping(payload, str_keys=True),
         )
 
 
-def _execution_stats_payload(bundle: DataFusionPlanBundle) -> dict[str, object]:
+def _execution_stats_payload(bundle: DataFusionPlanBundle) -> PlanExecutionStats:
     details = bundle.plan_details
     stats = details.get("statistics") if isinstance(details, Mapping) else None
     rows = None
@@ -239,14 +251,14 @@ def _execution_stats_payload(bundle: DataFusionPlanBundle) -> dict[str, object]:
     if isinstance(stats, Mapping):
         rows = _coerce_int(stats.get("num_rows") or stats.get("row_count"))
         bytes_scanned = _coerce_int(stats.get("total_byte_size") or stats.get("total_bytes"))
-    return {
-        "rows_produced": rows,
-        "bytes_scanned": bytes_scanned,
-        "partition_count": _coerce_int(details.get("partition_count")),
-        "repartition_count": _coerce_int(details.get("repartition_count")),
-        "explain_analyze_duration_ms": _coerce_float(details.get("explain_analyze_duration_ms")),
-        "explain_analyze_output_rows": _coerce_int(details.get("explain_analyze_output_rows")),
-    }
+    return PlanExecutionStats(
+        rows_produced=rows,
+        bytes_scanned=bytes_scanned,
+        partition_count=_coerce_int(details.get("partition_count")),
+        repartition_count=_coerce_int(details.get("repartition_count")),
+        explain_analyze_duration_ms=_coerce_float(details.get("explain_analyze_duration_ms")),
+        explain_analyze_output_rows=_coerce_int(details.get("explain_analyze_output_rows")),
+    )
 
 
 def _coerce_int(value: object) -> int | None:

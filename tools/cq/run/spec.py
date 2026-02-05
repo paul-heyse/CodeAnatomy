@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TypeGuard
+
 import msgspec
 
 
@@ -27,13 +29,13 @@ class RunStepBase(
     id: str | None = None
 
 
-class QStep(RunStepBase, tag="q"):
+class QStep(RunStepBase, tag="q", frozen=True):
     """Run step describing a q query."""
 
     query: str
 
 
-class SearchStep(RunStepBase, tag="search"):
+class SearchStep(RunStepBase, tag="search", frozen=True):
     """Run step describing a search query."""
 
     query: str
@@ -43,13 +45,13 @@ class SearchStep(RunStepBase, tag="search"):
     in_dir: str | None = None
 
 
-class CallsStep(RunStepBase, tag="calls"):
+class CallsStep(RunStepBase, tag="calls", frozen=True):
     """Run step describing a calls query."""
 
     function: str
 
 
-class ImpactStep(RunStepBase, tag="impact"):
+class ImpactStep(RunStepBase, tag="impact", frozen=True):
     """Run step describing an impact query."""
 
     function: str
@@ -57,40 +59,40 @@ class ImpactStep(RunStepBase, tag="impact"):
     depth: int = 5
 
 
-class ImportsStep(RunStepBase, tag="imports"):
+class ImportsStep(RunStepBase, tag="imports", frozen=True):
     """Run step describing an imports query."""
 
     cycles: bool = False
     module: str | None = None
 
 
-class ExceptionsStep(RunStepBase, tag="exceptions"):
+class ExceptionsStep(RunStepBase, tag="exceptions", frozen=True):
     """Run step describing an exceptions query."""
 
     function: str | None = None
 
 
-class SigImpactStep(RunStepBase, tag="sig-impact"):
+class SigImpactStep(RunStepBase, tag="sig-impact", frozen=True):
     """Run step describing a signature impact query."""
 
     symbol: str
     to: str
 
 
-class SideEffectsStep(RunStepBase, tag="side-effects"):
+class SideEffectsStep(RunStepBase, tag="side-effects", frozen=True):
     """Run step describing a side-effects query."""
 
     max_files: int = 2000
 
 
-class ScopesStep(RunStepBase, tag="scopes"):
+class ScopesStep(RunStepBase, tag="scopes", frozen=True):
     """Run step describing a scopes query."""
 
     target: str
     max_files: int = 500
 
 
-class BytecodeSurfaceStep(RunStepBase, tag="bytecode-surface"):
+class BytecodeSurfaceStep(RunStepBase, tag="bytecode-surface", frozen=True):
     """Run step describing a bytecode-surface query."""
 
     target: str
@@ -110,6 +112,31 @@ RunStep = (
     | ScopesStep
     | BytecodeSurfaceStep
 )
+
+RUN_STEP_TYPES: tuple[type[RunStep], ...] = (
+    QStep,
+    SearchStep,
+    CallsStep,
+    ImpactStep,
+    ImportsStep,
+    ExceptionsStep,
+    SigImpactStep,
+    SideEffectsStep,
+    ScopesStep,
+    BytecodeSurfaceStep,
+)
+
+
+def is_run_step(obj: object) -> TypeGuard[RunStep]:
+    """Return True if obj is a RunStep instance.
+
+    Returns
+    -------
+    bool
+        ``True`` when obj is a RunStep instance.
+    """
+    return isinstance(obj, RunStepBase)
+
 
 _STEP_TAGS: dict[type[RunStep], str] = {
     QStep: "q",
@@ -164,6 +191,7 @@ def normalize_step_ids(steps: tuple[RunStep, ...]) -> tuple[RunStep, ...]:
 
 
 __all__ = [
+    "RUN_STEP_TYPES",
     "BytecodeSurfaceStep",
     "CallsStep",
     "ExceptionsStep",
@@ -177,6 +205,7 @@ __all__ = [
     "SearchStep",
     "SideEffectsStep",
     "SigImpactStep",
+    "is_run_step",
     "normalize_step_ids",
     "step_type",
 ]

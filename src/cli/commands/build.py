@@ -78,6 +78,59 @@ class _PlanOverrides:
     enforce_plan_task_submission: bool | None = None
 
 
+@dataclass(frozen=True)
+class _PlanOverrideRequest:
+    """Inputs for applying plan overrides."""
+
+    config_contents: Mapping[str, JsonValue]
+    overrides: _PlanOverrides
+
+
+@dataclass(frozen=True)
+class _PlanOverrideRule:
+    attr: str
+    key: str
+    listify: bool = False
+
+
+class _PlanOverrideApplier:
+    _RULES: tuple[_PlanOverrideRule, ...] = (
+        _PlanOverrideRule("plan_allow_partial", "allow_partial"),
+        _PlanOverrideRule("plan_requested_tasks", "requested_tasks", listify=True),
+        _PlanOverrideRule("plan_impacted_tasks", "impacted_tasks", listify=True),
+        _PlanOverrideRule("enable_metric_scheduling", "enable_metric_scheduling"),
+        _PlanOverrideRule("enable_plan_diagnostics", "enable_plan_diagnostics"),
+        _PlanOverrideRule("enable_plan_task_submission_hook", "enable_plan_task_submission_hook"),
+        _PlanOverrideRule("enable_plan_task_grouping_hook", "enable_plan_task_grouping_hook"),
+        _PlanOverrideRule("enforce_plan_task_submission", "enforce_plan_task_submission"),
+    )
+
+    @classmethod
+    def apply(cls, request: _PlanOverrideRequest) -> dict[str, JsonValue]:
+        payload = dict(request.config_contents)
+        plan_payload, updated = _plan_payload_from_config(payload)
+        for rule in cls._RULES:
+            value = getattr(request.overrides, rule.attr)
+            if value is None:
+                continue
+            if rule.listify and not value:
+                continue
+            plan_payload[rule.key] = list(value) if rule.listify else value
+            updated = True
+        if updated:
+            payload["plan"] = plan_payload
+        return payload
+
+
+def _plan_payload_from_config(
+    payload: Mapping[str, JsonValue],
+) -> tuple[dict[str, JsonValue], bool]:
+    plan_section = payload.get("plan")
+    if isinstance(plan_section, dict):
+        return dict(cast("Mapping[str, JsonValue]", plan_section)), True
+    return {}, False
+
+
 _DEFAULT_SCIP_PYTHON = "scip-python"
 
 
@@ -855,48 +908,16 @@ def build_command(
     return 0
 
 
-def _apply_plan_overrides(  # noqa: C901
+def _apply_plan_overrides(
     config_contents: Mapping[str, JsonValue],
     overrides: _PlanOverrides,
 ) -> dict[str, JsonValue]:
-    payload = dict(config_contents)
-    plan_section = payload.get("plan")
-    plan_payload: dict[str, JsonValue]
-    if isinstance(plan_section, dict):
-        plan_payload = dict(cast("Mapping[str, JsonValue]", plan_section))
-        updated = True
-    else:
-        plan_payload = dict[str, JsonValue]()
-        updated = False
-    if overrides.plan_allow_partial is not None:
-        plan_payload["allow_partial"] = overrides.plan_allow_partial
-        updated = True
-    if overrides.plan_requested_tasks:
-        plan_payload["requested_tasks"] = list(overrides.plan_requested_tasks)
-        updated = True
-    if overrides.plan_impacted_tasks:
-        plan_payload["impacted_tasks"] = list(overrides.plan_impacted_tasks)
-        updated = True
-    if overrides.enable_metric_scheduling is not None:
-        plan_payload["enable_metric_scheduling"] = overrides.enable_metric_scheduling
-        updated = True
-    if overrides.enable_plan_diagnostics is not None:
-        plan_payload["enable_plan_diagnostics"] = overrides.enable_plan_diagnostics
-        updated = True
-    if overrides.enable_plan_task_submission_hook is not None:
-        plan_payload["enable_plan_task_submission_hook"] = (
-            overrides.enable_plan_task_submission_hook
+    return _PlanOverrideApplier.apply(
+        _PlanOverrideRequest(
+            config_contents=config_contents,
+            overrides=overrides,
         )
-        updated = True
-    if overrides.enable_plan_task_grouping_hook is not None:
-        plan_payload["enable_plan_task_grouping_hook"] = overrides.enable_plan_task_grouping_hook
-        updated = True
-    if overrides.enforce_plan_task_submission is not None:
-        plan_payload["enforce_plan_task_submission"] = overrides.enforce_plan_task_submission
-        updated = True
-    if updated:
-        payload["plan"] = plan_payload
-    return payload
+    )
 
 
 def _apply_optional_value(

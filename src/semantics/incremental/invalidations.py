@@ -138,7 +138,7 @@ def read_invalidation_snapshot(
     if not path.exists():
         return None
     resolved = context.resolve_storage(table_uri=str(path))
-    version = context.runtime.profile.delta_service().table_version(
+    version = context.runtime.profile.delta_ops.delta_service().table_version(
         path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,
@@ -277,7 +277,7 @@ def _incremental_plan_fingerprints(
     if not path.exists():
         return {}
     resolved = context.resolve_storage(table_uri=str(path))
-    version = context.runtime.profile.delta_service().table_version(
+    version = context.runtime.profile.delta_ops.delta_service().table_version(
         path=str(path),
         storage_options=resolved.storage_options,
         log_storage_options=resolved.log_storage_options,

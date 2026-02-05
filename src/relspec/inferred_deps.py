@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from datafusion_engine.lineage.datafusion import ScanLineage
+from schema_spec.dataset_spec_ops import dataset_spec_name
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
@@ -354,7 +355,7 @@ def _relationship_dataset_spec(
     )
     with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
         for spec in relationship_dataset_specs(ctx=ctx):
-            if spec.name == name:
+            if dataset_spec_name(spec) == name:
                 return spec
     return None
 

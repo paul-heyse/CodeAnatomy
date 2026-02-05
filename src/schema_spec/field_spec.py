@@ -6,17 +6,12 @@ from collections.abc import Mapping
 from typing import Literal
 
 import msgspec
-import pyarrow as pa
 
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.interop import FieldLike
 from datafusion_engine.arrow.metadata import ENCODING_META
-from schema_spec.arrow_types import (
-    ArrowTypeBase,
-    ArrowTypeSpec,
-    arrow_type_from_pyarrow,
-    arrow_type_to_pyarrow,
-)
+from schema_spec.arrow_type_coercion import ArrowTypeLike, coerce_arrow_type
+from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
 from serde_msgspec import StructBaseStrict
 
 
@@ -28,7 +23,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
     """Specification for a single Arrow field."""
 
     name: str
-    dtype: ArrowTypeSpec
+    dtype: ArrowTypeLike
     nullable: bool = True
     metadata: dict[str, str] = msgspec.field(default_factory=dict)
     default_value: str | None = None
@@ -36,8 +31,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
 
     def __post_init__(self) -> None:
         """Normalize dtype into a serializable ArrowTypeSpec."""
-        if isinstance(self.dtype, pa.DataType):
-            object.__setattr__(self, "dtype", arrow_type_from_pyarrow(self.dtype))
+        object.__setattr__(self, "dtype", coerce_arrow_type(self.dtype))
 
     def to_arrow_field(self) -> FieldLike:
         """Build a pyarrow.Field from the spec.

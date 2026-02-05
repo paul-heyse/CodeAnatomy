@@ -571,7 +571,7 @@ def _delta_output_version(
         write_result.delta_result.version if write_result.delta_result is not None else None
     )
     if final_version is None:
-        final_version = runtime_profile.delta_service().table_version(
+        final_version = runtime_profile.delta_ops.delta_service().table_version(
             path=str(target_dir),
             storage_options=output_config.delta_storage_options,
         )

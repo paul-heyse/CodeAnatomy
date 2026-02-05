@@ -322,8 +322,6 @@ def _nested_view_nodes(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     nodes: list[ViewNode] = []
     for spec in view_specs:
-        if spec.builder is None:
-            continue
         bundle, deps, required = _bundle_deps_and_udfs(
             ctx,
             spec.builder,

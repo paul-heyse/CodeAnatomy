@@ -81,7 +81,7 @@ def _resolve_cdf_inputs(
     if not path.exists():
         return None
     runtime = context.runtime
-    profile_location = runtime.profile.dataset_location(dataset_name)
+    profile_location = runtime.profile.catalog_ops.dataset_location(dataset_name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -98,7 +98,7 @@ def _resolve_cdf_inputs(
             scan_policy=runtime.profile.policies.scan_policy,
         )
         cdf_policy = profile_location.resolved.delta_cdf_policy
-    current_version = runtime.profile.delta_service().table_version(
+    current_version = runtime.profile.delta_ops.delta_service().table_version(
         path=str(path),
         storage_options=resolved_storage,
         log_storage_options=resolved_log_storage,
@@ -181,7 +181,7 @@ def read_cdf_changes(
         Raised when Delta CDF is required but unavailable or registration fails.
     """
     profile = context.runtime.profile
-    profile_location = profile.dataset_location(dataset_name)
+    profile_location = profile.catalog_ops.dataset_location(dataset_name)
     cdf_policy = (
         profile_location.resolved.delta_cdf_policy if profile_location is not None else None
     )

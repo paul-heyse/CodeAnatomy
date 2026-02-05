@@ -1448,62 +1448,92 @@ class _AdapterContext:
     profile_spec: RuntimeProfileSpec
 
 
-def _apply_adapters(  # noqa: C901, PLR0912
-    builder: driver.Builder,
+def _config_flag(
+    section: Mapping[str, JsonValue],
+    key: str,
     *,
+    default: bool = True,
+) -> bool:
+    value = section.get(key)
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _tracker_adapters(
     config: Mapping[str, JsonValue],
     context: _AdapterContext,
-) -> driver.Builder:
+) -> list[lifecycle_base.LifecycleAdapter]:
     tracker = _maybe_build_tracker_adapter(config, profile_spec=context.profile_spec)
-    if tracker is not None:
-        builder = builder.with_adapters(tracker)
+    return [tracker] if tracker is not None else []
+
+
+def _hamilton_adapters(
+    config: Mapping[str, JsonValue],
+    context: _AdapterContext,
+) -> list[lifecycle_base.LifecycleAdapter]:
     hamilton_config = _config_section(config, "hamilton")
-    otel_config = _config_section(config, "otel")
-    plan_config = _config_section(config, "plan")
-    enable_type_checker = hamilton_config.get("enable_type_checker")
-    if not isinstance(enable_type_checker, bool):
-        enable_type_checker = True
-    if enable_type_checker:
-        builder = builder.with_adapters(CodeAnatomyTypeChecker())
-    enable_node_diagnostics = hamilton_config.get("enable_node_diagnostics")
-    if not isinstance(enable_node_diagnostics, bool):
-        enable_node_diagnostics = True
-    if enable_node_diagnostics:
-        builder = builder.with_adapters(DiagnosticsNodeHook(context.diagnostics))
-    enable_node_tracing = otel_config.get("enable_node_tracing")
-    if not isinstance(enable_node_tracing, bool):
-        enable_node_tracing = True
-    if enable_node_tracing:
-        builder = builder.with_adapters(OtelNodeHook())
-    enable_plan_diagnostics = plan_config.get("enable_plan_diagnostics")
-    if not isinstance(enable_plan_diagnostics, bool):
-        enable_plan_diagnostics = True
-    if enable_plan_diagnostics:
-        builder = builder.with_adapters(
-            PlanDiagnosticsHook(
-                plan=context.plan,
-                profile=context.profile,
-                collector=context.diagnostics,
-            )
-        )
-    enable_structured_logs = hamilton_config.get("enable_structured_run_logs")
-    if not isinstance(enable_structured_logs, bool):
-        enable_structured_logs = True
-    if enable_structured_logs:
+    adapters: list[lifecycle_base.LifecycleAdapter] = []
+    if _config_flag(hamilton_config, "enable_type_checker"):
+        adapters.append(CodeAnatomyTypeChecker())
+    if _config_flag(hamilton_config, "enable_node_diagnostics"):
+        adapters.append(DiagnosticsNodeHook(context.diagnostics))
+    if _config_flag(hamilton_config, "enable_structured_run_logs"):
         from hamilton_pipeline.structured_logs import StructuredLogHook
 
-        builder = builder.with_adapters(
+        adapters.append(
             StructuredLogHook(
                 profile=context.profile,
                 config=config,
                 plan_signature=context.plan.plan_signature,
             )
         )
-    enable_plan_tracing = otel_config.get("enable_plan_tracing")
-    if not isinstance(enable_plan_tracing, bool):
-        enable_plan_tracing = True
-    if enable_plan_tracing:
-        builder = builder.with_adapters(OtelPlanHook())
+    return adapters
+
+
+def _otel_adapters(
+    config: Mapping[str, JsonValue],
+    _context: _AdapterContext,
+) -> list[lifecycle_base.LifecycleAdapter]:
+    otel_config = _config_section(config, "otel")
+    adapters: list[lifecycle_base.LifecycleAdapter] = []
+    if _config_flag(otel_config, "enable_node_tracing"):
+        adapters.append(OtelNodeHook())
+    if _config_flag(otel_config, "enable_plan_tracing"):
+        adapters.append(OtelPlanHook())
+    return adapters
+
+
+def _plan_adapters(
+    config: Mapping[str, JsonValue],
+    context: _AdapterContext,
+) -> list[lifecycle_base.LifecycleAdapter]:
+    plan_config = _config_section(config, "plan")
+    if not _config_flag(plan_config, "enable_plan_diagnostics"):
+        return []
+    return [
+        PlanDiagnosticsHook(
+            plan=context.plan,
+            profile=context.profile,
+            collector=context.diagnostics,
+        )
+    ]
+
+
+def _apply_adapters(
+    builder: driver.Builder,
+    *,
+    config: Mapping[str, JsonValue],
+    context: _AdapterContext,
+) -> driver.Builder:
+    adapters = (
+        _tracker_adapters(config, context)
+        + _hamilton_adapters(config, context)
+        + _otel_adapters(config, context)
+        + _plan_adapters(config, context)
+    )
+    for adapter in adapters:
+        builder = builder.with_adapters(adapter)
     return builder
 
 

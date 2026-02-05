@@ -1,0 +1,14 @@
+version = 1
+in_dir = "tools/cq"
+
+[[steps]]
+type = "search"
+query = "execute_run_plan"
+
+[[steps]]
+type = "q"
+query = "entity=function name=execute_run_plan"
+
+[[steps]]
+type = "calls"
+function = "execute_run_plan"

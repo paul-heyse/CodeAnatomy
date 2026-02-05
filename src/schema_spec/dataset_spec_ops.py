@@ -27,6 +27,7 @@ from schema_spec.system import (
     DeltaCdfPolicy,
     DeltaFeatureGate,
     DeltaMaintenancePolicy,
+    DeltaPolicyBundle,
     DeltaScanOptions,
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -95,6 +96,28 @@ def dataset_spec_delta_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenance
     if spec.policies.delta is None:
         return None
     return spec.policies.delta.maintenance_policy
+
+
+def dataset_spec_with_delta_maintenance(
+    spec: DatasetSpec,
+    maintenance_policy: DeltaMaintenancePolicy | None,
+) -> DatasetSpec:
+    """Return a DatasetSpec with updated Delta maintenance policy.
+
+    Returns
+    -------
+    DatasetSpec
+        Dataset spec with updated maintenance policy.
+    """
+    if maintenance_policy is None:
+        return spec
+    delta = spec.policies.delta
+    if delta is None:
+        delta = DeltaPolicyBundle(maintenance_policy=maintenance_policy)
+    else:
+        delta = msgspec.structs.replace(delta, maintenance_policy=maintenance_policy)
+    policies = msgspec.structs.replace(spec.policies, delta=delta)
+    return msgspec.structs.replace(spec, policies=policies)
 
 
 def dataset_spec_delta_write_policy(spec: DatasetSpec) -> DeltaWritePolicy | None:
@@ -279,7 +302,7 @@ def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
     tuple[ViewSpec, ...]
         View specs merged from contract and dataset scopes.
     """
-    specs: list = []
+    specs: list[ViewSpec] = []
     seen: set[str] = set()
     if spec.contract_spec is not None:
         for view in spec.contract_spec.view_specs:

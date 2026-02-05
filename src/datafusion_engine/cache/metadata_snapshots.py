@@ -70,7 +70,7 @@ def snapshot_datafusion_caches(
     list[dict[str, object]]
         Diagnostics payloads for each snapshot attempt.
     """
-    cache_root = Path(runtime_profile.metadata_cache_snapshot_root())
+    cache_root = Path(runtime_profile.io_ops.metadata_cache_snapshot_root())
     cache_root.mkdir(parents=True, exist_ok=True)
     pipeline = WritePipeline(ctx, runtime_profile=runtime_profile)
     events: list[dict[str, object]] = []

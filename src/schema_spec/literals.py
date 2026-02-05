@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datafusion_engine.expr.spec import ScalarLiteralSpec, scalar_literal
+from datafusion_engine.expr.spec import ScalarLiteralInput, ScalarLiteralSpec, scalar_literal
 
 
-def parse_scalar_value(value: object) -> ScalarLiteralSpec:
+def parse_scalar_value(value: ScalarLiteralInput) -> ScalarLiteralSpec:
     """Parse a scalar literal value.
 
     Returns

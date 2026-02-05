@@ -832,7 +832,7 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         registration.cache,
         policy_label="Delta output cache",
     )
-    location = runtime_profile.dataset_location(registration.node.name)
+    location = runtime_profile.catalog_ops.dataset_location(registration.node.name)
     if location is None:
         msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
         raise ValueError(msg)
@@ -1038,7 +1038,7 @@ def _delta_staging_path(
     runtime_profile: DataFusionRuntimeProfile,
     node: ViewNode,
 ) -> str:
-    cache_root = Path(runtime_profile.cache_root()) / "view_cache"
+    cache_root = Path(runtime_profile.io_ops.cache_root()) / "view_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     if node.plan_bundle is not None and node.plan_bundle.plan_identity_hash is not None:
         fingerprint = node.plan_bundle.plan_identity_hash
@@ -1187,7 +1187,7 @@ def _plan_scan_units_for_bundle(
     lineage = extract_lineage_from_bundle(bundle)
     scan_units: dict[str, ScanUnit] = {}
     for scan in lineage.scans:
-        location = runtime_profile.dataset_location(scan.dataset_name)
+        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(

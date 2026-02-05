@@ -136,9 +136,9 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
     assert request.format_options is not None
     assert request.format_options["delta_write_policy"] is dataset_spec_delta_write_policy(spec)
     assert request.format_options["delta_schema_policy"] is dataset_spec_delta_schema_policy(spec)
-    assert request.format_options["delta_maintenance_policy"] is dataset_spec_delta_maintenance_policy(
-        spec
-    )
+    assert request.format_options[
+        "delta_maintenance_policy"
+    ] is dataset_spec_delta_maintenance_policy(spec)
     assert captured_policy[0].mode == "additive"
 
 

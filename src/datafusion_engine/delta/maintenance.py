@@ -22,7 +22,10 @@ from datafusion_engine.delta.observability import (
     DeltaMaintenanceArtifact,
     record_delta_maintenance,
 )
-from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.delta.service import (
+    DeltaFeatureMutationRequest,
+    delta_service_for_profile,
+)
 from storage.deltalake.delta import DeltaFeatureMutationOptions
 
 if TYPE_CHECKING:
@@ -112,7 +115,7 @@ def run_delta_maintenance(
     service = delta_service_for_profile(runtime_profile)
     reports: list[Mapping[str, object]] = []
     if plan.policy.enable_deletion_vectors:
-        report = service.enable_deletion_vectors(
+        report = service.features.enable_deletion_vectors(
             _feature_mutation_options(
                 plan,
                 runtime_profile=runtime_profile,
@@ -132,7 +135,7 @@ def run_delta_maintenance(
             ),
         )
     if plan.policy.enable_v2_checkpoints:
-        report = service.enable_v2_checkpoints(
+        report = service.features.enable_v2_checkpoints(
             _feature_mutation_options(
                 plan,
                 runtime_profile=runtime_profile,
@@ -211,7 +214,7 @@ def _feature_mutation_options(
     commit_metadata: Mapping[str, str] | None,
 ) -> DeltaFeatureMutationOptions:
     service = delta_service_for_profile(runtime_profile)
-    return service.feature_mutation_options(
+    request = DeltaFeatureMutationRequest(
         path=plan.table_uri,
         storage_options=plan.storage_options,
         log_storage_options=plan.log_storage_options,
@@ -219,6 +222,7 @@ def _feature_mutation_options(
         commit_metadata=commit_metadata,
         gate=plan.feature_gate,
     )
+    return service.features.feature_mutation_options(request)
 
 
 def _has_maintenance(policy: DeltaMaintenancePolicy) -> bool:

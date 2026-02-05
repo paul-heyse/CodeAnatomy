@@ -53,7 +53,7 @@ def register_cdf_inputs(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
-        location = runtime_profile.dataset_location(name)
+        location = runtime_profile.catalog_ops.dataset_location(name)
         if location is None:
             continue
         provider = resolve_datafusion_provider(location)

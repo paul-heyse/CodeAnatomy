@@ -403,7 +403,7 @@ def extract_dataset_location_or_raise(
     ValueError
         Raised when the DataFusion runtime or dataset location is unavailable.
     """
-    location = runtime_profile.dataset_location(name)
+    location = runtime_profile.catalog_ops.dataset_location(name)
     if location is None:
         msg = f"No extract dataset location configured for {name!r}."
         raise ValueError(msg)
@@ -416,7 +416,7 @@ def _streaming_supported_for_extract(
     runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
-    if runtime_profile.dataset_location(name) is None:
+    if runtime_profile.catalog_ops.dataset_location(name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
@@ -461,7 +461,7 @@ def _plan_scan_units_for_extract(
         plan.optimized_logical_plan,
         udf_snapshot=plan.artifacts.udf_snapshot,
     ).scans:
-        location = runtime_profile.dataset_location(scan.dataset_name)
+        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -742,7 +742,7 @@ def _record_extract_compile(
 
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
     """Register a view for a materialized extract dataset."""
-    location = runtime_profile.dataset_location(name)
+    location = runtime_profile.catalog_ops.dataset_location(name)
     if location is None:
         return
     session_runtime = runtime_profile.session_runtime()
@@ -805,7 +805,7 @@ def _validate_extract_schema_contract(
     TypeError
         Raised when the expected schema cannot be resolved.
     """
-    if runtime_profile.dataset_location(name) is None:
+    if runtime_profile.catalog_ops.dataset_location(name) is None:
         return
     expected = dataset_schema(name)
     if not isinstance(expected, pa.Schema):

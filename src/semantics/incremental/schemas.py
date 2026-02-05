@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.schema.registry import registered_table_names
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
+from schema_spec.dataset_spec_ops import dataset_spec_with_delta_maintenance
 from schema_spec.system import DatasetSpec, DeltaMaintenancePolicy, dataset_spec_from_schema
 
 
@@ -31,8 +30,7 @@ def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
             continue
         spec = dataset_spec_from_schema(name, schema)
         maintenance = _incremental_maintenance_policy(spec)
-        if maintenance is not None:
-            spec = replace(spec, delta_maintenance_policy=maintenance)
+        spec = dataset_spec_with_delta_maintenance(spec, maintenance)
         specs.append(spec)
     return tuple(specs)
 

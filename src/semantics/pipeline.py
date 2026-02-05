@@ -600,14 +600,14 @@ def _cdf_changed_inputs(
         return None
     if not isinstance(cursor_store, CdfCursorStore):
         return None
-    delta_service = runtime_profile.delta_service()
+    delta_service = runtime_profile.delta_ops.delta_service()
     changed: set[str] = set()
     for canonical, source in input_mapping.items():
         if canonical == "file_line_index_v1":
             continue
-        location = runtime_profile.dataset_location(canonical)
+        location = runtime_profile.catalog_ops.dataset_location(canonical)
         if location is None:
-            location = runtime_profile.dataset_location(source)
+            location = runtime_profile.catalog_ops.dataset_location(source)
         if location is None:
             continue
         storage_options = dict(location.storage_options)
@@ -1050,12 +1050,11 @@ def _cpg_output_view_specs(
         profile: DataFusionRuntimeProfile | None,
     ) -> DataFrame:
         try:
-            from semantics.catalog.dataset_specs import dataset_spec
-        except Exception:  # noqa: BLE001
+            from semantics.catalog.dataset_specs import maybe_dataset_spec
+        except (ImportError, RuntimeError):
             return df
-        try:
-            spec = dataset_spec(view_name)
-        except KeyError:
+        spec = maybe_dataset_spec(view_name)
+        if spec is None:
             return df
         from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
 
@@ -2114,7 +2113,7 @@ def _has_cdf_inputs(
     from datafusion_engine.dataset.registry import resolve_datafusion_provider
 
     for name in inputs:
-        location = runtime_profile.dataset_location(name)
+        location = runtime_profile.catalog_ops.dataset_location(name)
         if location is None:
             continue
         if location.delta_cdf_options is not None:

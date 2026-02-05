@@ -231,7 +231,7 @@ def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
     return _arrow_type_from_pyarrow(dtype)
 
 
-def arrow_type_to_pyarrow(spec: ArrowTypeSpec) -> pa.DataType:
+def arrow_type_to_pyarrow(spec: ArrowTypeSpec | ArrowTypeBase) -> pa.DataType:
     """Return pyarrow dtype for an ArrowTypeSpec.
 
     Returns

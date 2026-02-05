@@ -15,6 +15,10 @@ from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
+from tools.cq.query.execution_requests import (
+    EntityQueryRequest,
+    PatternQueryRequest,
+)
 from tools.cq.query.executor import (
     execute_entity_query_from_records,
     execute_pattern_query_with_files,
@@ -110,42 +114,16 @@ def _execute_q_steps(
     pattern_steps: list[ParsedQStep] = []
 
     for step in steps:
-        step_id = step.id or "q"
-        try:
-            query = parse_query(step.query)
-        except QueryParseError as exc:
-            if not _has_query_tokens(step.query):
-                result = _execute_search_fallback(step.query, plan, ctx)
-                results.append((step_id, result))
-                continue
-            results.append((step_id, _error_result(step_id, "q", exc, ctx)))
-            if stop_on_error:
+        step_id, outcome, is_error = _prepare_q_step(step, plan, ctx)
+        if isinstance(outcome, CqResult):
+            results.append((step_id, outcome))
+            if stop_on_error and is_error:
                 return results
             continue
-
-        query = _apply_run_scope(query, plan)
-        tool_plan = compile_query(query)
-        scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
-        if not scope_paths:
-            results.append(
-                (step_id, _error_result(step_id, "q", RuntimeError("No files match scope"), ctx))
-            )
-            if stop_on_error:
-                return results
-            continue
-        scope_globs = scope_to_globs(tool_plan.scope)
-        parsed_step = ParsedQStep(
-            step_id=step_id,
-            step=step,
-            query=query,
-            plan=tool_plan,
-            scope_paths=scope_paths,
-            scope_globs=scope_globs,
-        )
-        if tool_plan.is_pattern_query:
-            pattern_steps.append(parsed_step)
+        if outcome.plan.is_pattern_query:
+            pattern_steps.append(outcome)
         else:
-            parsed.append(parsed_step)
+            parsed.append(outcome)
 
     if parsed:
         results.extend(_execute_entity_q_steps(parsed, ctx, stop_on_error=stop_on_error))
@@ -154,6 +132,47 @@ def _execute_q_steps(
         results.extend(_execute_pattern_q_steps(pattern_steps, ctx, stop_on_error=stop_on_error))
 
     return results
+
+
+def _prepare_q_step(
+    step: QStep,
+    plan: RunPlan,
+    ctx: CliContext,
+) -> tuple[str, ParsedQStep | CqResult, bool]:
+    step_id = step.id or "q"
+    try:
+        query = parse_query(step.query)
+    except QueryParseError as exc:
+        return _handle_query_parse_error(step, step_id, plan, ctx, exc)
+
+    query = _apply_run_scope(query, plan)
+    tool_plan = compile_query(query)
+    scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
+    if not scope_paths:
+        msg = "No files match scope"
+        return step_id, _error_result(step_id, "q", RuntimeError(msg), ctx), True
+    scope_globs = scope_to_globs(tool_plan.scope)
+    parsed_step = ParsedQStep(
+        step_id=step_id,
+        step=step,
+        query=query,
+        plan=tool_plan,
+        scope_paths=scope_paths,
+        scope_globs=scope_globs,
+    )
+    return step_id, parsed_step, False
+
+
+def _handle_query_parse_error(
+    step: QStep,
+    step_id: str,
+    plan: RunPlan,
+    ctx: CliContext,
+    exc: QueryParseError,
+) -> tuple[str, CqResult, bool]:
+    if not _has_query_tokens(step.query):
+        return step_id, _execute_search_fallback(step.query, plan, ctx), False
+    return step_id, _error_result(step_id, "q", exc, ctx), True
 
 
 def _execute_entity_q_steps(
@@ -195,19 +214,20 @@ def _execute_entity_q_steps(
     results: list[tuple[str, CqResult]] = []
     for step, allowed, spans in zip(steps, allowed_files, match_spans, strict=True):
         records = [record for record in session.records if record.file in allowed]
+        request = EntityQueryRequest(
+            plan=step.plan,
+            query=step.query,
+            tc=ctx.toolchain,
+            root=ctx.root,
+            records=records,
+            paths=step.scope_paths,
+            scope_globs=step.scope_globs,
+            argv=ctx.argv,
+            match_spans=spans,
+            symtable=session.symtable,
+        )
         try:
-            result = execute_entity_query_from_records(
-                plan=step.plan,
-                query=step.query,
-                tc=ctx.toolchain,
-                root=ctx.root,
-                records=records,
-                paths=step.scope_paths,
-                scope_globs=step.scope_globs,
-                argv=ctx.argv,
-                match_spans=spans,
-                symtable=session.symtable,
-            )
+            result = execute_entity_query_from_records(request)
         except Exception as exc:  # noqa: BLE001 - defensive boundary
             result = _error_result(step.step_id, "q", exc, ctx)
             results.append((step.step_id, result))
@@ -246,15 +266,16 @@ def _execute_pattern_q_steps(
     for step in steps:
         allowed_rel = filter_files_for_scope(pattern_files, ctx.root, step.plan.scope)
         files = select_files_by_rel(files_by_rel, allowed_rel)
+        request = PatternQueryRequest(
+            plan=step.plan,
+            query=step.query,
+            tc=ctx.toolchain,
+            root=ctx.root,
+            files=files,
+            argv=ctx.argv,
+        )
         try:
-            result = execute_pattern_query_with_files(
-                plan=step.plan,
-                query=step.query,
-                tc=ctx.toolchain,
-                root=ctx.root,
-                files=files,
-                argv=ctx.argv,
-            )
+            result = execute_pattern_query_with_files(request)
         except Exception as exc:  # noqa: BLE001 - defensive boundary
             result = _error_result(step.step_id, "q", exc, ctx)
             results.append((step.step_id, result))

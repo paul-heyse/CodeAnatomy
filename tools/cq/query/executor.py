@@ -33,6 +33,11 @@ from tools.cq.core.scoring import (
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
+from tools.cq.query.execution_requests import (
+    DefQueryContext,
+    EntityQueryRequest,
+    PatternQueryRequest,
+)
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
@@ -42,7 +47,6 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.index.files import FileFilterDecision
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter
 from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
@@ -322,6 +326,7 @@ def _apply_entity_handlers(
     query = state.ctx.query
     root = state.ctx.root
     candidates = state.candidates
+    def_ctx = DefQueryContext(state=state, result=result, symtable=symtable)
 
     if query.entity == "import":
         _process_import_query(
@@ -336,14 +341,7 @@ def _apply_entity_handlers(
     elif query.entity == "callsite":
         _process_call_query(state.scan, query, result, root)
     else:
-        _process_def_query(
-            state.scan,
-            query,
-            result,
-            root,
-            candidates.def_records,
-            symtable=symtable,
-        )
+        _process_def_query(def_ctx, query, candidates.def_records)
 
 
 def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> None:
@@ -442,19 +440,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     return result
 
 
-def execute_entity_query_from_records(
-    *,
-    plan: ToolPlan,
-    query: Query,
-    tc: Toolchain,
-    root: Path,
-    records: list[SgRecord],
-    paths: list[Path],
-    scope_globs: list[str] | None,
-    argv: list[str] | None = None,
-    match_spans: dict[str, list[tuple[int, int]]] | None = None,
-    symtable: SymtableEnricher | None = None,
-) -> CqResult:
+def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     """Execute an entity query using pre-scanned records.
 
     Returns
@@ -463,32 +449,32 @@ def execute_entity_query_from_records(
         Query result with findings and summary metadata.
     """
     ctx = QueryExecutionContext(
-        plan=plan,
-        query=query,
-        tc=tc,
-        root=root,
-        argv=argv or [],
+        plan=request.plan,
+        query=request.query,
+        tc=request.tc,
+        root=request.root,
+        argv=request.argv,
         started_ms=ms(),
     )
-    scan_ctx = _build_scan_context(records)
-    candidates = _build_entity_candidates(scan_ctx, records)
+    scan_ctx = _build_scan_context(request.records)
+    candidates = _build_entity_candidates(scan_ctx, request.records)
     candidates = _apply_rule_spans(
         ctx,
-        paths,
-        scope_globs,
+        request.paths,
+        request.scope_globs,
         candidates,
-        match_spans=match_spans,
+        match_spans=request.match_spans,
     )
     state = EntityExecutionState(
         ctx=ctx,
-        paths=paths,
-        scope_globs=scope_globs,
-        records=records,
+        paths=request.paths,
+        scope_globs=request.scope_globs,
+        records=request.records,
         scan=scan_ctx,
         candidates=candidates,
     )
     result = mk_result(_build_runmeta(ctx))
-    _apply_entity_handlers(state, result, symtable=symtable)
+    _apply_entity_handlers(state, result, symtable=request.symtable)
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     return result
@@ -535,16 +521,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     return result
 
 
-def execute_pattern_query_with_files(
-    *,
-    plan: ToolPlan,
-    query: Query,
-    tc: Toolchain,
-    root: Path,
-    files: list[Path],
-    argv: list[str] | None = None,
-    decisions: list[FileFilterDecision] | None = None,
-) -> CqResult:
+def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     """Execute a pattern query using a pre-tabulated file list.
 
     Returns
@@ -553,24 +530,24 @@ def execute_pattern_query_with_files(
         Query result with findings and summary metadata.
     """
     ctx = QueryExecutionContext(
-        plan=plan,
-        query=query,
-        tc=tc,
-        root=root,
-        argv=argv or [],
+        plan=request.plan,
+        query=request.query,
+        tc=request.tc,
+        root=request.root,
+        argv=request.argv,
         started_ms=ms(),
     )
 
-    if not files:
+    if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
-        if plan.explain and decisions is not None:
-            result.summary["file_filters"] = [asdict(decision) for decision in decisions]
+        if request.plan.explain and request.decisions is not None:
+            result.summary["file_filters"] = [asdict(decision) for decision in request.decisions]
         return result
 
     state = PatternExecutionState(
         ctx=ctx,
-        scope_globs=scope_to_globs(plan.scope),
-        file_result=FileTabulationResult(files=files, decisions=decisions or []),
+        scope_globs=scope_to_globs(request.plan.scope),
+        file_result=FileTabulationResult(files=request.files, decisions=request.decisions or []),
     )
 
     findings, records, _ = _execute_ast_grep_rules(
@@ -1130,26 +1107,27 @@ def _process_import_query(
 
 
 def _process_def_query(
-    ctx: ScanContext,
+    ctx: DefQueryContext,
     query: Query,
-    result: CqResult,
-    root: Path,
     def_candidates: list[SgRecord] | None = None,
-    *,
-    symtable: SymtableEnricher | None = None,
 ) -> None:
     """Process a definition entity query."""
-    candidate_records = def_candidates if def_candidates is not None else ctx.def_records
+    state = ctx.state
+    result = ctx.result
+    scan_ctx = state.scan
+    root = state.ctx.root
+
+    candidate_records = def_candidates if def_candidates is not None else scan_ctx.def_records
     matching_defs = _filter_to_matching(candidate_records, query)
     matching_records = list(matching_defs)  # Keep copy for scope filtering
 
     for def_record in matching_defs:
-        finding = _def_to_finding(def_record, ctx.calls_by_def.get(def_record, []))
+        finding = _def_to_finding(def_record, scan_ctx.calls_by_def.get(def_record, []))
         result.key_findings.append(finding)
 
     # Apply scope filter if present
     if query.scope_filter:
-        enricher = symtable if symtable is not None else SymtableEnricher(root)
+        enricher = ctx.symtable if ctx.symtable is not None else SymtableEnricher(root)
         result.key_findings = filter_by_scope(
             result.key_findings,
             query.scope_filter,
@@ -1161,27 +1139,27 @@ def _process_def_query(
     if "callers" in query.fields:
         callers_section = _build_callers_section(
             matching_defs,
-            ctx.call_records,
-            ctx.file_index,
+            scan_ctx.call_records,
+            scan_ctx.file_index,
             root,
         )
         if callers_section.findings:
             result.sections.append(callers_section)
 
     if "callees" in query.fields:
-        callees_section = _build_callees_section(matching_defs, ctx.calls_by_def, root)
+        callees_section = _build_callees_section(matching_defs, scan_ctx.calls_by_def, root)
         if callees_section.findings:
             result.sections.append(callees_section)
 
     if "imports" in query.fields:
-        imports_section = _build_imports_section(matching_defs, ctx.all_records)
+        imports_section = _build_imports_section(matching_defs, scan_ctx.all_records)
         if imports_section.findings:
             result.sections.append(imports_section)
 
-    _append_expander_sections(result, matching_defs, ctx, root, query)
+    _append_expander_sections(result, matching_defs, scan_ctx, root, query)
 
-    result.summary["total_defs"] = len(ctx.def_records)
-    result.summary["total_calls"] = len(ctx.call_records)
+    result.summary["total_defs"] = len(scan_ctx.def_records)
+    result.summary["total_calls"] = len(scan_ctx.call_records)
     result.summary["matches"] = len(result.key_findings)
 
 

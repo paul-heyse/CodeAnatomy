@@ -21,6 +21,7 @@ from serde_msgspec_ext import (
     SubstraitBytes,
 )
 from serde_msgspec_inspect import inspect_to_builtins
+from utils.validation import ensure_mapping
 
 
 class StructBaseStrict(
@@ -522,6 +523,18 @@ def to_builtins(obj: object, *, str_keys: bool = True) -> object:
         str_keys=str_keys,
         enc_hook=_json_enc_hook,
     )
+
+
+def to_builtins_mapping(obj: object, *, str_keys: bool = True) -> Mapping[str, object]:
+    """Convert an object into a JSON-friendly mapping payload.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Mapping payload with string keys.
+    """
+    payload = to_builtins(obj, str_keys=str_keys)
+    return ensure_mapping(payload, label="to_builtins_mapping")
 
 
 def to_builtins_sorted(obj: object, *, str_keys: bool = True) -> object:

@@ -53,6 +53,15 @@ class ViewSpec(StructBaseStrict, frozen=True):
     schema: TableSchemaSpec | None = None
 
 
+@dataclass(frozen=True)
+class ViewRuntimeSpec:
+    """Runtime view specification with builder wiring."""
+
+    name: IdentifierStr
+    builder: Callable[[SessionContext], DataFrame]
+    schema: TableSchemaSpec | None = None
+
+
 def view_spec_from_builder(inputs: ViewSpecInputs) -> ViewSpec:
     """Return a view spec derived from a DataFrame builder.
 

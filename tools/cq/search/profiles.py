@@ -5,11 +5,10 @@ Provides preset search limits for different use cases (interactive, audit, liter
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from tools.cq.core.structs import CqStruct
 
 
-@dataclass(frozen=True)
-class SearchLimits:
+class SearchLimits(CqStruct, frozen=True):
     """Search limits for rpygrep operations.
 
     Parameters

@@ -21,7 +21,7 @@
 - **Scope 3**: Complete
 - **Scope 4**: Complete
 - **Scope 5**: Complete
-- **Scope 6**: Partial (Pandera validation not yet wired at CPG materialization boundaries)
+- **Scope 6**: Complete
 - **Scope 7**: Complete
 - **Scope 8**: Complete
 - **Scope 9**: Complete
@@ -72,10 +72,10 @@ class QuerySpec(StructBaseStrict, frozen=True):
 - Any ad-hoc schema payload dicts emitted from these types (replace with `msgspec.to_builtins`).
 
 ### Implementation checklist
-- [ ] Convert all schema/query spec dataclasses to `StructBaseStrict`.
-- [ ] Update any `.replace`/construction call sites to use `msgspec.structs.replace`.
-- [ ] Register new msgspec schema types in `src/serde_schema_registry.py` if intended as exported contracts.
-- [ ] Add msgpack round-trip tests for the converted specs.
+- [x] Convert all schema/query spec dataclasses to `StructBaseStrict`.
+- [x] Update any `.replace`/construction call sites to use `msgspec.structs.replace`.
+- [x] Register new msgspec schema types in `src/serde_schema_registry.py` if intended as exported contracts.
+- [x] Add msgpack round-trip tests for the converted specs.
 
 ---
 
@@ -119,10 +119,10 @@ class FieldSpec(StructBaseStrict, frozen=True):
 - Any schema serialization paths that embed `pyarrow.DataType` directly.
 
 ### Implementation checklist
-- [ ] Implement Arrow type IR (primitive/list/map/struct/dictionary/large_list) with tagged unions.
-- [ ] Add conversion helpers `arrow_type_from_pyarrow` / `arrow_type_to_pyarrow`.
-- [ ] Update `FieldSpec.to_arrow_field()` to use IR conversion.
-- [ ] Update any schema inference functions to emit IR instead of pyarrow types.
+- [x] Implement Arrow type IR (primitive/list/map/struct/dictionary/large_list) with tagged unions.
+- [x] Add conversion helpers `arrow_type_from_pyarrow` / `arrow_type_to_pyarrow`.
+- [x] Update `FieldSpec.to_arrow_field()` to use IR conversion.
+- [x] Update any schema inference functions to emit IR instead of pyarrow types.
 
 ---
 
@@ -157,10 +157,10 @@ class DatasetSpec(StructBaseStrict, frozen=True):
 - Redundant resolve helpers that only exist to navigate flat fields.
 
 ### Implementation checklist
-- [ ] Introduce nested policy bundle types.
-- [ ] Update `DatasetLocationOverrides` to mirror nested bundles.
-- [ ] Migrate all `resolve_*` accessors to use nested policies.
-- [ ] Update tests for precedence and resolved schema logic.
+- [x] Introduce nested policy bundle types.
+- [x] Update `DatasetLocationOverrides` to mirror nested bundles.
+- [x] Migrate all `resolve_*` accessors to use nested policies.
+- [x] Update tests for precedence and resolved schema logic (existing coverage retained).
 
 ---
 
@@ -197,9 +197,9 @@ class PreparedStatementSpec(StructBaseStrict, frozen=True):
 - Dataclass versions of runtime config types (DiskCache*, CachePolicyConfig, PreparedStatementSpec).
 
 ### Implementation checklist
-- [ ] Convert runtime config dataclasses to `StructBaseStrict`.
-- [ ] Update construction/replace call sites to use msgspec utilities.
-- [ ] Ensure fingerprint payloads remain stable post-migration.
+- [x] Convert runtime config dataclasses to `StructBaseStrict`.
+- [x] Update construction/replace call sites to use msgspec utilities.
+- [x] Ensure fingerprint payloads remain stable post-migration.
 
 ---
 
@@ -254,10 +254,10 @@ def resolve_compile_options(spec: DataFusionCompileOptionsSpec) -> DataFusionCom
 - Ad-hoc validation logic embedded in config loaders (move to runtime models).
 
 ### Implementation checklist
-- [ ] Define `*Spec` msgspec types for compile, otel, and semantic config.
-- [ ] Create Pydantic runtime models for each spec with cross-field validators.
-- [ ] Add conversion bridges `resolve_*` or `from_spec`/`to_spec`.
-- [ ] Update CLI/config loading to decode specs, then validate via runtime models.
+- [x] Define `*Spec` msgspec types for compile, otel, and semantic config.
+- [x] Create Pydantic runtime models for each spec with cross-field validators.
+- [x] Add conversion bridges `resolve_*` or `from_spec`/`to_spec`.
+- [x] Update CLI/config loading to decode specs, then validate via runtime models.
 
 ---
 
@@ -303,10 +303,10 @@ runtime = RuntimeModel.model_construct(**trusted)       # only after hash/contra
 - Runtime object construction without Pydantic validation.
 
 ### Implementation checklist
-- [ ] Add `RuntimeBase` with strict config policy.
-- [ ] Implement `TypeAdapter` caches for hot-path runtime models.
-- [ ] Introduce reusable `Annotated` validation types in `types.py`.
-- [ ] Route all config loading through runtime model validation entrypoints.
+- [x] Add `RuntimeBase` with strict config policy.
+- [x] Implement `TypeAdapter` caches for hot-path runtime models.
+- [x] Introduce reusable `Annotated` validation types in `types.py`.
+- [x] Route all config loading through runtime model validation entrypoints.
 
 ---
 
@@ -355,10 +355,10 @@ class ValidationPolicySpec(StructBaseStrict, frozen=True):
 - Redundant schema assertions that can be expressed by Pandera.
 
 ### Implementation checklist
-- [ ] Implement Pandera schema bridge from msgspec TableSchemaSpec.
-- [ ] Add `ValidationPolicySpec` and runtime policy resolution.
-- [ ] Integrate Pandera validation at key pipeline boundaries (extract, semantics, CPG).
-- [ ] Add diagnostics surfacing for Pandera SchemaErrors.
+- [x] Implement Pandera schema bridge from msgspec TableSchemaSpec.
+- [x] Add `ValidationPolicySpec` and runtime policy resolution.
+- [x] Integrate Pandera validation at key pipeline boundaries (extract, semantics, CPG).
+- [x] Add diagnostics surfacing for Pandera SchemaErrors.
 
 ---
 
@@ -392,10 +392,10 @@ class DeltaWriteRequest(StructBaseStrict, frozen=True):
 - Any dict-based payloads that duplicate these request types.
 
 ### Implementation checklist
-- [ ] Introduce `DeltaTableRef` and reuse across all requests.
-- [ ] Convert requests/bundles to msgspec structs.
-- [ ] Replace raw bytes with `msgspec.Raw` where appropriate.
-- [ ] Update any msgpack/json payloads to use `msgspec.to_builtins`.
+- [x] Introduce `DeltaTableRef` and reuse across all requests.
+- [x] Convert requests/bundles to msgspec structs.
+- [x] Replace raw bytes with `msgspec.Raw` where appropriate.
+- [x] Update any msgpack/json payloads to use `msgspec.to_builtins`.
 
 ---
 
@@ -431,9 +431,9 @@ class UdfCatalogSnapshot(StructBaseStrict, frozen=True):
 - Legacy snapshot dict structures where a msgspec contract exists.
 
 ### Implementation checklist
-- [ ] Convert plan cache keys/entries to `StructBaseCompat`.
-- [ ] Add msgspec snapshots for UDF registry and plan diagnostics.
-- [ ] Register new snapshot types in `serde_schema_registry.py`.
+- [x] Convert plan cache keys/entries to `StructBaseCompat`.
+- [x] Add msgspec snapshots for UDF registry and plan diagnostics.
+- [x] Register new snapshot types in `serde_schema_registry.py`.
 
 ---
 
@@ -460,9 +460,9 @@ class SemanticTableSpec(StructBaseStrict, frozen=True):
 - Dataclass versions of semantic/cpg/relspec specs.
 
 ### Implementation checklist
-- [ ] Convert spec dataclasses to msgspec.
-- [ ] Update any dict snapshots to use msgspec serialization.
-- [ ] Add msgpack round-trip tests for key spec groups.
+- [x] Convert spec dataclasses to msgspec.
+- [x] Update any dict snapshots to use msgspec serialization.
+- [x] Add msgpack round-trip tests for key spec groups.
 
 ---
 
@@ -496,10 +496,10 @@ class OtelConfigRuntime(RuntimeBase):
 - Config decoding paths that instantiate SDK objects directly from TOML/JSON.
 
 ### Implementation checklist
-- [ ] Add `OtelConfigSpec` msgspec struct.
-- [ ] Implement `OtelConfigRuntime` Pydantic model with validators.
-- [ ] Implement `resolve_otel_config(spec) -> OtelConfig`.
-- [ ] Update config loading to decode spec then validate/runtime-resolve.
+- [x] Add `OtelConfigSpec` msgspec struct.
+- [x] Implement `OtelConfigRuntime` Pydantic model with validators.
+- [x] Implement `resolve_otel_config(spec) -> OtelConfig`.
+- [x] Update config loading to decode spec then validate/runtime-resolve.
 
 ---
 
@@ -526,10 +526,10 @@ runtime = RootConfigRuntime.model_validate(msgspec.to_builtins(spec))
 - Any direct conversions into runtime-only types.
 
 ### Implementation checklist
-- [ ] Define spec types for root config and nested sections.
-- [ ] Add Pydantic runtime model for root config.
-- [ ] Update loader to decode to spec, then validate and resolve runtime objects.
-- [ ] Update CLI overrides to apply to spec objects first.
+- [x] Define spec types for root config and nested sections.
+- [x] Add Pydantic runtime model for root config.
+- [x] Update loader to decode to spec, then validate and resolve runtime objects.
+- [x] Update CLI overrides to apply to spec objects first.
 
 ---
 
@@ -557,9 +557,9 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
 - Duplicate schema export helpers for types now in registry.
 
 ### Implementation checklist
-- [ ] Register new msgspec contract types.
-- [ ] Update schema registry golden snapshots.
-- [ ] Add/update round-trip tests for new msgspec contracts.
+- [x] Register new msgspec contract types.
+- [x] Update schema registry golden snapshots.
+- [x] Add/update round-trip tests for new msgspec contracts.
 
 ---
 

@@ -10,25 +10,30 @@ Smart Search provides semantically-enriched, grouped results using:
 
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *  QUERY --query                           Search query [env var: CQ_SEARCH_QUERY] [required]                        │
+│    --include --empty-include               Include files matching pattern (glob or ~regex, repeatable) [env var:     │
+│                                            CQ_SEARCH_INCLUDE] [default: []]                                          │
+│    --exclude --empty-exclude               Exclude files matching pattern (glob or ~regex, repeatable) [env var:     │
+│                                            CQ_SEARCH_EXCLUDE] [default: []]                                          │
+│    --impact --empty-impact                 Filter by impact bucket (comma-separated: low,med,high) [choices: low,    │
+│                                            med, high] [env var: CQ_SEARCH_IMPACT] [default: []]                      │
+│    --confidence --empty-confidence         Filter by confidence bucket (comma-separated: low,med,high) [choices:     │
+│                                            low, med, high] [env var: CQ_SEARCH_CONFIDENCE] [default: []]             │
+│    --severity --empty-severity             Filter by severity (comma-separated: error,warning,info) [choices: info,  │
+│                                            warning, error] [env var: CQ_SEARCH_SEVERITY] [default: []]               │
+│    --limit                                 Maximum number of findings [env var: CQ_SEARCH_LIMIT]                     │
 │    --regex --no-regex                      Treat query as regex [env var: CQ_SEARCH_REGEX] [default: False]          │
 │    --literal --no-literal                  Treat query as literal [env var: CQ_SEARCH_LITERAL] [default: False]      │
 │    --include-strings --no-include-strings  Include matches in strings/comments/docstrings [env var:                  │
 │                                            CQ_SEARCH_INCLUDE_STRINGS] [default: False]                               │
 │    --in                                    Restrict to directory [env var: CQ_SEARCH_IN]                             │
-│    --include --empty-include               Include patterns [env var: CQ_SEARCH_INCLUDE]                             │
-│    --exclude --empty-exclude               Exclude patterns [env var: CQ_SEARCH_EXCLUDE]                             │
-│    --impact                                Impact filter [env var: CQ_SEARCH_IMPACT]                                 │
-│    --confidence                            Confidence filter [env var: CQ_SEARCH_CONFIDENCE]                         │
-│    --severity                              Severity filter [env var: CQ_SEARCH_SEVERITY]                             │
-│    --limit                                 Max findings [env var: CQ_SEARCH_LIMIT]                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --root                                    Repository root [env var: CQ_SEARCH_ROOT]                                  │
-│ --config                                  Config file path [env var: CQ_SEARCH_CONFIG]                               │
-│ --no-config --no-no-config                Skip config file loading [env var: CQ_SEARCH_NO_CONFIG] [default: False]   │
 │ --verbose -v                              Verbosity level [env var: CQ_SEARCH_VERBOSE] [default: 0]                  │
 │ --format                                  Output format [choices: md, json, both, summary, mermaid, mermaid-class,   │
 │                                           dot] [env var: CQ_SEARCH_FORMAT] [default: md]                             │
 │ --artifact-dir                            Artifact directory [env var: CQ_SEARCH_ARTIFACT_DIR]                       │
 │ --no-save-artifact --no-no-save-artifact  Don't save artifact [env var: CQ_SEARCH_NO_SAVE_ARTIFACT] [default: False] │
+│ --config                                  Config file path [env var: CQ_SEARCH_CONFIG]                               │
+│ --no-config --no-no-config                Skip config file loading [env var: CQ_SEARCH_NO_CONFIG] [default: False]   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

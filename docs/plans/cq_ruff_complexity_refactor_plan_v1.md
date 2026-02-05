@@ -11,7 +11,7 @@ The plan now integrates a **msgspec‑first internal model layer** and **pydanti
 - Scope 1: Complete
 - Scope 2: Complete
 - Scope 3: Complete
-- Scope 4: Partial
+- Scope 4: Complete
 - Scope 5: Complete
 - Scope 6: Complete
 - Scope 7: Complete
@@ -22,6 +22,13 @@ The plan now integrates a **msgspec‑first internal model layer** and **pydanti
 - Scope 12: Complete
 - Scope 13: Complete
 - Scope 14: Complete
+- Scope 15: Complete
+- Scope 16: Complete
+- Scope 17: Complete
+- Scope 18: Complete
+- Scope 19: Complete
+- Scope 20: Complete
+- Scope 21: Complete
 
 ---
 
@@ -163,7 +170,7 @@ def q(query_string: str, *, opts: QueryOptions, ctx: CliContext | None = None) -
 
 ## Scope 4: Smart Search Context + Collector Refactor
 
-**Status**: Partial
+**Status**: Complete
 
 **Goal**  
 Split candidate collection and enrichment into smaller, testable stages.
@@ -213,9 +220,7 @@ class RgCollector:
 4. Update tests to exercise collector directly.
 
 **Remaining**
-- Add `RgCollector.finalize()` (or explicitly document why a finalize hook is unnecessary). 
-- Remove or clearly deprecate `_collect_candidates_raw` now that collector usage is primary. 
-- Add unit coverage that calls `RgCollector` directly (match + summary handling).
+- None.
 
 ---
 
@@ -566,6 +571,273 @@ opts = msgspec.convert(config.model_dump(), type=CommonFilters, strict=True)
 1. Centralize env/CLI coercion in `context.py` or `config_models.py`. 
 2. Ensure internal code always receives typed msgspec structs. 
 3. Update docs/tests for the new coercion boundary.
+
+---
+
+## Scope 15: Unified Source Span Models
+
+**Status**: Complete
+
+**Goal**  
+Consolidate file/line/column/span representations into a shared model to reduce duplication and keep schema stable.
+
+**Representative snippet**
+
+```python
+# tools/cq/core/locations.py
+from typing import Annotated
+import msgspec
+
+class SourceSpan(msgspec.Struct, frozen=True, omit_defaults=True):
+    file: str
+    start_line: Annotated[int, msgspec.Meta(ge=1)]
+    start_col: Annotated[int, msgspec.Meta(ge=0)]
+    end_line: int | None = None
+    end_col: int | None = None
+```
+
+```python
+# tools/cq/search/smart_search.py
+span = span_from_rg(match)
+finding = Finding(anchor=Anchor.from_span(span), ...)
+```
+
+**Target files**
+- `tools/cq/core/locations.py` (new)
+- `tools/cq/core/schema.py`
+- `tools/cq/search/smart_search.py`
+- `tools/cq/search/collector.py`
+- `tools/cq/query/executor.py`
+- `tools/cq/astgrep/sgpy_scanner.py`
+
+**Deprecate/Delete**
+- Ad‑hoc span tuples and duplicate match span structs.
+
+**Implementation checklist**
+1. Introduce `SourceSpan` (or equivalent) with explicit line/column constraints. 
+2. Add helper constructors (`span_from_rg`, `span_from_sg`, `Anchor.from_span`). 
+3. Refactor RawMatch/MatchPayload/AstGrepMatchSpan to use the unified model. 
+4. Update any serialization tests or schema exports as needed.
+
+---
+
+## Scope 16: Run Context Standardization
+
+**Status**: Complete
+
+**Goal**  
+Centralize run metadata construction (`RunMeta`) and toolchain injection into a shared context object.
+
+**Representative snippet**
+
+```python
+# tools/cq/core/run_context.py
+class RunContext(msgspec.Struct, frozen=True):
+    root: Path
+    argv: list[str]
+    tc: Toolchain
+    started_ms: float
+
+    def to_runmeta(self, macro: str) -> RunMeta:
+        return mk_runmeta(macro, self.argv, str(self.root), self.started_ms, self.tc.to_dict())
+```
+
+**Target files**
+- `tools/cq/core/run_context.py` (new)
+- `tools/cq/query/executor.py`
+- `tools/cq/search/smart_search.py`
+- `tools/cq/core/bundles.py`
+- `tools/cq/macros/*.py`
+
+**Deprecate/Delete**
+- Local `_build_runmeta` helpers and repeated `mk_runmeta(...)` boilerplate.
+
+**Implementation checklist**
+1. Add `RunContext` struct with `to_runmeta`. 
+2. Replace per-module runmeta builders with shared context usage. 
+3. Ensure toolchain metadata is consistent across macros, query, and search. 
+4. Update tests or golden outputs if run meta ordering changes.
+
+---
+
+## Scope 17: Scoring + Detail Payload Helper
+
+**Status**: Complete
+
+**Goal**  
+Replace repetitive `DetailPayload.from_legacy(dict(...))` sequences with a typed helper that composes scoring, evidence kind, and detail data.
+
+**Representative snippet**
+
+```python
+# tools/cq/core/scoring.py
+def build_detail_payload(
+    *,
+    data: dict[str, object],
+    impact: ImpactSignals | None = None,
+    confidence: ConfidenceSignals | None = None,
+    evidence_kind: str | None = None,
+) -> DetailPayload:
+    ...
+```
+
+**Target files**
+- `tools/cq/core/scoring.py`
+- `tools/cq/core/schema.py`
+- `tools/cq/macros/*.py`
+- `tools/cq/query/executor.py`
+
+**Deprecate/Delete**
+- Repeated `dict(scoring_details)` conversions and legacy detail dict shaping in macros.
+
+**Implementation checklist**
+1. Introduce a typed detail payload builder that returns `DetailPayload`. 
+2. Update macros to call the helper directly instead of assembling dicts. 
+3. Keep legacy compatibility by preserving `DetailPayload.from_legacy` for old payloads. 
+4. Add targeted tests for scoring + details composition.
+
+---
+
+## Scope 18: Smart Search Input Consolidation
+
+**Status**: Complete
+
+**Goal**  
+Reduce duplication across `SmartSearchRequest`, `CandidateSearchInputs`, `SearchSummaryInputs`, and classifier metadata by introducing a single shared config model and smaller typed inputs.
+
+**Representative snippet**
+
+```python
+# tools/cq/search/models.py
+class SearchConfig(CqStruct, frozen=True):
+    root: Path
+    query: str
+    mode: QueryMode
+    limits: SearchLimits
+    include_globs: list[str] | None = None
+    exclude_globs: list[str] | None = None
+    include_strings: bool = False
+```
+
+**Target files**
+- `tools/cq/search/models.py` (new)
+- `tools/cq/search/smart_search.py`
+- `tools/cq/search/adapter.py`
+- `tools/cq/search/context.py`
+
+**Deprecate/Delete**
+- Redundant smart search request/input dataclasses in `smart_search.py`.
+
+**Implementation checklist**
+1. Introduce `SearchConfig` and move shared fields into it. 
+2. Update candidate/search/summary helpers to accept config + specific args. 
+3. Remove redundant dataclasses from `smart_search.py`. 
+4. Adjust tests for the new constructor pathways.
+
+---
+
+## Scope 19: msgspec-Only Config Boundary
+
+**Status**: Complete
+
+**Goal**  
+Remove pydantic config models in favor of msgspec + explicit string coercion helpers for boundary parsing.
+
+**Representative snippet**
+
+```python
+# tools/cq/cli_app/config.py
+def parse_config(data: dict[str, object]) -> CqConfig | None:
+    coerced = coerce_config_strings(data)
+    return msgspec.convert(coerced, type=CqConfig, strict=True)
+```
+
+**Target files**
+- `tools/cq/cli_app/config.py`
+- `tools/cq/cli_app/config_types.py`
+- `tools/cq/cli_app/context.py`
+
+**Deprecate/Delete**
+- `tools/cq/cli_app/config_models.py`
+- Pydantic dependency for CQ config parsing.
+
+**Implementation checklist**
+1. Add explicit string coercion utilities for env/config fields. 
+2. Replace pydantic model validation with msgspec conversion. 
+3. Remove `CqConfigModel` and update imports/call sites. 
+4. Ensure config error handling remains stable.
+
+---
+
+## Scope 20: Typed Ripgrep Events + Deterministic Admin Output
+
+**Status**: Complete
+
+**Goal**  
+Use msgspec to decode ripgrep JSON events and to emit admin JSON via shared codecs.
+
+**Representative snippet**
+
+```python
+# tools/cq/search/rg_events.py
+class RgEvent(msgspec.Struct):
+    type: Literal["match", "summary", "begin", "end"]
+    data: dict[str, object]
+```
+
+```python
+# tools/cq/cli_app/commands/admin.py
+sys.stdout.write(dumps_json_value(payload, indent=2))
+```
+
+**Target files**
+- `tools/cq/search/smart_search.py`
+- `tools/cq/search/collector.py`
+- `tools/cq/cli_app/commands/admin.py`
+- `tools/cq/core/codec.py`
+
+**Deprecate/Delete**
+- `json.loads` usage for ripgrep events. 
+- Ad‑hoc `json.dumps` in admin command output.
+
+**Implementation checklist**
+1. Add typed rg event structs and msgspec decoder. 
+2. Route collector input through decoded events. 
+3. Replace admin JSON output with shared codec helpers. 
+4. Update tests to accept deterministic JSON ordering.
+
+---
+
+## Scope 21: msgspec Adoption for Remaining Core Dataclasses + Schema Export
+
+**Status**: Complete
+
+**Goal**  
+Convert performance‑sensitive dataclasses to msgspec Structs and expand JSON schema export coverage.
+
+**Representative snippet**
+
+```python
+# tools/cq/search/profiles.py
+class SearchLimits(msgspec.Struct, frozen=True):
+    max_files: int = 5000
+    ...
+```
+
+**Target files**
+- `tools/cq/search/profiles.py`
+- `tools/cq/core/scoring.py`
+- `tools/cq/core/toolchain.py`
+- `tools/cq/core/schema_export.py`
+
+**Deprecate/Delete**
+- Dataclass-only models that are purely data containers and serialized frequently.
+
+**Implementation checklist**
+1. Convert `SearchLimits`, `ImpactSignals`, `ConfidenceSignals`, `Toolchain` to msgspec Structs. 
+2. Update call sites and typing annotations. 
+3. Add schema export entries for the new structs. 
+4. Ensure backward compatibility for any serialized artifacts.
 
 ---
 

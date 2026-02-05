@@ -8,12 +8,12 @@ from typing import Annotated, Literal
 import msgspec
 
 from core_types import (
-    EVENT_KIND_PATTERN,
-    HASH_PATTERN,
-    IDENTIFIER_PATTERN,
-    RUN_ID_PATTERN,
-    STATUS_PATTERN,
+    EventKindStr,
+    HashStr,
+    IdentifierStr,
     JsonValueLax,
+    RunIdStr,
+    StatusStr,
 )
 from datafusion_engine.delta.protocol import (
     DeltaProtocolCompatibility,
@@ -78,88 +78,80 @@ StatsPolicyName = Annotated[
     ),
 ]
 PlanFingerprint = Annotated[
-    str,
+    HashStr,
     msgspec.Meta(
         min_length=32,
         max_length=128,
-        pattern=HASH_PATTERN,
         title="Plan Fingerprint",
         description="Deterministic plan fingerprint for reproducibility.",
         examples=["4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"],
     ),
 ]
 PlanIdentityHash = Annotated[
-    str,
+    HashStr,
     msgspec.Meta(
         min_length=32,
         max_length=128,
-        pattern=HASH_PATTERN,
         title="Plan Identity Hash",
         description="Deterministic plan identity hash for artifact rows.",
         examples=["9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c"],
     ),
 ]
 ProfileName = Annotated[
-    str,
+    IdentifierStr,
     msgspec.Meta(
         min_length=1,
         max_length=128,
-        pattern=IDENTIFIER_PATTERN,
         title="Profile Name",
         description="Runtime profile name.",
         examples=["default", "prod_primary"],
     ),
 ]
 DatasetName = Annotated[
-    str,
+    IdentifierStr,
     msgspec.Meta(
         min_length=1,
         max_length=128,
-        pattern=IDENTIFIER_PATTERN,
         title="Dataset Name",
         description="Dataset identifier.",
         examples=["cpg_nodes", "analytics.events_v2"],
     ),
 ]
 ViewName = Annotated[
-    str,
+    IdentifierStr,
     msgspec.Meta(
         min_length=1,
         max_length=128,
-        pattern=IDENTIFIER_PATTERN,
         title="View Name",
         description="View name.",
         examples=["example_view", "analytics.view_summary"],
     ),
 ]
 RunId = Annotated[
-    str,
+    RunIdStr,
     msgspec.Meta(
         min_length=8,
         max_length=64,
-        pattern=RUN_ID_PATTERN,
         title="Run Id",
         description="Unique identifier for a pipeline run.",
         examples=["run_01HZX4J3C8F8M2KQ"],
     ),
 ]
 EventKind = Annotated[
-    str,
+    EventKindStr,
     msgspec.Meta(
         min_length=1,
         max_length=64,
-        pattern=EVENT_KIND_PATTERN,
         title="Event Kind",
         description="Artifact event kind identifier.",
         examples=["plan", "execution", "write"],
     ),
 ]
 ArtifactStatus = Annotated[
-    str,
+    StatusStr,
     msgspec.Meta(
         min_length=1,
         max_length=32,
-        pattern=STATUS_PATTERN,
         title="Artifact Status",
         description="Artifact status value.",
         examples=["ok", "error"],

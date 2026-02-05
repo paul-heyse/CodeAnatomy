@@ -6,7 +6,7 @@ Enum member names ARE the CLI tokens for correct cyclopts coercion.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from enum import StrEnum
 
 
@@ -108,7 +108,32 @@ class ReportPreset(StrEnum):
         return self.value
 
 
-def comma_separated_list[T](type_: type[T]) -> Callable[[str | list[str]], list[T]]:
+def _iter_token_values(value: object) -> Iterable[str]:
+    items = value if isinstance(value, (list, tuple)) else [value]
+    for item in items:
+        if item is None:
+            continue
+        token_value = getattr(item, "value", item)
+        text = str(token_value)
+        for segment in text.split(","):
+            cleaned = segment.strip()
+            if cleaned:
+                yield cleaned
+
+
+_CONVERTER_ARGS_WITH_HINT = 2
+
+
+def _converter_value(args: tuple[object, ...]) -> object:
+    if len(args) == 1:
+        return args[0]
+    if len(args) == _CONVERTER_ARGS_WITH_HINT:
+        return args[1]
+    msg = "Expected converter args as (value) or (hint, value)."
+    raise TypeError(msg)
+
+
+def comma_separated_list[T](type_: type[T]) -> Callable[..., list[T]]:
     """Create a converter for comma-separated values.
 
     This handles both:
@@ -126,43 +151,28 @@ def comma_separated_list[T](type_: type[T]) -> Callable[[str | list[str]], list[
         A converter function for cyclopts.
     """
 
-    def convert(value: str | list[str]) -> list[T]:
+    def convert(*args: object) -> list[T]:
         """Convert input to list of typed values.
 
         Parameters
         ----------
-        value
-            Input string or list.
+        args
+            Converter inputs as (value) or (hint, value).
 
         Returns
         -------
         list[T]
             Converted list.
         """
-        if isinstance(value, list):
-            # Flatten any comma-separated items in the list
-            result: list[T] = []
-            for item in value:
-                for segment in str(item).split(","):
-                    cleaned = segment.strip()
-                    if cleaned:
-                        result.append(type_(cleaned))  # pyright: ignore[reportCallIssue]
-            return result
-
-        # Single comma-separated string
-        result = []
-        for segment in value.split(","):
-            cleaned = segment.strip()
-            if cleaned:
-                result.append(type_(cleaned))  # pyright: ignore[reportCallIssue]
-        return result
+        value = _converter_value(args)
+        return [type_(item) for item in _iter_token_values(value)]  # pyright: ignore[reportCallIssue]
 
     # Mark as cyclopts converter
-    convert.__cyclopts_converter__ = True
+    convert.__dict__["__cyclopts_converter__"] = True
     return convert
 
 
-def comma_separated_enum[T](enum_type: type[T]) -> Callable[[str | list[str]], list[T]]:
+def comma_separated_enum[T](enum_type: type[T]) -> Callable[..., list[T]]:
     """Create a converter for comma-separated enum values.
 
     Parameters
@@ -176,34 +186,21 @@ def comma_separated_enum[T](enum_type: type[T]) -> Callable[[str | list[str]], l
         A converter function for cyclopts.
     """
 
-    def convert(value: str | list[str]) -> list[T]:
+    def convert(*args: object) -> list[T]:
         """Convert input to list of enum values.
 
         Parameters
         ----------
-        value
-            Input string or list.
+        args
+            Converter inputs as (value) or (hint, value).
 
         Returns
         -------
         list[T]
             Converted list of enum values.
         """
-        if isinstance(value, list):
-            result: list[T] = []
-            for item in value:
-                for segment in str(item).split(","):
-                    cleaned = segment.strip()
-                    if cleaned:
-                        result.append(enum_type(cleaned))  # pyright: ignore[reportCallIssue]
-            return result
+        value = _converter_value(args)
+        return [enum_type(item) for item in _iter_token_values(value)]  # pyright: ignore[reportCallIssue]
 
-        result = []
-        for segment in value.split(","):
-            cleaned = segment.strip()
-            if cleaned:
-                result.append(enum_type(cleaned))  # pyright: ignore[reportCallIssue]
-        return result
-
-    convert.__cyclopts_converter__ = True
+    convert.__dict__["__cyclopts_converter__"] = True
     return convert

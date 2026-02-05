@@ -13,20 +13,20 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
     bucket,
+    build_detail_payload,
     confidence_score,
     impact_score,
 )
@@ -361,7 +361,7 @@ def _append_cycle_section(
                 category="info",
                 message="No import cycles detected",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
         return
@@ -370,19 +370,19 @@ def _append_cycle_section(
             category="cycle",
             message=f"Found {len(cycles)} import cycle(s)",
             severity="warning",
-            details=DetailPayload.from_legacy(dict(scoring_details)),
+            details=build_detail_payload(scoring=scoring_details),
         )
     )
     cycle_section = Section(title="Import Cycles")
     for index, cycle in enumerate(cycles[:_CYCLE_LIMIT], 1):
         cycle_str = " -> ".join(cycle) + f" -> {cycle[0]}"
-        details = {"modules": cycle, **scoring_details}
+        details = {"modules": cycle}
         cycle_section.findings.append(
             Finding(
                 category="cycle",
                 message=f"Cycle {index}: {cycle_str}",
                 severity="warning",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
     result.sections.append(cycle_section)
@@ -404,7 +404,7 @@ def _append_external_section(
                 category="external",
                 message=f"{dep}: {count} imports",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(ext_section)
@@ -426,7 +426,7 @@ def _append_relative_section(
                 message=f"from {dots}{imp_info.module or ''} import {', '.join(imp_info.names) or '*'}",
                 anchor=Anchor(file=imp_info.file, line=imp_info.line),
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(rel_section)
@@ -448,7 +448,7 @@ def _append_module_focus(
                         message=f"{'from ' if imp_info.is_from else 'import '}{imp_info.module}",
                         anchor=Anchor(file=imp_info.file, line=imp_info.line),
                         severity="info",
-                        details=DetailPayload.from_legacy(dict(scoring_details)),
+                        details=build_detail_payload(scoring=scoring_details),
                     )
                 )
     result.sections.append(focus_section)
@@ -470,7 +470,7 @@ def _append_import_evidence(
                 category="import",
                 message=what,
                 anchor=Anchor(file=imp_info.file, line=imp_info.line),
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 
@@ -555,13 +555,13 @@ def _build_imports_result(
     *,
     started_ms: float,
 ) -> CqResult:
-    run = mk_runmeta(
-        "imports",
-        ctx.request.argv,
-        str(ctx.request.root),
-        started_ms,
-        ctx.request.tc.to_dict(),
+    run_ctx = RunContext.from_parts(
+        root=ctx.request.root,
+        argv=ctx.request.argv,
+        tc=ctx.request.tc,
+        started_ms=started_ms,
     )
+    run = run_ctx.to_runmeta("imports")
     result = mk_result(run)
 
     internal_prefix = _resolve_internal_prefix(ctx.deps)

@@ -20,6 +20,7 @@ from tools.cq.search.classifier import (
     detect_query_mode,
     enrich_with_symtable,
 )
+from tools.cq.search.models import SearchConfig
 from tools.cq.search.profiles import AUDIT, DEFAULT, INTERACTIVE, LITERAL, SearchLimits
 from tools.cq.search.smart_search import (
     SMART_SEARCH_LIMITS,
@@ -40,6 +41,7 @@ __all__ = [
     "MatchCategory",
     "QueryMode",
     "RawMatch",
+    "SearchConfig",
     "SearchLimits",
     "SearchStats",
     "classify_from_node",

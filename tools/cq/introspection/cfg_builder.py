@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dis import Instruction
     from types import CodeType
 
 from tools.cq.introspection.bytecode_index import (
@@ -244,7 +243,7 @@ def _build_empty_cfg() -> CFG:
 
 
 def _find_block_end(
-    instructions: list[Instruction],
+    instructions: list[InstructionFact],
     sorted_starts: list[int],
     block_id: int,
     start_offset: int,
@@ -261,13 +260,13 @@ def _find_block_end(
 
 
 def _collect_block_instructions(
-    instructions: list[Instruction],
+    instructions: list[InstructionFact],
     start_offset: int,
     end_offset: int,
     block_id: int,
     offset_to_block: dict[int, int],
-) -> list[Instruction]:
-    block_instructions: list[Instruction] = []
+) -> list[InstructionFact]:
+    block_instructions: list[InstructionFact] = []
     for instr in instructions:
         if start_offset <= instr.offset <= end_offset:
             block_instructions.append(instr)
@@ -276,7 +275,7 @@ def _collect_block_instructions(
 
 
 def _build_blocks(
-    instructions: list[Instruction],
+    instructions: list[InstructionFact],
     sorted_starts: list[int],
 ) -> tuple[dict[int, BasicBlock], dict[int, int]]:
     blocks: dict[int, BasicBlock] = {}

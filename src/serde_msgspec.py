@@ -348,8 +348,7 @@ def _inspect_to_builtins(
             items = [(str(key), value) for key, value in items]
         items = sorted(items, key=lambda item: item[0])
         return {
-            key: _inspect_to_builtins(value, str_keys=str_keys, _seen=_seen)
-            for key, value in items
+            key: _inspect_to_builtins(value, str_keys=str_keys, _seen=_seen) for key, value in items
         }
     if isinstance(obj, list):
         return [_inspect_to_builtins(item, str_keys=str_keys, _seen=_seen) for item in obj]

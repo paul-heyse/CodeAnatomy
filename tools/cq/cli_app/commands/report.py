@@ -40,7 +40,8 @@ def report(
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
-    from tools.cq.core.schema import mk_result, mk_runmeta, ms
+    from tools.cq.core.run_context import RunContext
+    from tools.cq.core.schema import mk_result, ms
 
     if ctx is None:
         msg = "Context not injected"
@@ -50,13 +51,13 @@ def report(
 
     if options.target is None:
         started_ms = ms()
-        run = mk_runmeta(
-            macro="report",
+        run_ctx = RunContext.from_parts(
+            root=ctx.root,
             argv=ctx.argv,
-            root=str(ctx.root),
+            tc=ctx.toolchain,
             started_ms=started_ms,
-            toolchain=ctx.toolchain.to_dict(),
         )
+        run = run_ctx.to_runmeta("report")
         result = mk_result(run)
         result.summary["error"] = "Target spec is required"
         return CliResult(result=result, context=ctx, filters=options)
@@ -70,13 +71,13 @@ def report(
     }
     if preset not in valid_presets:
         started_ms = ms()
-        run = mk_runmeta(
-            macro="report",
+        run_ctx = RunContext.from_parts(
+            root=ctx.root,
             argv=ctx.argv,
-            root=str(ctx.root),
+            tc=ctx.toolchain,
             started_ms=started_ms,
-            toolchain=ctx.toolchain.to_dict(),
         )
+        run = run_ctx.to_runmeta("report")
         result = mk_result(run)
         result.summary["error"] = (
             f"Invalid preset: {preset}. Must be one of: {', '.join(sorted(valid_presets))}"
@@ -88,13 +89,13 @@ def report(
         target_spec = parse_target_spec(options.target)
     except ValueError as exc:
         started_ms = ms()
-        run = mk_runmeta(
-            macro="report",
+        run_ctx = RunContext.from_parts(
+            root=ctx.root,
             argv=ctx.argv,
-            root=str(ctx.root),
+            tc=ctx.toolchain,
             started_ms=started_ms,
-            toolchain=ctx.toolchain.to_dict(),
         )
+        run = run_ctx.to_runmeta("report")
         result = mk_result(run)
         result.summary["error"] = str(exc)
         return CliResult(result=result, context=ctx, filters=options)

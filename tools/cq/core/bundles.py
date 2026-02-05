@@ -6,15 +6,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     CqResult,
     DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
@@ -111,7 +111,8 @@ def parse_target_spec(value: str) -> TargetSpec:
     if not target_value:
         msg = "Target value cannot be empty"
         raise ValueError(msg)
-    return TargetSpec(kind=kind, value=target_value)
+    kind_literal = cast("TargetKind", kind)
+    return TargetSpec(kind=kind_literal, value=target_value)
 
 
 def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
@@ -232,7 +233,13 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
         Combined bundle report result.
     """
     started = ms()
-    run = mk_runmeta(f"report:{preset}", ctx.argv, str(ctx.root), started, ctx.tc.to_dict())
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=started,
+    )
+    run = run_ctx.to_runmeta(f"report:{preset}")
     merged = mk_result(run)
 
     merged.summary = {
@@ -492,7 +499,13 @@ def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
 
 def _skip_result(ctx: BundleContext, macro: str, reason: str) -> CqResult:
     started = ms()
-    run = mk_runmeta(macro, ctx.argv, str(ctx.root), started, ctx.tc.to_dict())
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=started,
+    )
+    run = run_ctx.to_runmeta(macro)
     result = mk_result(run)
     result.summary["skipped"] = reason
     return result

@@ -193,17 +193,19 @@ def _resolve_global_excludes_file(
 
 
 def _read_config_value(config: pygit2.Config, key: str) -> str | None:
+    config_any = cast("Any", config)
     try:
-        value = config.get(key) if hasattr(config, "get") else None
+        value = config_any.get(key) if hasattr(config_any, "get") else None
     except (KeyError, TypeError):
         value = None
     if value is None:
         try:
-            value = config[key]
+            value = config_any[key]
         except (KeyError, TypeError):
             value = None
     if value is None:
         return None
-    if hasattr(value, "value"):
-        return str(value.value)
+    value_attr = getattr(value, "value", None)
+    if value_attr is not None:
+        return str(value_attr)
     return str(value)

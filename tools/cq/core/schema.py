@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 import msgspec
 
 from tools.cq import SCHEMA_VERSION
+from tools.cq.core.locations import SourceSpan
 
 # Schema evolution notes:
 # - New fields must have defaults to preserve backward compatibility.
@@ -200,6 +201,23 @@ class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
             File reference string.
         """
         return f"{self.file}:{self.line}"
+
+    @classmethod
+    def from_span(cls, span: SourceSpan) -> Anchor:
+        """Create an Anchor from a SourceSpan.
+
+        Returns
+        -------
+        Anchor
+            Anchor with line/column details from the span.
+        """
+        return cls(
+            file=span.file,
+            line=span.start_line,
+            col=span.start_col,
+            end_line=span.end_line,
+            end_col=span.end_col,
+        )
 
 
 class Finding(msgspec.Struct):

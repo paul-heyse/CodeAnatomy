@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from ast_grep_py import SgNode, SgRoot
 
+from tools.cq.core.locations import SourceSpan
+
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
 
@@ -90,6 +92,17 @@ class SgRecord:
     def location(self) -> str:
         """Human-readable location string."""
         return f"{self.file}:{self.start_line}:{self.start_col}"
+
+    @property
+    def span(self) -> SourceSpan:
+        """Return a SourceSpan for this record."""
+        return SourceSpan(
+            file=self.file,
+            start_line=self.start_line,
+            start_col=self.start_col,
+            end_line=self.end_line,
+            end_col=self.end_col,
+        )
 
 
 def _is_full_config(config: dict[str, Any]) -> bool:

@@ -6,8 +6,13 @@ from typing import Any
 
 import msgspec
 
+from tools.cq.core.locations import SourceSpan
 from tools.cq.core.schema import CqResult
+from tools.cq.core.scoring import ConfidenceSignals, ImpactSignals
+from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
+from tools.cq.search.models import SearchConfig
+from tools.cq.search.profiles import SearchLimits
 
 
 def cq_result_schema() -> dict[str, Any]:
@@ -40,7 +45,18 @@ def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     tuple[dict[str, Any], dict[str, Any]]
         Schema and components sections.
     """
-    schema, components = msgspec.json.schema_components([CqResult, Query])
+    schema, components = msgspec.json.schema_components(
+        [
+            CqResult,
+            Query,
+            SearchLimits,
+            Toolchain,
+            ImpactSignals,
+            ConfidenceSignals,
+            SourceSpan,
+            SearchConfig,
+        ]
+    )
     return schema, components
 
 

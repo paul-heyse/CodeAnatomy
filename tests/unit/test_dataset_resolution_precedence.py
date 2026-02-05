@@ -114,7 +114,8 @@ def test_scan_policy_applies_listing_defaults() -> None:
 
     resolved = _apply_scan_policy(location, policy=policy)
 
-    scan = resolved.resolved.datafusion_scan
+    overrides = resolved.overrides
+    scan = overrides.datafusion_scan if overrides is not None else None
     assert scan is not None
     assert scan.collect_statistics is True
     assert scan.list_files_cache_ttl == "1h"
@@ -131,8 +132,10 @@ def test_scan_policy_applies_delta_defaults() -> None:
 
     resolved = _apply_scan_policy(location, policy=policy)
 
-    scan = resolved.resolved.datafusion_scan
-    delta_scan = resolved.resolved.delta_scan
+    overrides = resolved.overrides
+    scan = overrides.datafusion_scan if overrides is not None else None
+    delta_bundle = overrides.delta if overrides is not None else None
+    delta_scan = delta_bundle.scan if delta_bundle is not None else None
     assert scan is not None
     assert scan.list_files_cache_ttl == "5m"
     assert delta_scan is not None

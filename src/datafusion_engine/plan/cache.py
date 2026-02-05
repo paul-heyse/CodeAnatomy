@@ -144,7 +144,7 @@ def _plan_proto_cache_key(plan_identity_hash: str) -> str:
 # -----------------------------------------------------------------------------
 
 
-class PlanCacheKey(StructBaseHotPath, frozen=True, array_like=True):
+class PlanCacheKey(StructBaseHotPath, frozen=True):
     """Cache key for Substrait plan bytes."""
 
     profile_hash: str

@@ -133,7 +133,7 @@ def _converter_value(args: tuple[object, ...]) -> object:
     raise TypeError(msg)
 
 
-def comma_separated_list[T](type_: type[T]) -> Callable[..., list[T]]:
+def comma_separated_list[T](type_: Callable[[str], T]) -> Callable[..., list[T]]:
     """Create a converter for comma-separated values.
 
     This handles both:
@@ -143,7 +143,7 @@ def comma_separated_list[T](type_: type[T]) -> Callable[..., list[T]]:
     Parameters
     ----------
     type_
-        The target type for each element.
+        Callable that converts a single token to the target type.
 
     Returns
     -------
@@ -165,20 +165,20 @@ def comma_separated_list[T](type_: type[T]) -> Callable[..., list[T]]:
             Converted list.
         """
         value = _converter_value(args)
-        return [type_(item) for item in _iter_token_values(value)]  # pyright: ignore[reportCallIssue]
+        return [type_(item) for item in _iter_token_values(value)]
 
     # Mark as cyclopts converter
     convert.__dict__["__cyclopts_converter__"] = True
     return convert
 
 
-def comma_separated_enum[T](enum_type: type[T]) -> Callable[..., list[T]]:
+def comma_separated_enum[T](enum_type: Callable[[str], T]) -> Callable[..., list[T]]:
     """Create a converter for comma-separated enum values.
 
     Parameters
     ----------
     enum_type
-        The enum type.
+        Callable that converts a single token to the enum type.
 
     Returns
     -------
@@ -200,7 +200,7 @@ def comma_separated_enum[T](enum_type: type[T]) -> Callable[..., list[T]]:
             Converted list of enum values.
         """
         value = _converter_value(args)
-        return [enum_type(item) for item in _iter_token_values(value)]  # pyright: ignore[reportCallIssue]
+        return [enum_type(item) for item in _iter_token_values(value)]
 
     convert.__dict__["__cyclopts_converter__"] = True
     return convert

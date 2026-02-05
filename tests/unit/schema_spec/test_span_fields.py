@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from schema_spec.arrow_types import ArrowPrimitiveSpec
 from schema_spec.span_fields import (
     SPAN_PREFIXES,
     STANDARD_SPAN_TYPES,
@@ -72,9 +73,10 @@ class TestMakeSpanFieldSpecs:
     def test_field_specs_are_int64(self) -> None:
         """Field specs have int64 dtype."""
         bstart, bend = make_span_field_specs("call_")
-        # Compare the string representation since DataTypeLike is a protocol
-        assert str(bstart.dtype) == "int64"
-        assert str(bend.dtype) == "int64"
+        assert isinstance(bstart.dtype, ArrowPrimitiveSpec)
+        assert isinstance(bend.dtype, ArrowPrimitiveSpec)
+        assert bstart.dtype.name == "int64"
+        assert bend.dtype.name == "int64"
 
     def test_prefixed_field_specs(self) -> None:
         """Prefixed spans have correct names."""

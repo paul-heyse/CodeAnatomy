@@ -75,7 +75,7 @@ def _dataset_location(view_name: str) -> DatasetLocation:
 def test_write_semantic_output_applies_write_policy_and_schema_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    view_name = "py_bc_blocks_norm_v1"
+    view_name = "py_bc_blocks_norm"
     location = _dataset_location(view_name)
     spec = dataset_spec(view_name)
     assert dataset_spec_delta_write_policy(spec) is not None
@@ -147,7 +147,7 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
 def test_write_semantic_output_disables_schema_evolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    view_name = "py_bc_blocks_norm_v1"
+    view_name = "py_bc_blocks_norm"
     location = _dataset_location(view_name)
 
     captured = _CapturedWrite()

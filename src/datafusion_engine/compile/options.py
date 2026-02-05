@@ -262,7 +262,7 @@ def compile_options_runtime(
     from runtime_models.adapters import COMPILE_OPTIONS_ADAPTER
 
     payload = to_builtins(spec, str_keys=True)
-    return COMPILE_OPTIONS_ADAPTER.validate_strings(payload)
+    return COMPILE_OPTIONS_ADAPTER.validate_python(payload)
 
 
 def compile_options_from_spec(

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.rules_py import get_rules_for_types
-from tools.cq.astgrep.sgpy_scanner import SgRecord, filter_records_by_type, scan_files
+from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.enrichment import SymtableEnricher
@@ -18,6 +19,7 @@ from tools.cq.query.executor import (
     _build_scan_context,
 )
 from tools.cq.query.planner import scope_to_globs, scope_to_paths
+from tools.cq.query.sg_parser import normalize_record_types
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -43,7 +45,7 @@ def build_batch_session(
     root: Path,
     tc: Toolchain,
     paths: list[Path],
-    record_types: set[str],
+    record_types: Iterable[str] | Iterable[RecordType],
 ) -> BatchEntityQuerySession:
     """Build a shared scan session for multiple entity queries.
 
@@ -63,12 +65,13 @@ def build_batch_session(
     files = file_result.files
     files_by_rel = _index_files_by_rel(root, files)
 
-    rules = get_rules_for_types(record_types)
+    normalized_record_types = normalize_record_types(record_types)
+    rules = get_rules_for_types(normalized_record_types)
     if not files or not rules:
         records: list[SgRecord] = []
     else:
         records = scan_files(files, rules, root)
-        records = filter_records_by_type(records, record_types)
+        records = filter_records_by_type(records, normalized_record_types)
 
     scan_ctx = _build_scan_context(records)
     candidates = _build_entity_candidates(scan_ctx, records)

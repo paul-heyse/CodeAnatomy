@@ -29,8 +29,8 @@ class TestSemanticRelationshipSpecs:
         """Spec table names should be canonical outputs."""
         scip_norm = canonical_output_name("scip_occurrences_norm")
         for spec in RELATIONSHIP_SPECS:
-            assert spec.left_view.endswith("_v1")
-            assert spec.right_view.endswith("_v1")
+            assert spec.left_view == canonical_output_name(spec.left_view)
+            assert spec.right_view == canonical_output_name(spec.right_view)
             assert spec.right_view == scip_norm
 
     def test_join_types_valid(self) -> None:

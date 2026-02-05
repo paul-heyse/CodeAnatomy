@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from tools.cq.run.spec import RunPlan, RunStep, is_run_step, normalize_step_ids
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
-    import tomli as tomllib  # type: ignore[no-redef]
+    tomllib = importlib.import_module("tomli")
 
 
 class RunPlanError(RuntimeError):

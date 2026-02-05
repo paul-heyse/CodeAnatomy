@@ -7,11 +7,12 @@ the subprocess-based CLI integration.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from ast_grep_py import SgNode, SgRoot
+from ast_grep_py import Config, Rule, SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
 
@@ -39,17 +40,36 @@ class RuleSpec:
     rule_id: str
     record_type: RecordType
     kind: str
-    config: dict[str, Any] = field(default_factory=dict)
+    config: Mapping[str, Any] = field(default_factory=dict)
 
-    def to_config(self) -> dict[str, Any]:
-        """Convert to ast-grep-py Config format.
+    def __post_init__(self) -> None:
+        """Normalize config to a concrete mapping.
+
+        Raises
+        ------
+        TypeError
+            Raised when config is not a mapping.
+        """
+        if not isinstance(self.config, Mapping):
+            msg = f"RuleSpec.config must be a mapping, got {type(self.config)!r}"
+            raise TypeError(msg)
+        if not isinstance(self.config, dict):
+            object.__setattr__(self, "config", dict(self.config))
+
+    def to_config(self) -> Rule:
+        """Convert to ast-grep-py Rule mapping.
 
         Returns
         -------
         dict[str, Any]
             Configuration dict suitable for SgNode.find_all().
         """
-        return self.config.get("rule", self.config)
+        if _is_full_config(self.config):
+            inner = self.config.get("rule", {})
+            if isinstance(inner, Mapping):
+                return cast("Rule", dict(inner))
+            return cast("Rule", {})
+        return cast("Rule", self.config)
 
 
 @dataclass(frozen=True)
@@ -105,7 +125,7 @@ class SgRecord:
         )
 
 
-def _is_full_config(config: dict[str, Any]) -> bool:
+def _is_full_config(config: Mapping[str, Any]) -> bool:
     """Check if config needs full dict form (has rule/utils/constraints/transform).
 
     Parameters
@@ -121,7 +141,7 @@ def _is_full_config(config: dict[str, Any]) -> bool:
     return any(k in config for k in ("rule", "utils", "constraints", "transform"))
 
 
-def _has_complex_rule_keys(config: dict[str, Any]) -> bool:
+def _has_complex_rule_keys(config: Mapping[str, Any]) -> bool:
     """Check if inner rule has complex keys needing full config.
 
     Parameters
@@ -186,10 +206,10 @@ def scan_files(
             # Route based on config complexity
             if _is_full_config(rule.config):
                 # Already has rule/utils/constraints wrapper
-                matches = node.find_all(rule.config)  # type: ignore[arg-type]
+                matches = node.find_all(config=cast("Config", rule.config))
             elif _has_complex_rule_keys(inner_config):
                 # Wrap in full config for complex rules
-                matches = node.find_all({"rule": inner_config})  # type: ignore[arg-type]
+                matches = node.find_all(config=cast("Config", {"rule": inner_config}))
             elif "pattern" in inner_config and len(inner_config) == 1:
                 # Simple pattern-only
                 matches = node.find_all(pattern=inner_config["pattern"])
@@ -278,7 +298,11 @@ def _match_to_record(
     text = match.text()
 
     # Apply regex filters if present in rule config
-    rule_config = rule.config.get("rule", {})
+    rule_config_value = rule.config.get("rule", {})
+    if isinstance(rule_config_value, Mapping):
+        rule_config: Mapping[str, Any] = rule_config_value
+    else:
+        rule_config = {}
     if not _apply_regex_filters(text, rule_config):
         return None
 
@@ -403,7 +427,7 @@ def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
     return metavars
 
 
-def _apply_regex_filters(text: str, rule_config: dict[str, Any]) -> bool:
+def _apply_regex_filters(text: str, rule_config: Mapping[str, Any]) -> bool:
     """Apply regex filters from rule configuration.
 
     Parameters
@@ -426,7 +450,7 @@ def _apply_regex_filters(text: str, rule_config: dict[str, Any]) -> bool:
 
     # Check negative regex (not.regex)
     not_config = rule_config.get("not", {})
-    if isinstance(not_config, dict) and "regex" in not_config:
+    if isinstance(not_config, Mapping) and "regex" in not_config:
         pattern = not_config["regex"]
         if re.search(pattern, text):
             return False
@@ -459,7 +483,7 @@ def _normalize_file_path(file_path: Path, root: Path) -> str:
 
 def filter_records_by_type(
     records: list[SgRecord],
-    record_types: set[str] | None,
+    record_types: set[RecordType] | None,
 ) -> list[SgRecord]:
     """Filter records by record type.
 

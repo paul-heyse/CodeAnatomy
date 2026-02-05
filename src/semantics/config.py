@@ -97,7 +97,7 @@ def semantic_config_from_spec(
     from runtime_models.adapters import SEMANTIC_CONFIG_ADAPTER
 
     payload = to_builtins(spec, str_keys=True)
-    resolved = SEMANTIC_CONFIG_ADAPTER.validate_strings(payload)
+    resolved = SEMANTIC_CONFIG_ADAPTER.validate_python(payload)
     type_patterns = tuple(
         (re.compile(entry.pattern), entry.column_type) for entry in resolved.type_patterns
     )

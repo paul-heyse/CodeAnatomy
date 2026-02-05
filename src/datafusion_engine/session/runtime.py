@@ -132,8 +132,6 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
-    from semantics.incremental.cdf_cursors import CdfCursorStore
-    from semantics.runtime import CachePolicy
     from storage.deltalake.delta import IdempotentWriteOptions
 
     class _DeltaRuntimeEnvOptions(Protocol):
@@ -149,6 +147,8 @@ from schema_spec.system import (
     ScanPolicyConfig,
     dataset_spec_from_schema,
 )
+from semantics.incremental.cdf_cursors import CdfCursorStore
+from semantics.runtime import CachePolicy
 
 if TYPE_CHECKING:
     ExplainRows = TableLike | RecordBatchReaderLike

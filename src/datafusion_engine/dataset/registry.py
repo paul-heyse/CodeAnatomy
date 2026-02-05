@@ -42,6 +42,21 @@ if TYPE_CHECKING:
         ScanPolicyConfig,
         ValidationPolicySpec,
     )
+else:
+    from datafusion_engine.delta.protocol import DeltaFeatureGate
+    from schema_spec.system import (
+        ArrowValidationOptions,
+        DataFusionScanOptions,
+        DatasetSpec,
+        DeltaCdfPolicy,
+        DeltaMaintenancePolicy,
+        DeltaPolicyBundle,
+        DeltaScanOptions,
+        DeltaSchemaPolicy,
+        DeltaWritePolicy,
+        ScanPolicyConfig,
+        ValidationPolicySpec,
+    )
 
 type DatasetFormat = str
 type DataFusionProvider = Literal["listing", "delta_cdf"]
@@ -60,7 +75,7 @@ class DatasetLocationOverrides(StructBaseStrict, frozen=True):
 class DatasetLocation(StructBaseStrict, frozen=True):
     """Location metadata for a dataset."""
 
-    path: PathLike
+    path: str
     format: DatasetFormat = "delta"
     partitioning: str | None = "hive"
     read_options: Mapping[str, object] = msgspec.field(default_factory=dict)
@@ -74,6 +89,10 @@ class DatasetLocation(StructBaseStrict, frozen=True):
     delta_version: int | None = None
     delta_timestamp: str | None = None
     overrides: DatasetLocationOverrides | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize path-like inputs into a string."""
+        object.__setattr__(self, "path", str(self.path))
 
     @property
     def resolved(self) -> ResolvedDatasetLocation:

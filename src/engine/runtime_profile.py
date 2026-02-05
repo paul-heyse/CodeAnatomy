@@ -180,7 +180,7 @@ def _runtime_profile_env_patch() -> RuntimeProfileEnvPatch:
         ),
         "diagnostics_sink": _env_patch_diagnostics_sink("CODEANATOMY_DIAGNOSTICS_SINK"),
     }
-    validated = _RUNTIME_PROFILE_ENV_ADAPTER.validate_strings(payload)
+    validated = _RUNTIME_PROFILE_ENV_ADAPTER.validate_python(payload)
     return RuntimeProfileEnvPatch(**validated.model_dump())
 
 

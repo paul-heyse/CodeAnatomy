@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Literal
 
 import msgspec
 
@@ -36,6 +37,47 @@ class CacheConfigSpec(StructBaseStrict, frozen=True):
     default_loader_behavior: str | None = None
     default_saver_behavior: str | None = None
     default_nodes: tuple[str, ...] | None = None
+
+
+class DataFusionCachePolicySpec(StructBaseStrict, frozen=True):
+    """DataFusion cache policy configuration values."""
+
+    listing_cache_size: int | None = None
+    metadata_cache_size: int | None = None
+    stats_cache_size: int | None = None
+
+
+class DiskCacheSettingsSpec(StructBaseStrict, frozen=True):
+    """DiskCache settings overrides."""
+
+    size_limit_bytes: int | None = None
+    cull_limit: int | None = None
+    eviction_policy: str | None = None
+    statistics: bool | None = None
+    tag_index: bool | None = None
+    shards: int | None = None
+    timeout_seconds: float | None = None
+    disk_min_file_size: int | None = None
+    sqlite_journal_mode: str | None = None
+    sqlite_mmap_size: int | None = None
+    sqlite_synchronous: str | None = None
+
+
+class DiskCacheProfileSpec(StructBaseStrict, frozen=True):
+    """DiskCache profile overrides."""
+
+    root: str | None = None
+    base_settings: DiskCacheSettingsSpec | None = None
+    overrides: Mapping[str, DiskCacheSettingsSpec] | None = None
+    ttl_seconds: Mapping[str, float | None] | None = None
+
+
+class DataFusionCacheConfigSpec(StructBaseStrict, frozen=True):
+    """DataFusion cache configuration values."""
+
+    cache_policy: DataFusionCachePolicySpec | None = None
+    diskcache_profile: DiskCacheProfileSpec | None = None
+    snapshot_pinned_mode: Literal["off", "delta_version"] = "off"
 
 
 class IncrementalConfigSpec(StructBaseStrict, frozen=True):
@@ -154,6 +196,7 @@ class RootConfigSpec(StructBaseStrict, frozen=True):
 
     plan: PlanConfigSpec | None = None
     cache: CacheConfigSpec | None = None
+    datafusion_cache: DataFusionCacheConfigSpec | None = None
     graph_adapter: GraphAdapterConfig | None = None
     incremental: IncrementalConfigSpec | None = None
     delta: DeltaConfigSpec | None = None
@@ -164,9 +207,13 @@ class RootConfigSpec(StructBaseStrict, frozen=True):
 
 __all__ = [
     "CacheConfigSpec",
+    "DataFusionCacheConfigSpec",
+    "DataFusionCachePolicySpec",
     "DeltaConfigSpec",
     "DeltaExportConfigSpec",
     "DeltaRestoreConfigSpec",
+    "DiskCacheProfileSpec",
+    "DiskCacheSettingsSpec",
     "DocstringsConfigSpec",
     "DocstringsPolicyConfigSpec",
     "GraphAdapterConfig",

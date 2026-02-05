@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+import polars as pl
 import pyarrow as pa
 
 from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
@@ -29,14 +30,13 @@ class DataframeValidationRequest[TDF](StructBaseStrict, frozen=True):
     name: str = "unknown"
 
 
-def _arrow_to_pandas_dtype(dtype: pa.DataType) -> object:
-    to_pandas = getattr(dtype, "to_pandas_dtype", None)
-    if callable(to_pandas):
-        try:
-            return to_pandas()
-        except (TypeError, ValueError):
-            return object
-    return object
+def _arrow_to_polars_dtype(dtype: pa.DataType) -> object:
+    try:
+        table = pa.table({"_": pa.array([], type=dtype)})
+        df = cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
+        return df.schema["_"]
+    except (TypeError, ValueError, pa.ArrowInvalid):
+        return object
 
 
 def _model_name(spec: TableSchemaSpec) -> str:
@@ -105,8 +105,17 @@ def dataframe_model_for_spec(
     type[Any] | None
         Generated DataFrameModel class when column names are valid identifiers.
     """
-    import pandera.pandas as pa_schema
-    import pandera.typing as pa_typing
+    import pandera.polars as pa_schema
+
+    model_base = getattr(pa_schema, "DataFrameModel", None)
+    field_cls = getattr(pa_schema, "Field", None)
+    check_cls = getattr(pa_schema, "Check", None)
+    if model_base is None or field_cls is None or check_cls is None:
+        return None
+    try:
+        import pandera.typing.polars as pa_typing
+    except (ImportError, ModuleNotFoundError):
+        return None
 
     if any(not field.name.isidentifier() for field in spec.fields):
         return None
@@ -121,8 +130,8 @@ def dataframe_model_for_spec(
             nullable = field.nullable and field.name not in required_non_null
         checks = None
         if field.name in force_null:
-            checks = [pa_schema.Check(lambda s: s.isna().all(), element_wise=False)]
-        attrs[field.name] = pa_schema.Field(
+            checks = [check_cls(lambda s: s.is_null().all(), element_wise=False)]
+        attrs[field.name] = field_cls(
             dtype=field_to_pandera_dtype(field),
             nullable=nullable,
             required=True,
@@ -134,11 +143,11 @@ def dataframe_model_for_spec(
         (),
         {"strict": strict, "coerce": coerce, "ordered": True},
     )
-    return type(_model_name(spec), (pa_schema.DataFrameModel,), attrs)
+    return type(_model_name(spec), (model_base,), attrs)
 
 
 def field_to_pandera_dtype(field: FieldSpec) -> Any:
-    """Return a pandas dtype suitable for pandera from a field spec.
+    """Return a polars dtype suitable for pandera from a field spec.
 
     Parameters
     ----------
@@ -159,7 +168,7 @@ def field_to_pandera_dtype(field: FieldSpec) -> Any:
         arrow_dtype = None
     if arrow_dtype is None:
         return object
-    return _arrow_to_pandas_dtype(arrow_dtype)
+    return _arrow_to_polars_dtype(arrow_dtype)
 
 
 def to_pandera_schema(
@@ -183,8 +192,19 @@ def to_pandera_schema(
     -------
     Any
         Pandera DataFrameSchema instance.
+
+    Raises
+    ------
+    TypeError
+        Raised when the pandera polars backend is unavailable.
     """
-    import pandera.pandas as pa_schema
+    import pandera.polars as pa_schema
+
+    column_cls = getattr(pa_schema, "Column", None)
+    check_cls = getattr(pa_schema, "Check", None)
+    if column_cls is None or check_cls is None:
+        msg = "Pandera polars backend is unavailable; install pandera[polars]."
+        raise TypeError(msg)
 
     required_non_null, force_null = _constraint_sets(spec, constraints)
     columns = {}
@@ -195,8 +215,8 @@ def to_pandera_schema(
             nullable = field.nullable and field.name not in required_non_null
         checks = None
         if field.name in force_null:
-            checks = [pa_schema.Check(lambda s: s.isna().all(), element_wise=False)]
-        columns[field.name] = pa_schema.Column(
+            checks = [check_cls(lambda s: s.is_null().all(), element_wise=False)]
+        columns[field.name] = column_cls(
             dtype=field_to_pandera_dtype(field),
             nullable=nullable,
             required=True,
@@ -210,34 +230,51 @@ def to_pandera_schema(
         if policy.coerce is not None:
             coerce = policy.coerce
     unique = list(spec.key_fields) if spec.key_fields else None
+    if unique:
+        try:
+            return pa_schema.DataFrameSchema(
+                columns=columns,
+                strict=strict,
+                ordered=True,
+                coerce=coerce,
+                unique=unique,
+            )
+        except TypeError:
+            return pa_schema.DataFrameSchema(
+                columns=columns,
+                strict=strict,
+                ordered=True,
+                coerce=coerce,
+            )
     return pa_schema.DataFrameSchema(
-        columns,
+        columns=columns,
         strict=strict,
         ordered=True,
         coerce=coerce,
-        unique=unique,
     )
 
 
-def _maybe_to_pandas[TDF](df: TDF) -> tuple[TDF, object]:
-    import pandas as pd
-
-    if isinstance(df, pd.DataFrame):
+def _maybe_to_polars[TDF](df: TDF) -> tuple[TDF, pl.DataFrame]:
+    if isinstance(df, pl.DataFrame):
         return df, df
     if isinstance(df, pa.Table):
         table = cast("pa.Table", df)
-        return df, table.to_pandas()
-    to_pandas = getattr(df, "to_pandas", None)
-    if callable(to_pandas):
-        resolved = to_pandas()
-        if isinstance(resolved, pd.DataFrame):
-            return df, resolved
+        return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
+    if isinstance(df, pa.RecordBatchReader):
+        reader = cast("pa.RecordBatchReader", df)
+        return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
+    if hasattr(df, "__arrow_c_stream__"):
+        reader = pa.RecordBatchReader.from_stream(df)
+        return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
     to_arrow = getattr(df, "to_arrow_table", None)
     if callable(to_arrow):
         resolved = to_arrow()
         if isinstance(resolved, pa.Table):
             table = cast("pa.Table", resolved)
-            return df, table.to_pandas()
+            return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
+        if isinstance(resolved, pa.RecordBatchReader):
+            reader = cast("pa.RecordBatchReader", resolved)
+            return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
     msg = f"Unsupported dataframe type for pandera validation: {type(df).__name__}"
     raise TypeError(msg)
 
@@ -269,7 +306,7 @@ def validate_dataframe[TDF](
     """
     if policy is None or not policy.enabled:
         return df
-    original, pandas_df = _maybe_to_pandas(df)
+    original, polars_df = _maybe_to_polars(df)
     validate_kwargs: dict[str, object] = {"lazy": policy.lazy}
     if policy.sample is not None:
         validate_kwargs["sample"] = policy.sample
@@ -292,14 +329,14 @@ def validate_dataframe[TDF](
     )
     if model is not None:
         model.validate(
-            pandas_df,
+            polars_df,
             lazy=policy.lazy,
             sample=policy.sample,
             head=policy.head,
             tail=policy.tail,
         )
     schema = to_pandera_schema(schema_spec, policy=policy, constraints=constraints)
-    schema.validate(pandas_df, **validate_kwargs)
+    schema.validate(polars_df, **validate_kwargs)
     return original
 
 

@@ -29,6 +29,7 @@ __all__ = (
     "build_delta_file_index_from_add_actions",
     "build_delta_scan_config",
     "cleanup_delta_log",
+    "coerce_delta_input",
     "coerce_delta_table",
     "create_delta_checkpoint",
     "delta_add_constraints",
@@ -101,6 +102,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "idempotent_commit_properties": ("storage.deltalake.delta", "idempotent_commit_properties"),
     "build_delta_scan_config": ("storage.deltalake.scan_profile", "build_delta_scan_config"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
+    "coerce_delta_input": ("storage.deltalake.delta", "coerce_delta_input"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
     "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
     "delta_cdf_enabled": ("storage.deltalake.delta", "delta_cdf_enabled"),
@@ -236,6 +238,7 @@ if TYPE_CHECKING:
     idempotent_commit_properties = _delta_io.idempotent_commit_properties
     build_delta_scan_config = _scan_profile.build_delta_scan_config
     cleanup_delta_log = _delta_io.cleanup_delta_log
+    coerce_delta_input = _delta_io.coerce_delta_input
     coerce_delta_table = _delta_io.coerce_delta_table
     create_delta_checkpoint = _delta_io.create_delta_checkpoint
     delta_commit_metadata = _delta_io.delta_commit_metadata

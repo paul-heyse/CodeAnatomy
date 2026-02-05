@@ -139,6 +139,20 @@ fn stable_hash64_matches_expected() -> Result<()> {
 }
 
 #[test]
+fn stable_hash64_named_args_match_expected() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(&ctx, "SELECT stable_hash64(value => 'alpha') AS value")?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("int64 column");
+    assert_eq!(array.value(0), hash64_value("alpha"));
+    Ok(())
+}
+
+#[test]
 fn stable_hash64_coerce_types() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
@@ -151,6 +165,20 @@ fn stable_hash64_coerce_types() -> Result<()> {
     assert_eq!(coerced, vec![DataType::Utf8]);
     assert!(udf.inner().coerce_types(&[]).is_err());
     assert!(udf.inner().coerce_types(&[DataType::Utf8, DataType::Utf8]).is_err());
+    Ok(())
+}
+
+#[test]
+fn stable_hash128_named_args_match_expected() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(&ctx, "SELECT stable_hash128(value => 'alpha') AS value")?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("string column");
+    assert_eq!(array.value(0), hash128_value("alpha"));
     Ok(())
 }
 
@@ -305,6 +333,15 @@ fn map_get_default_reports_short_circuit() -> Result<()> {
         .get("map_get_default")
         .expect("map_get_default udf");
     assert!(udf.short_circuits());
+    Ok(())
+}
+
+#[test]
+fn registry_snapshot_reports_short_circuits() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
+    assert_eq!(snapshot.short_circuits.get("map_get_default"), Some(&true));
     Ok(())
 }
 

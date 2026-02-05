@@ -9,6 +9,9 @@ This plan captures **additional best-in-class improvements** to Rust + Python Da
 
 Update notes:
 - Audited against current `src/` + `rust/` implementation (Feb 2026).
+- Streaming-first Delta read/write migration completed.
+- DataFusion cache config (TTL + snapshot-pinned mode) implemented and wired.
+- Rust UDF conformance coverage expanded (named params + short-circuit invariants).
 - Each scope includes a short status snapshot (implemented vs remaining gaps).
 
 The scope below is intentionally additive and does **not** redesign the existing architecture. It focuses on packaging, streaming, storage/credential unification, Delta concurrency correctness, cache tuning, UDF quality gates, observability, compatibility handshakes, and Delta-specific integration hardening.
@@ -67,8 +70,8 @@ features = ["extension-module", "abi3-py310"]  # or per-version wheels if ABI no
 Eager `to_arrow_table()` breaks streaming and blows memory. Best-in-class integration uses `__arrow_c_stream__` end-to-end.
 
 ### Status
-- In place: streaming helpers (`src/arrow_utils/core/streaming.py`), coercion helpers, Rust `arrow_stream_to_batches`.
-- Remaining: migrate `to_arrow_table()` call sites in Delta read/write paths to streaming-first readers and keep eager materialization explicit.
+- Complete: streaming helpers (`src/arrow_utils/core/streaming.py`), coercion helpers, Rust `arrow_stream_to_batches`.
+- Complete: Delta read/write paths are streaming-first with explicit eager fallbacks only when required (IPC/encoding alignment).
 
 ### Architecture and Code Pattern
 Use stream as the default interchange object; only materialize when explicitly requested.
@@ -103,10 +106,10 @@ fn arrow_stream_to_batches(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Py<PyAny>
 - Any internal helper that materializes DataFrames via `to_arrow_table()` by default.
 
 ### Implementation Checklist
-- [ ] Treat Arrow C Stream as primary interchange (Python) across all Delta read/write entrypoints.
+- [x] Treat Arrow C Stream as primary interchange (Python) across all Delta read/write entrypoints.
 - [x] Provide explicit eager conversion helpers only when needed.
-- [ ] Migrate remaining Delta read/write paths to `RecordBatchReader`/`to_reader`.
-- [ ] Ensure Delta writes accept `ArrowStreamExportable` without materializing.
+- [x] Migrate remaining Delta read/write paths to `RecordBatchReader`/`to_reader`.
+- [x] Ensure Delta writes accept `ArrowStreamExportable` without materializing.
 
 ---
 
@@ -195,8 +198,8 @@ class DeltaRetryPolicy:
 Metadata IO dominates Delta performance; cache configuration is not a first-class surface.
 
 ### Status
-- In place: `CachePolicyConfig` + runtime settings in `session/runtime.py`.
-- Remaining: expose TTL/limits coherently for DataFusion caches and add “snapshot pinned” cache mode.
+- Complete: `CachePolicyConfig` + runtime settings in `session/runtime.py`.
+- Complete: TTL/limits surfaced via config + “snapshot pinned” cache mode (per-dataset) implemented.
 
 ### Architecture and Code Pattern
 Expose cache options via `CachePolicyConfig` and scan policy settings; apply to RuntimeEnv.
@@ -220,8 +223,8 @@ class CachePolicyConfig(StructBaseStrict, frozen=True):
 
 ### Implementation Checklist
 - [x] Align plan text with `CachePolicyConfig` + scan-policy TTL controls.
-- [ ] Ensure TTL/limits are configurable via runtime profile or config models.
-- [ ] Provide safe “snapshot pinned” cache mode.
+- [x] Ensure TTL/limits are configurable via runtime profile or config models.
+- [x] Provide safe “snapshot pinned” cache mode.
 
 ---
 
@@ -231,8 +234,8 @@ class CachePolicyConfig(StructBaseStrict, frozen=True):
 Rust UDFs can violate DataFusion invariants (row count, scalar paths, metadata-aware outputs).
 
 ### Status
-- In place: conformance tests in `rust/datafusion_ext/tests/udf_conformance.rs` and `docs/architecture/udf_quality_gate.md`.
-- Remaining: expand conformance coverage for named parameters and short-circuit invariants.
+- Complete: conformance tests in `rust/datafusion_ext/tests/udf_conformance.rs` and `docs/architecture/udf_quality_gate.md`.
+- Complete: named parameter + short-circuit invariants covered.
 
 ### Architecture and Code Pattern
 Define a “UDF quality gate” checklist and enforce in code review/tests.
@@ -253,8 +256,8 @@ fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> { ..
 ### Implementation Checklist
 - [x] Enforce row-count invariant via `to_array_of_size`.
 - [x] Require `return_field_from_args` when output depends on input metadata.
-- [ ] Validate `short_circuits` for lazy-eval UDFs.
-- [ ] Add named-parameter invariants to conformance tests.
+- [x] Validate `short_circuits` for lazy-eval UDFs.
+- [x] Add named-parameter invariants to conformance tests.
 
 ---
 

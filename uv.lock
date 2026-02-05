@@ -369,7 +369,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-asyncio" },
     { name = "opentelemetry-instrumentation-system-metrics" },
     { name = "opentelemetry-instrumentation-threading" },
-    { name = "pandera" },
+    { name = "pandera", extra = ["polars"] },
     { name = "pathspec" },
     { name = "pip" },
     { name = "plotly" },
@@ -439,7 +439,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.60b1" },
     { name = "opentelemetry-instrumentation-system-metrics", specifier = ">=0.60b1" },
     { name = "opentelemetry-instrumentation-threading", specifier = ">=0.60b1" },
-    { name = "pandera", specifier = ">=0.29.0" },
+    { name = "pandera", extras = ["polars"], specifier = ">=0.29.0" },
     { name = "pathspec", specifier = ">=0.12.1" },
     { name = "pip", specifier = ">=25.3" },
     { name = "plotly" },
@@ -693,7 +693,7 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:107c653da86ccb6266f366abcd03bf88be41e26932de7c9b8729e76ebc558d1d" },
+    { filename = "datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:bb8a2ab64b121afb89785064e62d9843ab720b8230c71127ef8e6d2f6361d455" },
 ]
 
 [package.metadata]
@@ -711,7 +711,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:76ba42098eec1d99be21e4852be4c38f2bf1e493412d5af92ea0b3bcd14d9d3c" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:f9a05f7e22fd7ca38c4a8ee45a7e61066fc1e8650525008f2b09fc4b066866dc" },
 ]
 
 [package.metadata]
@@ -1978,6 +1978,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/75/7b/03299e4ccc5e3cfb0f9e234207ac43ef08b3ba6c4c2882c890e550ceadba/pandera-0.29.0-py3-none-any.whl", hash = "sha256:b3b25d6c00d7c100fbab96aff0e81e52d3dae543a880d24135cca705fa97c516", size = 295876, upload-time = "2026-01-29T02:49:34.812Z" },
 ]
 
+[package.optional-dependencies]
+polars = [
+    { name = "polars" },
+]
+
 [[package]]
 name = "partd"
 version = "1.4.2"
@@ -2062,11 +2067,11 @@ wheels = [
 
 [[package]]
 name = "pip"
-version = "26.0"
+version = "26.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/44/c2/65686a7783a7c27a329706207147e82f23c41221ee9ae33128fc331670a0/pip-26.0.tar.gz", hash = "sha256:3ce220a0a17915972fbf1ab451baae1521c4539e778b28127efa79b974aff0fa", size = 1812654, upload-time = "2026-01-31T01:40:54.361Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/83/0d7d4e9efe3344b8e2fe25d93be44f64b65364d3c8d7bc6dc90198d5422e/pip-26.0.1.tar.gz", hash = "sha256:c4037d8a277c89b320abe636d59f91e6d0922d08a05b60e85e53b296613346d8", size = 1812747, upload-time = "2026-02-05T02:20:18.702Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/00/5ac7aa77688ec4d34148b423d34dc0c9bc4febe0d872a9a1ad9860b2f6f1/pip-26.0-py3-none-any.whl", hash = "sha256:98436feffb9e31bc9339cf369fd55d3331b1580b6a6f1173bacacddcf9c34754", size = 1787564, upload-time = "2026-01-31T01:40:52.252Z" },
+    { url = "https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl", hash = "sha256:bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b", size = 1787723, upload-time = "2026-02-05T02:20:16.416Z" },
 ]
 
 [[package]]

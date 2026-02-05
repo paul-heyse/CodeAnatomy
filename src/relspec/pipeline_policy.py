@@ -6,12 +6,12 @@ from collections.abc import Mapping
 
 import msgspec
 
-from core.config_base import FingerprintableConfig, config_fingerprint
+from core.config_base import config_fingerprint
 from datafusion_engine.tables.param import ParamTablePolicy
 from serde_msgspec import StructBaseStrict
 
 
-class DiagnosticsPolicy(StructBaseStrict, FingerprintableConfig, frozen=True):
+class DiagnosticsPolicy(StructBaseStrict, frozen=True):
     """Diagnostics capture policy for pipeline execution."""
 
     capture_datafusion_metrics: bool = True
@@ -51,7 +51,7 @@ class DiagnosticsPolicy(StructBaseStrict, FingerprintableConfig, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
-class PipelinePolicy(StructBaseStrict, FingerprintableConfig, frozen=True):
+class PipelinePolicy(StructBaseStrict, frozen=True):
     """Centralized pipeline policy for execution and diagnostics."""
 
     param_table_policy: ParamTablePolicy = msgspec.field(default_factory=ParamTablePolicy)

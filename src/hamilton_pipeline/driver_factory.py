@@ -8,15 +8,29 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
+import msgspec
 from hamilton import driver
 from hamilton.execution import executors
 from hamilton.lifecycle import base as lifecycle_base
 from opentelemetry import trace as otel_trace
 
+from cache.diskcache_factory import (
+    DiskCacheKind,
+    DiskCacheProfile,
+    DiskCacheSettings,
+    default_diskcache_profile,
+)
+from cli.config_models import (
+    DataFusionCacheConfigSpec,
+    DataFusionCachePolicySpec,
+    DiskCacheProfileSpec,
+    DiskCacheSettingsSpec,
+)
 from core.config_base import FingerprintableConfig
 from core.config_base import config_fingerprint as hash_config_fingerprint
 from core_types import DeterminismTier, JsonValue, parse_determinism_tier
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
+from datafusion_engine.session.cache_policy import DEFAULT_CACHE_POLICY, CachePolicyConfig
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.driver_builder import DriverBuilder
@@ -107,6 +121,147 @@ def _mutable_config_section(
     section = dict(value) if isinstance(value, Mapping) else {}
     config[key] = section
     return section
+
+
+_DISKCACHE_KINDS: set[str] = {
+    "plan",
+    "extract",
+    "schema",
+    "repo_scan",
+    "runtime",
+    "queue",
+    "index",
+    "coordination",
+}
+
+
+def _datafusion_cache_config(
+    config: Mapping[str, JsonValue],
+) -> DataFusionCacheConfigSpec | None:
+    section = _config_section(config, "datafusion_cache")
+    if not section:
+        return None
+    return msgspec.convert(section, type=DataFusionCacheConfigSpec, strict=True)
+
+
+def _coerce_diskcache_kind(value: str) -> DiskCacheKind:
+    normalized = value.strip()
+    if normalized in _DISKCACHE_KINDS:
+        return cast("DiskCacheKind", normalized)
+    msg = f"Unsupported diskcache kind: {value!r}."
+    raise ValueError(msg)
+
+
+def _merge_diskcache_settings(
+    base: DiskCacheSettings,
+    spec: DiskCacheSettingsSpec | None,
+) -> DiskCacheSettings:
+    if spec is None:
+        return base
+    return DiskCacheSettings(
+        size_limit_bytes=spec.size_limit_bytes
+        if spec.size_limit_bytes is not None
+        else base.size_limit_bytes,
+        cull_limit=spec.cull_limit if spec.cull_limit is not None else base.cull_limit,
+        eviction_policy=spec.eviction_policy
+        if spec.eviction_policy is not None
+        else base.eviction_policy,
+        statistics=spec.statistics if spec.statistics is not None else base.statistics,
+        tag_index=spec.tag_index if spec.tag_index is not None else base.tag_index,
+        shards=spec.shards if spec.shards is not None else base.shards,
+        timeout_seconds=spec.timeout_seconds
+        if spec.timeout_seconds is not None
+        else base.timeout_seconds,
+        disk_min_file_size=spec.disk_min_file_size
+        if spec.disk_min_file_size is not None
+        else base.disk_min_file_size,
+        sqlite_journal_mode=spec.sqlite_journal_mode
+        if spec.sqlite_journal_mode is not None
+        else base.sqlite_journal_mode,
+        sqlite_mmap_size=spec.sqlite_mmap_size
+        if spec.sqlite_mmap_size is not None
+        else base.sqlite_mmap_size,
+        sqlite_synchronous=spec.sqlite_synchronous
+        if spec.sqlite_synchronous is not None
+        else base.sqlite_synchronous,
+    )
+
+
+def _diskcache_profile_from_spec(
+    spec: DiskCacheProfileSpec | None,
+    *,
+    existing: DiskCacheProfile | None,
+) -> DiskCacheProfile | None:
+    if spec is None:
+        return existing
+    base_profile = existing or default_diskcache_profile()
+    base_settings = _merge_diskcache_settings(base_profile.base_settings, spec.base_settings)
+    overrides = dict(base_profile.overrides)
+    if spec.overrides:
+        for kind, override_spec in spec.overrides.items():
+            resolved_kind = _coerce_diskcache_kind(str(kind))
+            base_override = overrides.get(resolved_kind, base_settings)
+            overrides[resolved_kind] = _merge_diskcache_settings(base_override, override_spec)
+    ttl_seconds = dict(base_profile.ttl_seconds)
+    if spec.ttl_seconds:
+        for kind, ttl in spec.ttl_seconds.items():
+            resolved_kind = _coerce_diskcache_kind(str(kind))
+            ttl_seconds[resolved_kind] = ttl
+    root = base_profile.root
+    if spec.root is not None and str(spec.root).strip():
+        root = Path(spec.root).expanduser()
+    return DiskCacheProfile(
+        root=root,
+        base_settings=base_settings,
+        overrides=overrides,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _cache_policy_from_spec(
+    spec: DataFusionCachePolicySpec | None,
+    *,
+    existing: CachePolicyConfig | None,
+) -> CachePolicyConfig | None:
+    if spec is None:
+        return existing
+    base = existing or DEFAULT_CACHE_POLICY
+    return CachePolicyConfig(
+        listing_cache_size=spec.listing_cache_size
+        if spec.listing_cache_size is not None
+        else base.listing_cache_size,
+        metadata_cache_size=spec.metadata_cache_size
+        if spec.metadata_cache_size is not None
+        else base.metadata_cache_size,
+        stats_cache_size=spec.stats_cache_size
+        if spec.stats_cache_size is not None
+        else base.stats_cache_size,
+    )
+
+
+def _apply_datafusion_cache_config(
+    profile: DataFusionRuntimeProfile,
+    *,
+    config: Mapping[str, JsonValue],
+) -> DataFusionRuntimeProfile:
+    resolved = _datafusion_cache_config(config)
+    if resolved is None:
+        return profile
+    cache_policy = _cache_policy_from_spec(
+        resolved.cache_policy,
+        existing=profile.policies.cache_policy,
+    )
+    diskcache_profile = _diskcache_profile_from_spec(
+        resolved.diskcache_profile,
+        existing=profile.policies.diskcache_profile,
+    )
+    updated_policies = msgspec.structs.replace(
+        profile.policies,
+        cache_policy=cache_policy,
+        diskcache_profile=diskcache_profile,
+        snapshot_pinned_mode=resolved.snapshot_pinned_mode,
+    )
+    return msgspec.structs.replace(profile, policies=updated_policies)
 
 
 def driver_config_fingerprint(config: Mapping[str, JsonValue]) -> str:
@@ -242,7 +397,12 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
         _runtime_profile_name(config),
         determinism=_determinism_override(config),
     )
-    profile = runtime_profile_spec.datafusion
+    profile = _apply_datafusion_cache_config(runtime_profile_spec.datafusion, config=config)
+    if profile is not runtime_profile_spec.datafusion:
+        runtime_profile_spec = msgspec.structs.replace(
+            runtime_profile_spec,
+            datafusion=profile,
+        )
     from cpg.kind_catalog import validate_edge_kind_requirements
     from datafusion_engine.session.runtime import refresh_session_runtime
     from datafusion_engine.views.registration import ensure_view_graph

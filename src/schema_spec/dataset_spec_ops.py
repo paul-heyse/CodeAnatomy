@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -19,7 +20,6 @@ from datafusion_engine.schema.alignment import CastErrorPolicy
 from datafusion_engine.schema.finalize import Contract, FinalizeContext
 from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.validation import ArrowValidationOptions
-from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.system import (
     ContractSpec,
     DataFusionScanOptions,
@@ -35,6 +35,9 @@ from schema_spec.system import (
     ViewSpec,
     _ordering_metadata_spec,
 )
+
+if TYPE_CHECKING:
+    from schema_spec.dataset_handle import DatasetHandle
 
 
 def dataset_spec_name(spec: DatasetSpec) -> str:
@@ -291,6 +294,8 @@ def dataset_spec_handle(spec: DatasetSpec) -> DatasetHandle:
     DatasetHandle
         Dataset handle for the dataset spec.
     """
+    from schema_spec.dataset_handle import DatasetHandle
+
     return DatasetHandle(spec=spec)
 
 

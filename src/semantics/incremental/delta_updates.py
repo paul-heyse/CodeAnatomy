@@ -27,7 +27,7 @@ from semantics.incremental.write_helpers import (
 )
 from storage.deltalake import (
     DeltaDeleteWhereRequest,
-    coerce_delta_table,
+    coerce_delta_input,
     idempotent_commit_properties,
 )
 
@@ -88,10 +88,11 @@ def upsert_partitioned_dataset(
         raise ValueError(msg)
     schema = spec.schema or table.schema
     delete_partitions = _partition_specs(spec.partition_column, changes.deleted_file_ids)
-    data = coerce_delta_table(
+    data = coerce_delta_input(
         table,
         schema=schema,
         encoding_policy=encoding_policy_from_schema(schema),
+        prefer_reader=True,
     )
     _delete_delta_partitions(
         base_dir,
@@ -104,7 +105,7 @@ def upsert_partitioned_dataset(
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     write_result = write_delta_table_via_pipeline(
         runtime=context.runtime,
-        table=data,
+        table=data.data,
         request=IncrementalDeltaWriteRequest(
             destination=base_dir,
             mode=WriteMode.APPEND,
@@ -143,10 +144,11 @@ def write_overwrite_dataset(
         Raised when the Delta write result is unavailable.
     """
     metadata = spec.commit_metadata
-    data = coerce_delta_table(
+    data = coerce_delta_input(
         table,
         schema=spec.schema,
         encoding_policy=encoding_policy_from_schema(spec.schema),
+        prefer_reader=True,
     )
     target = str(state_store.dataset_dir(spec.name))
     dataset_location = context.runtime.profile.catalog_ops.dataset_location(spec.name)
@@ -154,7 +156,7 @@ def write_overwrite_dataset(
     resolved_storage = context.resolve_storage(table_uri=target)
     write_result = write_delta_table_via_pipeline(
         runtime=context.runtime,
-        table=data,
+        table=data.data,
         request=IncrementalDeltaWriteRequest(
             destination=target,
             mode=WriteMode.OVERWRITE,
@@ -169,11 +171,11 @@ def write_overwrite_dataset(
     if write_result.delta_result is None:
         msg = f"Overwrite delta write returned no result for {spec.name!r}."
         raise RuntimeError(msg)
-    if data.num_rows > _STREAMING_ROW_THRESHOLD:
+    if data.row_count is not None and data.row_count > _STREAMING_ROW_THRESHOLD:
         record_artifact(
             context.runtime.profile,
             "incremental_streaming_writes_v1",
-            {"dataset_name": spec.name, "row_count": data.num_rows},
+            {"dataset_name": spec.name, "row_count": data.row_count},
         )
     return {spec.name: write_result.delta_result.path}
 

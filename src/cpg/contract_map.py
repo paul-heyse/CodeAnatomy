@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from cpg.prop_catalog import PROP_SPECS, PropSpec
 from cpg.specs import PropFieldSpec
@@ -36,7 +37,7 @@ def _resolve_prop_field(
             raise ValueError(msg)
         value_type = _value_type_for_key(key, prop_specs)
         if source.value_type is None:
-            return replace(source, value_type=value_type)
+            return msgspec.structs.replace(source, value_type=value_type)
         if source.value_type != value_type:
             msg = (
                 f"PropFieldSpec value_type mismatch for {key!r}: "

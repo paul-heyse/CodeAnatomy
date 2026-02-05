@@ -119,6 +119,7 @@ from storage.ipc_utils import payload_hash
 from utils.registry_protocol import Registry
 from utils.uuid_factory import uuid7_str
 from utils.validation import find_missing
+from utils.value_coercion import coerce_int
 
 _MISSING = object()
 
@@ -251,6 +252,7 @@ _EXTENSIONS_SCHEMA = pa.struct(
         pa.field("delta_plan_codecs_enabled", pa.bool_()),
         pa.field("delta_plan_codec_physical", pa.string()),
         pa.field("delta_plan_codec_logical", pa.string()),
+        pa.field("snapshot_pinned_mode", pa.string()),
         pa.field("delta_ffi_provider_enforced", pa.bool_()),
         pa.field("expr_planners_enabled", pa.bool_()),
         pa.field("expr_planner_names", pa.list_(pa.string())),
@@ -2486,6 +2488,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "delta_plan_codecs_enabled": profile.features.enable_delta_plan_codecs,
             "delta_plan_codec_physical": profile.policies.delta_plan_codec_physical,
             "delta_plan_codec_logical": profile.policies.delta_plan_codec_logical,
+            "snapshot_pinned_mode": profile.policies.snapshot_pinned_mode,
             "delta_ffi_provider_enforced": profile.features.enforce_delta_ffi_provider,
             "expr_planners_enabled": profile.features.enable_expr_planners,
             "expr_planner_names": list(profile.policies.expr_planner_names),
@@ -2927,6 +2930,7 @@ class _RuntimeDiagnosticsMixin:
                 "delta_plan_codecs_enabled": features.enable_delta_plan_codecs,
                 "delta_plan_codec_physical": policies.delta_plan_codec_physical,
                 "delta_plan_codec_logical": policies.delta_plan_codec_logical,
+                "snapshot_pinned_mode": policies.snapshot_pinned_mode,
                 "delta_protocol_mode": policies.delta_protocol_mode,
                 "delta_protocol_support": _delta_protocol_support_payload(profile),
                 "expr_planners_enabled": features.enable_expr_planners,
@@ -3544,6 +3548,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     diskcache_profile: DiskCacheProfile | None = msgspec.field(
         default_factory=default_diskcache_profile
     )
+    snapshot_pinned_mode: Literal["off", "delta_version"] = "off"
     cache_output_root: str | None = None
     runtime_artifact_cache_enabled: bool = False
     runtime_artifact_cache_root: str | None = None
@@ -3691,6 +3696,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
             ),
             "delta_protocol_mode": self.delta_protocol_mode,
             "diskcache_profile": self._diskcache_profile_payload(self.diskcache_profile),
+            "snapshot_pinned_mode": self.snapshot_pinned_mode,
             "cache_output_root": self.cache_output_root,
             "runtime_artifact_cache_enabled": self.runtime_artifact_cache_enabled,
             "runtime_artifact_cache_root": self.runtime_artifact_cache_root,
@@ -5957,6 +5963,7 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
                 {
                     "kind": kind,
                     "profile_key": self.context_cache_key(),
+                    "ttl_seconds": diskcache_profile.ttl_for(cast("DiskCacheKind", kind)),
                     "size_limit_bytes": settings.size_limit_bytes,
                     "eviction_policy": settings.eviction_policy,
                     "cull_limit": settings.cull_limit,
@@ -6607,6 +6614,37 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
         _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
 
 
+def cache_prefix_for_delta_snapshot(
+    profile: DataFusionRuntimeProfile,
+    *,
+    dataset_name: str,
+    snapshot: Mapping[str, object] | None = None,
+    delta_version: int | None = None,
+    delta_timestamp: str | int | None = None,
+) -> str | None:
+    """Return a cache prefix that pins caches to a Delta snapshot.
+
+    Returns
+    -------
+    str | None
+        Cache prefix when snapshot identifiers are available; otherwise ``None``.
+    """
+    version = coerce_int(snapshot.get("version")) if snapshot is not None else None
+    if version is None:
+        version = delta_version
+    timestamp_value = None
+    if snapshot is not None:
+        timestamp_value = coerce_int(snapshot.get("snapshot_timestamp"))
+        if timestamp_value is None:
+            timestamp_value = snapshot.get("timestamp")
+    if timestamp_value is None and delta_timestamp is not None:
+        timestamp_value = delta_timestamp
+    if version is None and timestamp_value is None:
+        return None
+    suffix = version if version is not None else timestamp_value
+    return f"{profile.context_cache_key()}::{dataset_name}::{suffix}"
+
+
 def collect_datafusion_metrics(
     profile: DataFusionRuntimeProfile,
 ) -> Mapping[str, object] | None:
@@ -6625,6 +6663,8 @@ def collect_datafusion_metrics(
 def schema_introspector_for_profile(
     profile: DataFusionRuntimeProfile,
     ctx: SessionContext,
+    *,
+    cache_prefix: str | None = None,
 ) -> SchemaIntrospector:
     """Return a schema introspector for a runtime profile.
 
@@ -6636,11 +6676,12 @@ def schema_introspector_for_profile(
     cache_profile = profile.policies.diskcache_profile
     cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
     cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
+    resolved_prefix = cache_prefix or profile.context_cache_key()
     return SchemaIntrospector(
         ctx,
         sql_options=profile.sql_options(),
         cache=cache,
-        cache_prefix=profile.context_cache_key(),
+        cache_prefix=resolved_prefix,
         cache_ttl=cache_ttl,
     )
 
@@ -7493,6 +7534,7 @@ __all__ = [
     "apply_execution_policy",
     "assert_schema_metadata",
     "build_session_runtime",
+    "cache_prefix_for_delta_snapshot",
     "collect_datafusion_metrics",
     "collect_datafusion_traces",
     "dataset_schema_from_context",

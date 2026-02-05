@@ -577,23 +577,6 @@ impl PySessionContext {
         self.create_dataframe(list_of_batches, name, Some(schema.into()), py)
     }
 
-    /// Construct datafusion dataframe from pandas
-    #[allow(clippy::wrong_self_convention)]
-    #[pyo3(signature = (data, name=None))]
-    pub fn from_pandas(&self, data: Bound<'_, PyAny>, name: Option<&str>) -> PyResult<PyDataFrame> {
-        // Obtain GIL token
-        let py = data.py();
-
-        // Instantiate pyarrow Table object & convert to Arrow Table
-        let table_class = py.import("pyarrow")?.getattr("Table")?;
-        let args = PyTuple::new(py, &[data])?;
-        let table = table_class.call_method1("from_pandas", args)?;
-
-        // Convert Arrow Table to datafusion DataFrame
-        let df = self.from_arrow(table, name, py)?;
-        Ok(df)
-    }
-
     /// Construct datafusion dataframe from polars
     #[pyo3(signature = (data, name=None))]
     pub fn from_polars(&self, data: Bound<'_, PyAny>, name: Option<&str>) -> PyResult<PyDataFrame> {

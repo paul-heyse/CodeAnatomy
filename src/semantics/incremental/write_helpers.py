@@ -6,9 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-import pyarrow as pa
-
-from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import (
     WriteFormat,
@@ -47,7 +45,7 @@ class IncrementalDeltaWriteRequest:
 def write_delta_table_via_pipeline(
     *,
     runtime: IncrementalRuntime,
-    table: TableLike | pa.Table,
+    table: TableLike | RecordBatchReaderLike,
     request: IncrementalDeltaWriteRequest,
 ) -> WriteResult:
     """Write an Arrow table to Delta via WritePipeline.

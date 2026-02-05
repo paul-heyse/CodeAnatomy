@@ -49,7 +49,7 @@ def semantic_runtime_from_profile(
     output_locations = {
         name: str(location.path)
         for name in view_names
-        if (location := profile.dataset_location(name)) is not None
+        if (location := profile.catalog_ops.dataset_location(name)) is not None
     }
 
     # Extract cache policy overrides

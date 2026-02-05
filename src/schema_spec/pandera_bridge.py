@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
 
 
-class DataframeValidationRequest(StructBaseStrict, frozen=True):
+class DataframeValidationRequest[TDF](StructBaseStrict, frozen=True):
     """Validation request for Pandera dataframe checks."""
 
-    df: object
+    df: TDF
     schema_spec: TableSchemaSpec
     policy: ValidationPolicySpec | None
     constraints: Iterable[str] | None = None
@@ -137,7 +137,7 @@ def dataframe_model_for_spec(
     return type(_model_name(spec), (pa_schema.DataFrameModel,), attrs)
 
 
-def field_to_pandera_dtype(field: FieldSpec) -> object:
+def field_to_pandera_dtype(field: FieldSpec) -> Any:
     """Return a pandas dtype suitable for pandera from a field spec.
 
     Parameters
@@ -147,7 +147,7 @@ def field_to_pandera_dtype(field: FieldSpec) -> object:
 
     Returns
     -------
-    object
+    Any
         Pandas dtype object usable with pandera.
     """
     dtype = field.dtype
@@ -209,7 +209,7 @@ def to_pandera_schema(
             strict = policy.strict
         if policy.coerce is not None:
             coerce = policy.coerce
-    unique = tuple(spec.key_fields) if spec.key_fields else None
+    unique = list(spec.key_fields) if spec.key_fields else None
     return pa_schema.DataFrameSchema(
         columns,
         strict=strict,
@@ -219,7 +219,7 @@ def to_pandera_schema(
     )
 
 
-def _maybe_to_pandas(df: object) -> tuple[object, object]:
+def _maybe_to_pandas[TDF](df: TDF) -> tuple[TDF, object]:
     import pandas as pd
 
     if isinstance(df, pd.DataFrame):
@@ -240,13 +240,13 @@ def _maybe_to_pandas(df: object) -> tuple[object, object]:
     raise TypeError(msg)
 
 
-def validate_dataframe(
-    df: object,
+def validate_dataframe[TDF](
+    df: TDF,
     *,
     schema_spec: TableSchemaSpec,
     policy: ValidationPolicySpec | None,
     constraints: Iterable[str] | None = None,
-) -> object:
+) -> TDF:
     """Validate a dataframe-like object with pandera when enabled.
 
     Parameters
@@ -262,7 +262,7 @@ def validate_dataframe(
 
     Returns
     -------
-    object
+    TDF
         Original dataframe-like object after validation.
     """
     if policy is None or not policy.enabled:
@@ -297,19 +297,25 @@ def validate_dataframe(
         ) -> pa_typing.DataFrame[model]:
             return data
 
-        validator = check_types(**validate_kwargs)(_validate_model)
-        validator(pandas_df)
+        validator = check_types(
+            lazy=policy.lazy,
+            sample=policy.sample,
+            head=policy.head,
+            tail=policy.tail,
+        )(_validate_model)
+        pandas_typed = cast("pa_typing.DataFrame[Any]", pandas_df)
+        validator(pandas_typed)
     schema = to_pandera_schema(schema_spec, policy=policy, constraints=constraints)
     schema.validate(pandas_df, **validate_kwargs)
     return original
 
 
-def validate_with_policy(request: DataframeValidationRequest) -> object:
+def validate_with_policy[TDF](request: DataframeValidationRequest[TDF]) -> TDF:
     """Validate a dataframe-like object and emit diagnostics on failure.
 
     Returns
     -------
-    object
+    TDF
         Original dataframe-like object after validation.
     """
     if request.policy is None or not request.policy.enabled:

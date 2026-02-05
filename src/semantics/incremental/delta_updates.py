@@ -99,7 +99,7 @@ def upsert_partitioned_dataset(
         context=context,
         dataset_name=spec.name,
     )
-    dataset_location = context.runtime.profile.dataset_location(spec.name)
+    dataset_location = context.runtime.profile.catalog_ops.dataset_location(spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     write_result = write_delta_table_via_pipeline(
@@ -149,7 +149,7 @@ def write_overwrite_dataset(
         encoding_policy=encoding_policy_from_schema(spec.schema),
     )
     target = str(state_store.dataset_dir(spec.name))
-    dataset_location = context.runtime.profile.dataset_location(spec.name)
+    dataset_location = context.runtime.profile.catalog_ops.dataset_location(spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=target)
     write_result = write_delta_table_via_pipeline(
@@ -401,7 +401,7 @@ def _delete_delta_partitions(
     if not predicate:
         return
     commit_metadata = {"dataset": base_dir, "operation": "delete"}
-    commit_options, commit_run = context.runtime.profile.reserve_delta_commit(
+    commit_options, commit_run = context.runtime.profile.delta_ops.reserve_delta_commit(
         key=base_dir,
         metadata=commit_metadata,
         commit_metadata=commit_metadata,
@@ -414,11 +414,11 @@ def _delete_delta_partitions(
     )
     ctx = context.runtime.session_runtime().ctx
     dataset_location = (
-        context.runtime.profile.dataset_location(dataset_name) if dataset_name else None
+        context.runtime.profile.catalog_ops.dataset_location(dataset_name) if dataset_name else None
     )
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
-    delta_service = context.runtime.profile.delta_service()
+    delta_service = context.runtime.profile.delta_ops.delta_service()
     delta_service.mutate(
         DeltaMutationRequest(
             delete=DeltaDeleteWhereRequest(
@@ -435,7 +435,7 @@ def _delete_delta_partitions(
         ),
         ctx=ctx,
     )
-    context.runtime.profile.finalize_delta_commit(
+    context.runtime.profile.delta_ops.finalize_delta_commit(
         key=base_dir,
         run=commit_run,
         metadata={"operation": "delete", "partition_count": len(delete_partitions)},

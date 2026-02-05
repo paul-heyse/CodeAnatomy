@@ -109,7 +109,7 @@ def _plan_scan_units(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = runtime.profile.dataset_location(scan.dataset_name)
+        location = runtime.profile.catalog_ops.dataset_location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(

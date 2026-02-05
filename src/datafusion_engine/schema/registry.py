@@ -64,7 +64,7 @@ from datafusion_engine.schema.introspection import SchemaIntrospector, table_nam
 from datafusion_engine.sql.options import sql_options_for_profile
 from datafusion_engine.udf.expr import udf_expr
 from schema_spec.file_identity import FILE_ID_FIELD, FILE_SHA256_FIELD, PATH_FIELD
-from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+from schema_spec.view_specs import ViewRuntimeSpec
 from utils.registry_protocol import ImmutableRegistry, MappingRegistryAdapter
 from utils.validation import find_missing
 
@@ -3008,21 +3008,19 @@ def nested_view_spec(
     name: str,
     *,
     table: str | None = None,
-) -> ViewSpec:
-    """Return a ViewSpec for a nested dataset.
+) -> ViewRuntimeSpec:
+    """Return a runtime view spec for a nested dataset.
 
     Returns
     -------
-    ViewSpec
-        View specification derived from the registered base table.
+    ViewRuntimeSpec
+        Runtime view specification derived from the registered base table.
     """
-    builder = partial(nested_base_df, name=name, table=table)
-    return view_spec_from_builder(
-        ViewSpecInputs(
-            ctx=ctx,
-            name=name,
-            builder=builder,
-        )
+    builder = partial(nested_base_df, ctx, name=name, table=table)
+    return ViewRuntimeSpec(
+        name=name,
+        builder=builder,
+        schema=None,
     )
 
 
@@ -3030,17 +3028,17 @@ def nested_view_specs(
     ctx: SessionContext,
     *,
     table: str | None = None,
-) -> tuple[ViewSpec, ...]:
-    """Return ViewSpecs for all nested datasets.
+) -> tuple[ViewRuntimeSpec, ...]:
+    """Return runtime view specs for all nested datasets.
 
     Returns
     -------
-    tuple[ViewSpec, ...]
-        View specifications for nested datasets.
+    tuple[ViewRuntimeSpec, ...]
+        Runtime view specifications for nested datasets.
     """
     if table is not None and not ctx.table_exist(table):
         return ()
-    specs: list[ViewSpec] = []
+    specs: list[ViewRuntimeSpec] = []
     for name in nested_dataset_names():
         root, _path = nested_path_for(name)
         resolved_table = table or root

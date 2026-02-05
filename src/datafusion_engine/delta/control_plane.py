@@ -898,7 +898,7 @@ def delta_write_ipc(
         storage_payload,
         request.version,
         request.timestamp,
-        request.data_ipc.data,
+        bytes(request.data_ipc),
         request.mode,
         request.schema_mode,
         partitions_payload,

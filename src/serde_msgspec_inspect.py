@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import msgspec
 
@@ -41,8 +41,12 @@ def _handle_struct(
     fallback: Callable[[object], object] | None,
     seen: set[int],
 ) -> object:
-    if not (_is_msgspec_inspect(obj) or hasattr(obj, "__struct_fields__")):
+    fields = getattr(obj, "__struct_fields__", None)
+    if not (_is_msgspec_inspect(obj) or fields is not None):
         return _NOT_HANDLED
+    if fields is None:
+        return _NOT_HANDLED
+    fields = cast("Sequence[str]", fields)
     obj_id = id(obj)
     seen.add(obj_id)
     payload = {
@@ -53,7 +57,7 @@ def _handle_struct(
             fallback=fallback,
             _seen=seen,
         )
-        for field in obj.__struct_fields__
+        for field in fields
     }
     seen.remove(obj_id)
     return payload

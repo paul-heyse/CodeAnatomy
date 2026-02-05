@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         DeltaFeatureEnableRequest,
     )
     from datafusion_engine.delta.protocol import DeltaFeatureGate, DeltaProtocolSnapshot
+    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
@@ -246,6 +247,62 @@ class DeltaCdfOptions:
     columns: list[str] | None = None
     predicate: str | None = None
     allow_out_of_range: bool = False
+
+
+def cdf_options_to_spec(options: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec | None:
+    """Return a DeltaCdfOptionsSpec payload for control-plane requests.
+
+    Returns
+    -------
+    DeltaCdfOptionsSpec | None
+        Control-plane CDF options payload.
+    """
+    if options is None:
+        return None
+    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
+
+    columns = tuple(options.columns) if options.columns is not None else None
+    return DeltaCdfOptionsSpec(
+        starting_version=options.starting_version,
+        ending_version=options.ending_version,
+        starting_timestamp=options.starting_timestamp,
+        ending_timestamp=options.ending_timestamp,
+        columns=columns,
+        predicate=options.predicate,
+        allow_out_of_range=options.allow_out_of_range,
+    )
+
+
+def cdf_options_from_spec(options: DeltaCdfOptionsSpec | None) -> DeltaCdfOptions | None:
+    """Return storage-layer DeltaCdfOptions from a control-plane spec.
+
+    Returns
+    -------
+    DeltaCdfOptions | None
+        Storage-layer CDF options.
+
+    Raises
+    ------
+    TypeError
+        Raised when the input is not a DeltaCdfOptionsSpec.
+    """
+    if options is None:
+        return None
+    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
+
+    if not isinstance(options, DeltaCdfOptionsSpec):
+        msg = f"Expected DeltaCdfOptionsSpec, got {type(options).__name__}."
+        raise TypeError(msg)
+    columns = list(options.columns) if options.columns is not None else None
+    return DeltaCdfOptions(
+        starting_version=options.starting_version,
+        ending_version=options.ending_version,
+        starting_timestamp=options.starting_timestamp,
+        ending_timestamp=options.ending_timestamp,
+        columns=columns,
+        predicate=options.predicate,
+        allow_out_of_range=options.allow_out_of_range,
+    )
 
 
 @dataclass(frozen=True)
@@ -823,7 +880,7 @@ def enable_delta_features(
         return {}
     with _feature_control_span(options, operation="set_properties"):
         profile = _runtime_profile_for_delta(options.runtime_profile)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaCommitOptions,
@@ -866,7 +923,7 @@ def _feature_enable_request(
 ) -> tuple[SessionContext, DeltaFeatureEnableRequest]:
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     profile = _runtime_profile_for_delta(options.runtime_profile)
-    ctx = profile.delta_runtime_ctx()
+    ctx = profile.delta_ops.delta_runtime_ctx()
     from datafusion_engine.delta.control_plane import (
         DeltaCommitOptions,
         DeltaFeatureEnableRequest,
@@ -917,7 +974,7 @@ def delta_add_constraints(
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     with _feature_control_span(options, operation="add_constraints"):
         profile = _runtime_profile_for_delta(options.runtime_profile)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaAddConstraintsRequest,
@@ -980,7 +1037,7 @@ def delta_drop_constraints(
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     with _feature_control_span(options, operation="drop_constraints"):
         profile = _runtime_profile_for_delta(options.runtime_profile)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaCommitOptions,
@@ -1993,7 +2050,7 @@ def vacuum_delta(
     ) as span:
         storage = merged_storage_options(storage_options, log_storage_options)
         profile = _runtime_profile_for_delta(None)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaCommitOptions,
@@ -2061,7 +2118,7 @@ def create_delta_checkpoint(
     ):
         storage = merged_storage_options(storage_options, log_storage_options)
         profile = _runtime_profile_for_delta(runtime_profile)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaCheckpointRequest,
@@ -2130,7 +2187,7 @@ def cleanup_delta_log(
     ):
         storage = merged_storage_options(storage_options, log_storage_options)
         profile = _runtime_profile_for_delta(runtime_profile)
-        ctx = profile.delta_runtime_ctx()
+        ctx = profile.delta_ops.delta_runtime_ctx()
         try:
             from datafusion_engine.delta.control_plane import (
                 DeltaCheckpointRequest,
@@ -2831,22 +2888,6 @@ def _delta_cdf_table_provider(
     log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
 ) -> DeltaCdfProviderBundle | None:
-    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
-
-    def _cdf_spec(value: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec | None:
-        if value is None:
-            return None
-        columns = tuple(value.columns) if value.columns is not None else None
-        return DeltaCdfOptionsSpec(
-            starting_version=value.starting_version,
-            ending_version=value.ending_version,
-            starting_timestamp=value.starting_timestamp,
-            ending_timestamp=value.ending_timestamp,
-            columns=columns,
-            predicate=value.predicate,
-            allow_out_of_range=value.allow_out_of_range,
-        )
-
     storage = merged_storage_options(storage_options, log_storage_options)
     try:
         from datafusion_engine.delta.control_plane import DeltaCdfRequest, delta_cdf_provider
@@ -2857,7 +2898,7 @@ def _delta_cdf_table_provider(
                 storage_options=storage or None,
                 version=None,
                 timestamp=None,
-                options=_cdf_spec(options),
+                options=cdf_options_to_spec(options),
             )
         )
     except (ImportError, RuntimeError, TypeError, ValueError):

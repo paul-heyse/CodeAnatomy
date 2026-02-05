@@ -19,6 +19,7 @@ from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
 from schema_spec.pandera_bridge import validation_policy_payload
+from schema_spec.system import ValidationPolicySpec
 from serde_msgspec import StructBaseCompat
 from utils.uuid_factory import uuid7_str
 
@@ -254,26 +255,33 @@ def record_view_contract_violations(
     recorder_sink.record_artifact("view_contract_violations_v1", payload)
 
 
+def _normalize_failure_cases(error: Exception) -> list[dict[str, object]] | None:
+    failure_cases = getattr(error, "failure_cases", None)
+    if failure_cases is None:
+        return None
+    try:
+        head = getattr(failure_cases, "head", None)
+        if callable(head):
+            failure_cases = head(50)
+        to_dict = getattr(failure_cases, "to_dict", None)
+        if callable(to_dict):
+            payload = to_dict(orient="records")
+            if isinstance(payload, list):
+                return payload
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None
+
+
 def record_dataframe_validation_error(
     sink: DiagnosticsSink,
     *,
     name: str,
     error: Exception,
-    policy: object | None = None,
+    policy: ValidationPolicySpec | None = None,
 ) -> None:
     """Record a dataframe validation error payload."""
-    failure_cases_payload = None
-    failure_cases = getattr(error, "failure_cases", None)
-    if failure_cases is not None:
-        try:
-            head = getattr(failure_cases, "head", None)
-            if callable(head):
-                failure_cases = head(50)
-            to_dict = getattr(failure_cases, "to_dict", None)
-            if callable(to_dict):
-                failure_cases_payload = to_dict(orient="records")
-        except Exception:  # noqa: BLE001
-            failure_cases_payload = None
+    failure_cases_payload = _normalize_failure_cases(error)
     payload = {
         "name": name,
         "error_type": type(error).__name__,

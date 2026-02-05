@@ -600,7 +600,7 @@ def _resolve_dataframe_from_session(
     try:
         return ctx.table(name)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        location = session_runtime.profile.dataset_location(name)
+        location = session_runtime.profile.catalog_ops.dataset_location(name)
         if location is None:
             return None
         from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -886,7 +886,7 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = inputs.engine_session.datafusion_profile.dataset_location(spec.task_output)
+        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -944,7 +944,7 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = inputs.engine_session.datafusion_profile.dataset_location(spec.task_output)
+        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -1118,7 +1118,7 @@ def _record_extract_outputs(
         rows = None
         if hasattr(table, "num_rows"):
             rows = int(table.num_rows)
-        location = inputs.engine_session.datafusion_profile.dataset_location(name)
+        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(name)
         status = "ok"
         issue = None
         if location is None:

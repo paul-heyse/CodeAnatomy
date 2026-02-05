@@ -16,6 +16,7 @@ from schema_spec.system import (
     ScanPolicyConfig,
     ValidationPolicySpec,
 )
+from serde_msgspec import StructBaseStrict
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,17 @@ class ResolvedDatasetPolicies:
     dataframe_validation: ValidationPolicySpec | None
 
 
+class DatasetPolicyRequest(StructBaseStrict, frozen=True):
+    """Inputs for resolving dataset policies."""
+
+    dataset_format: str
+    dataset_spec: DatasetSpec | None = None
+    datafusion_scan_override: DataFusionScanOptions | None = None
+    delta_policy_override: DeltaPolicyBundle | None = None
+    validation_override: ArrowValidationOptions | None = None
+    dataframe_validation_override: ValidationPolicySpec | None = None
+
+
 _DEFAULT_DELTA_SCAN = DeltaScanOptions(
     file_column_name="__delta_rs_path",
     enable_parquet_pushdown=True,
@@ -38,15 +50,7 @@ _DEFAULT_DELTA_SCAN = DeltaScanOptions(
 )
 
 
-def resolve_dataset_policies(  # noqa: PLR0913
-    *,
-    dataset_format: str,
-    dataset_spec: DatasetSpec | None,
-    datafusion_scan_override: DataFusionScanOptions | None,
-    delta_policy_override: DeltaPolicyBundle | None,
-    validation_override: ArrowValidationOptions | None,
-    dataframe_validation_override: ValidationPolicySpec | None,
-) -> ResolvedDatasetPolicies:
+def resolve_dataset_policies(request: DatasetPolicyRequest) -> ResolvedDatasetPolicies:
     """Resolve dataset policies using precedence rules.
 
     Returns
@@ -55,22 +59,26 @@ def resolve_dataset_policies(  # noqa: PLR0913
         Resolved policy bundle for the dataset.
     """
     datafusion_scan = resolve_datafusion_scan_options(
-        dataset_spec=dataset_spec,
-        override=datafusion_scan_override,
+        dataset_spec=request.dataset_spec,
+        override=request.datafusion_scan_override,
     )
     delta_scan = resolve_delta_scan_options(
-        dataset_format=dataset_format,
-        dataset_spec=dataset_spec,
-        override=delta_policy_override.scan if delta_policy_override is not None else None,
+        dataset_format=request.dataset_format,
+        dataset_spec=request.dataset_spec,
+        override=(
+            request.delta_policy_override.scan
+            if request.delta_policy_override is not None
+            else None
+        ),
     )
     delta_bundle = resolve_delta_policy_bundle(
-        dataset_spec=dataset_spec,
-        override=delta_policy_override,
+        dataset_spec=request.dataset_spec,
+        override=request.delta_policy_override,
     )
     validation, dataframe_validation = resolve_validation_policies(
-        dataset_spec=dataset_spec,
-        validation_override=validation_override,
-        dataframe_validation_override=dataframe_validation_override,
+        dataset_spec=request.dataset_spec,
+        validation_override=request.validation_override,
+        dataframe_validation_override=request.dataframe_validation_override,
     )
     return ResolvedDatasetPolicies(
         datafusion_scan=datafusion_scan,
@@ -117,7 +125,9 @@ def resolve_datafusion_scan_options(
     """
     from schema_spec.dataset_spec_ops import dataset_spec_datafusion_scan, dataset_spec_ordering
 
-    scan = override or (dataset_spec_datafusion_scan(dataset_spec) if dataset_spec is not None else None)
+    scan = override or (
+        dataset_spec_datafusion_scan(dataset_spec) if dataset_spec is not None else None
+    )
     if scan is None:
         return None
     if dataset_spec is None:
@@ -260,6 +270,7 @@ def _merge_delta_scan(
 
 
 __all__ = [
+    "DatasetPolicyRequest",
     "ResolvedDatasetPolicies",
     "apply_scan_policy_defaults",
     "merge_delta_policy_bundle",

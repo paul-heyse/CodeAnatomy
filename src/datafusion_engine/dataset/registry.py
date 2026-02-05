@@ -13,6 +13,7 @@ from core_types import PathLike
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.dataset.policies import (
+    DatasetPolicyRequest,
     ResolvedDatasetPolicies,
     apply_scan_policy_defaults,
 )
@@ -453,6 +454,76 @@ def _resolve_table_spec(
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _DeltaPolicyFields:
+    delta_cdf_policy: DeltaCdfPolicy | None
+    delta_write_policy: DeltaWritePolicy | None
+    delta_schema_policy: DeltaSchemaPolicy | None
+    delta_maintenance_policy: DeltaMaintenancePolicy | None
+    delta_feature_gate: DeltaFeatureGate | None
+    delta_constraints: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedLocationContext:
+    location: DatasetLocation
+    overrides: DatasetLocationOverrides | None
+    policies: ResolvedDatasetPolicies
+    delta_fields: _DeltaPolicyFields
+    table_spec: TableSchemaSpec | None
+    datafusion_provider: DataFusionProvider | None
+    delta_log_storage_options: Mapping[str, str] | None
+
+
+def _delta_policy_fields(delta_bundle: DeltaPolicyBundle | None) -> _DeltaPolicyFields:
+    return _DeltaPolicyFields(
+        delta_cdf_policy=delta_bundle.cdf_policy if delta_bundle is not None else None,
+        delta_write_policy=delta_bundle.write_policy if delta_bundle is not None else None,
+        delta_schema_policy=delta_bundle.schema_policy if delta_bundle is not None else None,
+        delta_maintenance_policy=(
+            delta_bundle.maintenance_policy if delta_bundle is not None else None
+        ),
+        delta_feature_gate=delta_bundle.feature_gate if delta_bundle is not None else None,
+        delta_constraints=delta_bundle.constraints if delta_bundle is not None else (),
+    )
+
+
+def _resolve_datafusion_provider(
+    location: DatasetLocation,
+    *,
+    delta_cdf_policy: DeltaCdfPolicy | None,
+) -> DataFusionProvider | None:
+    provider = location.datafusion_provider
+    if provider is None and (
+        (delta_cdf_policy is not None and delta_cdf_policy.required)
+        or (location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf")
+    ):
+        provider = "delta_cdf"
+    return provider
+
+
+def _resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
+    return location.delta_log_storage_options or location.storage_options or None
+
+
+def _resolve_location_context(location: DatasetLocation) -> ResolvedLocationContext:
+    overrides = location.overrides
+    policies = resolve_dataset_policies(location, overrides=overrides)
+    delta_fields = _delta_policy_fields(policies.delta_bundle)
+    return ResolvedLocationContext(
+        location=location,
+        overrides=overrides,
+        policies=policies,
+        delta_fields=delta_fields,
+        table_spec=_resolve_table_spec(location, overrides),
+        datafusion_provider=_resolve_datafusion_provider(
+            location,
+            delta_cdf_policy=delta_fields.delta_cdf_policy,
+        ),
+        delta_log_storage_options=_resolve_delta_log_storage_options(location),
+    )
+
+
 def resolve_dataset_policies(
     location: DatasetLocation,
     *,
@@ -471,18 +542,17 @@ def resolve_dataset_policies(
     if resolved_overrides is not None:
         validation_override = resolved_overrides.validation
         dataframe_validation_override = resolved_overrides.dataframe_validation
-    return _resolve_dataset_policies(
+    request = DatasetPolicyRequest(
         dataset_format=location.format,
         dataset_spec=location.dataset_spec,
         datafusion_scan_override=(
             resolved_overrides.datafusion_scan if resolved_overrides is not None else None
         ),
-        delta_policy_override=(
-            resolved_overrides.delta if resolved_overrides is not None else None
-        ),
+        delta_policy_override=(resolved_overrides.delta if resolved_overrides is not None else None),
         validation_override=validation_override,
         dataframe_validation_override=dataframe_validation_override,
     )
+    return _resolve_dataset_policies(request)
 
 
 def _apply_scan_policy_overrides(
@@ -552,7 +622,7 @@ def _resolve_dataset_schema_internal(
     return None
 
 
-def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocation:  # noqa: PLR0914
+def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocation:
     """Return a resolved view of a dataset location.
 
     Returns
@@ -560,49 +630,28 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     ResolvedDatasetLocation
         Resolved dataset location with derived configuration.
     """
-    overrides = location.overrides
-    dataset_spec = location.dataset_spec
-    policies = resolve_dataset_policies(location, overrides=overrides)
-    datafusion_scan = policies.datafusion_scan
-    delta_scan = policies.delta_scan
-    delta_bundle = policies.delta_bundle
-    delta_cdf_policy = delta_bundle.cdf_policy if delta_bundle is not None else None
-    delta_write_policy = delta_bundle.write_policy if delta_bundle is not None else None
-    delta_schema_policy = delta_bundle.schema_policy if delta_bundle is not None else None
-    delta_maintenance_policy = delta_bundle.maintenance_policy if delta_bundle is not None else None
-    delta_feature_gate = delta_bundle.feature_gate if delta_bundle is not None else None
-    delta_constraints = delta_bundle.constraints if delta_bundle is not None else ()
-    table_spec = _resolve_table_spec(location, overrides)
-    datafusion_provider = location.datafusion_provider
-    if datafusion_provider is None and (
-        (delta_cdf_policy is not None and delta_cdf_policy.required)
-        or (dataset_spec is not None and dataset_spec.dataset_kind == "delta_cdf")
-    ):
-        datafusion_provider = "delta_cdf"
-    delta_log_storage_options = (
-        location.delta_log_storage_options or location.storage_options or None
-    )
+    context = _resolve_location_context(location)
     schema = _resolve_dataset_schema_internal(
-        location,
-        datafusion_scan=datafusion_scan,
-        table_spec=table_spec,
-        delta_feature_gate=delta_feature_gate,
-        delta_log_storage_options=delta_log_storage_options,
+        context.location,
+        datafusion_scan=context.policies.datafusion_scan,
+        table_spec=context.table_spec,
+        delta_feature_gate=context.delta_fields.delta_feature_gate,
+        delta_log_storage_options=context.delta_log_storage_options,
     )
     return ResolvedDatasetLocation(
         location=location,
-        dataset_spec=dataset_spec,
-        datafusion_scan=datafusion_scan,
-        datafusion_provider=datafusion_provider,
-        delta_scan=delta_scan,
-        delta_cdf_policy=delta_cdf_policy,
-        delta_log_storage_options=delta_log_storage_options,
-        delta_write_policy=delta_write_policy,
-        delta_schema_policy=delta_schema_policy,
-        delta_maintenance_policy=delta_maintenance_policy,
-        delta_feature_gate=delta_feature_gate,
-        delta_constraints=delta_constraints,
-        table_spec=table_spec,
+        dataset_spec=location.dataset_spec,
+        datafusion_scan=context.policies.datafusion_scan,
+        datafusion_provider=context.datafusion_provider,
+        delta_scan=context.policies.delta_scan,
+        delta_cdf_policy=context.delta_fields.delta_cdf_policy,
+        delta_log_storage_options=context.delta_log_storage_options,
+        delta_write_policy=context.delta_fields.delta_write_policy,
+        delta_schema_policy=context.delta_fields.delta_schema_policy,
+        delta_maintenance_policy=context.delta_fields.delta_maintenance_policy,
+        delta_feature_gate=context.delta_fields.delta_feature_gate,
+        delta_constraints=context.delta_fields.delta_constraints,
+        table_spec=context.table_spec,
         schema=schema,
     )
 

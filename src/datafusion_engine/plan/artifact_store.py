@@ -157,7 +157,7 @@ def ensure_plan_artifacts_table(
     if location is None:
         return None
     table_path = Path(location.path)
-    existing_version = profile.delta_service().table_version(path=str(table_path))
+    existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
             _reset_artifacts_table_path(
@@ -194,7 +194,7 @@ def ensure_hamilton_events_table(
     if location is None:
         return None
     table_path = Path(location.path)
-    existing_version = profile.delta_service().table_version(path=str(table_path))
+    existing_version = profile.delta_ops.delta_service().table_version(path=str(table_path))
     if existing_version is None:
         if table_path.exists():
             _reset_artifacts_table_path(
@@ -659,7 +659,7 @@ def _write_artifact_table(
     )
     if result.delta_result is not None and result.delta_result.version is not None:
         return result.delta_result.version
-    return profile.delta_service().table_version(path=str(request.table_path))
+    return profile.delta_ops.delta_service().table_version(path=str(request.table_path))
 
 
 def persist_plan_artifact_rows(
@@ -958,7 +958,7 @@ def _delta_schema_available(
     *,
     profile: DataFusionRuntimeProfile,
 ) -> bool:
-    schema = profile.delta_service().table_schema(
+    schema = profile.delta_ops.delta_service().table_schema(
         DeltaSchemaRequest(
             path=str(location.path),
             storage_options=location.storage_options or None,

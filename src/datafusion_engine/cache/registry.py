@@ -152,7 +152,7 @@ def resolve_cache_hit(
         return None
     if record.cache_path != request.cache_path:
         return None
-    current_version = profile.delta_service().table_version(
+    current_version = profile.delta_ops.delta_service().table_version(
         path=request.cache_path,
         storage_options=request.storage_options,
         log_storage_options=request.log_storage_options,

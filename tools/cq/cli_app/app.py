@@ -271,8 +271,12 @@ app.command("tools.cq.cli_app.commands.analysis:impact", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:calls", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:imports", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:exceptions", group=analysis_group)
-app.command("tools.cq.cli_app.commands.analysis:sig_impact", name="sig-impact", group=analysis_group)
-app.command("tools.cq.cli_app.commands.analysis:side_effects", name="side-effects", group=analysis_group)
+app.command(
+    "tools.cq.cli_app.commands.analysis:sig_impact", name="sig-impact", group=analysis_group
+)
+app.command(
+    "tools.cq.cli_app.commands.analysis:side_effects", name="side-effects", group=analysis_group
+)
 app.command("tools.cq.cli_app.commands.analysis:scopes", group=analysis_group)
 app.command(
     "tools.cq.cli_app.commands.analysis:bytecode_surface",

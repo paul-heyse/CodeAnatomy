@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from io import StringIO
+
+from rich.console import Console
 from tools.cq.cli_app.app import app
 
 
@@ -12,3 +15,11 @@ def test_lazy_command_resolution() -> None:
     assert app["search"] is not None
     assert app["run"] is not None
     assert app["chain"] is not None
+
+
+def test_lazy_help_render() -> None:
+    """Ensure help rendering works with lazy-loaded commands."""
+    buffer = StringIO()
+    console = Console(file=buffer, force_terminal=False, color_system=None, width=100)
+    app.help_print(tokens=["run"], console=console)
+    assert buffer.getvalue()

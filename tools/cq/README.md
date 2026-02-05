@@ -14,8 +14,9 @@ High-signal code queries for LLM agents.
 # Trace parameter impact
 /cq impact build_graph --param root
 
-# Direct invocation
-uv run python -c "from tools.cq.cli_app import main; main()" calls build_graph_product
+# Direct invocation (preferred entrypoints)
+./cq calls build_graph_product
+uv run python -m tools.cq.cli calls build_graph_product
 
 # Multi-step execution (shared scan for q steps)
 /cq run --steps '[{"type":"search","query":"build_graph_product"},{"type":"q","query":"entity=function name=build_graph_product"},{"type":"calls","function":"build_graph_product"}]'
@@ -37,6 +38,14 @@ All commands support these global options:
 | `--format` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact output directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip artifact saving |
+
+### Filters
+
+- `--include`, `--exclude` (glob or `~regex`)
+- `--impact` (low,med,high)
+- `--confidence` (low,med,high)
+- `--severity` (error,warning,info)
+- `--limit` (max findings)
 
 ### Output Formats
 
@@ -71,6 +80,10 @@ artifact_dir = ".cq/artifacts"
 save_artifact = true
 ```
 
+## Dependencies
+
+Smart search uses ripgrep via rpygrep. Ensure `rg` is installed and on `PATH`.
+
 ## Command Groups
 
 ### Analysis Commands
@@ -90,6 +103,13 @@ save_artifact = true
 | `report` | Target-scoped report bundles | `/cq report refactor-impact --target function:foo` |
 | `run` | Multi-step execution (shared scan) | `/cq run --plan docs/plans/cq_run_example.toml` |
 | `chain` | Command chaining frontend | `/cq chain q "entity=function" AND calls foo` |
+
+### Run/Chain Notes
+
+- `--step` and `--steps` accept JSON in a single token (quote the entire JSON).
+- `cq run` continues on error by default; `--stop-on-error` fails fast.
+- Merged results include `details.data["source_step"]` and `details.data["source_macro"]`.
+- `cq chain` uses a delimiter token (default `AND`); quote multi-word queries.
 
 ### Administration Commands
 

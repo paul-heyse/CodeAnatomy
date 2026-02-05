@@ -33,10 +33,10 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.control_plane import (
         DeltaProviderBundle,
     )
+    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DeltaScanOptions
-    from storage.deltalake.delta import DeltaCdfOptions
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
 
@@ -69,7 +69,7 @@ class DatasetResolution:
     delta_scan_options: DeltaScanOptions | None
     add_actions: Sequence[Mapping[str, object]] | None = None
     predicate_error: str | None = None
-    cdf_options: DeltaCdfOptions | None = None
+    cdf_options: DeltaCdfOptionsSpec | None = None
 
 
 def resolve_dataset_provider(request: DatasetResolutionRequest) -> DatasetResolution:
@@ -237,7 +237,7 @@ def _resolve_dataset_location(
     runtime_profile: DataFusionRuntimeProfile,
     dataset_name: str,
 ) -> DatasetLocation | None:
-    location = runtime_profile.dataset_location(dataset_name)
+    location = runtime_profile.catalog_ops.dataset_location(dataset_name)
     if location is not None:
         return location
     parts = dataset_name.split(".")
@@ -247,7 +247,7 @@ def _resolve_dataset_location(
     if len(parts) >= _MIN_QUALIFIED_PARTS:
         candidates.append(".".join(parts[-2:]))
     for candidate in candidates:
-        resolved = runtime_profile.dataset_location(candidate)
+        resolved = runtime_profile.catalog_ops.dataset_location(candidate)
         if resolved is not None:
             return resolved
     return None

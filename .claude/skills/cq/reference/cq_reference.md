@@ -25,10 +25,22 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                      Command Modules                             │
-│  commands/analysis.py → impact, calls, imports, etc.             │
-│  commands/query.py → q command                                   │
-│  commands/report.py → report command                             │
+│  commands/analysis.py → impact, calls, imports, etc.              │
+│  commands/query.py → q command                                    │
+│  commands/search.py → search command                              │
+│  commands/run.py → run command                                    │
+│  commands/chain.py → chain command                                │
+│  commands/report.py → report command                              │
 │  commands/admin.py → index (deprecated), cache (deprecated), schema │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        Run/Batch Layer                            │
+│  run/loader.py → plan parsing + step conversion                   │
+│  run/runner.py → step execution + merging                         │
+│  query/batch.py → shared scan for q steps                          │
+│  query/batch_spans.py → relational span batching                   │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -56,7 +68,7 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  core/findings_table.py - Polars-based filtering + rehydration    │
 │  core/report.py       - Markdown rendering                        │
 │  core/artifacts.py    - JSON artifact persistence                 │
-│  core/toolchain.py    - External tool detection (rg, sg)          │
+│  core/toolchain.py    - External tool detection (rpygrep, ast-grep) │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,7 +83,7 @@ All cq commands accept these global options, handled by the meta-app launcher.
 | `--root` | Path | `CQ_ROOT` | Auto-detect | Repository root path. Auto-detects from current directory if not specified. |
 | `--config` | Path | `CQ_CONFIG` | `.cq.toml` | Path to TOML config file. |
 | `--no-config` | bool | `CQ_NO_CONFIG` | `false` | Skip loading config file entirely. |
-| `--verbose`, `-v` | int | `CQ_VERBOSE` | `0` | Verbosity level (0=quiet, 1=info, 2=debug, 3=trace). |
+| `--verbose`, `-v` | int | `CQ_VERBOSE` | `0` | Verbosity level (0=normal, 1=verbose, 2=debug, 3=trace). |
 | `--format` | enum | `CQ_FORMAT` | `md` | Output format. See Output Formats below. |
 | `--artifact-dir` | Path | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Directory for saving JSON artifacts. |
 | `--no-save-artifact` | bool | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving JSON artifacts. |
@@ -245,6 +257,8 @@ The default tool for finding code patterns with semantic enrichment.
 | `--include-strings` | Include matches in strings/comments/docstrings |
 | `--include PATTERN` | Include files matching glob |
 | `--exclude PATTERN` | Exclude files matching glob |
+
+All commands support filtering options; see **Filtering Options** for details.
 
 **How it works:**
 1. **Candidate Generation**: rpygrep scans files for pattern matches
@@ -578,43 +592,6 @@ Uses Python's `symtable` to analyze scope capture for closures.
 
 ---
 
-### async-hazards - Blocking in Async Detection
-
-Finds blocking calls inside async functions.
-
-```bash
-/cq async-hazards [--profiles "<blocking_patterns>"]
-```
-
-**Default blocking patterns:**
-- `time.sleep`, `sleep`
-- `requests.{get,post,put,delete,head,patch,request}`
-- `subprocess.{run,call,check_call,check_output,Popen}`
-- `os.system`, `os.popen`
-- `urllib.request.urlopen`, `urlopen`
-- `socket.socket.{recv,send,connect}`
-- `open` (file I/O)
-
-**How it works:**
-1. Scans files for `async def` functions
-2. Within async scopes, detects calls matching blocking patterns
-3. Records hazards with async function name and blocking call
-
-**Output sections:**
-- Summary: files scanned, async functions, hazards
-- Key Findings: hazard count, most common blocker
-- Async Hazards list
-- By Blocking Call Type
-- Evidence
-
-**Example:**
-```bash
-/cq async-hazards
-/cq async-hazards --profiles "redis.get,mysql.execute"
-```
-
----
-
 ### bytecode-surface - Bytecode Analysis
 
 Analyzes Python bytecode for hidden dependencies.
@@ -656,12 +633,182 @@ Default: `globals,attrs,constants`
 
 ---
 
+### run - Multi-Step Execution
+
+Execute multiple cq commands with shared scanning for improved performance.
+
+```bash
+/cq run --plan <PLAN_FILE> [--step <JSON>] [--steps <JSON_ARRAY>] [--stop-on-error]
+```
+
+**Input Sources (at least one required):**
+
+| Option | Description |
+|--------|-------------|
+| `--plan PATH` | TOML plan file |
+| `--step JSON` | Repeatable JSON step object |
+| `--steps JSON` | JSON array of steps |
+
+**Behavior Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--stop-on-error` | false | Stop execution on first step error |
+
+**Run Notes:**
+- `--step` and `--steps` accept JSON in a single token (quote the entire JSON).
+- Runs continue on error by default; `--stop-on-error` fails fast.
+- Merged results include `details.data["source_step"]` and `details.data["source_macro"]`.
+- Section titles are prefixed with `{step_id}:`.
+
+**How it works:**
+1. Parse plan file and/or inline JSON steps
+2. Normalize step IDs (auto-generate if missing: `{type}_{index}`)
+3. Partition steps: `q` steps batched separately for single-scan optimization
+4. Execute each step, collecting results
+5. Merge all step results with provenance (`source_step`, `source_macro`)
+
+**TOML Plan File Format:**
+
+```toml
+version = 1                    # Required
+in_dir = "src/"               # Optional: global scope restriction
+exclude = ["tests/"]          # Optional: global excludes
+
+[[steps]]
+type = "q"
+query = "entity=function name=build_graph"
+
+[[steps]]
+type = "calls"
+function = "build_graph"
+```
+
+**JSON Step Format:**
+
+```json
+{"type": "q", "query": "entity=function name=foo", "id": "my_step"}
+```
+
+**Available Step Types (10 total):**
+
+| Type | Required Fields | Optional Fields |
+|------|-----------------|-----------------|
+| `q` | `query` | `id` |
+| `search` | `query` | `regex`, `literal`, `include_strings`, `in_dir`, `id` |
+| `calls` | `function` | `id` |
+| `impact` | `function`, `param` | `depth`, `id` |
+| `imports` | — | `cycles`, `module`, `id` |
+| `exceptions` | — | `function`, `id` |
+| `sig-impact` | `symbol`, `to` | `id` |
+| `side-effects` | — | `max_files`, `id` |
+| `scopes` | `target` | `max_files`, `id` |
+| `bytecode-surface` | `target` | `show`, `max_files`, `id` |
+
+**Performance:**
+
+Multiple `q` steps share a single repo scan via `BatchEntityQuerySession`, avoiding redundant file parsing. This is a significant speedup when running multiple entity queries.
+
+**Examples:**
+
+```bash
+# From TOML plan file
+/cq run --plan docs/plans/my_analysis.toml
+
+# Inline JSON steps (agent-friendly)
+/cq run --steps '[{"type":"search","query":"build_graph"},{"type":"calls","function":"build_graph"}]'
+
+# Mixed: plan + additional steps
+/cq run --plan base.toml --step '{"type":"impact","function":"foo","param":"x"}'
+
+# Stop on first error
+/cq run --plan analysis.toml --stop-on-error
+```
+
+---
+
+### chain - Command Chaining Frontend
+
+Execute multiple commands with delimiter-based syntax, sharing a single scan.
+
+```bash
+/cq chain <CMD1_ARGS> [DELIMITER] <CMD2_ARGS> [DELIMITER] <CMD3_ARGS> [--delimiter DELIM]
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--delimiter` | `AND` | Token that separates command groups |
+
+**How it works:**
+1. Split tokens by delimiter
+2. Parse each group as a complete cq subcommand
+3. Compile to `RunPlan` with corresponding `RunStep` for each group
+4. Execute via `execute_run_plan()` (same engine as `/cq run`)
+
+**Notes:**
+- Delimiter is a token (default `AND`).
+- Quote multi-word queries so they remain in a single token.
+
+**Supported Commands:**
+
+All 10 step types: `q`, `search`, `calls`, `impact`, `imports`, `exceptions`, `sig-impact`, `side-effects`, `scopes`, `bytecode-surface`
+
+**Examples:**
+
+```bash
+# Default AND delimiter
+/cq chain q "entity=function name=build_graph" AND calls build_graph AND search build_graph
+
+# Custom delimiter
+/cq chain q "entity=function" OR calls foo OR search bar --delimiter OR
+
+# Complex analysis workflow
+/cq chain search build_graph AND q "entity=function name=build_graph expand=callers" AND impact build_graph --param root
+```
+
+---
+
+### report - Bundled Analysis Presets
+
+Run target-scoped report bundles that combine multiple analyses into a single output.
+
+```bash
+/cq report <preset> --target <spec>
+```
+
+**Presets:**
+- `refactor-impact`
+- `safety-reliability`
+- `change-propagation`
+- `dependency-health`
+
+**Target spec examples:**
+- `function:build_graph_product`
+- `class:SemanticCompiler`
+- `module:src.semantics.pipeline`
+- `path:src/semantics/`
+
+**Example:**
+```bash
+/cq report refactor-impact --target function:build_graph_product
+```
+
+---
+
 ### q - Declarative Entity Queries
 
 The `q` command provides a composable, declarative query system for finding and analyzing code entities using ast-grep.
 
 ```bash
 /cq q "<query_string>"
+```
+
+**Fallback Behavior:**
+Plain queries without `key=value` pairs fall back to smart search:
+```bash
+/cq q build_graph
 ```
 
 **How it works:**
@@ -875,8 +1022,9 @@ cq detects and uses external tools:
 
 | Tool | Required | Purpose |
 |------|----------|---------|
-| `rg` (ripgrep) | Yes | Fast file search for candidates |
-| `sg` (ast-grep) | Optional | Structural code search (future) |
+| `rg` (ripgrep) | Yes | Fast file search for candidates (used by rpygrep) |
+| `rpygrep` | Yes | Python search engine for smart search and prefilters |
+| `ast-grep-py` | Yes | Structural matching for `q` and classification |
 | Python | Yes | AST parsing, symtable, bytecode |
 
 **Installation:**
@@ -887,10 +1035,8 @@ brew install ripgrep
 # Linux
 apt install ripgrep
 
-# ast-grep (optional)
-pip install ast-grep-py
-# or
-cargo install ast-grep
+# Python packages
+pip install rpygrep ast-grep-py
 ```
 
 ---
@@ -1015,12 +1161,6 @@ CqResult → flatten_result() → FindingRecord[] → build_frame() → pl.DataF
 
 Check for captured variables that would break extraction.
 
-### Investigating Async Issues
-
-```bash
-/cq async-hazards --impact high
-```
-
 ### Understanding Module Dependencies
 
 ```bash
@@ -1032,7 +1172,7 @@ Check for captured variables that would break extraction.
 
 ```bash
 # Fail if high-impact breaking changes detected
-./scripts/cq sig-impact foo --to "foo(new_sig)" --format summary --impact high
+./cq sig-impact foo --to "foo(new_sig)" --format summary --impact high
 ```
 
 ---

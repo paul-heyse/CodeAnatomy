@@ -16,6 +16,7 @@ from datafusion_engine.schema.contracts import (
     schema_contract_from_contract_spec,
     schema_contract_from_dataset_spec,
 )
+from schema_spec.dataset_spec_ops import dataset_spec_name
 from utils.env_utils import env_bool
 
 if TYPE_CHECKING:
@@ -283,7 +284,11 @@ def _semantic_output_names() -> set[str]:
         from semantics.registry import SEMANTIC_MODEL
     except (ImportError, RuntimeError, TypeError, ValueError):
         return set()
-    return {spec.name for spec in SEMANTIC_MODEL.outputs}
+    from schema_spec.system import DatasetSpec
+
+    return {
+        dataset_spec_name(spec) for spec in SEMANTIC_MODEL.outputs if isinstance(spec, DatasetSpec)
+    }
 
 
 def _semantic_roles_by_name() -> dict[str, str]:
@@ -444,7 +449,7 @@ def _relationship_dataset_spec(name: str, ctx: SessionContext | None) -> Dataset
     )
     with contextlib.suppress(RuntimeError, TypeError, ValueError):
         for spec in relationship_dataset_specs(ctx):
-            if spec.name == name:
+            if dataset_spec_name(spec) == name:
                 return spec
     return None
 
@@ -505,7 +510,7 @@ def known_dataset_specs(
     )
     for collection in collections:
         _append_unique_specs(specs, collection, seen)
-    specs.sort(key=lambda spec: spec.name)
+    specs.sort(key=dataset_spec_name)
     return tuple(specs)
 
 
@@ -515,9 +520,10 @@ def _append_unique_specs(
     seen: set[str],
 ) -> None:
     for spec in incoming:
-        if spec.name in seen:
+        spec_name = dataset_spec_name(spec)
+        if spec_name in seen:
             continue
-        seen.add(spec.name)
+        seen.add(spec_name)
         specs.append(spec)
 
 

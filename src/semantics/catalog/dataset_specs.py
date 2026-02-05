@@ -265,6 +265,20 @@ def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:
     return specs[name]
 
 
+def maybe_dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec | None:
+    """Return a DatasetSpec by name when available.
+
+    Returns
+    -------
+    DatasetSpec | None
+        Registered dataset spec when present, otherwise ``None``.
+    """
+    try:
+        return dataset_spec(name, ctx=ctx)
+    except KeyError:
+        return None
+
+
 def dataset_specs() -> Iterable[DatasetSpec]:
     """Return all semantic dataset specs.
 

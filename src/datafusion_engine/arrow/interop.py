@@ -34,12 +34,10 @@ def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
     try:
         from schema_spec.arrow_types import ArrowTypeBase as _ArrowTypeBase
         from schema_spec.arrow_types import arrow_type_to_pyarrow
-    except ImportError:
-        arrow_type_base: tuple[()] | type = ()
-        arrow_type_to_pyarrow = None
-    else:
-        arrow_type_base = _ArrowTypeBase
-    if arrow_type_base and isinstance(dtype, arrow_type_base):
+    except ImportError as exc:
+        msg = "Arrow type conversion requires schema_spec.arrow_types."
+        raise TypeError(msg) from exc
+    if isinstance(dtype, _ArrowTypeBase):
         return arrow_type_to_pyarrow(dtype)
     msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
     raise TypeError(msg)

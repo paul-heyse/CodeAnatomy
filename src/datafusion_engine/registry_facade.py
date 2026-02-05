@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from datafusion_engine.catalog.provider_registry import RegistrationMetadata
+from datafusion_engine.errors import DataFusionEngineError
 from serde_msgspec import StructBaseStrict
 from utils.registry_protocol import Registry, SnapshotRegistry
 from utils.uuid_factory import uuid7_str
@@ -45,6 +46,25 @@ class RegistrationResult(StructBaseStrict, frozen=True):
     phase: str
     timestamp: float
     error: str | None = None
+
+
+_REGISTRATION_ERRORS = (DataFusionEngineError, KeyError, RuntimeError, TypeError, ValueError)
+
+
+def _registration_failure(
+    *,
+    key: str,
+    phase: str,
+    start: float,
+    exc: Exception,
+) -> RegistrationResult:
+    return RegistrationResult(
+        success=False,
+        key=key,
+        phase=phase,
+        timestamp=start,
+        error=str(exc),
+    )
 
 
 @dataclass(frozen=True)
@@ -211,13 +231,12 @@ class RegistryFacade:
                 cache_policy=cache_policy,
                 overwrite=overwrite,
             )
-        except Exception as exc:  # noqa: BLE001
-            return RegistrationResult(
-                success=False,
+        except _REGISTRATION_ERRORS as exc:
+            return _registration_failure(
                 key=name,
                 phase="dataset",
-                timestamp=start,
-                error=str(exc),
+                start=start,
+                exc=exc,
             )
         else:
             return RegistrationResult(
@@ -254,13 +273,12 @@ class RegistryFacade:
             RegistrationPhaseOrchestrator().run(
                 (RegistrationPhase(name="udf_registry", validate=_register_udf),)
             )
-        except Exception as exc:  # noqa: BLE001
-            return RegistrationResult(
-                success=False,
+        except _REGISTRATION_ERRORS as exc:
+            return _registration_failure(
                 key=key,
                 phase="udf",
-                timestamp=start,
-                error=str(exc),
+                start=start,
+                exc=exc,
             )
         else:
             return RegistrationResult(
@@ -297,13 +315,12 @@ class RegistryFacade:
             RegistrationPhaseOrchestrator().run(
                 (RegistrationPhase(name="view_registry", validate=_register_view),)
             )
-        except Exception as exc:  # noqa: BLE001
-            return RegistrationResult(
-                success=False,
+        except _REGISTRATION_ERRORS as exc:
+            return _registration_failure(
                 key=name,
                 phase="view",
-                timestamp=start,
-                error=str(exc),
+                start=start,
+                exc=exc,
             )
         else:
             return RegistrationResult(

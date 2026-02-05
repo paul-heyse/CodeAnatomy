@@ -48,7 +48,10 @@ from datafusion.expr import SortExpr
 from core.config_base import config_fingerprint
 from core_types import IDENTIFIER_PATTERN
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
-from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.delta.service import (
+    DeltaFeatureMutationRequest,
+    delta_service_for_profile,
+)
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.contracts import delta_constraints_for_location
@@ -579,7 +582,7 @@ def _delta_feature_mutation_options(
         Options used by feature mutation routines.
     """
     service = delta_service_for_profile(runtime_profile)
-    return service.feature_mutation_options(
+    request = DeltaFeatureMutationRequest(
         path=spec.table_uri,
         storage_options=spec.storage_options,
         log_storage_options=spec.log_storage_options,
@@ -587,6 +590,7 @@ def _delta_feature_mutation_options(
         dataset_name=spec.commit_key,
         gate=spec.feature_gate,
     )
+    return service.features.feature_mutation_options(request)
 
 
 def _apply_explicit_delta_features(
@@ -609,20 +613,20 @@ def _apply_explicit_delta_features(
     options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
     for feature in spec.enable_features:
         if feature == "change_data_feed":
-            service.enable_change_data_feed(options)
+            service.features.enable_change_data_feed(options)
         elif feature == "deletion_vectors":
-            service.enable_deletion_vectors(options)
+            service.features.enable_deletion_vectors(options)
         elif feature == "row_tracking":
-            service.enable_row_tracking(options)
+            service.features.enable_row_tracking(options)
         elif feature == "in_commit_timestamps":
-            service.enable_in_commit_timestamps(options)
+            service.features.enable_in_commit_timestamps(options)
         elif feature == "column_mapping":
-            service.enable_column_mapping(
+            service.features.enable_column_mapping(
                 options,
                 mode=spec.table_properties.get("delta.columnMapping.mode", "name"),
             )
         elif feature == "v2_checkpoints":
-            service.enable_v2_checkpoints(options)
+            service.features.enable_v2_checkpoints(options)
 
 
 def _delta_constraint_name(expression: str) -> str:
@@ -686,11 +690,11 @@ def _apply_delta_check_constraints(
         return "skipped"
     service = delta_service_for_profile(runtime_profile)
     options = _delta_feature_mutation_options(spec, runtime_profile=runtime_profile)
-    service.enable_check_constraints(options)
+    service.features.enable_check_constraints(options)
     existing = _existing_delta_constraints(spec, runtime_profile=runtime_profile)
     to_add = _delta_constraints_to_add(spec.extra_constraints, existing=existing)
     if to_add:
-        service.add_constraints(options, constraints=to_add)
+        service.features.add_constraints(options, constraints=to_add)
         return "added"
     return "present"
 
@@ -828,7 +832,7 @@ class WritePipeline:
         """
         if self.runtime_profile is None:
             return None
-        location = self.runtime_profile.dataset_location(destination)
+        location = self.runtime_profile.catalog_ops.dataset_location(destination)
         if location is not None:
             return destination, location
         normalized_destination = str(destination)
@@ -975,10 +979,17 @@ class WritePipeline:
                 request=context.request,
                 spec=streaming_spec,
             )
-            return StreamingWriteOutcome(method=WriteMethod.STREAMING, sql_text=None, rows_written=None, delta_outcome=delta_outcome)
+            return StreamingWriteOutcome(
+                method=WriteMethod.STREAMING,
+                sql_text=None,
+                rows_written=None,
+                delta_outcome=delta_outcome,
+            )
         rows_written = self._maybe_count_rows(context.df)
         sql_text = self._write_copy(context.df, request=context.request)
-        return StreamingWriteOutcome(method=WriteMethod.COPY, sql_text=sql_text, rows_written=rows_written)
+        return StreamingWriteOutcome(
+            method=WriteMethod.COPY, sql_text=sql_text, rows_written=rows_written
+        )
 
     def _finalize_streaming_result(
         self,
@@ -994,9 +1005,7 @@ class WritePipeline:
             duration_ms=duration_ms,
             rows_written=outcome.rows_written,
             delta_result=delta_outcome.delta_result if delta_outcome is not None else None,
-            delta_features=(
-                delta_outcome.enabled_features if delta_outcome is not None else None
-            ),
+            delta_features=(delta_outcome.enabled_features if delta_outcome is not None else None),
             commit_app_id=delta_outcome.commit_app_id if delta_outcome is not None else None,
             commit_version=delta_outcome.commit_version if delta_outcome is not None else None,
         )
@@ -1452,7 +1461,7 @@ class WritePipeline:
         """
         if self.runtime_profile is None:
             return None
-        commit_options, commit_run = self.runtime_profile.reserve_delta_commit(
+        commit_options, commit_run = self.runtime_profile.delta_ops.reserve_delta_commit(
             key=commit_key,
             metadata={
                 "destination": commit_key,
@@ -1492,7 +1501,7 @@ class WritePipeline:
                 metadata["commit_app_id"] = spec.commit_app_id
             if spec.commit_version is not None:
                 metadata["commit_version"] = spec.commit_version
-            self.runtime_profile.finalize_delta_commit(
+            self.runtime_profile.delta_ops.finalize_delta_commit(
                 key=spec.commit_key,
                 run=spec.commit_run,
                 metadata=metadata,
@@ -1665,7 +1674,7 @@ class WritePipeline:
         )
         _ = existing_version
         delta_result = self._write_delta_bootstrap(result, spec=spec)
-        feature_options = delta_service.feature_mutation_options(
+        feature_request = DeltaFeatureMutationRequest(
             path=spec.table_uri,
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
@@ -1673,7 +1682,8 @@ class WritePipeline:
             dataset_name=spec.commit_key,
             gate=spec.feature_gate,
         )
-        enabled_features = delta_service.enable_features(
+        feature_options = delta_service.features.feature_mutation_options(feature_request)
+        enabled_features = delta_service.features.enable_features(
             feature_options,
             features=spec.table_properties,
         )
@@ -1966,11 +1976,11 @@ def _delta_table_properties(options: Mapping[str, object]) -> dict[str, str]:
     return properties
 
 
-def _schema_columns(df: DataFrame) -> tuple[str, ...] | None:
+def _schema_columns(df: DataFrame) -> tuple[str, ...]:
     try:
         names = df.schema().names
     except (AttributeError, RuntimeError, TypeError, ValueError):
-        return None
+        return ()
     return tuple(str(name) for name in names)
 
 

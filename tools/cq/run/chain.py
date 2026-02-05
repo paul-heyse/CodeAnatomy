@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from cyclopts.exceptions import CycloptsError
 
@@ -21,6 +22,48 @@ from tools.cq.run.spec import (
     SideEffectsStep,
     SigImpactStep,
 )
+
+
+@dataclass(frozen=True)
+class ChainCommand:
+    """Parsed command + bound args for chaining."""
+
+    name: str
+    args: tuple[object, ...]
+    opts: object | None
+
+
+StepBuilder = Callable[[tuple[object, ...], object | None], RunStep]
+
+
+def _require_name(name: object | None) -> str:
+    if isinstance(name, str):
+        return name
+    msg = "Unsupported chain command: <unknown>"
+    raise RuntimeError(msg)
+
+
+def _require_str_arg(args: tuple[object, ...], idx: int, label: str) -> str:
+    try:
+        value = args[idx]
+    except IndexError as exc:
+        msg = f"Missing {label} argument"
+        raise RuntimeError(msg) from exc
+    if isinstance(value, str):
+        return value
+    msg = f"Invalid {label} argument: expected string"
+    raise RuntimeError(msg)
+
+
+def _require_str_attr(opts: object | None, attr: str, label: str) -> str:
+    if opts is None:
+        msg = f"Missing {label} option"
+        raise RuntimeError(msg)
+    value = getattr(opts, attr, None)
+    if isinstance(value, str):
+        return value
+    msg = f"Invalid {label} option: expected string"
+    raise RuntimeError(msg)
 
 
 def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
@@ -58,23 +101,26 @@ def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
 
 
 def _step_from_command(command: object, bound: object) -> RunStep:
-    name = getattr(command, "__name__", None)
-    args = getattr(bound, "args", ())
-    kwargs = getattr(bound, "kwargs", {})
-    builder = _STEP_BUILDERS.get(name)
+    name = _require_name(getattr(command, "__name__", None))
+    raw_args = getattr(bound, "args", ())
+    args = tuple(raw_args)
+    raw_kwargs = getattr(bound, "kwargs", {})
+    kwargs: dict[str, object] = raw_kwargs if isinstance(raw_kwargs, dict) else {}
+    cmd = ChainCommand(name=name, args=args, opts=kwargs.get("opts"))
+    builder = _STEP_BUILDERS.get(cmd.name)
     if builder is None:
         msg = f"Unsupported chain command: {name}"
         raise RuntimeError(msg)
-    return builder(args, kwargs.get("opts"))
+    return builder(cmd.args, cmd.opts)
 
 
 def _build_q_step(args: tuple[object, ...], _opts: object | None) -> RunStep:
-    return QStep(query=args[0])
+    return QStep(query=_require_str_arg(args, 0, "query"))
 
 
 def _build_search_step(args: tuple[object, ...], opts: object | None) -> RunStep:
     return SearchStep(
-        query=args[0],
+        query=_require_str_arg(args, 0, "query"),
         regex=getattr(opts, "regex", False),
         literal=getattr(opts, "literal", False),
         include_strings=getattr(opts, "include_strings", False),
@@ -83,13 +129,13 @@ def _build_search_step(args: tuple[object, ...], opts: object | None) -> RunStep
 
 
 def _build_calls_step(args: tuple[object, ...], _opts: object | None) -> RunStep:
-    return CallsStep(function=args[0])
+    return CallsStep(function=_require_str_arg(args, 0, "function"))
 
 
 def _build_impact_step(args: tuple[object, ...], opts: object | None) -> RunStep:
     return ImpactStep(
-        function=args[0],
-        param=getattr(opts, "param", None),
+        function=_require_str_arg(args, 0, "function"),
+        param=_require_str_attr(opts, "param", "param"),
         depth=getattr(opts, "depth", 5),
     )
 
@@ -106,7 +152,10 @@ def _build_exceptions_step(_args: tuple[object, ...], opts: object | None) -> Ru
 
 
 def _build_sig_impact_step(args: tuple[object, ...], opts: object | None) -> RunStep:
-    return SigImpactStep(symbol=args[0], to=getattr(opts, "to", None))
+    return SigImpactStep(
+        symbol=_require_str_arg(args, 0, "symbol"),
+        to=_require_str_attr(opts, "to", "to"),
+    )
 
 
 def _build_side_effects_step(_args: tuple[object, ...], opts: object | None) -> RunStep:
@@ -114,17 +163,17 @@ def _build_side_effects_step(_args: tuple[object, ...], opts: object | None) -> 
 
 
 def _build_scopes_step(args: tuple[object, ...], _opts: object | None) -> RunStep:
-    return ScopesStep(target=args[0])
+    return ScopesStep(target=_require_str_arg(args, 0, "target"))
 
 
 def _build_bytecode_surface_step(args: tuple[object, ...], opts: object | None) -> RunStep:
     return BytecodeSurfaceStep(
-        target=args[0],
+        target=_require_str_arg(args, 0, "target"),
         show=getattr(opts, "show", "globals,attrs,constants"),
     )
 
 
-_STEP_BUILDERS = {
+_STEP_BUILDERS: dict[str, StepBuilder] = {
     "q": _build_q_step,
     "search": _build_search_step,
     "calls": _build_calls_step,

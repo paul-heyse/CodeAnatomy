@@ -191,7 +191,7 @@ def _worklist_stream(
     df_ctx = session_runtime.ctx
     repo_name = f"__repo_files_{uuid7_hex()}"
     output_exists = _table_exists(df_ctx, output_table)
-    output_location = runtime_profile.dataset_location(output_table)
+    output_location = runtime_profile.catalog_ops.dataset_location(output_table)
     use_output = output_exists or output_location is not None
     output_name = output_table if use_output else None
     builder = worklist_builder(

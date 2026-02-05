@@ -17,6 +17,7 @@ from datafusion_engine.delta.store_policy import (
     apply_delta_store_policy,
     resolve_delta_store_policy,
 )
+from serde_msgspec import StructBaseStrict
 from storage.deltalake.delta import (
     DeltaCdfOptions,
     DeltaDeleteWhereRequest,
@@ -81,11 +82,231 @@ class DeltaMutationRequest:
             raise ValueError(msg)
 
 
-@dataclass(frozen=True)  # noqa: PLR0904
+class DeltaFeatureMutationRequest(StructBaseStrict, frozen=True):
+    """Request payload for Delta feature mutation options."""
+
+    path: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    version: int | None = None
+    timestamp: str | None = None
+    gate: DeltaFeatureGate | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    dataset_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaFeatureOps:
+    """Feature mutation helpers bound to a Delta service."""
+
+    service: DeltaService
+
+    def feature_mutation_options(
+        self,
+        request: DeltaFeatureMutationRequest,
+    ) -> DeltaFeatureMutationOptions:
+        """Build resolved feature mutation options using runtime defaults.
+
+        Returns
+        -------
+        DeltaFeatureMutationOptions
+            Resolved mutation options with runtime defaults applied.
+        """
+        resolved_storage, resolved_log = self.service.resolve_store_options(
+            path=request.path,
+            storage_options=request.storage_options,
+            log_storage_options=request.log_storage_options,
+        )
+        return DeltaFeatureMutationOptions(
+            path=request.path,
+            storage_options=resolved_storage or None,
+            log_storage_options=resolved_log or None,
+            version=request.version,
+            timestamp=request.timestamp,
+            gate=request.gate,
+            commit_metadata=request.commit_metadata,
+            runtime_profile=self.service.profile,
+            dataset_name=request.dataset_name,
+        )
+
+    def enable_features(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        features: Mapping[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Enable Delta table feature properties using runtime defaults.
+
+        Returns
+        -------
+        dict[str, str]
+            Properties applied to the Delta table.
+        """
+        resolved = self.service.resolve_feature_options(options)
+        return enable_delta_features(
+            resolved,
+            features=features,
+        )
+
+    def enable_change_data_feed(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta change data feed using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_change_data_feed(
+            self.service.resolve_feature_options(options),
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def enable_deletion_vectors(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta deletion vectors using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_deletion_vectors(
+            self.service.resolve_feature_options(options),
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def enable_row_tracking(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta row tracking using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_row_tracking(
+            self.service.resolve_feature_options(options),
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def enable_in_commit_timestamps(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        enablement_version: int | None = None,
+        enablement_timestamp: str | None = None,
+    ) -> Mapping[str, object]:
+        """Enable in-commit timestamps using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_in_commit_timestamps(
+            self.service.resolve_feature_options(options),
+            enablement_version=enablement_version,
+            enablement_timestamp=enablement_timestamp,
+        )
+
+    def enable_column_mapping(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        mode: str = "name",
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta column mapping using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_column_mapping(
+            self.service.resolve_feature_options(options),
+            mode=mode,
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def enable_v2_checkpoints(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta v2 checkpoints using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_v2_checkpoints(
+            self.service.resolve_feature_options(options),
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def enable_check_constraints(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        allow_protocol_versions_increase: bool = True,
+    ) -> Mapping[str, object]:
+        """Enable Delta check constraints using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return enable_delta_check_constraints(
+            self.service.resolve_feature_options(options),
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+
+    def add_constraints(
+        self,
+        options: DeltaFeatureMutationOptions,
+        *,
+        constraints: Mapping[str, str],
+    ) -> Mapping[str, object]:
+        """Add Delta check constraints using runtime defaults.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Control-plane mutation report payload.
+        """
+        return delta_add_constraints(
+            self.service.resolve_feature_options(options),
+            constraints=constraints,
+        )
+
+
+@dataclass(frozen=True)
 class DeltaService:
     """Unified Delta access service for runtime profiles."""
 
     profile: DataFusionRuntimeProfile
+
+    @property
+    def features(self) -> DeltaFeatureOps:
+        """Return feature mutation helpers bound to this service."""
+        return DeltaFeatureOps(self)
 
     def _resolve_store_options(
         self,
@@ -394,42 +615,6 @@ class DeltaService:
             dataset_name=dataset_name,
         )
 
-    def feature_mutation_options(  # noqa: PLR0913
-        self,
-        *,
-        path: str,
-        storage_options: StorageOptions | None = None,
-        log_storage_options: StorageOptions | None = None,
-        version: int | None = None,
-        timestamp: str | None = None,
-        gate: DeltaFeatureGate | None = None,
-        commit_metadata: Mapping[str, str] | None = None,
-        dataset_name: str | None = None,
-    ) -> DeltaFeatureMutationOptions:
-        """Build resolved feature mutation options using runtime defaults.
-
-        Returns
-        -------
-        DeltaFeatureMutationOptions
-            Resolved mutation options with store-policy defaults applied.
-        """
-        resolved_storage, resolved_log = self._resolve_store_options(
-            path=path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-        )
-        return DeltaFeatureMutationOptions(
-            path=path,
-            storage_options=resolved_storage or None,
-            log_storage_options=resolved_log or None,
-            version=version,
-            timestamp=timestamp,
-            gate=gate,
-            commit_metadata=commit_metadata,
-            runtime_profile=self.profile,
-            dataset_name=dataset_name,
-        )
-
     def _resolve_feature_options(
         self,
         options: DeltaFeatureMutationOptions,
@@ -446,172 +631,6 @@ class DeltaService:
             runtime_profile=self.profile,
         )
 
-    def enable_features(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        features: Mapping[str, str] | None = None,
-    ) -> dict[str, str]:
-        """Enable Delta table feature properties using runtime defaults.
-
-        Returns
-        -------
-        dict[str, str]
-            Properties applied to the Delta table.
-        """
-        return enable_delta_features(
-            self._resolve_feature_options(options),
-            features=features,
-        )
-
-    def enable_change_data_feed(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta change data feed using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_change_data_feed(
-            self._resolve_feature_options(options),
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def enable_deletion_vectors(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta deletion vectors using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_deletion_vectors(
-            self._resolve_feature_options(options),
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def enable_row_tracking(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta row tracking using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_row_tracking(
-            self._resolve_feature_options(options),
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def enable_in_commit_timestamps(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        enablement_version: int | None = None,
-        enablement_timestamp: str | None = None,
-    ) -> Mapping[str, object]:
-        """Enable Delta in-commit timestamps using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_in_commit_timestamps(
-            self._resolve_feature_options(options),
-            enablement_version=enablement_version,
-            enablement_timestamp=enablement_timestamp,
-        )
-
-    def enable_column_mapping(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        mode: str = "name",
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta column mapping using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_column_mapping(
-            self._resolve_feature_options(options),
-            mode=mode,
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def enable_v2_checkpoints(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta v2 checkpoints using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_v2_checkpoints(
-            self._resolve_feature_options(options),
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def enable_check_constraints(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        allow_protocol_versions_increase: bool = True,
-    ) -> Mapping[str, object]:
-        """Enable Delta check constraints using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return enable_delta_check_constraints(
-            self._resolve_feature_options(options),
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-        )
-
-    def add_constraints(
-        self,
-        options: DeltaFeatureMutationOptions,
-        *,
-        constraints: Mapping[str, str],
-    ) -> Mapping[str, object]:
-        """Add Delta check constraints using runtime defaults.
-
-        Returns
-        -------
-        Mapping[str, object]
-            Control-plane mutation report payload.
-        """
-        return delta_add_constraints(
-            self._resolve_feature_options(options),
-            constraints=constraints,
-        )
-
     def delete_where(
         self,
         request: DeltaDeleteWhereRequest,
@@ -625,7 +644,7 @@ class DeltaService:
         Mapping[str, object]
             Delete operation report payload.
         """
-        resolved_ctx = ctx or self.profile.delta_runtime_ctx()
+        resolved_ctx = ctx or self.profile.delta_ops.delta_runtime_ctx()
         resolved_storage, resolved_log = self._resolve_store_options(
             path=request.path,
             storage_options=request.storage_options,
@@ -652,7 +671,7 @@ class DeltaService:
         Mapping[str, object]
             Merge operation report payload.
         """
-        resolved_ctx = ctx or self.profile.delta_runtime_ctx()
+        resolved_ctx = ctx or self.profile.delta_ops.delta_runtime_ctx()
         resolved_storage, resolved_log = self._resolve_store_options(
             path=request.path,
             storage_options=request.storage_options,
@@ -708,4 +727,9 @@ def delta_service_for_profile(profile: DataFusionRuntimeProfile | None) -> Delta
     return DeltaService(profile=profile)
 
 
-__all__ = ["DeltaMutationRequest", "DeltaService", "delta_service_for_profile"]
+__all__ = [
+    "DeltaFeatureMutationRequest",
+    "DeltaMutationRequest",
+    "DeltaService",
+    "delta_service_for_profile",
+]

@@ -3634,7 +3634,305 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
-class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):  # noqa: PLR0904
+@dataclass(frozen=True)
+class RuntimeProfileDeltaOps:
+    """Delta-specific runtime operations bound to a profile."""
+
+    profile: DataFusionRuntimeProfile
+
+    def delta_runtime_ctx(self) -> SessionContext:
+        """Return a SessionContext configured for Delta operations.
+
+        Returns
+        -------
+        SessionContext
+            Session context configured for Delta operations.
+        """
+        return self.profile.session_context()
+
+    def delta_service(self) -> DeltaService:
+        """Return the Delta service bound to this runtime profile.
+
+        Returns
+        -------
+        DeltaService
+            Delta service bound to the runtime profile.
+        """
+        from datafusion_engine.delta.service import DeltaService
+
+        return DeltaService(profile=self.profile)
+
+    def reserve_delta_commit(
+        self,
+        *,
+        key: str,
+        metadata: Mapping[str, object] | None = None,
+        commit_metadata: Mapping[str, str] | None = None,
+    ) -> tuple[IdempotentWriteOptions, DataFusionRun]:
+        """Reserve the next idempotent commit version for a Delta write.
+
+        Returns
+        -------
+        tuple[IdempotentWriteOptions, DataFusionRun]
+            Commit options plus the updated run context.
+        """
+        run = self.profile.delta_commit_runs.get(key)
+        if run is None:
+            from obs.datafusion_runs import create_run_context
+
+            base_metadata: dict[str, str] = {"key": key}
+            if metadata:
+                base_metadata.update(
+                    {str(item_key): str(item_value) for item_key, item_value in metadata.items()}
+                )
+            run = create_run_context(
+                label="delta_commit",
+                sink=self.profile.diagnostics.diagnostics_sink,
+                metadata=base_metadata,
+            )
+            self.profile.delta_commit_runs[key] = run
+        elif metadata:
+            run.metadata.update(dict(metadata))
+        if commit_metadata:
+            run.metadata["commit_metadata"] = dict(commit_metadata)
+        options, updated = run.next_commit_version()
+        if self.profile.diagnostics.diagnostics_sink is not None:
+            commit_meta_payload = dict(commit_metadata) if commit_metadata is not None else None
+            payload = {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "key": key,
+                "run_id": run.run_id,
+                "app_id": options.app_id,
+                "version": options.version,
+                "commit_sequence": run.commit_sequence,
+                "status": "reserved",
+                "metadata": dict(run.metadata),
+                "commit_metadata": commit_meta_payload,
+            }
+            self.profile.record_artifact("datafusion_delta_commit_v1", payload)
+        return options, updated
+
+    def finalize_delta_commit(
+        self,
+        *,
+        key: str,
+        run: DataFusionRun,
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
+        """Persist commit sequencing state after a successful write."""
+        if metadata:
+            run.metadata.update(dict(metadata))
+        self.profile.delta_commit_runs[key] = run
+        if self.profile.diagnostics.diagnostics_sink is None:
+            return
+        committed_version = run.commit_sequence - 1 if run.commit_sequence > 0 else None
+        payload = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "key": key,
+            "run_id": run.run_id,
+            "app_id": run.run_id,
+            "version": committed_version,
+            "commit_sequence": run.commit_sequence,
+            "status": "finalized",
+            "metadata": dict(run.metadata),
+        }
+        self.profile.record_artifact("datafusion_delta_commit_v1", payload)
+
+    def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
+        """Install Delta plan codecs when enabled.
+
+        Returns
+        -------
+        bool
+            True when codecs are installed.
+        """
+        if not self.profile.features.enable_delta_plan_codecs:
+            return False
+        available, installed = self.profile.install_delta_plan_codecs(ctx)
+        self.profile.record_delta_plan_codecs_event(
+            available=available,
+            installed=installed,
+        )
+        return installed
+
+
+@dataclass(frozen=True)
+class RuntimeProfileIO:
+    """Runtime I/O helpers for cache and ephemeral contexts."""
+
+    profile: DataFusionRuntimeProfile
+
+    def cache_root(self) -> str:
+        """Return the root directory for Delta-backed caches.
+
+        Returns
+        -------
+        str
+            Cache root directory.
+        """
+        if self.profile.policies.cache_output_root is not None:
+            return self.profile.policies.cache_output_root
+        return str(Path(tempfile.gettempdir()) / "datafusion_cache")
+
+    def runtime_artifact_root(self) -> str:
+        """Return the root directory for runtime artifact cache tables.
+
+        Returns
+        -------
+        str
+            Runtime artifact cache root.
+        """
+        if self.profile.policies.runtime_artifact_cache_root is not None:
+            return self.profile.policies.runtime_artifact_cache_root
+        return str(Path(self.cache_root()) / "runtime_artifacts")
+
+    def metadata_cache_snapshot_root(self) -> str:
+        """Return the root directory for metadata cache snapshots.
+
+        Returns
+        -------
+        str
+            Metadata cache snapshot root.
+        """
+        return str(Path(self.cache_root()) / "metadata_cache_snapshots")
+
+    def ephemeral_context(self) -> SessionContext:
+        """Return a non-cached SessionContext configured from the profile.
+
+        Returns
+        -------
+        SessionContext
+            Ephemeral session context configured for this profile.
+        """
+        ctx = self.profile.build_ephemeral_context()
+        RegistrationPhaseOrchestrator().run(self.profile.ephemeral_context_phases(ctx))
+        return ctx
+
+
+@dataclass(frozen=True)
+class RuntimeProfileCatalog:
+    """Catalog helpers bound to a runtime profile."""
+
+    profile: DataFusionRuntimeProfile
+
+    def ast_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured AST dataset location, when available.
+
+        Returns
+        -------
+        DatasetLocation | None
+            AST dataset location when configured.
+        """
+        return self.profile.resolve_ast_dataset_location()
+
+    def bytecode_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured bytecode dataset location, when available.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Bytecode dataset location when configured.
+        """
+        return self.profile.resolve_bytecode_dataset_location()
+
+    def extract_dataset_location(self, name: str) -> DatasetLocation | None:
+        """Return a configured extract dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Dataset location when configured.
+        """
+        location = self.profile.resolve_dataset_template(name)
+        if location is None:
+            location = extract_output_locations_for_profile(self.profile).get(name)
+        if location is None:
+            location = self.profile.data_sources.extract_output.scip_dataset_locations.get(name)
+        if location is None:
+            return None
+        if location.dataset_spec is None:
+            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
+
+            try:
+                spec = extract_dataset_spec(name)
+            except KeyError:
+                spec = None
+            if spec is not None:
+                location = msgspec.structs.replace(location, dataset_spec=spec)
+        return location
+
+    def dataset_location(self, name: str) -> DatasetLocation | None:
+        """Return a configured dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Dataset location when configured.
+        """
+        location = self.extract_dataset_location(name)
+        if location is not None:
+            resolved = apply_delta_store_policy(
+                location,
+                policy=self.profile.policies.delta_store_policy,
+            )
+            if self.profile.policies.scan_policy is None:
+                return resolved
+            from datafusion_engine.dataset.policies import apply_scan_policy_defaults
+            from datafusion_engine.dataset.registry import (
+                DatasetLocationOverrides,
+                resolve_dataset_policies,
+            )
+
+            policies = resolve_dataset_policies(resolved, overrides=resolved.overrides)
+            datafusion_scan, delta_scan = apply_scan_policy_defaults(
+                dataset_format=resolved.format or "delta",
+                datafusion_scan=policies.datafusion_scan,
+                delta_scan=policies.delta_scan,
+                policy=self.profile.policies.scan_policy,
+            )
+            if datafusion_scan is None and delta_scan is None:
+                return resolved
+            overrides = resolved.overrides or DatasetLocationOverrides()
+            if datafusion_scan is not None:
+                overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
+            if delta_scan is not None:
+                delta_bundle = policies.delta_bundle
+                if delta_bundle is None:
+                    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+
+                    delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
+                else:
+                    delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
+                overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
+            return msgspec.structs.replace(resolved, overrides=overrides)
+        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+
+        catalog = dataset_catalog_from_profile(self.profile)
+        if catalog.has(name):
+            return catalog.get(name)
+        return None
+
+    def dataset_location_or_raise(self, name: str) -> DatasetLocation:
+        """Return a configured dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation
+            Dataset location when configured.
+
+        Raises
+        ------
+        KeyError
+            Raised when the dataset location is not configured.
+        """
+        location = self.dataset_location(name)
+        if location is None:
+            msg = f"No dataset location configured for {name!r}."
+            raise KeyError(msg)
+        return location
+
+
+class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, frozen=True):
     """DataFusion runtime configuration.
 
     Identifier normalization is disabled by default to preserve case-sensitive
@@ -3656,6 +3954,39 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
     plan_proto_cache: PlanProtoCache | None = None
     udf_catalog_cache: dict[int, UdfCatalog] = msgspec.field(default_factory=dict)
     delta_commit_runs: dict[str, DataFusionRun] = msgspec.field(default_factory=dict)
+
+    @property
+    def delta_ops(self) -> RuntimeProfileDeltaOps:
+        """Return Delta runtime operations bound to this profile.
+
+        Returns
+        -------
+        RuntimeProfileDeltaOps
+            Delta operations helper.
+        """
+        return RuntimeProfileDeltaOps(self)
+
+    @property
+    def io_ops(self) -> RuntimeProfileIO:
+        """Return I/O helpers bound to this profile.
+
+        Returns
+        -------
+        RuntimeProfileIO
+            I/O operations helper.
+        """
+        return RuntimeProfileIO(self)
+
+    @property
+    def catalog_ops(self) -> RuntimeProfileCatalog:
+        """Return catalog helpers bound to this profile.
+
+        Returns
+        -------
+        RuntimeProfileCatalog
+            Catalog operations helper.
+        """
+        return RuntimeProfileCatalog(self)
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:
@@ -3857,7 +4188,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
         self._prepare_statements(ctx)
-        self.ensure_delta_plan_codecs(ctx)
+        self.delta_ops.ensure_delta_plan_codecs(ctx)
         self._record_extension_parity_validation(ctx)
         self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing(ctx)
@@ -3866,27 +4197,75 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self._cache_context(ctx)
         return ctx
 
-    def delta_runtime_ctx(self) -> SessionContext:
-        """Return a SessionContext configured for Delta operations.
+    def build_ephemeral_context(self) -> SessionContext:
+        """Return a non-cached SessionContext configured from the profile.
 
         Returns
         -------
-        datafusion.SessionContext
-            Session context configured for Delta access paths.
+        SessionContext
+            Ephemeral session context configured for this profile.
         """
-        return self.session_context()
+        return self._apply_url_table(self._build_session_context())
 
-    def delta_service(self) -> DeltaService:
-        """Return the Delta service bound to this runtime profile.
+    def ephemeral_context_phases(
+        self,
+        ctx: SessionContext,
+    ) -> tuple[RegistrationPhase, ...]:
+        """Return registration phases for ephemeral contexts.
 
         Returns
         -------
-        DeltaService
-            Delta service instance bound to this runtime profile.
+        tuple[RegistrationPhase, ...]
+            Registration phases for ephemeral contexts.
         """
-        from datafusion_engine.delta.service import DeltaService
+        return self._ephemeral_context_phases(ctx)
 
-        return DeltaService(profile=self)
+    def install_delta_plan_codecs(self, ctx: SessionContext) -> tuple[bool, bool]:
+        """Install Delta plan codecs using the extension or context fallback.
+
+        Returns
+        -------
+        tuple[bool, bool]
+            Tuple of (available, installed) flags.
+        """
+        available, installed = self._install_delta_plan_codecs_extension(ctx)
+        if not available:
+            available, installed = self._install_delta_plan_codecs_context(ctx)
+        return available, installed
+
+    def record_delta_plan_codecs_event(self, *, available: bool, installed: bool) -> None:
+        """Record the Delta plan codecs install status."""
+        self._record_delta_plan_codecs(available=available, installed=installed)
+
+    def resolve_dataset_template(self, name: str) -> DatasetLocation | None:
+        """Return a dataset location template for the name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Template dataset location when configured.
+        """
+        return self._dataset_template(name)
+
+    def resolve_ast_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured AST dataset location.
+
+        Returns
+        -------
+        DatasetLocation | None
+            AST dataset location when configured.
+        """
+        return self._ast_dataset_location()
+
+    def resolve_bytecode_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured bytecode dataset location.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Bytecode dataset location when configured.
+        """
+        return self._bytecode_dataset_location()
 
     def _delta_runtime_profile_ctx(
         self,
@@ -3912,8 +4291,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
                     self.execution,
                     share_context=False,
                 ),
-            ).delta_runtime_ctx()
-        return self.delta_runtime_ctx()
+            ).delta_ops.delta_runtime_ctx()
+        return self.delta_ops.delta_runtime_ctx()
 
     def _session_runtime_from_context(self, ctx: SessionContext) -> SessionRuntime:
         """Build a SessionRuntime from an existing SessionContext.
@@ -3936,55 +4315,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             Planning-ready session runtime.
         """
         return build_session_runtime(self, use_cache=True)
-
-    def cache_root(self) -> str:
-        """Return the root directory for Delta-backed caches.
-
-        Returns
-        -------
-        str
-            Root directory for cache tables.
-        """
-        if self.policies.cache_output_root is not None:
-            return self.policies.cache_output_root
-        return str(Path(tempfile.gettempdir()) / "datafusion_cache")
-
-    def runtime_artifact_root(self) -> str:
-        """Return the root directory for runtime artifact cache tables.
-
-        Returns
-        -------
-        str
-            Root directory for runtime artifact cache outputs.
-        """
-        if self.policies.runtime_artifact_cache_root is not None:
-            return self.policies.runtime_artifact_cache_root
-        return str(Path(self.cache_root()) / "runtime_artifacts")
-
-    def metadata_cache_snapshot_root(self) -> str:
-        """Return the root directory for metadata cache snapshots.
-
-        Returns
-        -------
-        str
-            Root directory for metadata cache snapshot tables.
-        """
-        return str(Path(self.cache_root()) / "metadata_cache_snapshots")
-
-    def ephemeral_context(self) -> SessionContext:
-        """Return a non-cached SessionContext configured from the profile.
-
-        Use session_runtime() for planning to ensure UDF and settings
-        snapshots are captured deterministically.
-
-        Returns
-        -------
-        datafusion.SessionContext
-            Session context configured for the profile without caching.
-        """
-        ctx = self._apply_url_table(self._build_session_context())
-        RegistrationPhaseOrchestrator().run(self._ephemeral_context_phases(ctx))
-        return ctx
 
     def _ephemeral_context_phases(
         self,
@@ -4044,7 +4374,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
 
     def _install_planning_extensions_for_context(self, ctx: SessionContext) -> None:
         self._prepare_statements(ctx)
-        self.ensure_delta_plan_codecs(ctx)
+        self.delta_ops.ensure_delta_plan_codecs(ctx)
 
     def _install_extension_hooks_for_context(self, ctx: SessionContext) -> None:
         self._record_extension_parity_validation(ctx)
@@ -4433,82 +4763,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
             allow_async=self.features.enable_async_udfs,
         )
 
-    def reserve_delta_commit(
-        self,
-        *,
-        key: str,
-        metadata: Mapping[str, object] | None = None,
-        commit_metadata: Mapping[str, str] | None = None,
-    ) -> tuple[IdempotentWriteOptions, DataFusionRun]:
-        """Reserve the next idempotent commit version for a Delta write.
-
-        Returns
-        -------
-        tuple[IdempotentWriteOptions, DataFusionRun]
-            Idempotent write options and updated run context.
-        """
-        run = self.delta_commit_runs.get(key)
-        if run is None:
-            from obs.datafusion_runs import create_run_context
-
-            base_metadata: dict[str, str] = {"key": key}
-            if metadata:
-                base_metadata.update(
-                    {str(item_key): str(item_value) for item_key, item_value in metadata.items()}
-                )
-            run = create_run_context(
-                label="delta_commit",
-                sink=self.diagnostics.diagnostics_sink,
-                metadata=base_metadata,
-            )
-            self.delta_commit_runs[key] = run
-        elif metadata:
-            run.metadata.update(dict(metadata))
-        if commit_metadata:
-            run.metadata["commit_metadata"] = dict(commit_metadata)
-        options, updated = run.next_commit_version()
-        if self.diagnostics.diagnostics_sink is not None:
-            commit_meta_payload = dict(commit_metadata) if commit_metadata is not None else None
-            payload = {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "key": key,
-                "run_id": run.run_id,
-                "app_id": options.app_id,
-                "version": options.version,
-                "commit_sequence": run.commit_sequence,
-                "status": "reserved",
-                "metadata": dict(run.metadata),
-                "commit_metadata": commit_meta_payload,
-            }
-            self.record_artifact("datafusion_delta_commit_v1", payload)
-        return options, updated
-
-    def finalize_delta_commit(
-        self,
-        *,
-        key: str,
-        run: DataFusionRun,
-        metadata: Mapping[str, object] | None = None,
-    ) -> None:
-        """Persist commit sequencing state after a successful write."""
-        if metadata:
-            run.metadata.update(dict(metadata))
-        self.delta_commit_runs[key] = run
-        if self.diagnostics.diagnostics_sink is None:
-            return
-        committed_version = run.commit_sequence - 1 if run.commit_sequence > 0 else None
-        payload = {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "key": key,
-            "run_id": run.run_id,
-            "app_id": run.run_id,
-            "version": committed_version,
-            "commit_sequence": run.commit_sequence,
-            "status": "finalized",
-            "metadata": dict(run.metadata),
-        }
-        self.record_artifact("datafusion_delta_commit_v1", payload)
-
     def _validate_rule_function_allowlist(self, ctx: SessionContext) -> None:
         """Validate rulepack function demands against information_schema.
 
@@ -4723,16 +4977,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
     def _ast_dataset_location(self) -> DatasetLocation | None:
         return self._dataset_template("ast_files_v1")
 
-    def ast_dataset_location(self) -> DatasetLocation | None:
-        """Return the configured AST dataset location, when available.
-
-        Returns
-        -------
-        DatasetLocation | None
-            DatasetLocation for AST outputs or ``None`` when not configured.
-        """
-        return self._ast_dataset_location()
-
     def _register_ast_dataset(self, ctx: SessionContext) -> None:
         location = self._ast_dataset_location()
         if location is None:
@@ -4765,112 +5009,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
         facade.register_dataset(name="bytecode_files_v1", location=location)
         self._record_bytecode_registration(location=location)
-
-    def bytecode_dataset_location(self) -> DatasetLocation | None:
-        """Return the configured bytecode dataset location, when available.
-
-        Returns
-        -------
-        DatasetLocation | None
-            Bytecode dataset location when configured.
-        """
-        return self._bytecode_dataset_location()
-
-    def extract_dataset_location(self, name: str) -> DatasetLocation | None:
-        """Return a configured extract dataset location for the dataset name.
-
-        Returns
-        -------
-        DatasetLocation | None
-            Extract dataset location when configured.
-        """
-        location = self._dataset_template(name)
-        if location is None:
-            location = extract_output_locations_for_profile(self).get(name)
-        if location is None:
-            location = self.data_sources.extract_output.scip_dataset_locations.get(name)
-        if location is None:
-            return None
-        if location.dataset_spec is None:
-            from datafusion_engine.extract.registry import dataset_spec as extract_dataset_spec
-
-            try:
-                spec = extract_dataset_spec(name)
-            except KeyError:
-                spec = None
-            if spec is not None:
-                location = msgspec.structs.replace(location, dataset_spec=spec)
-        return location
-
-    def dataset_location(self, name: str) -> DatasetLocation | None:
-        """Return a configured dataset location for the dataset name.
-
-        Returns
-        -------
-        DatasetLocation | None
-            Dataset location when configured.
-        """
-        location = self.extract_dataset_location(name)
-        if location is not None:
-            resolved = apply_delta_store_policy(
-                location,
-                policy=self.policies.delta_store_policy,
-            )
-            if self.policies.scan_policy is None:
-                return resolved
-            from datafusion_engine.dataset.policies import apply_scan_policy_defaults
-            from datafusion_engine.dataset.registry import (
-                DatasetLocationOverrides,
-                resolve_dataset_policies,
-            )
-
-            policies = resolve_dataset_policies(resolved, overrides=resolved.overrides)
-            datafusion_scan, delta_scan = apply_scan_policy_defaults(
-                dataset_format=resolved.format or "delta",
-                datafusion_scan=policies.datafusion_scan,
-                delta_scan=policies.delta_scan,
-                policy=self.policies.scan_policy,
-            )
-            if datafusion_scan is None and delta_scan is None:
-                return resolved
-            overrides = resolved.overrides or DatasetLocationOverrides()
-            if datafusion_scan is not None:
-                overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
-            if delta_scan is not None:
-                delta_bundle = policies.delta_bundle
-                if delta_bundle is None:
-                    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
-
-                    delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
-                else:
-                    delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
-                overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
-            return msgspec.structs.replace(resolved, overrides=overrides)
-        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
-
-        catalog = dataset_catalog_from_profile(self)
-        if catalog.has(name):
-            return catalog.get(name)
-        return None
-
-    def dataset_location_or_raise(self, name: str) -> DatasetLocation:
-        """Return a configured dataset location for the dataset name.
-
-        Returns
-        -------
-        DatasetLocation
-            Dataset location for the dataset.
-
-        Raises
-        ------
-        KeyError
-            Raised when the dataset location is not configured.
-        """
-        location = self.dataset_location(name)
-        if location is None:
-            msg = f"No dataset location configured for {name!r}."
-            raise KeyError(msg)
-        return location
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
         scip_locations = self.data_sources.extract_output.scip_dataset_locations
@@ -5561,25 +5699,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
                 return True, False
         return True, True
 
-    def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
-        """Install Delta plan codecs when enabled.
-
-        Returns
-        -------
-        bool
-            True when codecs were installed, otherwise False.
-        """
-        if not self.features.enable_delta_plan_codecs:
-            return False
-        available, installed = self._install_delta_plan_codecs_extension(ctx)
-        if not available:
-            available, installed = self._install_delta_plan_codecs_context(ctx)
-        self._record_delta_plan_codecs(
-            available=available,
-            installed=installed,
-        )
-        return installed
-
     def _record_udf_snapshot(self, snapshot: Mapping[str, object]) -> None:
         if self.diagnostics.diagnostics_sink is None:
             return
@@ -5659,7 +5778,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin, StructBaseStrict, froze
         self.record_artifact("datafusion_cache_config_v1", config_payload)
         self.record_artifact(
             "datafusion_cache_root_v1",
-            {"cache_root": self.cache_root()},
+            {"cache_root": self.io_ops.cache_root()},
         )
         if self.policies.cache_policy is not None:
             self.record_artifact(
@@ -6754,7 +6873,7 @@ def apply_execution_policy(
 
 @lru_cache(maxsize=128)
 def _datafusion_type_name(dtype: pa.DataType) -> str:
-    ctx = DataFusionRuntimeProfile().ephemeral_context()
+    ctx = DataFusionRuntimeProfile().io_ops.ephemeral_context()
     table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 
@@ -7093,7 +7212,7 @@ def record_dataset_readiness(
 
     blockers: list[str] = []
     for name in dataset_names:
-        location = profile.dataset_location(name)
+        location = profile.catalog_ops.dataset_location(name)
         if location is None:
             record_artifact(
                 profile,

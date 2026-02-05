@@ -13,7 +13,7 @@ from tools.cq.cli_app.params import RunParams
 
 def run(
     *,
-    opts: Annotated[RunParams, Parameter(name="*")],
+    opts: Annotated[RunParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> CliResult:
     """Execute a multi-step CQ run plan.
@@ -37,6 +37,8 @@ def run(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = RunParams()
     options = options_from_params(opts, type_=RunOptions)
     try:
         plan = load_run_plan(options)

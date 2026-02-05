@@ -80,9 +80,7 @@ type ScalarLiteralSpec = (
     | ScalarStringLiteral
     | ScalarBytesLiteral
 )
-type ScalarLiteralInput = (
-    ScalarLiteralSpec | ScalarLike | bool | int | float | str | bytes | None
-)
+type ScalarLiteralInput = ScalarLiteralSpec | ScalarLike | bool | int | float | str | bytes | None
 type ScalarSpecValue = ScalarLiteralSpec
 type ScalarLiteralValue = bool | int | float | str | bytes | None
 
@@ -97,7 +95,9 @@ _PY_LITERAL_BUILDERS: tuple[
     (str, lambda value: ScalarStringLiteral(value=cast("str", value))),
 )
 
-_LITERAL_VALUE_GETTERS: dict[type[ScalarLiteralSpec], Callable[[ScalarLiteralSpec], ScalarLiteralValue]] = {
+_LITERAL_VALUE_GETTERS: dict[
+    type[ScalarLiteralSpec], Callable[[ScalarLiteralSpec], ScalarLiteralValue]
+] = {
     ScalarNullLiteral: lambda _literal: None,
     ScalarBoolLiteral: lambda literal: cast("ScalarBoolLiteral", literal).value,
     ScalarIntLiteral: lambda literal: cast("ScalarIntLiteral", literal).value,
@@ -105,6 +105,14 @@ _LITERAL_VALUE_GETTERS: dict[type[ScalarLiteralSpec], Callable[[ScalarLiteralSpe
     ScalarStringLiteral: lambda literal: cast("ScalarStringLiteral", literal).value,
     ScalarBytesLiteral: lambda literal: cast("ScalarBytesLiteral", literal).data,
 }
+
+
+def _coerce_scalar_like(value: ScalarLike) -> ScalarLiteralInput:
+    resolved = value.as_py()
+    if resolved is None or isinstance(resolved, (bool, int, float, str, bytes)):
+        return cast("ScalarLiteralInput", resolved)
+    msg = f"Unsupported scalar value: {type(resolved).__name__}."
+    raise TypeError(msg)
 
 
 class ScalarLiteralCodec:
@@ -117,7 +125,7 @@ class ScalarLiteralCodec:
         if value is None:
             return ScalarNullLiteral()
         if isinstance(value, ScalarLike):
-            return ScalarLiteralCodec.from_input(value.as_py())
+            return ScalarLiteralCodec.from_input(_coerce_scalar_like(value))
         for literal_type, builder in _PY_LITERAL_BUILDERS:
             if isinstance(value, literal_type):
                 return builder(value)

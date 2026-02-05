@@ -291,7 +291,7 @@ def _bootstrap_cache_ledger_table(
 
 
 def _cache_ledger_root(profile: DataFusionRuntimeProfile) -> Path:
-    return Path(profile.cache_root()) / "cache_ledgers"
+    return Path(profile.io_ops.cache_root()) / "cache_ledgers"
 
 
 def _cache_run_summary_schema() -> pa.Schema:

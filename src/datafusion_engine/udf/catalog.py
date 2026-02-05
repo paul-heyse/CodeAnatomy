@@ -815,13 +815,27 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
         """
         return len(self.catalog.custom_specs())
 
-    def snapshot(self) -> UdfCatalogSnapshot:
-        """Return a snapshot of custom UDF specs plus policy hash.
+    def snapshot(self) -> Mapping[str, object]:
+        """Return a mapping snapshot of custom UDF specs plus policy hash.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Mapping snapshot suitable for registry persistence.
+        """
+        snapshot = self.snapshot_struct()
+        return {
+            "specs": snapshot.specs,
+            "function_factory_hash": snapshot.function_factory_hash,
+        }
+
+    def snapshot_struct(self) -> UdfCatalogSnapshot:
+        """Return a structured snapshot for schema-aware serialization.
 
         Returns
         -------
         UdfCatalogSnapshot
-            Snapshot payload for the current custom UDF registry state.
+            Structured snapshot with typed spec payloads.
         """
         specs = {name: spec.to_snapshot() for name, spec in self.catalog.custom_specs().items()}
         return UdfCatalogSnapshot(

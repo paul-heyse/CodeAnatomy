@@ -917,7 +917,7 @@ def _proto_serialization_context(
             installed=None,
             reason="delta_plan_codecs_disabled",
         )
-    installed = profile.ensure_delta_plan_codecs(ctx)
+    installed = profile.delta_ops.ensure_delta_plan_codecs(ctx)
     if not installed:
         return False, PlanProtoStatus(
             enabled=False,

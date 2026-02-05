@@ -126,7 +126,7 @@ def register_delta_df(
     DataFrame
         DataFusion DataFrame for the registered Delta table.
     """
-    profile_location = context.runtime.profile.dataset_location(name)
+    profile_location = context.runtime.profile.catalog_ops.dataset_location(name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -195,7 +195,7 @@ def run_delta_maintenance_if_configured(
         Log storage options for the Delta table.
     """
     runtime_profile = context.runtime.profile
-    dataset_location = runtime_profile.dataset_location(dataset_name) if dataset_name else None
+    dataset_location = runtime_profile.catalog_ops.dataset_location(dataset_name) if dataset_name else None
     plan = resolve_delta_maintenance_plan(
         DeltaMaintenancePlanInput(
             dataset_location=dataset_location,

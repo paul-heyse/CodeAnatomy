@@ -1222,7 +1222,7 @@ def register_dataset_spec(
 
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     >>> from schema_spec.system import DatasetSpec
-    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
+    >>> ctx = DataFusionRuntimeProfile().io_ops.ephemeral_context()
     >>> spec = DatasetSpec(table_spec=table_spec)
     >>> register_dataset_spec(
     ...     ctx,
@@ -2412,7 +2412,7 @@ def apply_projection_scan_overrides(
     for table_name, columns in projection_map.items():
         if not columns:
             continue
-        location = runtime_profile.dataset_location(table_name)
+        location = runtime_profile.catalog_ops.dataset_location(table_name)
         if location is None:
             continue
         scan = location.resolved.datafusion_scan
@@ -3087,7 +3087,7 @@ def _register_delta_cache_for_dataset(
     runtime_profile = context.runtime_profile
     if runtime_profile is None:
         return _register_memory_cache(context, df)
-    cache_root = Path(runtime_profile.cache_root()) / "dataset_cache"
+    cache_root = Path(runtime_profile.io_ops.cache_root()) / "dataset_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     from datafusion_engine.tables.spec import table_spec_from_location
 

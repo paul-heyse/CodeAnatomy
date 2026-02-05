@@ -9,7 +9,7 @@ from pathlib import Path
 import msgspec
 
 from tools.cq.cli_app.options import RunOptions
-from tools.cq.run.spec import RunPlan, RunStep, RunStepBase, normalize_step_ids
+from tools.cq.run.spec import RunPlan, RunStep, is_run_step, normalize_step_ids
 
 try:
     import tomllib
@@ -72,9 +72,9 @@ def _load_inline_steps(
 
 
 def _coerce_step(item: object) -> RunStep:
-    if isinstance(item, RunStepBase):
+    if is_run_step(item):
         return item
-    if is_dataclass(item):
+    if is_dataclass(item) and not isinstance(item, type):
         item = asdict(item)
     if isinstance(item, dict):
         try:

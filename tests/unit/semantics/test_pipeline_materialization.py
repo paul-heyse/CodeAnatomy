@@ -132,9 +132,11 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
     assert captured.request is not None
     request = captured.request
     assert isinstance(request, WriteViewRequest)
-    assert tuple(dataset_spec_delta_write_policy(spec).partition_by) == request.partition_by
+    write_policy = dataset_spec_delta_write_policy(spec)
+    assert write_policy is not None
+    assert tuple(write_policy.partition_by) == request.partition_by
     assert request.format_options is not None
-    assert request.format_options["delta_write_policy"] is dataset_spec_delta_write_policy(spec)
+    assert request.format_options["delta_write_policy"] is write_policy
     assert request.format_options["delta_schema_policy"] is dataset_spec_delta_schema_policy(spec)
     assert request.format_options[
         "delta_maintenance_policy"

@@ -69,7 +69,7 @@ from storage.deltalake.config import DeltaSchemaPolicy
         (
             TableSchemaSpec(
                 name="example",
-                fields=(FieldSpec(name="id", dtype=ArrowPrimitiveSpec(name="int64")),),
+                fields=[FieldSpec(name="id", dtype=ArrowPrimitiveSpec(name="int64"))],
                 required_non_null=("id",),
                 key_fields=("id",),
             ),
@@ -79,7 +79,7 @@ from storage.deltalake.config import DeltaSchemaPolicy
             DatasetSpec(
                 table_spec=TableSchemaSpec(
                     name="example",
-                    fields=(FieldSpec(name="id", dtype=ArrowPrimitiveSpec(name="int64")),),
+                    fields=[FieldSpec(name="id", dtype=ArrowPrimitiveSpec(name="int64"))],
                 ),
                 policies=DatasetPolicies(
                     dataframe_validation=ValidationPolicySpec(enabled=True, sample=10)

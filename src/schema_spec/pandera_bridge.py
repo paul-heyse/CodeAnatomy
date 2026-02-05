@@ -225,7 +225,8 @@ def _maybe_to_pandas[TDF](df: TDF) -> tuple[TDF, object]:
     if isinstance(df, pd.DataFrame):
         return df, df
     if isinstance(df, pa.Table):
-        return df, df.to_pandas()
+        table = cast("pa.Table", df)
+        return df, table.to_pandas()
     to_pandas = getattr(df, "to_pandas", None)
     if callable(to_pandas):
         resolved = to_pandas()
@@ -235,7 +236,8 @@ def _maybe_to_pandas[TDF](df: TDF) -> tuple[TDF, object]:
     if callable(to_arrow):
         resolved = to_arrow()
         if isinstance(resolved, pa.Table):
-            return df, resolved.to_pandas()
+            table = cast("pa.Table", resolved)
+            return df, table.to_pandas()
     msg = f"Unsupported dataframe type for pandera validation: {type(df).__name__}"
     raise TypeError(msg)
 
@@ -289,22 +291,13 @@ def validate_dataframe[TDF](
         constraints=constraints,
     )
     if model is not None:
-        import pandera.typing as pa_typing
-        from pandera.decorators import check_types
-
-        def _validate_model(
-            data: pa_typing.DataFrame[model],
-        ) -> pa_typing.DataFrame[model]:
-            return data
-
-        validator = check_types(
+        model.validate(
+            pandas_df,
             lazy=policy.lazy,
             sample=policy.sample,
             head=policy.head,
             tail=policy.tail,
-        )(_validate_model)
-        pandas_typed = cast("pa_typing.DataFrame[Any]", pandas_df)
-        validator(pandas_typed)
+        )
     schema = to_pandera_schema(schema_spec, policy=policy, constraints=constraints)
     schema.validate(pandas_df, **validate_kwargs)
     return original

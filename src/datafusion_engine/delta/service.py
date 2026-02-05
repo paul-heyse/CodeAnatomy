@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.arrow.interop import RecordBatchReaderLike
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.dataset.resolution import (
     DatasetResolution,
@@ -46,7 +47,9 @@ from storage.deltalake.delta import (
     enable_delta_row_tracking,
     enable_delta_v2_checkpoints,
     read_delta_cdf,
+    read_delta_cdf_eager,
     read_delta_table,
+    read_delta_table_eager,
     vacuum_delta,
 )
 
@@ -322,6 +325,26 @@ class DeltaService:
             log_storage_options=log_storage_options,
         )
 
+    def resolve_store_options(
+        self,
+        *,
+        path: str,
+        storage_options: StorageOptions | None,
+        log_storage_options: StorageOptions | None,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Resolve storage options using the profile's Delta store policy.
+
+        Returns
+        -------
+        tuple[dict[str, str], dict[str, str]]
+            Resolved storage and log storage options.
+        """
+        return self._resolve_store_options(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+
     def _apply_store_policy(self, location: DatasetLocation) -> DatasetLocation:
         return apply_delta_store_policy(
             location,
@@ -403,13 +426,13 @@ class DeltaService:
         )
         return delta_table_schema(resolved_request)
 
-    def read_table(self, request: DeltaReadRequest) -> pa.Table:
-        """Read a Delta table using the runtime profile.
+    def read_table(self, request: DeltaReadRequest) -> RecordBatchReaderLike:
+        """Read a Delta table using the runtime profile (streaming).
 
         Returns
         -------
-        pyarrow.Table
-            Table containing the requested Delta snapshot.
+        RecordBatchReaderLike
+            Streaming reader containing the requested Delta snapshot.
         """
         resolved_storage, resolved_log = self._resolve_store_options(
             path=request.path,
@@ -424,6 +447,27 @@ class DeltaService:
         )
         return read_delta_table(resolved)
 
+    def read_table_eager(self, request: DeltaReadRequest) -> pa.Table:
+        """Read a Delta table and materialize to an Arrow table.
+
+        Returns
+        -------
+        pyarrow.Table
+            Materialized table containing the requested Delta snapshot.
+        """
+        resolved_storage, resolved_log = self._resolve_store_options(
+            path=request.path,
+            storage_options=request.storage_options,
+            log_storage_options=request.log_storage_options,
+        )
+        resolved = replace(
+            request,
+            runtime_profile=self.profile,
+            storage_options=resolved_storage or None,
+            log_storage_options=resolved_log or None,
+        )
+        return read_delta_table_eager(resolved)
+
     def read_cdf(
         self,
         *,
@@ -431,13 +475,13 @@ class DeltaService:
         storage_options: StorageOptions | None = None,
         log_storage_options: StorageOptions | None = None,
         cdf_options: DeltaCdfOptions | None = None,
-    ) -> pa.Table:
-        """Read Delta change data feed table.
+    ) -> RecordBatchReaderLike:
+        """Read Delta change data feed table (streaming).
 
         Returns
         -------
-        pyarrow.Table
-            Change data feed table for the requested range.
+        RecordBatchReaderLike
+            Streaming reader for the requested change data feed range.
         """
         resolved_storage, resolved_log = self._resolve_store_options(
             path=table_path,
@@ -445,6 +489,33 @@ class DeltaService:
             log_storage_options=log_storage_options,
         )
         return read_delta_cdf(
+            table_path,
+            storage_options=resolved_storage or None,
+            log_storage_options=resolved_log or None,
+            cdf_options=cdf_options,
+        )
+
+    def read_cdf_eager(
+        self,
+        *,
+        table_path: str,
+        storage_options: StorageOptions | None = None,
+        log_storage_options: StorageOptions | None = None,
+        cdf_options: DeltaCdfOptions | None = None,
+    ) -> pa.Table:
+        """Read Delta change data feed and materialize to a table.
+
+        Returns
+        -------
+        pyarrow.Table
+            Materialized Arrow table with CDF changes.
+        """
+        resolved_storage, resolved_log = self._resolve_store_options(
+            path=table_path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+        return read_delta_cdf_eager(
             table_path,
             storage_options=resolved_storage or None,
             log_storage_options=resolved_log or None,
@@ -630,6 +701,19 @@ class DeltaService:
             log_storage_options=resolved_log or None,
             runtime_profile=self.profile,
         )
+
+    def resolve_feature_options(
+        self,
+        options: DeltaFeatureMutationOptions,
+    ) -> DeltaFeatureMutationOptions:
+        """Resolve feature mutation options using runtime defaults.
+
+        Returns
+        -------
+        DeltaFeatureMutationOptions
+            Resolved feature mutation options with runtime defaults applied.
+        """
+        return self._resolve_feature_options(options)
 
     def delete_where(
         self,

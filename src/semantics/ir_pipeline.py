@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
@@ -35,7 +35,6 @@ _KIND_ORDER: Mapping[str, int] = {
     "artifact": 11,
 }
 _MIN_JOIN_GROUP_SIZE = 2
-MIN_VERSIONED_ALIAS_COUNT: Final[int] = 2
 
 
 def _expr_repr(expr_spec: ExprSpec) -> str:
@@ -354,28 +353,6 @@ def _build_semantic_normalization_rows(
 def _build_relationship_rows(
     model: SemanticModel,
 ) -> tuple[SemanticDatasetRow, ...]:
-    from relspec.view_defs import (
-        DEFAULT_REL_TASK_PRIORITY,
-        REL_CALLSITE_SYMBOL_OUTPUT,
-        REL_DEF_SYMBOL_OUTPUT,
-        REL_IMPORT_SYMBOL_OUTPUT,
-        REL_NAME_SYMBOL_OUTPUT,
-    )
-    from semantics.catalog.projections import (
-        SemanticProjectionConfig,
-        semantic_projection_options,
-    )
-
-    projection_options = semantic_projection_options(
-        SemanticProjectionConfig(
-            default_priority=DEFAULT_REL_TASK_PRIORITY,
-            rel_name_output=REL_NAME_SYMBOL_OUTPUT,
-            rel_import_output=REL_IMPORT_SYMBOL_OUTPUT,
-            rel_def_output=REL_DEF_SYMBOL_OUTPUT,
-            rel_call_output=REL_CALLSITE_SYMBOL_OUTPUT,
-            relationship_specs=model.relationship_specs,
-        )
-    )
     feature_fields = tuple(
         f"feat_{name}"
         for name in sorted(
@@ -385,41 +362,39 @@ def _build_relationship_rows(
     max_hard = max((len(spec.signals.hard) for spec in model.relationship_specs), default=0)
     hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
 
-    def _relationship_fields(entity_id_alias: str) -> tuple[str, ...]:
+    def _relationship_fields() -> tuple[str, ...]:
         return (
-            entity_id_alias,
+            "entity_id",
             "symbol",
-            "symbol_roles",
             "path",
-            "edge_owner_file_id",
             "bstart",
             "bend",
-            "resolution_method",
+            "origin",
             "confidence",
             "score",
-            "task_name",
-            "task_priority",
+            "provider",
+            "rule_name",
+            "ambiguity_group_id",
             *hard_fields,
             *feature_fields,
         )
 
     rows: list[SemanticDatasetRow] = []
     for spec in model.relationship_specs:
-        options = projection_options[spec.name]
-        join_keys = (options.entity_id_alias, "symbol")
+        join_keys = ("entity_id", "symbol")
         rows.append(
             SemanticDatasetRow(
                 name=spec.name,
                 version=SEMANTIC_SCHEMA_VERSION,
                 bundles=(),
-                fields=_relationship_fields(options.entity_id_alias),
+                fields=_relationship_fields(),
                 category="semantic",
                 supports_cdf=True,
                 partition_cols=(),
                 merge_keys=join_keys,
                 join_keys=join_keys,
                 template="semantic_relationship",
-                view_builder=f"{spec.name.replace('_v1', '')}_df_builder",
+                view_builder=f"{spec.name}_df_builder",
                 register_view=True,
                 source_dataset=None,
             )
@@ -446,8 +421,8 @@ def _build_diagnostic_rows() -> tuple[SemanticDatasetRow, ...]:
     max_hard = max((len(spec.signals.hard) for spec in RELATIONSHIP_SPECS), default=0)
     hard_fields = tuple(f"hard_{index}" for index in range(1, max_hard + 1))
     dynamic_fields = {
-        "relationship_candidates_v1",
-        "relationship_decisions_v1",
+        "relationship_candidates",
+        "relationship_decisions",
     }
     rows: list[SemanticDatasetRow] = []
     for spec in DIAGNOSTIC_DATASETS:
@@ -697,16 +672,16 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
     )
 
     export_inputs: dict[str, tuple[str, ...]] = {
-        "dim_exported_defs_v1": (
+        "dim_exported_defs": (
             canonical_output_name("cst_defs_norm"),
             canonical_output_name("rel_def_symbol"),
         ),
     }
     diagnostic_inputs: dict[str, tuple[str, ...]] = {
-        "relationship_quality_metrics_v1": tuple(spec.name for spec in model.relationship_specs),
-        "relationship_ambiguity_report_v1": tuple(spec.name for spec in model.relationship_specs),
-        "relationship_candidates_v1": tuple(spec.name for spec in model.relationship_specs),
-        "relationship_decisions_v1": tuple(spec.name for spec in model.relationship_specs),
+        "relationship_quality_metrics": tuple(spec.name for spec in model.relationship_specs),
+        "relationship_ambiguity_report": tuple(spec.name for spec in model.relationship_specs),
+        "relationship_candidates": tuple(spec.name for spec in model.relationship_specs),
+        "relationship_decisions": tuple(spec.name for spec in model.relationship_specs),
     }
 
     def _emit_output_spec(spec: SemanticOutputSpec) -> None:
@@ -857,59 +832,6 @@ def optimize_semantics(
     return prune_ir(optimized, outputs=outputs)
 
 
-def _parse_versioned_name(name: str) -> tuple[str, int | None]:
-    base, sep, suffix = name.rpartition("_v")
-    if sep and suffix.isdigit():
-        return base, int(suffix)
-    return name, None
-
-
-def _validate_schema_migrations(rows: Sequence[object]) -> None:
-    from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
-    from semantics.catalog.dataset_specs import dataset_spec
-    from semantics.migrations import migration_for, migration_skeleton
-    from semantics.schema_diff import diff_contract_specs
-
-    grouped: dict[str, list[tuple[str, int | None]]] = {}
-    for row in rows:
-        row_name = getattr(row, "name", None)
-        if row_name is None:
-            continue
-        base, version = _parse_versioned_name(str(row_name))
-        grouped.setdefault(base, []).append((str(row_name), version))
-
-    for alias, entries in grouped.items():
-        if len(entries) < MIN_VERSIONED_ALIAS_COUNT:
-            continue
-        if any(version is None for _name, version in entries):
-            msg = f"Duplicate semantic dataset alias with unversioned name: {alias!r}."
-            raise ValueError(msg)
-        entries_sorted = sorted(entries, key=lambda item: item[1] or 0)
-        latest_name, _ = entries_sorted[-1]
-        latest_contract = dataset_spec_contract_spec_or_default(dataset_spec(latest_name))
-        for name, _version in entries_sorted:
-            if name == latest_name:
-                continue
-            if migration_for(name, latest_name) is not None:
-                continue
-            diff = diff_contract_specs(
-                dataset_spec_contract_spec_or_default(dataset_spec(name)),
-                latest_contract,
-            )
-            if not diff.is_breaking:
-                continue
-            diff_lines = diff.summary_lines() or ("no schema changes detected",)
-            diff_summary = "\n".join(f"- {line}" for line in diff_lines)
-            skeleton = migration_skeleton(name, latest_name, diff)
-            msg = (
-                f"Missing migration from {name!r} to {latest_name!r} "
-                f"for dataset alias {alias!r}.\n"
-                f"Schema diff:\n{diff_summary}\n\n"
-                f"Suggested skeleton:\n{skeleton}"
-            )
-            raise ValueError(msg)
-
-
 def emit_semantics(ir: SemanticIR) -> SemanticIR:
     """Emit semantic IR artifacts (placeholder).
 
@@ -919,7 +841,6 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
         Emitted semantic IR artifacts.
     """
     dataset_rows = _dataset_rows_for_model(SEMANTIC_MODEL)
-    _validate_schema_migrations(dataset_rows)
     model_hash = semantic_model_fingerprint(SEMANTIC_MODEL)
     ir_hash = semantic_ir_fingerprint(ir)
     return SemanticIR(

@@ -548,7 +548,9 @@ def resolve_dataset_policies(
         datafusion_scan_override=(
             resolved_overrides.datafusion_scan if resolved_overrides is not None else None
         ),
-        delta_policy_override=(resolved_overrides.delta if resolved_overrides is not None else None),
+        delta_policy_override=(
+            resolved_overrides.delta if resolved_overrides is not None else None
+        ),
         validation_override=validation_override,
         dataframe_validation_override=dataframe_validation_override,
     )

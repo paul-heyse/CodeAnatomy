@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 
 _RUN_ID: ContextVar[str | None] = ContextVar("codeanatomy.run_id", default=None)
+_QUERY_ID: ContextVar[str | None] = ContextVar("codeanatomy.query_id", default=None)
 
 
 def get_run_id() -> str | None:
@@ -44,4 +45,50 @@ def clear_run_id() -> None:
     _RUN_ID.set(None)
 
 
-__all__ = ["clear_run_id", "get_run_id", "reset_run_id", "set_run_id"]
+def get_query_id() -> str | None:
+    """Return the current query_id, if set.
+
+    Returns
+    -------
+    str | None
+        Current query identifier or None.
+    """
+    return _QUERY_ID.get()
+
+
+def set_query_id(query_id: str) -> Token[str | None]:
+    """Set the query_id and return the context token.
+
+    Parameters
+    ----------
+    query_id
+        Query identifier to set.
+
+    Returns
+    -------
+    contextvars.Token[str | None]
+        Token used to restore the previous value.
+    """
+    return _QUERY_ID.set(query_id)
+
+
+def reset_query_id(token: Token[str | None]) -> None:
+    """Reset the query_id to the previous value using the token."""
+    _QUERY_ID.reset(token)
+
+
+def clear_query_id() -> None:
+    """Clear the query_id for the current context."""
+    _QUERY_ID.set(None)
+
+
+__all__ = [
+    "clear_query_id",
+    "clear_run_id",
+    "get_query_id",
+    "get_run_id",
+    "reset_query_id",
+    "reset_run_id",
+    "set_query_id",
+    "set_run_id",
+]

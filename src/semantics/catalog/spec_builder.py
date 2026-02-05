@@ -146,9 +146,9 @@ def _bundles_for_row(row: SemanticDatasetRow) -> tuple[FieldBundle, ...]:
 
 
 def _edge_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
-    if row.name not in {"cpg_edges_by_src_v1", "cpg_edges_by_dst_v1"}:
+    if row.name not in {"cpg_edges_by_src", "cpg_edges_by_dst"}:
         return None
-    edge_peer = "dst_node_id" if row.name == "cpg_edges_by_src_v1" else "src_node_id"
+    edge_peer = "dst_node_id" if row.name == "cpg_edges_by_src" else "src_node_id"
     edge_struct = pa.struct(
         [
             pa.field("edge_id", pa.string()),
@@ -225,17 +225,18 @@ def _relationship_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None
     if row.template != "semantic_relationship":
         return None
     type_map = {
+        "entity_id": pa.string(),
         "symbol": pa.string(),
-        "symbol_roles": pa.int32(),
         "path": pa.string(),
         "edge_owner_file_id": pa.string(),
         "bstart": pa.int64(),
         "bend": pa.int64(),
-        "resolution_method": pa.string(),
+        "origin": pa.string(),
         "confidence": pa.float64(),
         "score": pa.float64(),
-        "task_name": pa.string(),
-        "task_priority": pa.int32(),
+        "provider": pa.string(),
+        "rule_name": pa.string(),
+        "ambiguity_group_id": pa.string(),
     }
     specs: list[FieldSpec] = []
     for field_name in row.fields:

@@ -190,28 +190,6 @@ class PlanCacheKey(StructBaseHotPath, frozen=True, array_like=True):
             delta_inputs_hash=self.delta_inputs_hash,
         )
 
-    def legacy_key(self) -> str:
-        """Return the legacy colon-concatenated cache key string.
-
-        Returns
-        -------
-        str
-            Legacy cache key string.
-        """
-        parts = (
-            self.profile_hash,
-            self.substrait_hash,
-            self.plan_fingerprint,
-            self.udf_snapshot_hash,
-            self.function_registry_hash,
-            self.information_schema_hash,
-            self.required_udfs_hash,
-            self.required_rewrite_tags_hash,
-            self.settings_hash,
-            self.delta_inputs_hash,
-        )
-        return "plan:" + ":".join(parts)
-
 
 class PlanCacheEntry(StructBaseHotPath, frozen=True):
     """Cached Substrait plan bytes keyed by profile and Substrait hashes."""
@@ -282,10 +260,6 @@ class PlanCache:
         primary_key = key.as_key()
         value = cache.get(primary_key, default=None, retry=True)
         if value is None:
-            legacy_key = key.legacy_key()
-            if legacy_key != primary_key:
-                value = cache.get(legacy_key, default=None, retry=True)
-        if value is None:
             return None
         if isinstance(value, PlanCacheEntry):
             return value.plan_bytes
@@ -330,10 +304,6 @@ class PlanCache:
         sentinel = object()
         primary_key = key.as_key()
         value = cache.get(primary_key, default=sentinel, retry=True)
-        if value is sentinel:
-            legacy_key = key.legacy_key()
-            if legacy_key != primary_key:
-                value = cache.get(legacy_key, default=sentinel, retry=True)
         return value is not sentinel
 
     def snapshot(self) -> list[PlanCacheEntry]:

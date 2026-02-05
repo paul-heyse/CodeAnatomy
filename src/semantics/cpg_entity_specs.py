@@ -526,7 +526,7 @@ EXPLICIT_CPG_ENTITY_SPECS: tuple[CpgEntitySpec, ...] = (
         name="type_expr",
         node_kind=kind_catalog.NODE_KIND_TYPE_EXPR,
         id_cols=("type_expr_id",),
-        node_table="type_exprs_norm_v1",
+        node_table="type_exprs_norm",
         node_family=NodeFamily.TYPE,
         prop_source_map={
             "expr_text": "expr_text",
@@ -539,7 +539,7 @@ EXPLICIT_CPG_ENTITY_SPECS: tuple[CpgEntitySpec, ...] = (
         name="type",
         node_kind=kind_catalog.NODE_KIND_TYPE,
         id_cols=("type_id",),
-        node_table="type_nodes_v1",
+        node_table="type_nodes",
         node_family=NodeFamily.TYPE,
         prop_source_map={
             "type_repr": "type_repr",

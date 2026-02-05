@@ -66,8 +66,9 @@ cp -f "${plugin_lib}" rust/datafusion_ext_py/plugin/
 
 manylinux_args=()
 if [ "$(uname -s)" = "Linux" ]; then
-  manylinux_args=(--manylinux 2_39)
+  manylinux_args=(--manylinux 2014)
 fi
+compatibility_args=(--compatibility pypi)
 
 datafusion_python_features=("substrait")
 if [ "${CODEANATOMY_SUBSTRAIT_PROTOC:-}" = "1" ]; then
@@ -80,9 +81,9 @@ if [ "${#datafusion_python_features[@]}" -gt 0 ]; then
   datafusion_feature_flags=(--features "${datafusion_feature_csv}")
 fi
 
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 datafusion_wheel="$(ls -1 "${wheel_dir}"/datafusion-*.whl | sort | tail -n 1)"
@@ -106,15 +107,28 @@ wheel_path = Path("${datafusion_wheel}")
 if not wheel_path.exists():
     raise SystemExit(f"DataFusion wheel not found: {wheel_path}")
 
+ext_path = Path("${datafusion_ext_wheel}")
+if not ext_path.exists():
+    raise SystemExit(f"DataFusion-ext wheel not found: {ext_path}")
+
 with tempfile.TemporaryDirectory() as tmpdir:
     with zipfile.ZipFile(wheel_path) as archive:
         archive.extractall(tmpdir)
+    with zipfile.ZipFile(ext_path) as archive:
+        archive.extractall(tmpdir)
     sys.path.insert(0, tmpdir)
+    # Ensure the extension module is importable under the expected package.
+    importlib.import_module("datafusion._internal")
     module = importlib.import_module("datafusion.substrait")
     producer = getattr(module, "Producer", None)
     to_substrait = getattr(producer, "to_substrait_plan", None) if producer else None
     if not callable(to_substrait):
         raise SystemExit("Substrait Producer API missing from built wheel.")
+    ext = importlib.import_module("datafusion_ext")
+    snapshot = getattr(ext, "capabilities_snapshot", None)
+    if not callable(snapshot):
+        raise SystemExit("capabilities_snapshot() missing from datafusion_ext wheel.")
+    snapshot()
 PY
 
 uv run python - <<PY

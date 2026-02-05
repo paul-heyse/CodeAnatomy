@@ -886,7 +886,9 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(spec.task_output)
+        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(
+            spec.task_output
+        )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -944,7 +946,9 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(spec.task_output)
+        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(
+            spec.task_output
+        )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [

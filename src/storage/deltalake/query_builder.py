@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import warnings
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
@@ -20,6 +23,19 @@ class _QueryBuilderProtocol(Protocol):
     ) -> _QueryBuilderProtocol: ...
 
     def execute(self, sql: str) -> RecordBatchReader: ...
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _warn_querybuilder_usage() -> None:
+    msg = (
+        "Delta QueryBuilder is intended for ad-hoc use. Prefer "
+        "SessionContext + Delta TableProvider for production pipelines."
+    )
+    _LOGGER.warning(msg)
+    warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
 
 def _require_query_builder() -> type[_QueryBuilderProtocol]:
@@ -76,6 +92,7 @@ def execute_query(
     RecordBatchReader
         Record batch reader with query results.
     """
+    _warn_querybuilder_usage()
     query_builder_cls = _require_query_builder()
     builder = query_builder_cls()
     for name, table in tables.items():

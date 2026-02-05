@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -57,6 +59,36 @@ try:
     _DEFAULT_OBSERVABILITY_ROOT = Path(__file__).resolve().parents[2] / ".artifacts"
 except IndexError:
     _DEFAULT_OBSERVABILITY_ROOT = Path.cwd() / ".artifacts"
+
+_DELTA_TRACING_LOCK = threading.Lock()
+_DELTA_TRACING_READY = threading.Event()
+_LOGGER = logging.getLogger(__name__)
+
+
+def ensure_delta_tracing() -> tuple[bool, str | None]:
+    """Initialize delta-rs tracing once per process.
+
+    Returns
+    -------
+    tuple[bool, str | None]
+        (installed, error) result.
+    """
+    if _DELTA_TRACING_READY.is_set():
+        return True, None
+    with _DELTA_TRACING_LOCK:
+        if _DELTA_TRACING_READY.is_set():
+            return True, None
+        try:
+            from deltalake import init_tracing
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            return False, str(exc)
+        try:
+            init_tracing()
+        except (RuntimeError, TypeError, ValueError) as exc:  # pragma: no cover - env-dependent
+            _LOGGER.debug("Delta tracing init failed: %s", exc)
+            return False, str(exc)
+        _DELTA_TRACING_READY.set()
+        return True, None
 
 
 class DeltaSnapshotArtifact(StructBaseStrict, frozen=True):

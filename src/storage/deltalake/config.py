@@ -209,6 +209,86 @@ class DeltaSchemaPolicy(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
+class DeltaRetryPolicy(StructBaseStrict, frozen=True):
+    """Retry classification policy for Delta mutations."""
+
+    max_attempts: PositiveInt = 3
+    base_delay_s: PositiveFloat = 0.25
+    max_delay_s: PositiveFloat = 2.0
+    retryable_errors: tuple[NonEmptyStr, ...] = (
+        "ConcurrentAppendException",
+        "ConcurrentTransactionException",
+    )
+    fatal_errors: tuple[NonEmptyStr, ...] = (
+        "MetadataChangedException",
+        "ProtocolChangedException",
+    )
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "max_attempts": self.max_attempts,
+            "base_delay_s": self.base_delay_s,
+            "max_delay_s": self.max_delay_s,
+            "retryable_errors": self.retryable_errors,
+            "fatal_errors": self.fatal_errors,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
+
+class DeltaMutationPolicy(StructBaseStrict, frozen=True):
+    """Mutation safety policy for Delta writes."""
+
+    retry_policy: DeltaRetryPolicy = msgspec.field(default_factory=DeltaRetryPolicy)
+    require_locking_provider: bool = True
+    locking_option_keys: tuple[NonEmptyStr, ...] = (
+        "aws_s3_locking_provider",
+        "s3_locking_provider",
+        "locking_provider",
+    )
+    append_only: bool = False
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return canonical payload for fingerprinting.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Payload used for policy fingerprinting.
+        """
+        return {
+            "retry_policy": self.retry_policy.fingerprint_payload(),
+            "require_locking_provider": self.require_locking_provider,
+            "locking_option_keys": self.locking_option_keys,
+            "append_only": self.append_only,
+        }
+
+    def fingerprint(self) -> str:
+        """Return a stable fingerprint for the policy.
+
+        Returns
+        -------
+        str
+            Fingerprint string for the policy.
+        """
+        return config_fingerprint(self.fingerprint_payload())
+
+
 class StatsColumnsInputs(StructBaseStrict, frozen=True):
     """Inputs for resolving Delta stats columns."""
 
@@ -281,6 +361,8 @@ def delta_schema_configuration(policy: DeltaSchemaPolicy | None) -> dict[str, st
 
 
 __all__ = [
+    "DeltaMutationPolicy",
+    "DeltaRetryPolicy",
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
     "ParquetWriterPolicy",

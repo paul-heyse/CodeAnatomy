@@ -209,23 +209,19 @@ def scan_telemetry_table(rows: Sequence[Mapping[str, object]]) -> TableLike:
                 "scan_columns": payload.get("scan_columns"),
                 "dataset_schema_msgpack": _scan_payload_bytes(
                     payload,
-                    primary="dataset_schema_msgpack",
-                    fallback="dataset_schema_json",
+                    key="dataset_schema_msgpack",
                 ),
                 "projected_schema_msgpack": _scan_payload_bytes(
                     payload,
-                    primary="projected_schema_msgpack",
-                    fallback="projected_schema_json",
+                    key="projected_schema_msgpack",
                 ),
                 "discovery_policy_msgpack": _scan_payload_bytes(
                     payload,
-                    primary="discovery_policy_msgpack",
-                    fallback="discovery_policy_json",
+                    key="discovery_policy_msgpack",
                 ),
                 "scan_profile_msgpack": _scan_payload_bytes(
                     payload,
-                    primary="scan_profile_msgpack",
-                    fallback="scan_profile_json",
+                    key="scan_profile_msgpack",
                 ),
             }
         )
@@ -235,13 +231,10 @@ def scan_telemetry_table(rows: Sequence[Mapping[str, object]]) -> TableLike:
 _SCAN_TELEMETRY_ENCODER = MSGPACK_ENCODER
 
 
-def _scan_payload_bytes(payload: Mapping[str, object], *, primary: str, fallback: str) -> bytes:
-    value = payload.get(primary)
+def _scan_payload_bytes(payload: Mapping[str, object], *, key: str) -> bytes:
+    value = payload.get(key)
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value)
-    legacy = payload.get(fallback)
-    if legacy is not None:
-        return MSGPACK_ENCODER.encode(legacy)
     return MSGPACK_ENCODER.encode({})
 
 

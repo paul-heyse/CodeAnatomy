@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import StringIO
+from typing import cast
 
 from rich.console import Console
 from tools.cq.cli_app.app import app
@@ -47,15 +48,18 @@ def _render_search_summary() -> str:
         elapsed_ms=12.0,
         toolchain={},
     )
-    summary = {
-        "query": "build_graph",
-        "mode": "identifier",
-        "include": ["src/**"],
-        "exclude": ["tests/**"],
-        "pattern": r"\bbuild_graph\b",
-        "caps_hit": "max_total_matches",
-        "scanned_files_is_estimate": False,
-    }
+    summary = cast(
+        "dict[str, object]",
+        {
+            "query": "build_graph",
+            "mode": "identifier",
+            "include": ["src/**"],
+            "exclude": ["tests/**"],
+            "pattern": r"\bbuild_graph\b",
+            "caps_hit": "max_total_matches",
+            "scanned_files_is_estimate": False,
+        },
+    )
     result = CqResult(run=run, summary=summary)
     return render_markdown(result)
 

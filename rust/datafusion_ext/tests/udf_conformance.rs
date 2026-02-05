@@ -155,6 +155,40 @@ fn stable_hash64_coerce_types() -> Result<()> {
 }
 
 #[test]
+fn scalar_udfs_preserve_row_count() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+    let array = Arc::new(StringArray::from(vec![Some("alpha"), None, Some("beta")]))
+        as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+    let batches = run_query(&ctx, "SELECT stable_hash64(value) AS value FROM t")?;
+    let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(total_rows, 3);
+    Ok(())
+}
+
+#[test]
+fn scalar_udf_snapshot_metadata_complete() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
+    for name in snapshot.scalar.iter() {
+        assert!(
+            snapshot.signature_inputs.contains_key(name),
+            "missing signature_inputs for {name}"
+        );
+        assert!(
+            snapshot.return_types.contains_key(name),
+            "missing return_types for {name}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn information_schema_routines_match_snapshot() -> Result<()> {
     let config = SessionConfig::new().with_information_schema(true);
     let ctx = SessionContext::new_with_config(config);

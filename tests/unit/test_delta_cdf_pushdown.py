@@ -81,3 +81,37 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     assert "id" in scan.projected_columns
     assert "value" not in scan.projected_columns
     assert any("id" in expr and ">" in expr for expr in scan.pushed_filters)
+
+
+def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
+    """Expose CDF providers via the execution facade."""
+    from datafusion_engine.dataset.registration import (
+        DatasetRegistrationOptions,
+        register_dataset_df,
+    )
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+    from storage.deltalake import DeltaCdfOptions
+
+    table_path = tmp_path / "cdf_table"
+    _create_cdf_table(table_path)
+    profile = DataFusionRuntimeProfile(
+        features=FeatureGatesConfig(enable_delta_cdf=True),
+    )
+    ctx = profile.session_context()
+    register_dataset_df(
+        ctx,
+        name="cdf_table",
+        location=DatasetLocation(
+            path=table_path,
+            format="delta",
+            delta_cdf_options=DeltaCdfOptions(starting_version=0),
+        ),
+        options=DatasetRegistrationOptions(runtime_profile=profile),
+    )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
+    mapping = facade.register_cdf_inputs(table_names=("cdf_table",))
+    assert mapping["cdf_table"] == "cdf_table__cdf"
+    df = ctx.table(mapping["cdf_table"])
+    assert "id" in df.schema().names

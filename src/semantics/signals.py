@@ -1,7 +1,7 @@
 """File quality view builder for quality-aware relationships.
 
 This module builds aggregated file quality signals from multiple extraction
-sources. The file_quality_v1 view provides per-file quality metrics that
+sources. The file_quality view provides per-file quality metrics that
 can be joined during relationship compilation to adjust confidence scores.
 
 Quality signals include:

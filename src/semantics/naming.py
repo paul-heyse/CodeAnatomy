@@ -1,44 +1,39 @@
 """Canonical output naming policy for semantic views.
 
-This module provides a single source of truth for mapping internal semantic
-view names to their canonical output names with versioning suffixes. All
-modules that need semantic output names should use this mapping to ensure
-consistency.
+This module provides a single source of truth for semantic output names.
+Canonical names are now identical to internal view names (no version suffixes).
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-OUTPUT_VERSION_SUFFIX: Final = "_v1"
-
-# Canonical mapping from internal names to output names.
-# The _v1 suffix indicates schema version for forward compatibility.
+# Canonical mapping from internal names to output names (identity).
 SEMANTIC_OUTPUT_NAMES: Final[dict[str, str]] = {
     # Normalized extraction tables
-    "scip_occurrences_norm": "scip_occurrences_norm_v1",
-    "cst_refs_norm": "cst_refs_norm_v1",
-    "cst_defs_norm": "cst_defs_norm_v1",
-    "cst_imports_norm": "cst_imports_norm_v1",
-    "cst_calls_norm": "cst_calls_norm_v1",
-    "cst_call_args_norm": "cst_call_args_norm_v1",
-    "cst_docstrings_norm": "cst_docstrings_norm_v1",
-    "cst_decorators_norm": "cst_decorators_norm_v1",
+    "scip_occurrences_norm": "scip_occurrences_norm",
+    "cst_refs_norm": "cst_refs_norm",
+    "cst_defs_norm": "cst_defs_norm",
+    "cst_imports_norm": "cst_imports_norm",
+    "cst_calls_norm": "cst_calls_norm",
+    "cst_call_args_norm": "cst_call_args_norm",
+    "cst_docstrings_norm": "cst_docstrings_norm",
+    "cst_decorators_norm": "cst_decorators_norm",
     # Relationship views (semantic joins)
-    "rel_name_symbol": "rel_name_symbol_v1",
-    "rel_def_symbol": "rel_def_symbol_v1",
-    "rel_import_symbol": "rel_import_symbol_v1",
-    "rel_callsite_symbol": "rel_callsite_symbol_v1",
+    "rel_name_symbol": "rel_name_symbol",
+    "rel_def_symbol": "rel_def_symbol",
+    "rel_import_symbol": "rel_import_symbol",
+    "rel_callsite_symbol": "rel_callsite_symbol",
     # Semantic union layer outputs
-    "semantic_nodes_union": "semantic_nodes_union_v1",
-    "semantic_edges_union": "semantic_edges_union_v1",
+    "semantic_nodes_union": "semantic_nodes_union",
+    "semantic_edges_union": "semantic_edges_union",
     # Final CPG outputs
-    "cpg_nodes": "cpg_nodes_v1",
-    "cpg_edges": "cpg_edges_v1",
-    "cpg_props": "cpg_props_v1",
-    "cpg_props_map": "cpg_props_map_v1",
-    "cpg_edges_by_src": "cpg_edges_by_src_v1",
-    "cpg_edges_by_dst": "cpg_edges_by_dst_v1",
+    "cpg_nodes": "cpg_nodes",
+    "cpg_edges": "cpg_edges",
+    "cpg_props": "cpg_props",
+    "cpg_props_map": "cpg_props_map",
+    "cpg_edges_by_src": "cpg_edges_by_src",
+    "cpg_edges_by_dst": "cpg_edges_by_dst",
 }
 
 
@@ -53,7 +48,7 @@ def canonical_output_name(internal_name: str) -> str:
     Returns
     -------
     str
-        The canonical output name with appropriate versioning suffix.
+        The canonical output name.
         Returns the internal name unchanged if no mapping exists.
     """
     canonical = SEMANTIC_OUTPUT_NAMES.get(internal_name)
@@ -68,7 +63,7 @@ def internal_name(output_name: str) -> str:
     Parameters
     ----------
     output_name
-        The canonical output name with versioning suffix.
+        The canonical output name.
 
     Returns
     -------
@@ -98,7 +93,6 @@ def is_semantic_output(name: str) -> bool:
 
 
 __all__ = [
-    "OUTPUT_VERSION_SUFFIX",
     "SEMANTIC_OUTPUT_NAMES",
     "canonical_output_name",
     "internal_name",

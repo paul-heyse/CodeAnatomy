@@ -195,7 +195,9 @@ def run_delta_maintenance_if_configured(
         Log storage options for the Delta table.
     """
     runtime_profile = context.runtime.profile
-    dataset_location = runtime_profile.catalog_ops.dataset_location(dataset_name) if dataset_name else None
+    dataset_location = (
+        runtime_profile.catalog_ops.dataset_location(dataset_name) if dataset_name else None
+    )
     plan = resolve_delta_maintenance_plan(
         DeltaMaintenancePlanInput(
             dataset_location=dataset_location,

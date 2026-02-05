@@ -809,6 +809,37 @@ class DataFusionExecutionFacade:
             cache_policy=cache_policy,
         )
 
+    def register_cdf_inputs(
+        self,
+        *,
+        table_names: Sequence[str],
+    ) -> Mapping[str, str]:
+        """Register Delta CDF-backed inputs for the provided table names.
+
+        Returns
+        -------
+        Mapping[str, str]
+            Mapping from base table names to registered CDF view names.
+
+        Raises
+        ------
+        ValueError
+            Raised when the runtime profile is unavailable or CDF is disabled.
+        """
+        if self.runtime_profile is None:
+            msg = "Runtime profile is required for CDF registration."
+            raise ValueError(msg)
+        if not self.runtime_profile.features.enable_delta_cdf:
+            msg = "Delta CDF registration requires enable_delta_cdf to be True."
+            raise ValueError(msg)
+        from datafusion_engine.delta.cdf import register_cdf_inputs
+
+        return register_cdf_inputs(
+            self.ctx,
+            self.runtime_profile,
+            table_names=table_names,
+        )
+
     def schema_introspector(self) -> SchemaIntrospector:
         """Return a SchemaIntrospector bound to the facade context.
 

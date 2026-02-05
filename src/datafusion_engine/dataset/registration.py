@@ -1637,6 +1637,19 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     provider = resolution.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
     provider_to_register = _provider_for_registration(provider)
+    format_name = location.format or "delta"
+    provider_is_native = _table_provider_capsule(provider_to_register) is not None
+    if format_name == "delta" and not provider_is_native:
+        msg = (
+            "Delta provider registration fell back to a PyArrow dataset; "
+            "FFI TableProvider is required for pushdown and correctness."
+        )
+        if (
+            context.runtime_profile is not None
+            and context.runtime_profile.features.enforce_delta_ffi_provider
+        ):
+            raise RuntimeError(msg)
+        logger.warning(msg)
     if resolution.provider_kind == "delta_cdf":
         adapter.register_delta_cdf_provider(context.name, provider_to_register)
     else:
@@ -1651,6 +1664,9 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     )
     if resolution.provider_kind == "delta_cdf":
         artifact_details = _delta_cdf_artifact_payload(location, resolution=resolution)
+        artifact_details["ffi_table_provider"] = provider_is_native
+        if format_name == "delta" and not provider_is_native:
+            artifact_details["provider_mode"] = "dataset_fallback"
         if fingerprint_details:
             artifact_details.update(fingerprint_details)
         _record_table_provider_artifact(
@@ -1658,7 +1674,9 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             artifact=_TableProviderArtifact(
                 name=context.name,
                 provider=provider,
-                provider_kind="cdf_table_provider",
+                provider_kind="cdf_table_provider"
+                if provider_is_native
+                else "cdf_dataset_fallback",
                 source=None,
                 details=artifact_details,
             ),
@@ -1695,6 +1713,9 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             add_actions=resolution.add_actions,
         ),
     )
+    artifact_details["ffi_table_provider"] = provider_is_native
+    if format_name == "delta" and not provider_is_native:
+        artifact_details["provider_mode"] = "dataset_fallback"
     if fingerprint_details:
         artifact_details.update(fingerprint_details)
     _record_table_provider_artifact(
@@ -1702,7 +1723,9 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         artifact=_TableProviderArtifact(
             name=context.name,
             provider=provider,
-            provider_kind="delta_table_provider",
+            provider_kind="delta_table_provider"
+            if provider_is_native
+            else "delta_dataset_fallback",
             source=None,
             details=artifact_details,
         ),

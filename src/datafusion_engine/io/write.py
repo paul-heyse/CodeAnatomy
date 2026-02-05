@@ -1780,7 +1780,7 @@ class WritePipeline:
         from datafusion_engine.lineage.diagnostics import record_artifact
         from utils.storage_options import merged_storage_options
 
-        table = result.to_table()
+        stream = result.to_arrow_stream()
         storage = merged_storage_options(spec.storage_options, spec.log_storage_options)
         partition_by = list(spec.partition_by) if spec.partition_by else None
         storage_options = dict(storage) if storage else None
@@ -1788,7 +1788,7 @@ class WritePipeline:
             if spec.writer_properties is None:
                 write_deltalake(
                     spec.table_uri,
-                    table,
+                    stream,
                     partition_by=partition_by,
                     mode="overwrite",
                     schema_mode=spec.schema_mode,
@@ -1799,7 +1799,7 @@ class WritePipeline:
             else:
                 write_deltalake(
                     spec.table_uri,
-                    table,
+                    stream,
                     partition_by=partition_by,
                     mode="overwrite",
                     schema_mode=spec.schema_mode,
@@ -1811,7 +1811,7 @@ class WritePipeline:
         elif spec.writer_properties is None:
             write_deltalake(
                 spec.table_uri,
-                table,
+                stream,
                 partition_by=partition_by,
                 mode="append",
                 schema_mode=spec.schema_mode,
@@ -1822,7 +1822,7 @@ class WritePipeline:
         else:
             write_deltalake(
                 spec.table_uri,
-                table,
+                stream,
                 partition_by=partition_by,
                 mode="append",
                 schema_mode=spec.schema_mode,
@@ -1832,6 +1832,7 @@ class WritePipeline:
                 commit_properties=spec.commit_properties,
             )
         if self.runtime_profile is not None:
+            row_count = None
             record_artifact(
                 self.runtime_profile,
                 "delta_write_bootstrap_v1",
@@ -1839,7 +1840,7 @@ class WritePipeline:
                     "event_time_unix_ms": int(time.time() * 1000),
                     "table_uri": spec.table_uri,
                     "mode": spec.mode,
-                    "row_count": table.num_rows,
+                    "row_count": row_count,
                 },
             )
         return DeltaWriteResult(path=spec.table_uri, version=None, report=None)

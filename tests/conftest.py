@@ -171,6 +171,12 @@ def pytest_sessionfinish(session: object, exitstatus: int) -> None:
     """Persist diagnostics at pytest session completion."""
     _write_json(_RESOURCES_PATH, _collect_resources())
     _write_json(_EXTENSIONS_PATH, _collect_extensions())
+    try:
+        from cache.diskcache_factory import close_cache_pool
+    except Exception:
+        close_cache_pool = None
+    if close_cache_pool is not None:
+        close_cache_pool()
     _ = (session, exitstatus)
 
 

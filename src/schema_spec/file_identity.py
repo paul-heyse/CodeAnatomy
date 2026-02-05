@@ -199,14 +199,19 @@ def file_identity_field_specs(
         Tuple of FieldSpec objects for schema_spec bundles.
     """
     from datafusion_engine.arrow import interop
+    from schema_spec.arrow_type_coercion import coerce_arrow_type
 
     specs: list[FieldSpec] = []
     if include_repo:
-        specs.append(FieldSpec(name="repo", dtype=interop.string(), nullable=True))
-    specs.append(FieldSpec(name="file_id", dtype=interop.string()))
-    specs.append(FieldSpec(name="path", dtype=interop.string()))
+        specs.append(
+            FieldSpec(name="repo", dtype=coerce_arrow_type(interop.string()), nullable=True)
+        )
+    specs.append(FieldSpec(name="file_id", dtype=coerce_arrow_type(interop.string())))
+    specs.append(FieldSpec(name="path", dtype=coerce_arrow_type(interop.string())))
     if include_sha256:
-        specs.append(FieldSpec(name="file_sha256", dtype=interop.string()))
+        specs.append(
+            FieldSpec(name="file_sha256", dtype=coerce_arrow_type(interop.string()))
+        )
     return tuple(specs)
 
 

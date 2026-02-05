@@ -48,6 +48,7 @@ import pyarrow as pa
 
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
+from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.evidence_metadata import evidence_metadata_bundle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.file_identity import file_identity_field_specs
@@ -82,8 +83,10 @@ def _byte_span_bundle(prefix: str = "") -> FieldBundle:
     return FieldBundle(
         name=f"{normalized}byte_span" if normalized else "byte_span",
         fields=(
-            FieldSpec(name=f"{normalized}bstart", dtype=interop.int64()),
-            FieldSpec(name=f"{normalized}bend", dtype=interop.int64()),
+            FieldSpec(
+                name=f"{normalized}bstart", dtype=coerce_arrow_type(interop.int64())
+            ),
+            FieldSpec(name=f"{normalized}bend", dtype=coerce_arrow_type(interop.int64())),
         ),
     )
 
@@ -104,7 +107,9 @@ def _structured_span_bundle(prefix: str = "") -> FieldBundle:
     normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
     return FieldBundle(
         name=f"{normalized}span" if normalized else "span",
-        fields=(FieldSpec(name=f"{normalized}span", dtype=SPAN_STORAGE),),
+        fields=(
+            FieldSpec(name=f"{normalized}span", dtype=coerce_arrow_type(SPAN_STORAGE)),
+        ),
     )
 
 
@@ -125,10 +130,18 @@ def _line_col_span_bundle(prefix: str = "") -> FieldBundle:
     return FieldBundle(
         name=f"{normalized}line_col_span" if normalized else "line_col_span",
         fields=(
-            FieldSpec(name=f"{normalized}start_line", dtype=interop.int32()),
-            FieldSpec(name=f"{normalized}start_col", dtype=interop.int32()),
-            FieldSpec(name=f"{normalized}end_line", dtype=interop.int32()),
-            FieldSpec(name=f"{normalized}end_col", dtype=interop.int32()),
+            FieldSpec(
+                name=f"{normalized}start_line", dtype=coerce_arrow_type(interop.int32())
+            ),
+            FieldSpec(
+                name=f"{normalized}start_col", dtype=coerce_arrow_type(interop.int32())
+            ),
+            FieldSpec(
+                name=f"{normalized}end_line", dtype=coerce_arrow_type(interop.int32())
+            ),
+            FieldSpec(
+                name=f"{normalized}end_col", dtype=coerce_arrow_type(interop.int32())
+            ),
         ),
     )
 

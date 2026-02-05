@@ -23,7 +23,7 @@ def test_finalize_df_to_contract_adds_missing_columns() -> None:
     df = ctx.table("partial_defs")
     finalized = _finalize_df_to_contract(ctx, df=df, view_name="dim_exported_defs")
 
-    contract = dataset_spec_contract(dataset_spec("dim_exported_defs_v1"))
+    contract = dataset_spec_contract(dataset_spec("dim_exported_defs"))
     expected_schema = contract.schema
     if hasattr(expected_schema, "names"):
         expected_names = tuple(expected_schema.names)

@@ -12,13 +12,16 @@ from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
 from datafusion_engine.schema.contracts import ContractRegistry, SchemaContract
 from datafusion_engine.session.runtime import DataFusionViewRegistry
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
+from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.field_spec import FieldSpec
 from utils.registry_protocol import Registry
 
 
 def test_contract_registry_implements_protocol() -> None:
     """Ensure ContractRegistry matches the Registry protocol."""
-    column = FieldSpec(name="id", dtype=pa.int32(), nullable=False)
+    column = FieldSpec(
+        name="id", dtype=coerce_arrow_type(pa.int32()), nullable=False
+    )
     contract = SchemaContract(table_name="example", columns=(column,))
     registry = ContractRegistry()
     registry.register_contract(contract)

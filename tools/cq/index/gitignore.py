@@ -34,7 +34,7 @@ def load_gitignore_spec(
     inputs = collect_gitignore_inputs(repo_root, git_dir, repo)
     return cast(
         "GitIgnoreSpec",
-        cast("Any", GitIgnoreSpec).from_lines("gitwildmatch", inputs.patterns),
+        cast("Any", GitIgnoreSpec).from_lines("gitignore", inputs.patterns),
     )
 
 

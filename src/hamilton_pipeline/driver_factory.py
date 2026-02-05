@@ -92,6 +92,57 @@ def _ensure_hamilton_dataframe_types() -> None:
     hamilton_registry.register_types("datafusion", TableLike, None)
 
 
+def _patch_hamilton_file_metadata() -> None:
+    try:
+        from hamilton.io import default_data_loaders as hamilton_loaders
+        from hamilton.io import utils as hamilton_utils
+    except ModuleNotFoundError:
+        return
+
+    if getattr(hamilton_utils, "_codeanatomy_file_meta_patch", False):
+        return
+
+    import time
+    from datetime import UTC, datetime
+    from pathlib import Path
+    from urllib import parse
+
+    def _safe_get_file_metadata(path: object) -> dict[str, object]:
+        if isinstance(path, Path):
+            path = str(path)
+        parsed = parse.urlparse(str(path))
+        size = None
+        scheme = parsed.scheme
+        last_modified = time.time()
+        timestamp = datetime.now(UTC).timestamp()
+        notes = (
+            "File metadata is unsupported for scheme: "
+            f"{scheme} or path: {path} does not exist."
+        )
+
+        is_win_path = parsed.scheme and len(parsed.scheme) == 1 and parsed.scheme.isalpha()
+        if (parsed.scheme == "" or is_win_path) and Path(path).exists():
+            size = Path(path).stat().st_size
+            last_modified = Path(path).stat().st_mtime
+            notes = ""
+
+        return {
+            "file_metadata": {
+                "size": size,
+                "path": path,
+                "last_modified": last_modified,
+                "timestamp": timestamp,
+                "scheme": scheme,
+                "notes": notes,
+                "__version__": "1.0.0",
+            }
+        }
+
+    hamilton_utils.get_file_metadata = _safe_get_file_metadata
+    hamilton_loaders.get_file_metadata = _safe_get_file_metadata
+    hamilton_utils._codeanatomy_file_meta_patch = True
+
+
 def default_modules() -> list[ModuleType]:
     """Return the default Hamilton module set for the pipeline.
 
@@ -1800,6 +1851,7 @@ def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
         Builder wrapper for synchronous drivers.
     """
     _ensure_hamilton_dataframe_types()
+    _patch_hamilton_file_metadata()
     config_payload = plan_ctx.config_payload
     builder = driver.Builder().allow_module_overrides()
     builder = builder.with_modules(*plan_ctx.modules).with_config(config_payload)

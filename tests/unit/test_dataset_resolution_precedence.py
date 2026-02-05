@@ -12,6 +12,7 @@ from datafusion_engine.dataset.registry import (
     resolve_dataset_location,
     resolve_dataset_policies,
 )
+from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.dataset_spec_ops import dataset_spec_schema
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
@@ -29,7 +30,13 @@ from storage.deltalake.config import DeltaSchemaPolicy
 def _table_spec(name: str, field_name: str) -> TableSchemaSpec:
     return TableSchemaSpec(
         name=name,
-        fields=[FieldSpec(name=field_name, dtype=pa.int64(), nullable=False)],
+        fields=[
+            FieldSpec(
+                name=field_name,
+                dtype=coerce_arrow_type(pa.int64()),
+                nullable=False,
+            )
+        ],
     )
 
 

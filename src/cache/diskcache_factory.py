@@ -203,6 +203,16 @@ def default_diskcache_profile() -> DiskCacheProfile:
 _CACHE_POOL: dict[str, Cache | FanoutCache] = {}
 
 
+def close_cache_pool() -> None:
+    """Close all cached DiskCache instances and clear the pool."""
+    for cache in _CACHE_POOL.values():
+        try:
+            cache.close()
+        except Exception:
+            continue
+    _CACHE_POOL.clear()
+
+
 @dataclass(frozen=True)
 class DiskCacheMaintenance:
     """Maintenance result for a cache kind."""
@@ -465,6 +475,7 @@ __all__ = [
     "build_index",
     "bulk_cache_set",
     "cache_for_kind",
+    "close_cache_pool",
     "default_diskcache_profile",
     "diskcache_stats_snapshot",
     "evict_cache_tag",

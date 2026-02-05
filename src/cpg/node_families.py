@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow import interop
+from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle, TableSchemaSpec
 
@@ -45,9 +46,9 @@ def _identity_fields() -> tuple[FieldSpec, ...]:
         Fields for node_id, node_kind, and file_id.
     """
     return (
-        FieldSpec(name="node_id", dtype=interop.string(), nullable=False),
-        FieldSpec(name="node_kind", dtype=interop.string(), nullable=False),
-        FieldSpec(name="file_id", dtype=interop.string(), nullable=True),
+        FieldSpec(name="node_id", dtype=coerce_arrow_type(interop.string()), nullable=False),
+        FieldSpec(name="node_kind", dtype=coerce_arrow_type(interop.string()), nullable=False),
+        FieldSpec(name="file_id", dtype=coerce_arrow_type(interop.string()), nullable=True),
     )
 
 
@@ -59,7 +60,7 @@ def _path_field() -> FieldSpec:
     FieldSpec
         Field for file path.
     """
-    return FieldSpec(name="path", dtype=interop.string(), nullable=True)
+    return FieldSpec(name="path", dtype=coerce_arrow_type(interop.string()), nullable=True)
 
 
 def _span_fields() -> tuple[FieldSpec, ...]:
@@ -71,8 +72,8 @@ def _span_fields() -> tuple[FieldSpec, ...]:
         Fields for byte span columns.
     """
     return (
-        FieldSpec(name="bstart", dtype=interop.int64(), nullable=True),
-        FieldSpec(name="bend", dtype=interop.int64(), nullable=True),
+        FieldSpec(name="bstart", dtype=coerce_arrow_type(interop.int64()), nullable=True),
+        FieldSpec(name="bend", dtype=coerce_arrow_type(interop.int64()), nullable=True),
     )
 
 
@@ -85,8 +86,8 @@ def _treesitter_span_fields() -> tuple[FieldSpec, ...]:
         Fields for tree-sitter byte span columns.
     """
     return (
-        FieldSpec(name="start_byte", dtype=interop.int64(), nullable=True),
-        FieldSpec(name="end_byte", dtype=interop.int64(), nullable=True),
+        FieldSpec(name="start_byte", dtype=coerce_arrow_type(interop.int64()), nullable=True),
+        FieldSpec(name="end_byte", dtype=coerce_arrow_type(interop.int64()), nullable=True),
     )
 
 
@@ -99,8 +100,8 @@ def _task_fields() -> tuple[FieldSpec, ...]:
         Fields for task_name and task_priority.
     """
     return (
-        FieldSpec(name="task_name", dtype=interop.string(), nullable=True),
-        FieldSpec(name="task_priority", dtype=interop.int32(), nullable=True),
+        FieldSpec(name="task_name", dtype=coerce_arrow_type(interop.string()), nullable=True),
+        FieldSpec(name="task_priority", dtype=coerce_arrow_type(interop.int32()), nullable=True),
     )
 
 
@@ -113,10 +114,10 @@ def _scip_range_fields() -> tuple[FieldSpec, ...]:
         Fields for SCIP range columns.
     """
     return (
-        FieldSpec(name="start_line", dtype=interop.int32(), nullable=True),
-        FieldSpec(name="start_char", dtype=interop.int32(), nullable=True),
-        FieldSpec(name="end_line", dtype=interop.int32(), nullable=True),
-        FieldSpec(name="end_char", dtype=interop.int32(), nullable=True),
+        FieldSpec(name="start_line", dtype=coerce_arrow_type(interop.int32()), nullable=True),
+        FieldSpec(name="start_char", dtype=coerce_arrow_type(interop.int32()), nullable=True),
+        FieldSpec(name="end_line", dtype=coerce_arrow_type(interop.int32()), nullable=True),
+        FieldSpec(name="end_char", dtype=coerce_arrow_type(interop.int32()), nullable=True),
     )
 
 
@@ -206,9 +207,9 @@ def _scip_family_fields() -> tuple[FieldSpec, ...]:
         Complete field set for SCIP-derived nodes.
     """
     return (
-        FieldSpec(name="node_id", dtype=interop.string(), nullable=False),
-        FieldSpec(name="node_kind", dtype=interop.string(), nullable=False),
-        FieldSpec(name="symbol", dtype=interop.string(), nullable=False),
+        FieldSpec(name="node_id", dtype=coerce_arrow_type(interop.string()), nullable=False),
+        FieldSpec(name="node_kind", dtype=coerce_arrow_type(interop.string()), nullable=False),
+        FieldSpec(name="symbol", dtype=coerce_arrow_type(interop.string()), nullable=False),
         *_scip_range_fields(),
         *_task_fields(),
     )
@@ -275,8 +276,8 @@ def _runtime_family_fields() -> tuple[FieldSpec, ...]:
         Complete field set for runtime introspection nodes.
     """
     return (
-        FieldSpec(name="node_id", dtype=interop.string(), nullable=False),
-        FieldSpec(name="node_kind", dtype=interop.string(), nullable=False),
+        FieldSpec(name="node_id", dtype=coerce_arrow_type(interop.string()), nullable=False),
+        FieldSpec(name="node_kind", dtype=coerce_arrow_type(interop.string()), nullable=False),
         *_task_fields(),
     )
 

@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+import datafusion as _datafusion
 import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
@@ -59,10 +60,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 
 
-try:
-    from datafusion import _internal as _datafusion_internal
-except ImportError:
-    _datafusion_internal = None
+_datafusion_internal = getattr(_datafusion, "_internal", None)
 
 try:
     from datafusion.substrait import Producer as SubstraitProducer
@@ -1388,6 +1386,57 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
         raise
 
 
+def _encode_substrait_bytes(plan_obj: object) -> bytes:
+    encode = getattr(plan_obj, "encode", None)
+    if not callable(encode):
+        msg = "Substrait plan missing encode method."
+        raise TypeError(msg)
+    try:
+        encoded = encode()
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Failed to encode Substrait plan bytes: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(encoded, (bytes, bytearray)):
+        msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
+        raise TypeError(msg)
+    return bytes(encoded)
+
+
+def _internal_substrait_bytes(
+    ctx: SessionContext,
+    normalized: object,
+) -> bytes | None:
+    if _SUBSTRAIT_INTERNAL is None:
+        return None
+    internal_producer = getattr(_SUBSTRAIT_INTERNAL, "Producer", None)
+    to_substrait = getattr(internal_producer, "to_substrait_plan", None)
+    if not callable(to_substrait):
+        return None
+    raw_plan = getattr(normalized, "_raw_plan", normalized)
+    try:
+        substrait_plan = to_substrait(raw_plan, ctx.ctx)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Failed to encode Substrait plan bytes: {exc}"
+        raise ValueError(msg) from exc
+    return _encode_substrait_bytes(substrait_plan)
+
+
+def _public_substrait_bytes(
+    ctx: SessionContext,
+    normalized: object,
+) -> bytes:
+    to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
+    if not callable(to_substrait):
+        msg = "Substrait producer missing to_substrait_plan."
+        raise TypeError(msg)
+    try:
+        substrait_plan = to_substrait(normalized, ctx)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Failed to encode Substrait plan bytes: {exc}"
+        raise ValueError(msg) from exc
+    return _encode_substrait_bytes(substrait_plan)
+
+
 def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     """Convert an optimized plan to Substrait bytes.
 
@@ -1403,8 +1452,6 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     ------
     ValueError
         Raised when Substrait serialization is unavailable.
-    TypeError
-        Raised when Substrait callables return invalid types.
     """
     if SubstraitProducer is None:
         msg = "Substrait producer is unavailable."
@@ -1413,48 +1460,10 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
         msg = "Substrait serialization requires an optimized logical plan."
         raise ValueError(msg)
     normalized = normalize_substrait_plan(ctx, cast("DataFusionLogicalPlan", optimized))
-
-    def _encode_plan(plan_obj: object) -> bytes:
-        encode = getattr(plan_obj, "encode", None)
-        if not callable(encode):
-            msg = "Substrait plan missing encode method."
-            raise TypeError(msg)
-        try:
-            encoded = encode()
-        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-            msg = f"Failed to encode Substrait plan bytes: {exc}"
-            raise ValueError(msg) from exc
-        if not isinstance(encoded, (bytes, bytearray)):
-            msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
-            raise TypeError(msg)
-        return bytes(encoded)
-
-    if _SUBSTRAIT_INTERNAL is not None:
-        internal_producer = getattr(_SUBSTRAIT_INTERNAL, "Producer", None)
-        to_substrait = getattr(internal_producer, "to_substrait_plan", None)
-        if callable(to_substrait):
-            raw_plan = getattr(normalized, "_raw_plan", normalized)
-            try:
-                substrait_plan = to_substrait(raw_plan, ctx.ctx)
-            except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-                msg = f"Failed to encode Substrait plan bytes: {exc}"
-                raise ValueError(msg) from exc
-            return _encode_plan(substrait_plan)
-
-    # Use Producer.to_substrait_plan(logical_plan, ctx) -> Plan, then Plan.encode() -> bytes
-    if SubstraitProducer is None:
-        msg = "Substrait producer is unavailable."
-        raise ValueError(msg)
-    to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
-    if not callable(to_substrait):
-        msg = "Substrait producer missing to_substrait_plan."
-        raise TypeError(msg)
-    try:
-        substrait_plan = to_substrait(normalized, ctx)
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Failed to encode Substrait plan bytes: {exc}"
-        raise ValueError(msg) from exc
-    return _encode_plan(substrait_plan)
+    internal_bytes = _internal_substrait_bytes(ctx, normalized)
+    if internal_bytes is not None:
+        return internal_bytes
+    return _public_substrait_bytes(ctx, normalized)
 
 
 def _capture_explain_analyze(
@@ -1561,15 +1570,32 @@ def _information_schema_snapshot(
         definition = introspector.table_definition(str(name))
         if definition:
             table_definitions[str(name)] = definition
+    capture_udf_metadata = _capture_udf_metadata_for_plan(session_runtime)
+    routines: Sequence[Mapping[str, object]] = ()
+    parameters: Sequence[Mapping[str, object]] = ()
+    function_catalog: Sequence[Mapping[str, object]] = ()
+    if capture_udf_metadata:
+        try:
+            routines = introspector.routines_snapshot()
+        except (RuntimeError, TypeError, ValueError, Warning):
+            routines = ()
+        try:
+            parameters = introspector.parameters_snapshot()
+        except (RuntimeError, TypeError, ValueError, Warning):
+            parameters = ()
+        try:
+            function_catalog = introspector.function_catalog_snapshot(include_parameters=True)
+        except (RuntimeError, TypeError, ValueError, Warning):
+            function_catalog = ()
     return {
         "df_settings": _df_settings_snapshot(ctx, session_runtime=session_runtime),
         "settings": introspector.settings_snapshot(),
         "tables": tables,
         "schemata": introspector.schemata_snapshot(),
         "columns": introspector.columns_snapshot(),
-        "routines": introspector.routines_snapshot(),
-        "parameters": introspector.parameters_snapshot(),
-        "function_catalog": introspector.function_catalog_snapshot(include_parameters=True),
+        "routines": list(routines),
+        "parameters": list(parameters),
+        "function_catalog": list(function_catalog),
         "table_definitions": table_definitions,
     }
 
@@ -2189,12 +2215,24 @@ def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
     return hash_msgpack_canonical(canonical)
 
 
+def _capture_udf_metadata_for_plan(session_runtime: SessionRuntime | None) -> bool:
+    if session_runtime is None:
+        return False
+    profile = session_runtime.profile
+    return profile.catalog.enable_information_schema and profile.features.enable_udfs
+
+
 def _function_registry_artifacts(
     ctx: SessionContext,
     *,
     session_runtime: SessionRuntime | None,
 ) -> _RegistryArtifacts:
     from datafusion_engine.schema.introspection import SchemaIntrospector
+
+    if not _capture_udf_metadata_for_plan(session_runtime):
+        return _RegistryArtifacts(
+            registry_hash=_function_registry_hash({"functions": []}),
+        )
 
     functions: Sequence[Mapping[str, object]] = ()
     try:
@@ -2208,7 +2246,7 @@ def _function_registry_artifacts(
                 sql_options = None
         introspector = SchemaIntrospector(ctx, sql_options=sql_options)
         functions = introspector.function_catalog_snapshot(include_parameters=True)
-    except (RuntimeError, TypeError, ValueError):
+    except (RuntimeError, TypeError, ValueError, Warning):
         functions = ()
     snapshot: Mapping[str, object] = {"functions": list(functions)}
     return _RegistryArtifacts(
@@ -2222,15 +2260,15 @@ def _udf_artifacts(
     registry_snapshot: Mapping[str, object] | None,
     session_runtime: SessionRuntime | None,
 ) -> _UdfArtifacts:
-    if session_runtime is not None and session_runtime.ctx is ctx:
+    if registry_snapshot is not None:
+        snapshot = registry_snapshot
+    elif session_runtime is not None:
         return _UdfArtifacts(
             snapshot=session_runtime.udf_snapshot,
             snapshot_hash=session_runtime.udf_snapshot_hash,
             rewrite_tags=session_runtime.udf_rewrite_tags,
             domain_planner_names=session_runtime.domain_planner_names,
         )
-    if registry_snapshot is not None:
-        snapshot = registry_snapshot
     else:
         from datafusion_engine.udf.runtime import rust_udf_snapshot
 

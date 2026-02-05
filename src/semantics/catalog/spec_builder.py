@@ -20,7 +20,7 @@ from datafusion_engine.arrow.metadata import (
     ordering_metadata_spec,
 )
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.specs import (
@@ -102,7 +102,7 @@ _SEMANTIC_BUNDLE_CATALOG: dict[str, FieldBundle] = {
     "file_identity": file_identity_bundle(include_sha256=False),
     "span": FieldBundle(
         name="span",
-        fields=(FieldSpec(name="span", dtype=coerce_arrow_type(SPAN_STORAGE)),),
+        fields=(FieldSpec(name="span", dtype=arrow_type_from_pyarrow(SPAN_STORAGE)),),
     ),
 }
 
@@ -168,8 +168,8 @@ def _edge_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
         ]
     )
     return [
-        FieldSpec(name=row.fields[0], dtype=coerce_arrow_type(pa.string())),
-        FieldSpec(name="edges", dtype=coerce_arrow_type(pa.list_(edge_struct))),
+        FieldSpec(name=row.fields[0], dtype=arrow_type_from_pyarrow(pa.string())),
+        FieldSpec(name="edges", dtype=arrow_type_from_pyarrow(pa.list_(edge_struct))),
     ]
 
 
@@ -193,10 +193,10 @@ def _props_map_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
         ]
     )
     return [
-        FieldSpec(name="entity_kind", dtype=coerce_arrow_type(pa.string())),
-        FieldSpec(name="entity_id", dtype=coerce_arrow_type(pa.string())),
-        FieldSpec(name="node_kind", dtype=coerce_arrow_type(pa.string())),
-        FieldSpec(name="props", dtype=coerce_arrow_type(pa.list_(prop_struct))),
+        FieldSpec(name="entity_kind", dtype=arrow_type_from_pyarrow(pa.string())),
+        FieldSpec(name="entity_id", dtype=arrow_type_from_pyarrow(pa.string())),
+        FieldSpec(name="node_kind", dtype=arrow_type_from_pyarrow(pa.string())),
+        FieldSpec(name="props", dtype=arrow_type_from_pyarrow(pa.list_(prop_struct))),
     ]
 
 
@@ -219,7 +219,7 @@ def _scip_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
     return [
         FieldSpec(
             name=field_name,
-            dtype=coerce_arrow_type(type_map.get(field_name, pa.string())),
+            dtype=arrow_type_from_pyarrow(type_map.get(field_name, pa.string())),
         )
         for field_name in row.fields
     ]
@@ -250,7 +250,7 @@ def _relationship_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None
             dtype = pa.float64()
         else:
             dtype = type_map.get(field_name, pa.string())
-        specs.append(FieldSpec(name=field_name, dtype=coerce_arrow_type(dtype)))
+        specs.append(FieldSpec(name=field_name, dtype=arrow_type_from_pyarrow(dtype)))
     return specs
 
 
@@ -269,7 +269,7 @@ def _semantic_normalize_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] 
     return [
         FieldSpec(
             name=field_name,
-            dtype=coerce_arrow_type(
+            dtype=arrow_type_from_pyarrow(
                 field_types.get(field_name, derived_types.get(field_name, pa.string()))
             ),
         )
@@ -291,7 +291,7 @@ def _input_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
     return [
         FieldSpec(
             name=field.name,
-            dtype=coerce_arrow_type(field.type),
+            dtype=arrow_type_from_pyarrow(field.type),
             nullable=field.nullable,
         )
         for field in schema
@@ -318,7 +318,7 @@ def _field_specs_for_row(row: SemanticDatasetRow) -> list[FieldSpec]:
         if specs is not None:
             return specs
     return [
-        FieldSpec(name=field_name, dtype=coerce_arrow_type(pa.string()))
+        FieldSpec(name=field_name, dtype=arrow_type_from_pyarrow(pa.string()))
         for field_name in row.fields
     ]
 

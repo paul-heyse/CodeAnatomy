@@ -144,7 +144,7 @@ from serde_artifacts import (
     WriteArtifactRow,
 )
 from serde_msgspec import dumps_msgpack
-from serde_msgspec_inspect import inspect_to_builtins
+from serde_msgspec_inspect import inspect_to_builtins, stable_stringify
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from utils.hashing import hash_sha256_hex
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
@@ -578,9 +578,17 @@ def schema_contract_index() -> list[dict[str, object]]:
     """
     schema_types = _schema_registry_types()
     type_info = msgspec.inspect.multi_type_info(schema_types)
+
+    def _stable_contract_fallback(value: object) -> str:
+        return stable_stringify(value)
+
     entries: list[dict[str, object]] = []
     for schema_type, info in zip(schema_types, type_info, strict=False):
-        payload = inspect_to_builtins(info, mapping_mode="stringify", fallback=str)
+        payload = inspect_to_builtins(
+            info,
+            mapping_mode="stringify",
+            fallback=_stable_contract_fallback,
+        )
         entries.append({"name": schema_type.__name__, "type_info": payload})
     entries.sort(key=lambda item: cast("str", item.get("name", "")))
     return entries

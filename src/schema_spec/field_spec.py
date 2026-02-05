@@ -10,7 +10,6 @@ import msgspec
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.interop import FieldLike
 from datafusion_engine.arrow.metadata import ENCODING_META
-from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 from serde_msgspec import StructBaseStrict
 
@@ -30,8 +29,16 @@ class FieldSpec(StructBaseStrict, frozen=True):
     encoding: Literal["dictionary"] | None = None
 
     def __post_init__(self) -> None:
-        """Normalize dtype into a serializable ArrowTypeSpec."""
-        object.__setattr__(self, "dtype", coerce_arrow_type(self.dtype))
+        """Validate dtype is a serializable ArrowTypeSpec.
+
+        Raises
+        ------
+        TypeError
+            If dtype is not an ArrowTypeSpec instance.
+        """
+        if not isinstance(self.dtype, ArrowTypeBase):
+            msg = f"FieldSpec.dtype must be ArrowTypeSpec, got {type(self.dtype).__name__}"
+            raise TypeError(msg)
 
     def to_arrow_field(self) -> FieldLike:
         """Build a pyarrow.Field from the spec.

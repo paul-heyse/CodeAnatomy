@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, cast
@@ -9,6 +10,7 @@ from typing import Literal, cast
 import msgspec
 
 _NOT_HANDLED = object()
+_RUNTIME_ADDRESS_RE = re.compile(r" at 0x[0-9A-Fa-f]+")
 
 type MappingMode = Literal["recurse", "stringify"]
 
@@ -31,6 +33,29 @@ def _handle_type_like(obj: object) -> object:
     if callable(obj) and hasattr(obj, "__qualname__"):
         return f"{obj.__module__}.{obj.__qualname__}"
     return _NOT_HANDLED
+
+
+def _normalize_repr(text: str) -> str:
+    """Remove runtime-specific address fragments from repr-like strings."""
+    return _RUNTIME_ADDRESS_RE.sub("", text)
+
+
+def stable_stringify(
+    obj: object,
+    *,
+    fallback: Callable[[object], object] | None = None,
+) -> str:
+    """Stringify values while removing nondeterministic runtime addresses."""
+    type_like = _handle_type_like(obj)
+    if isinstance(type_like, str):
+        return type_like
+    if fallback is None or fallback is stable_stringify:
+        rendered = str(obj)
+    else:
+        rendered = fallback(obj)
+    if not isinstance(rendered, str):
+        rendered = str(rendered)
+    return _normalize_repr(rendered)
 
 
 def _handle_struct(
@@ -74,7 +99,7 @@ def _handle_mapping(
     if not isinstance(obj, Mapping):
         return _NOT_HANDLED
     if mapping_mode == "stringify":
-        return fallback(obj) if fallback is not None else str(obj)
+        return stable_stringify(obj, fallback=fallback)
     obj_id = id(obj)
     seen.add(obj_id)
     items = obj.items()
@@ -127,7 +152,7 @@ def _sequence_payload(
 ) -> object:
     str_keys, mapping_mode, fallback, seen = context
     if mapping_mode == "stringify":
-        return fallback(items) if fallback is not None else str(items)
+        return stable_stringify(items, fallback=fallback)
     obj_id = id(items)
     seen.add(obj_id)
     payload = [
@@ -207,7 +232,9 @@ def inspect_to_builtins(
         result = handler(obj)
         if result is not _NOT_HANDLED:
             return result
-    return fallback(obj) if fallback is not None else obj
+    if fallback is None:
+        return obj
+    return stable_stringify(obj, fallback=fallback)
 
 
-__all__ = ["inspect_to_builtins"]
+__all__ = ["inspect_to_builtins", "stable_stringify"]

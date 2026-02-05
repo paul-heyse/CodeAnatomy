@@ -78,6 +78,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     hamilton_adapters = None
 
 _DEFAULT_DAG_NAME = "codeintel::semantic_v1"
+_HAMILTON_FILE_META_PATCH_STATE: dict[str, bool] = {"patched": False}
 _SEMANTIC_VERSION = "v1"
 _PACKED_REF_FIELDS = 2
 
@@ -99,7 +100,7 @@ def _patch_hamilton_file_metadata() -> None:
     except ModuleNotFoundError:
         return
 
-    if getattr(hamilton_utils, "_codeanatomy_file_meta_patch", False):
+    if _HAMILTON_FILE_META_PATCH_STATE["patched"]:
         return
 
     import time
@@ -108,28 +109,27 @@ def _patch_hamilton_file_metadata() -> None:
     from urllib import parse
 
     def _safe_get_file_metadata(path: object) -> dict[str, object]:
-        if isinstance(path, Path):
-            path = str(path)
-        parsed = parse.urlparse(str(path))
+        path_str = str(path)
+        parsed = parse.urlparse(path_str)
         size = None
         scheme = parsed.scheme
         last_modified = time.time()
         timestamp = datetime.now(UTC).timestamp()
         notes = (
             "File metadata is unsupported for scheme: "
-            f"{scheme} or path: {path} does not exist."
+            f"{scheme} or path: {path_str} does not exist."
         )
 
         is_win_path = parsed.scheme and len(parsed.scheme) == 1 and parsed.scheme.isalpha()
-        if (parsed.scheme == "" or is_win_path) and Path(path).exists():
-            size = Path(path).stat().st_size
-            last_modified = Path(path).stat().st_mtime
+        if (not parsed.scheme or is_win_path) and Path(path_str).exists():
+            size = Path(path_str).stat().st_size
+            last_modified = Path(path_str).stat().st_mtime
             notes = ""
 
         return {
             "file_metadata": {
                 "size": size,
-                "path": path,
+                "path": path_str,
                 "last_modified": last_modified,
                 "timestamp": timestamp,
                 "scheme": scheme,
@@ -140,7 +140,7 @@ def _patch_hamilton_file_metadata() -> None:
 
     hamilton_utils.get_file_metadata = _safe_get_file_metadata
     hamilton_loaders.get_file_metadata = _safe_get_file_metadata
-    hamilton_utils._codeanatomy_file_meta_patch = True
+    _HAMILTON_FILE_META_PATCH_STATE["patched"] = True
 
 
 def default_modules() -> list[ModuleType]:

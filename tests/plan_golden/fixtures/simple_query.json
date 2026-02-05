@@ -1,12 +1,12 @@
 {
   "determinism_audit": {
     "df_settings_hash": "bdd5a76f410eeac66db97cc10dfb8610ba96a75f4afcbc5d1259cc0d082f1762",
-    "function_registry_hash": "cc82c65cb004da0f3b5b9200eb7e5371914caed9fb4662d40c8affd6ee79342e",
-    "information_schema_hash": "9a24109cd5a5be57c8baa9bb720ed138e292aab7b4341dd507e1b7c5ffeb05cc",
-    "plan_fingerprint": "a6f879976fcc723e311559afc74682814649ff870b2699ab8b375c0ba98e1d09",
+    "function_registry_hash": "1783517f0bab14432ad73da4c3a5256bcf92dd2aa0559e6fe8eddf1412f15164",
+    "information_schema_hash": "660f81d56de55aa3e5987a3193dfd7c2f6b16d84a3bcbe95eec3181b34650238",
+    "plan_fingerprint": "5f4d7f186bb13764d0d72cabcb6d5553ef0dca2be7184e8f171ebfbb9feef384",
     "planning_env_hash": "78916891870ff7f11b1697ea495dad31f7b0ac603d972ad6046d24b17071e8a3",
     "rulepack_hash": "6a4a9f47d0de119c5a184c627e41a58d81f5b84c1024ec64ee3218606d82225e",
-    "schema_contract_hash": "54a8281efdf6c9ebd98c3f43c84cc3401d99dbd4651a81e86deeefe56b368305",
+    "schema_contract_hash": "12bbac0ac3d9c5179f383faa5f8355e29a8828333c0fb7aa92548fa436d35651",
     "udf_snapshot_hash": "e6ea082e891ec644ac219fc98527989927515abb2b48de78ed4b58ceac6e0b39"
   },
   "df_settings": {

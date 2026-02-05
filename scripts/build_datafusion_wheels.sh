@@ -65,12 +65,24 @@ mkdir -p rust/datafusion_ext_py/plugin
 cp -f "${plugin_lib}" rust/datafusion_ext_py/plugin/
 
 manylinux_args=()
-if [ "$(uname -s)" = "Linux" ]; then
-  manylinux_args=(--manylinux 2014)
+compatibility="${CODEANATOMY_WHEEL_COMPATIBILITY:-linux}"
+case "${compatibility}" in
+  linux|off|pypi)
+    ;;
+  *)
+    echo "Invalid CODEANATOMY_WHEEL_COMPATIBILITY: ${compatibility}. Use 'linux', 'off', or 'pypi'." >&2
+    exit 1
+    ;;
+esac
+compatibility_args=(--compatibility "${compatibility}")
+if [ "$(uname -s)" = "Linux" ] && [ "${compatibility}" = "pypi" ]; then
+  manylinux_policy="${CODEANATOMY_WHEEL_MANYLINUX:-2014}"
+  if [ "${manylinux_policy}" != "off" ]; then
+    manylinux_args=(--manylinux "${manylinux_policy}")
+  fi
 fi
-compatibility_args=(--compatibility pypi)
 
-datafusion_python_features=("substrait")
+datafusion_python_features=("substrait" "async-udf")
 if [ "${CODEANATOMY_SUBSTRAIT_PROTOC:-}" = "1" ]; then
   datafusion_python_features+=("protoc")
 fi
@@ -125,10 +137,19 @@ with tempfile.TemporaryDirectory() as tmpdir:
     if not callable(to_substrait):
         raise SystemExit("Substrait Producer API missing from built wheel.")
     ext = importlib.import_module("datafusion_ext")
-    snapshot = getattr(ext, "capabilities_snapshot", None)
-    if not callable(snapshot):
-        raise SystemExit("capabilities_snapshot() missing from datafusion_ext wheel.")
-    snapshot()
+    capabilities = getattr(ext, "capabilities_snapshot", None)
+    if callable(capabilities):
+        capabilities()
+    else:
+        snapshot = getattr(ext, "registry_snapshot", None)
+        if not callable(snapshot):
+            raise SystemExit(
+                "Neither capabilities_snapshot() nor registry_snapshot() is available in datafusion_ext."
+            )
+        ctx_builder = getattr(ext, "delta_session_context", None)
+        if not callable(ctx_builder):
+            raise SystemExit("delta_session_context() missing from datafusion_ext wheel.")
+        snapshot(ctx_builder())
 PY
 
 uv run python - <<PY

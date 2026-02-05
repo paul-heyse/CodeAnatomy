@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pytest
 
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
@@ -16,7 +15,6 @@ from tests.test_helpers.optional_deps import (
 )
 
 require_datafusion()
-pytest.importorskip("datafusion_ext")
 require_deltalake()
 require_delta_extension()
 
@@ -25,18 +23,15 @@ def _create_cdf_table(path: Path) -> None:
     from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
-    try:
-        _ = write_delta_table(
-            path.parent,
-            table=table,
-            options=DeltaSeedOptions(
-                profile=df_profile(),
-                table_name=path.name,
-            ),
-        )
-        enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
-    except RuntimeError as exc:
-        pytest.skip(str(exc))
+    _ = write_delta_table(
+        path.parent,
+        table=table,
+        options=DeltaSeedOptions(
+            profile=df_profile(),
+            table_name=path.name,
+        ),
+    )
+    enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
 
 
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:

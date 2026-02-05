@@ -61,7 +61,9 @@ def evidence_metadata_bundle() -> FieldBundle:
                 dtype=arrow_type_from_pyarrow(interop.float64()),
                 nullable=True,
             ),
-            FieldSpec(name="score", dtype=arrow_type_from_pyarrow(interop.float64()), nullable=True),
+            FieldSpec(
+                name="score", dtype=arrow_type_from_pyarrow(interop.float64()), nullable=True
+            ),
             FieldSpec(
                 name="resolution_method",
                 dtype=arrow_type_from_pyarrow(interop.string()),

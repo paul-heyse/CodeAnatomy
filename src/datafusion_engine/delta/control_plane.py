@@ -11,7 +11,6 @@ This module centralizes access to the Rust Delta control plane exposed via
 from __future__ import annotations
 
 import base64
-import importlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
@@ -20,7 +19,10 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.arrow.abi import schema_to_dict
-from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+from datafusion_engine.delta.capabilities import (
+    is_delta_extension_compatible,
+    resolve_delta_extension_module,
+)
 from datafusion_engine.delta.object_store import register_delta_object_store
 from datafusion_engine.delta.payload import (
     cdf_options_payload,
@@ -478,16 +480,12 @@ def _resolve_extension_module(
     object
         Resolved extension module implementing the requested entrypoints.
     """
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if required_attr is not None and not hasattr(module, required_attr):
-            continue
-        if entrypoint is not None and not callable(getattr(module, entrypoint, None)):
-            continue
-        return module
+    resolved = resolve_delta_extension_module(
+        required_attr=required_attr,
+        entrypoint=entrypoint,
+    )
+    if resolved is not None:
+        return resolved.module
     msg = "Delta control-plane operations require datafusion._internal or datafusion_ext."
     raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
 
@@ -520,6 +518,15 @@ def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
     if not compatibility.available:
         msg = "Delta control-plane extension module is unavailable."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    if compatibility.compatible:
+        if compatibility.ctx_kind == "outer":
+            return cast("InternalSessionContext", ctx)
+        if compatibility.ctx_kind == "internal":
+            return cast("InternalSessionContext", internal_ctx)
+        if compatibility.ctx_kind == "fallback":
+            alt_ctx = _fallback_delta_internal_ctx()
+            if alt_ctx is not None:
+                return alt_ctx
     if not compatibility.compatible:
         alt_ctx = _fallback_delta_internal_ctx()
         if alt_ctx is not None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pytest
 
 from datafusion_engine.session.runtime import read_delta_as_reader
 from semantics.incremental.delta_context import DeltaAccessContext
@@ -19,15 +18,9 @@ require_delta_extension()
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    try:
-        runtime = IncrementalRuntime.build()
-        _ = runtime.session_context()
-    except ImportError as exc:
-        pytest.skip(str(exc))
-    else:
-        return runtime
-    msg = "Incremental runtime unavailable."
-    raise RuntimeError(msg)
+    runtime = IncrementalRuntime.build()
+    _ = runtime.session_context()
+    return runtime
 
 
 def test_write_overwrite_dataset_roundtrip(tmp_path: Path) -> None:

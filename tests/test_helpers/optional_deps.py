@@ -5,8 +5,6 @@ from __future__ import annotations
 import importlib
 from types import ModuleType
 
-import pytest
-
 
 def _resolve_datafusion_extension(required: tuple[str, ...]) -> ModuleType | None:
     for module_name in ("datafusion._internal", "datafusion_ext"):
@@ -20,22 +18,32 @@ def _resolve_datafusion_extension(required: tuple[str, ...]) -> ModuleType | Non
 
 
 def require_datafusion() -> ModuleType:
-    """Skip tests when datafusion is unavailable.
+    """Require DataFusion and extension hooks for tests.
 
     Returns
     -------
     ModuleType
         Imported datafusion module.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when DataFusion or required extension hooks are unavailable.
     """
-    datafusion = pytest.importorskip("datafusion")
+    try:
+        datafusion = importlib.import_module("datafusion")
+    except ImportError as exc:
+        msg = "DataFusion is required for this test profile."
+        raise RuntimeError(msg) from exc
     internal = _resolve_datafusion_extension(
         ("install_codeanatomy_policy_config", "install_codeanatomy_physical_config")
     )
     if internal is None:
-        pytest.skip(
-            "DataFusion extension hooks are unavailable; skipping DataFusion tests.",
-            allow_module_level=True,
+        msg = (
+            "DataFusion extension hooks are unavailable. Rebuild rust artifacts via "
+            "`bash scripts/rebuild_rust_artifacts.sh`."
         )
+        raise RuntimeError(msg)
     return datafusion
 
 
@@ -48,43 +56,63 @@ def _fallback_udfs_available() -> bool:
 
 
 def require_datafusion_udfs() -> ModuleType:
-    """Skip tests when DataFusion UDF extensions are unavailable.
+    """Require DataFusion UDF extensions for tests.
 
     Returns
     -------
     ModuleType
         Imported datafusion module.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when UDF support is unavailable and no fallback registry exists.
     """
     datafusion = require_datafusion()
     internal = _resolve_datafusion_extension(("register_codeanatomy_udfs",))
     if internal is None:
         if _fallback_udfs_available():
             return datafusion
-        pytest.skip(
-            "DataFusion build missing codeanatomy UDFs; skipping tests.",
-            allow_module_level=True,
+        msg = (
+            "DataFusion build is missing codeanatomy UDF support. Rebuild rust artifacts via "
+            "`bash scripts/rebuild_rust_artifacts.sh`."
         )
+        raise RuntimeError(msg)
     return datafusion
 
 
 def require_deltalake() -> ModuleType:
-    """Skip tests when deltalake is unavailable.
+    """Require Delta Lake for tests.
 
     Returns
     -------
     ModuleType
         Imported deltalake module.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the ``deltalake`` package is unavailable.
     """
-    return pytest.importorskip("deltalake")
+    try:
+        return importlib.import_module("deltalake")
+    except ImportError as exc:
+        msg = "Delta Lake is required for this test profile."
+        raise RuntimeError(msg) from exc
 
 
 def require_delta_extension() -> ModuleType:
-    """Skip tests when Delta DataFusion extensions are unavailable/incompatible.
+    """Require Delta DataFusion extension support for tests.
 
     Returns
     -------
     ModuleType
         Imported datafusion module.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when Delta extension support is unavailable or incompatible.
     """
     datafusion = require_datafusion()
     from datafusion import SessionContext
@@ -94,13 +122,24 @@ def require_delta_extension() -> ModuleType:
     ctx = SessionContext()
     compatibility = is_delta_extension_compatible(ctx)
     if not compatibility.available:
-        pytest.skip(
-            "Delta extension module unavailable; skipping Delta integration tests.",
-            allow_module_level=True,
+        msg = (
+            "Delta extension module unavailable. Rebuild rust artifacts via "
+            "`bash scripts/rebuild_rust_artifacts.sh`."
         )
+        raise RuntimeError(msg)
     if not compatibility.compatible:
-        message = "Delta extension incompatible; skipping Delta integration tests."
+        details: list[str] = [
+            "Delta extension incompatible for this test profile.",
+            f"entrypoint={compatibility.entrypoint}",
+        ]
+        if compatibility.module is not None:
+            details.append(f"module={compatibility.module}")
+        if compatibility.ctx_kind is not None:
+            details.append(f"ctx_kind={compatibility.ctx_kind}")
+        if compatibility.probe_result is not None:
+            details.append(f"probe_result={compatibility.probe_result}")
         if compatibility.error:
-            message = f"{message} ({compatibility.error})"
-        pytest.skip(message, allow_module_level=True)
+            details.append(f"error={compatibility.error}")
+        details.append("rebuild=`bash scripts/rebuild_rust_artifacts.sh`")
+        raise RuntimeError(" ".join(details))
     return datafusion

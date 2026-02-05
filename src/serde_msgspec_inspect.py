@@ -36,7 +36,13 @@ def _handle_type_like(obj: object) -> object:
 
 
 def _normalize_repr(text: str) -> str:
-    """Remove runtime-specific address fragments from repr-like strings."""
+    """Remove runtime-specific address fragments from repr-like strings.
+
+    Returns
+    -------
+    str
+        Normalized string representation without runtime addresses.
+    """
     return _RUNTIME_ADDRESS_RE.sub("", text)
 
 
@@ -45,14 +51,17 @@ def stable_stringify(
     *,
     fallback: Callable[[object], object] | None = None,
 ) -> str:
-    """Stringify values while removing nondeterministic runtime addresses."""
+    """Stringify values while removing nondeterministic runtime addresses.
+
+    Returns
+    -------
+    str
+        Stable string representation with address fragments removed.
+    """
     type_like = _handle_type_like(obj)
     if isinstance(type_like, str):
         return type_like
-    if fallback is None or fallback is stable_stringify:
-        rendered = str(obj)
-    else:
-        rendered = fallback(obj)
+    rendered = str(obj) if fallback is None or fallback is stable_stringify else fallback(obj)
     if not isinstance(rendered, str):
         rendered = str(rendered)
     return _normalize_repr(rendered)

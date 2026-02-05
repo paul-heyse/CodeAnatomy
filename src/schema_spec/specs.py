@@ -484,9 +484,7 @@ def provenance_bundle() -> FieldBundle:
     return FieldBundle(
         name="provenance",
         fields=(
-            FieldSpec(
-                name=PROVENANCE_COLS[0], dtype=arrow_type_from_pyarrow(interop.string())
-            ),
+            FieldSpec(name=PROVENANCE_COLS[0], dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name=PROVENANCE_COLS[1], dtype=arrow_type_from_pyarrow(interop.int32())),
             FieldSpec(name=PROVENANCE_COLS[2], dtype=arrow_type_from_pyarrow(interop.int32())),
             FieldSpec(name=PROVENANCE_COLS[3], dtype=arrow_type_from_pyarrow(interop.bool_())),

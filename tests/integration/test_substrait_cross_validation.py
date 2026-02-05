@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pyarrow as pa
 import pytest
 
@@ -29,11 +27,7 @@ def test_substrait_cross_validation_match() -> None:
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),
     )
-    if bundle.substrait_bytes is None:
-        pytest.skip("Substrait serialization unavailable.")
-    validation = validate_substrait_plan(bundle.substrait_bytes, df=df)
-    if not isinstance(validation, Mapping):
-        pytest.skip("Substrait validation unavailable.")
-    if validation.get("status") in {"unavailable", "missing_plan"}:
-        pytest.skip("Substrait validation unavailable.")
+    assert bundle.substrait_bytes is not None
+    validation = validate_substrait_plan(bundle.substrait_bytes, df=df, ctx=ctx)
+    assert validation.get("status") == "ok"
     assert validation.get("match") is True

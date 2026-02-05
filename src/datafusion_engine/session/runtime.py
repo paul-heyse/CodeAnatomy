@@ -3163,10 +3163,9 @@ def build_session_runtime(
     """
     cache_key = profile.context_cache_key()
     cached = _SESSION_RUNTIME_CACHE.get(cache_key)
-    if cached is not None and use_cache:
-        # Guard against cache-key collisions across profile variants.
-        if cached.profile == profile:
-            return cached
+    # Guard against cache-key collisions across profile variants.
+    if cached is not None and use_cache and cached.profile == profile:
+        return cached
     ctx = profile.session_context()
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
     from datafusion_engine.udf.catalog import rewrite_tag_index

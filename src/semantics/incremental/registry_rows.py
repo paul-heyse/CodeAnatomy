@@ -182,35 +182,71 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             FieldSpec(name="plan_fingerprint", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="plan_identity_hash", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="udf_snapshot_hash", dtype=arrow_type_from_pyarrow(interop.string())),
-            FieldSpec(name="function_registry_hash", dtype=arrow_type_from_pyarrow(interop.string())),
-            FieldSpec(name="required_udfs", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))),
-            FieldSpec(name="required_rewrite_tags", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))),
-            FieldSpec(name="domain_planner_names", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))),
+            FieldSpec(
+                name="function_registry_hash", dtype=arrow_type_from_pyarrow(interop.string())
+            ),
+            FieldSpec(
+                name="required_udfs", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))
+            ),
+            FieldSpec(
+                name="required_rewrite_tags",
+                dtype=arrow_type_from_pyarrow(interop.list_(interop.string())),
+            ),
+            FieldSpec(
+                name="domain_planner_names",
+                dtype=arrow_type_from_pyarrow(interop.list_(interop.string())),
+            ),
             FieldSpec(name="delta_inputs_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="df_settings", dtype=arrow_type_from_pyarrow(pa.map_(pa.string(), pa.string()))),
+            FieldSpec(
+                name="df_settings", dtype=arrow_type_from_pyarrow(pa.map_(pa.string(), pa.string()))
+            ),
             FieldSpec(name="planning_env_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(name="planning_env_hash", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="rulepack_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(name="rulepack_hash", dtype=arrow_type_from_pyarrow(interop.string())),
-            FieldSpec(name="information_schema_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="information_schema_hash", dtype=arrow_type_from_pyarrow(interop.string())),
+            FieldSpec(
+                name="information_schema_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
+            FieldSpec(
+                name="information_schema_hash", dtype=arrow_type_from_pyarrow(interop.string())
+            ),
             FieldSpec(name="substrait_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="logical_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="optimized_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="execution_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
+            FieldSpec(
+                name="logical_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
+            FieldSpec(
+                name="optimized_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
+            FieldSpec(
+                name="execution_plan_proto_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
             FieldSpec(name="explain_tree_rows_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="explain_verbose_rows_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="explain_analyze_duration_ms", dtype=arrow_type_from_pyarrow(pa.float64())),
-            FieldSpec(name="explain_analyze_output_rows", dtype=arrow_type_from_pyarrow(interop.int64())),
-            FieldSpec(name="substrait_validation_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
+            FieldSpec(
+                name="explain_verbose_rows_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
+            FieldSpec(
+                name="explain_analyze_duration_ms", dtype=arrow_type_from_pyarrow(pa.float64())
+            ),
+            FieldSpec(
+                name="explain_analyze_output_rows", dtype=arrow_type_from_pyarrow(interop.int64())
+            ),
+            FieldSpec(
+                name="substrait_validation_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
             FieldSpec(name="lineage_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(name="scan_units_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="scan_keys", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))),
+            FieldSpec(
+                name="scan_keys", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))
+            ),
             FieldSpec(name="plan_details_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(name="udf_snapshot_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
-            FieldSpec(name="udf_planner_snapshot_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
+            FieldSpec(
+                name="udf_planner_snapshot_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
             FieldSpec(name="udf_compatibility_ok", dtype=arrow_type_from_pyarrow(interop.bool_())),
-            FieldSpec(name="udf_compatibility_detail_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
+            FieldSpec(
+                name="udf_compatibility_detail_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())
+            ),
             FieldSpec(name="execution_duration_ms", dtype=arrow_type_from_pyarrow(pa.float64())),
             FieldSpec(name="execution_status", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="execution_error", dtype=arrow_type_from_pyarrow(interop.string())),
@@ -254,8 +290,12 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             FieldSpec(name="run_id", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="event_name", dtype=arrow_type_from_pyarrow(interop.string())),
             FieldSpec(name="plan_signature", dtype=arrow_type_from_pyarrow(interop.string())),
-            FieldSpec(name="reduced_plan_signature", dtype=arrow_type_from_pyarrow(interop.string())),
-            FieldSpec(name="event_payload_msgpack", dtype=arrow_type_from_pyarrow(interop.binary())),
+            FieldSpec(
+                name="reduced_plan_signature", dtype=arrow_type_from_pyarrow(interop.string())
+            ),
+            FieldSpec(
+                name="event_payload_msgpack", dtype=arrow_type_from_pyarrow(interop.binary())
+            ),
             FieldSpec(name="event_payload_hash", dtype=arrow_type_from_pyarrow(interop.string())),
         ),
         constraints=TableSpecConstraints(

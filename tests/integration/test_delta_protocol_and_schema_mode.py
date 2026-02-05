@@ -19,14 +19,14 @@ require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
 
-try:  # pragma: no cover - skip when native extensions are unavailable
-    import datafusion_ext
-except ImportError:  # pragma: no cover - environment without extensions
-    pytest.skip("datafusion_ext is unavailable", allow_module_level=True)
-if getattr(datafusion_ext, "IS_STUB", False):  # pragma: no cover - stubbed extensions
-    pytest.skip("datafusion_ext stub detected", allow_module_level=True)
+import datafusion_ext
+
+if getattr(datafusion_ext, "IS_STUB", False):
+    msg = "datafusion_ext stub detected; native extension is required."
+    raise RuntimeError(msg)
 if not callable(getattr(datafusion_ext, "delta_write_ipc", None)):
-    pytest.skip("datafusion_ext.delta_write_ipc unavailable", allow_module_level=True)
+    msg = "datafusion_ext.delta_write_ipc unavailable; rebuild Rust artifacts."
+    raise TypeError(msg)
 
 from deltalake import DeltaTable
 

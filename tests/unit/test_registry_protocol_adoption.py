@@ -19,9 +19,7 @@ from utils.registry_protocol import Registry
 
 def test_contract_registry_implements_protocol() -> None:
     """Ensure ContractRegistry matches the Registry protocol."""
-    column = FieldSpec(
-        name="id", dtype=coerce_arrow_type(pa.int32()), nullable=False
-    )
+    column = FieldSpec(name="id", dtype=coerce_arrow_type(pa.int32()), nullable=False)
     contract = SchemaContract(table_name="example", columns=(column,))
     registry = ContractRegistry()
     registry.register_contract(contract)

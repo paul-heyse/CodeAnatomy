@@ -785,22 +785,24 @@ def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpe
 
 def _normalize_option_value(value: object) -> object:
     if isinstance(value, msgspec.Struct):
-        return _normalize_option_value(msgspec.structs.asdict(value))
+        value = msgspec.structs.asdict(value)
     if is_dataclass(value) and not isinstance(value, type):
-        return _normalize_option_value(asdict(value))
+        value = asdict(value)
     if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, dict):
-        normalized: dict[str, object] = {}
-        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
-            normalized[str(key)] = _normalize_option_value(item)
-        return normalized
-    if isinstance(value, set):
+        normalized: object = value.as_posix()
+    elif isinstance(value, dict):
+        normalized = {
+            str(key): _normalize_option_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    elif isinstance(value, set):
         normalized_items = [_normalize_option_value(item) for item in value]
-        return sorted(normalized_items, key=str)
-    if isinstance(value, (tuple, list)):
-        return [_normalize_option_value(item) for item in value]
-    return value
+        normalized = sorted(normalized_items, key=str)
+    elif isinstance(value, (tuple, list)):
+        normalized = [_normalize_option_value(item) for item in value]
+    else:
+        normalized = value
+    return normalized
 
 
 def _stable_repr(value: object) -> str:
@@ -840,6 +842,16 @@ def _encoding_hint(field: ArrowFieldSpec) -> str | None:
     return field.metadata.get(ENCODING_META)
 
 
+def _dictionary_encoding_info(
+    name: str,
+    dtype: DataTypeLike | ArrowTypeSpec,
+) -> tuple[str, DataTypeLike | None, bool | None] | None:
+    if patypes.is_dictionary(dtype):
+        dict_dtype = cast("pa.DictionaryType", dtype)
+        return name, dict_dtype.index_type, dict_dtype.ordered
+    return None
+
+
 def _encoding_info_from_field(
     field: ArrowFieldSpec,
 ) -> tuple[str, DataTypeLike | None, bool | None] | None:
@@ -847,15 +859,10 @@ def _encoding_info_from_field(
     if isinstance(dtype, ArrowTypeBase):
         dtype = arrow_type_to_pyarrow(dtype)
     hint = _encoding_hint(field)
-    if hint != ENCODING_DICTIONARY:
-        if patypes.is_dictionary(dtype):
-            dict_dtype = cast("pa.DictionaryType", dtype)
-            return field.name, dict_dtype.index_type, dict_dtype.ordered
-        return None
-    if patypes.is_dictionary(dtype):
-        dict_dtype = cast("pa.DictionaryType", dtype)
-        return field.name, dict_dtype.index_type, dict_dtype.ordered
-    return field.name, None, None
+    info = _dictionary_encoding_info(field.name, dtype)
+    if hint == ENCODING_DICTIONARY:
+        return info if info is not None else (field.name, None, None)
+    return info
 
 
 def _encoding_info_from_metadata(

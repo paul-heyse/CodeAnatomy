@@ -115,14 +115,16 @@ def resolve_datafusion_scan_options(
     DataFusionScanOptions | None
         Resolved DataFusion scan options.
     """
-    scan = override or (dataset_spec.datafusion_scan if dataset_spec is not None else None)
+    from schema_spec.dataset_spec_ops import dataset_spec_datafusion_scan, dataset_spec_ordering
+
+    scan = override or (dataset_spec_datafusion_scan(dataset_spec) if dataset_spec is not None else None)
     if scan is None:
         return None
     if dataset_spec is None:
         return scan
     if scan.file_sort_order:
         return scan
-    ordering = dataset_spec.ordering()
+    ordering = dataset_spec_ordering(dataset_spec)
     file_sort_order: tuple[tuple[str, str], ...] = ()
     if ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
         file_sort_order = tuple(ordering.keys)
@@ -193,8 +195,12 @@ def resolve_delta_scan_options(
     if dataset_format != "delta":
         return None
     base = _DEFAULT_DELTA_SCAN
-    if dataset_spec is not None and dataset_spec.delta_scan is not None:
-        base = _merge_delta_scan(base, dataset_spec.delta_scan)
+    if dataset_spec is not None:
+        from schema_spec.dataset_spec_ops import dataset_spec_delta_scan
+
+        delta_scan = dataset_spec_delta_scan(dataset_spec)
+        if delta_scan is not None:
+            base = _merge_delta_scan(base, delta_scan)
     return _merge_delta_scan(base, override)
 
 

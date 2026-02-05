@@ -20,6 +20,7 @@ from serde_msgspec_ext import (
     OptimizedPlanProtoBytes,
     SubstraitBytes,
 )
+from serde_msgspec_inspect import inspect_to_builtins
 
 
 class StructBaseStrict(
@@ -315,54 +316,6 @@ def dumps_json_sorted(obj: object, *, pretty: bool = False) -> bytes:
     return msgspec.json.format(raw, indent=2)
 
 
-def _inspect_to_builtins(
-    obj: object,
-    *,
-    str_keys: bool,
-    _seen: set[int] | None = None,
-) -> object:
-    if _seen is None:
-        _seen = set()
-    obj_id = id(obj)
-    if obj_id in _seen:
-        return "..."
-    if obj is msgspec.NODEFAULT:
-        return "NODEFAULT"
-    if obj is ...:
-        return "..."
-    if isinstance(obj, type):
-        return f"{obj.__module__}.{obj.__qualname__}"
-    if callable(obj) and hasattr(obj, "__qualname__"):
-        return f"{obj.__module__}.{obj.__qualname__}"
-    if obj.__class__.__module__ == "msgspec.inspect" or hasattr(obj, "__struct_fields__"):
-        _seen.add(obj_id)
-        payload = {
-            field: _inspect_to_builtins(getattr(obj, field), str_keys=str_keys, _seen=_seen)
-            for field in obj.__struct_fields__
-        }
-        _seen.remove(obj_id)
-        return payload
-    if isinstance(obj, dict):
-        items = obj.items()
-        if str_keys:
-            items = [(str(key), value) for key, value in items]
-        items = sorted(items, key=lambda item: item[0])
-        return {
-            key: _inspect_to_builtins(value, str_keys=str_keys, _seen=_seen) for key, value in items
-        }
-    if isinstance(obj, list):
-        return [_inspect_to_builtins(item, str_keys=str_keys, _seen=_seen) for item in obj]
-    if isinstance(obj, tuple):
-        return tuple(_inspect_to_builtins(item, str_keys=str_keys, _seen=_seen) for item in obj)
-    if isinstance(obj, Path):
-        return str(obj)
-    if isinstance(obj, msgspec.Raw):
-        return bytes(obj).hex()
-    if isinstance(obj, (bytes, bytearray, memoryview)):
-        return bytes(obj).hex()
-    return obj
-
-
 def loads_json[T](buf: bytes | str, *, target_type: type[T], strict: bool = True) -> T:
     """Deserialize JSON bytes into the requested type.
 
@@ -587,11 +540,11 @@ def to_builtins_sorted(obj: object, *, str_keys: bool = True) -> object:
         Builtin-friendly representation with sorted mapping keys.
     """
     if obj.__class__.__module__ == "msgspec.inspect":
-        return _inspect_to_builtins(obj, str_keys=str_keys)
+        return inspect_to_builtins(obj, str_keys=str_keys)
     if isinstance(obj, (list, tuple)) and obj:
         module = obj[0].__class__.__module__
         if module == "msgspec.inspect":
-            return _inspect_to_builtins(obj, str_keys=str_keys)
+            return inspect_to_builtins(obj, str_keys=str_keys)
     return msgspec.to_builtins(
         obj,
         order="sorted",

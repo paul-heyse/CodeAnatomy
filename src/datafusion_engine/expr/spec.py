@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
@@ -72,7 +72,7 @@ class ScalarBytesLiteral(ScalarLiteralBase, tag="bytes", frozen=True):
     data: bytes
 
 
-ScalarLiteralSpec: TypeAlias = (
+type ScalarLiteralSpec = (
     ScalarNullLiteral
     | ScalarBoolLiteral
     | ScalarIntLiteral
@@ -80,59 +80,88 @@ ScalarLiteralSpec: TypeAlias = (
     | ScalarStringLiteral
     | ScalarBytesLiteral
 )
-ScalarLiteralInput: TypeAlias = (
+type ScalarLiteralInput = (
     ScalarLiteralSpec | ScalarLike | bool | int | float | str | bytes | None
 )
-ScalarSpecValue: TypeAlias = ScalarLiteralSpec
+type ScalarSpecValue = ScalarLiteralSpec
+type ScalarLiteralValue = bool | int | float | str | bytes | None
+
+_PY_LITERAL_BUILDERS: tuple[
+    tuple[type[object], Callable[[object], ScalarLiteralSpec]],
+    ...,
+] = (
+    (bool, lambda value: ScalarBoolLiteral(value=cast("bool", value))),
+    (int, lambda value: ScalarIntLiteral(value=cast("int", value))),
+    (float, lambda value: ScalarFloatLiteral(value=cast("float", value))),
+    (bytes, lambda value: ScalarBytesLiteral(data=cast("bytes", value))),
+    (str, lambda value: ScalarStringLiteral(value=cast("str", value))),
+)
+
+_LITERAL_VALUE_GETTERS: dict[type[ScalarLiteralSpec], Callable[[ScalarLiteralSpec], ScalarLiteralValue]] = {
+    ScalarNullLiteral: lambda _literal: None,
+    ScalarBoolLiteral: lambda literal: cast("ScalarBoolLiteral", literal).value,
+    ScalarIntLiteral: lambda literal: cast("ScalarIntLiteral", literal).value,
+    ScalarFloatLiteral: lambda literal: cast("ScalarFloatLiteral", literal).value,
+    ScalarStringLiteral: lambda literal: cast("ScalarStringLiteral", literal).value,
+    ScalarBytesLiteral: lambda literal: cast("ScalarBytesLiteral", literal).data,
+}
+
+
+class ScalarLiteralCodec:
+    """Centralized literal normalization and extraction helpers."""
+
+    @staticmethod
+    def from_input(value: ScalarLiteralInput) -> ScalarLiteralSpec:
+        if isinstance(value, ScalarLiteralBase):
+            return value
+        if value is None:
+            return ScalarNullLiteral()
+        if isinstance(value, ScalarLike):
+            return ScalarLiteralCodec.from_input(value.as_py())
+        for literal_type, builder in _PY_LITERAL_BUILDERS:
+            if isinstance(value, literal_type):
+                return builder(value)
+        msg = f"Unsupported literal value: {type(value).__name__}."
+        raise TypeError(msg)
+
+    @staticmethod
+    def to_value(value: ScalarLiteralInput) -> ScalarLiteralValue:
+        literal = ScalarLiteralCodec.from_input(value)
+        getter = _LITERAL_VALUE_GETTERS.get(type(literal))
+        if getter is None:
+            msg = f"Unsupported literal value: {type(literal).__name__}."
+            raise TypeError(msg)
+        return getter(literal)
 
 
 def scalar_literal(
     value: ScalarLiteralInput,
 ) -> ScalarLiteralSpec:
-    """Return a tagged scalar literal spec for primitive values."""
-    if isinstance(value, ScalarLiteralBase):
-        return value
-    if value is None:
-        return ScalarNullLiteral()
-    if isinstance(value, bool):
-        return ScalarBoolLiteral(value=value)
-    if isinstance(value, int):
-        return ScalarIntLiteral(value=value)
-    if isinstance(value, float):
-        return ScalarFloatLiteral(value=value)
-    if isinstance(value, bytes):
-        return ScalarBytesLiteral(data=value)
-    if isinstance(value, str):
-        return ScalarStringLiteral(value=value)
-    if isinstance(value, ScalarLike):
-        return scalar_literal(value.as_py())
-    msg = f"Unsupported literal value: {type(value).__name__}."
-    raise TypeError(msg)
+    """Return a tagged scalar literal spec for primitive values.
+
+    Returns
+    -------
+    ScalarLiteralSpec
+        Tagged literal specification.
+    """
+    return ScalarLiteralCodec.from_input(value)
 
 
 def scalar_literal_value(
     value: ScalarLiteralInput,
-) -> bool | int | float | str | bytes | None:
-    """Return the Python scalar value for a literal spec."""
-    literal = scalar_literal(value)
-    if isinstance(literal, ScalarNullLiteral):
-        return None
-    if isinstance(literal, ScalarBoolLiteral):
-        return literal.value
-    if isinstance(literal, ScalarIntLiteral):
-        return literal.value
-    if isinstance(literal, ScalarFloatLiteral):
-        return literal.value
-    if isinstance(literal, ScalarStringLiteral):
-        return literal.value
-    if isinstance(literal, ScalarBytesLiteral):
-        return literal.data
-    msg = f"Unsupported literal value: {type(literal).__name__}."
-    raise TypeError(msg)
+) -> ScalarLiteralValue:
+    """Return the Python scalar value for a literal spec.
+
+    Returns
+    -------
+    ScalarLiteralValue
+        Python scalar value extracted from the literal spec.
+    """
+    return ScalarLiteralCodec.to_value(value)
 
 
 def _sql_literal(
-    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+    value: ScalarLiteralSpec | ScalarLike | float | str | bytes | None,
 ) -> str:
     literal = scalar_literal(value)
     if isinstance(literal, ScalarNullLiteral):
@@ -167,6 +196,7 @@ class ExprIR(StructBaseStrict, frozen=True):
     args: tuple[ExprIR, ...] = ()
 
     def __post_init__(self) -> None:
+        """Normalize literal values into canonical tagged specs."""
         object.__setattr__(self, "value", scalar_literal(self.value))
 
     def to_sql(self) -> str:

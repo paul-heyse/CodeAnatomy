@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datafusion import SessionContext
 
+from schema_spec.dataset_spec_ops import dataset_spec_contract
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.pipeline import _finalize_df_to_contract
 
@@ -22,7 +23,7 @@ def test_finalize_df_to_contract_adds_missing_columns() -> None:
     df = ctx.table("partial_defs")
     finalized = _finalize_df_to_contract(ctx, df=df, view_name="dim_exported_defs_v1")
 
-    contract = dataset_spec("dim_exported_defs_v1").contract()
+    contract = dataset_spec_contract(dataset_spec("dim_exported_defs_v1"))
     expected_schema = contract.schema
     if hasattr(expected_schema, "names"):
         expected_names = tuple(expected_schema.names)

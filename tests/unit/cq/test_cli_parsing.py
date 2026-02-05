@@ -188,3 +188,30 @@ class TestReportCommandParsing:
         assert opts.in_dir == "src/"
         assert opts.param == "config"
         assert opts.signature == "foo(a, b)"
+
+
+class TestRunCommandParsing:
+    """Tests for run command parsing."""
+
+    def test_run_with_step(self) -> None:
+        """Test parsing run command with --step."""
+        _cmd, bound, _extra = app.parse_args(
+            ["run", "--step", '{"type":"q","query":"entity=function name=main"}'],
+            exit_on_error=False,
+            print_error=False,
+        )
+        opts = bound.kwargs["opts"]
+        assert opts.step
+
+
+class TestChainCommandParsing:
+    """Tests for chain command parsing."""
+
+    def test_chain_basic(self) -> None:
+        """Test parsing chain command tokens."""
+        _cmd, bound, _extra = app.parse_args(
+            ["chain", "q", "entity=function name=main", "AND", "calls", "main"],
+            exit_on_error=False,
+            print_error=False,
+        )
+        assert bound.args

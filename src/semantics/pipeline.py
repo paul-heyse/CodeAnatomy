@@ -414,11 +414,12 @@ def _finalize_df_to_contract(
     from datafusion import col, lit
 
     from datafusion_engine.expr.cast import safe_cast
+    from schema_spec.dataset_spec_ops import dataset_spec_contract
     from semantics.catalog.dataset_specs import dataset_spec
 
     _ = ctx
     spec = dataset_spec(view_name)
-    contract = spec.contract()
+    contract = dataset_spec_contract(spec)
     target_schema = contract.schema
     existing = set(df.schema().names)
     selections = [
@@ -1056,25 +1057,29 @@ def _cpg_output_view_specs(
             spec = dataset_spec(view_name)
         except KeyError:
             return df
+        from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
+
         policy = spec.policies.dataframe_validation
         constraints: tuple[str, ...] = ()
         if spec.contract_spec is not None:
             constraints = tuple(spec.contract_spec.constraints)
-        if spec.delta_constraints:
-            constraints = (*constraints, *spec.delta_constraints)
+        delta_constraints = dataset_spec_delta_constraints(spec)
+        if delta_constraints:
+            constraints = (*constraints, *delta_constraints)
         diagnostics = None
         if profile is not None:
             diagnostics = profile.diagnostics.diagnostics_sink
-        from schema_spec.pandera_bridge import validate_with_policy
+        from schema_spec.pandera_bridge import DataframeValidationRequest, validate_with_policy
 
-        return validate_with_policy(
-            df,
+        request = DataframeValidationRequest(
+            df=df,
             schema_spec=spec.table_spec,
             policy=policy,
             constraints=constraints,
             diagnostics=diagnostics,
             name=view_name,
         )
+        return validate_with_policy(request)
 
     def _wrap_cpg_builder(
         view_name: str,
@@ -1573,6 +1578,12 @@ def _semantic_output_locations(
         Mapping of view name to dataset location.
     """
     from datafusion_engine.dataset.registry import DatasetLocation
+    from schema_spec.dataset_spec_ops import (
+        dataset_spec_delta_feature_gate,
+        dataset_spec_delta_maintenance_policy,
+        dataset_spec_delta_schema_policy,
+        dataset_spec_delta_write_policy,
+    )
     from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_specs import dataset_spec
 
@@ -1592,10 +1603,10 @@ def _semantic_output_locations(
             dataset_spec=spec,
             overrides=DatasetLocationOverrides(
                 delta=DeltaPolicyBundle(
-                    write_policy=spec.delta_write_policy,
-                    schema_policy=spec.delta_schema_policy,
-                    maintenance_policy=spec.delta_maintenance_policy,
-                    feature_gate=spec.delta_feature_gate,
+                    write_policy=dataset_spec_delta_write_policy(spec),
+                    schema_policy=dataset_spec_delta_schema_policy(spec),
+                    maintenance_policy=dataset_spec_delta_maintenance_policy(spec),
+                    feature_gate=dataset_spec_delta_feature_gate(spec),
                 ),
             ),
         )
@@ -1656,27 +1667,27 @@ def _write_semantic_output(
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
     from datafusion_engine.io.write import WriteFormat, WriteMode, WriteViewRequest
     from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+    from schema_spec.dataset_spec_ops import (
+        dataset_spec_delta_maintenance_policy,
+        dataset_spec_delta_schema_policy,
+        dataset_spec_delta_write_policy,
+    )
     from semantics.catalog.dataset_specs import dataset_spec
 
-    ctx = write_context.ctx
-    pipeline = write_context.pipeline
-    runtime_profile = write_context.runtime_profile
-    runtime_config = write_context.runtime_config
-    schema_policy = write_context.schema_policy
     spec = dataset_spec(view_name)
     location = apply_delta_store_policy(
         output_location,
-        policy=runtime_profile.policies.delta_store_policy,
+        policy=write_context.runtime_profile.policies.delta_store_policy,
     )
     if location.format != "delta":
         msg = f"Semantic output {view_name!r} must be stored as Delta."
         raise ValueError(msg)
-    df = ctx.table(view_name)
-    schema = arrow_schema_from_df(df)
-    resolved_schema_policy = schema_policy
-    if spec.delta_schema_policy is not None and spec.delta_schema_policy.schema_mode == "merge":
+    schema = arrow_schema_from_df(write_context.ctx.table(view_name))
+    resolved_schema_policy = write_context.schema_policy
+    delta_schema_policy = dataset_spec_delta_schema_policy(spec)
+    if delta_schema_policy is not None and delta_schema_policy.schema_mode == "merge":
         resolved_schema_policy = SchemaEvolutionPolicy(mode="additive")
-    if not runtime_config.schema_evolution_enabled:
+    if not write_context.runtime_config.schema_evolution_enabled:
         resolved_schema_policy = SchemaEvolutionPolicy(mode="strict")
     schema_hash = enforce_schema_policy(
         expected_schema=schema,
@@ -1691,16 +1702,15 @@ def _write_semantic_output(
 
     if view_name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
         commit_metadata["snapshot_kind"] = view_name
+    delta_write_policy = dataset_spec_delta_write_policy(spec)
     format_options: dict[str, object] = {
         "delta_commit_metadata": commit_metadata,
-        "delta_write_policy": spec.delta_write_policy,
-        "delta_schema_policy": spec.delta_schema_policy,
-        "delta_maintenance_policy": spec.delta_maintenance_policy,
+        "delta_write_policy": delta_write_policy,
+        "delta_schema_policy": delta_schema_policy,
+        "delta_maintenance_policy": dataset_spec_delta_maintenance_policy(spec),
     }
-    partition_by = (
-        tuple(spec.delta_write_policy.partition_by) if spec.delta_write_policy is not None else ()
-    )
-    pipeline.write_view(
+    partition_by = tuple(delta_write_policy.partition_by) if delta_write_policy is not None else ()
+    write_context.pipeline.write_view(
         WriteViewRequest(
             view_name=view_name,
             destination=str(location.path),

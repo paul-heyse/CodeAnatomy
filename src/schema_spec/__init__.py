@@ -196,11 +196,9 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    # Schema spec exports
     "DICT_STRING",
     "ENCODING_DICTIONARY",
     "ENCODING_META",
-    # Evidence metadata canonical fields and helpers
     "EVIDENCE_METADATA_FIELDS",
     "KEY_FIELDS_META",
     "PROVENANCE_COLS",
@@ -210,7 +208,6 @@ __all__ = [
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
     "ArrowValidationOptions",
-    "ValidationPolicySpec",
     "ContractCatalogSpec",
     "ContractSpec",
     "DatasetHandle",
@@ -226,12 +223,12 @@ __all__ = [
     "FieldBundle",
     "FieldSpec",
     "NestedFieldSpec",
-    # Nested type builders
     "NestedTypeBuilder",
     "SortKeySpec",
     "TableSchemaContract",
     "TableSchemaSpec",
     "TableSpecConstraints",
+    "ValidationPolicySpec",
     "ViewSchemaMismatchError",
     "ViewSpec",
     "VirtualFieldSpec",

@@ -361,15 +361,18 @@ def _extra_evidence_names(
 ) -> tuple[str, ...]:
     if extra_evidence is None:
         return ()
+    from schema_spec.dataset_spec_ops import dataset_spec_name
+
     names: set[str] = set()
     for item in extra_evidence:
         if isinstance(item, str):
             if item:
                 names.add(item)
             continue
-        name = getattr(item, "name", None)
-        if isinstance(name, str) and name:
-            names.add(name)
+        if isinstance(item, DatasetSpec):
+            name = dataset_spec_name(item)
+            if name:
+                names.add(name)
             continue
         msg = "Extra evidence must be strings or dataset specs with a name."
         raise TypeError(msg)

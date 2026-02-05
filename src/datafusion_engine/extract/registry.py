@@ -16,6 +16,7 @@ from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract.templates import config
 from datafusion_engine.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
+from schema_spec.dataset_spec_ops import dataset_spec_encoding_policy
 from schema_spec.system import (
     DatasetSpec,
     DeltaCdfPolicy,
@@ -224,7 +225,9 @@ def dataset_schema_policy(
     spec = dataset_spec(name)
     return schema_policy_factory(
         spec.table_spec,
-        options=SchemaPolicyOptions(encoding=spec.encoding_policy() if enable_encoding else None),
+        options=SchemaPolicyOptions(
+            encoding=dataset_spec_encoding_policy(spec) if enable_encoding else None
+        ),
     )
 
 

@@ -9,6 +9,11 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.schema.registry import is_extract_nested_dataset
+from schema_spec.dataset_spec_ops import (
+    dataset_spec_name,
+    dataset_spec_resolved_view_specs,
+    dataset_spec_schema,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
@@ -45,7 +50,7 @@ class DatasetHandle:
         ValueError
             Raised when the dataset naming or versioning is invalid.
         """
-        name = self.spec.name
+        name = dataset_spec_name(self.spec)
         if not name:
             msg = "DatasetHandle requires a non-empty dataset name."
             raise ValueError(msg)
@@ -74,7 +79,7 @@ class DatasetHandle:
         SchemaLike
             Arrow schema for the dataset.
         """
-        return self.spec.schema()
+        return dataset_spec_schema(self.spec)
 
     def register(
         self,
@@ -103,13 +108,13 @@ class DatasetHandle:
 
         return register_dataset_df(
             session_runtime.ctx,
-            name=self.spec.name,
+            name=dataset_spec_name(self.spec),
             location=location,
             options=DatasetRegistrationOptions(runtime_profile=session_runtime.profile),
         )
 
+    @staticmethod
     def register_views(
-        self,
         session_runtime: SessionRuntime,
         *,
         validate: bool = True,
@@ -134,7 +139,7 @@ class DatasetHandle:
         tuple[ViewSpec, ...]
             View specifications for the dataset.
         """
-        return self.spec.resolved_view_specs()
+        return dataset_spec_resolved_view_specs(self.spec)
 
 
 __all__ = ["DatasetHandle"]

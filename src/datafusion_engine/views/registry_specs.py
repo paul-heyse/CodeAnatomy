@@ -280,9 +280,10 @@ def view_graph_nodes(
 
 
 def _semantic_dataset_specs() -> dict[str, DatasetSpec]:
+    from schema_spec.dataset_spec_ops import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
-    return {spec.name: spec for spec in dataset_specs()}
+    return {dataset_spec_name(spec): spec for spec in dataset_specs()}
 
 
 def _dataset_contract_for(
@@ -293,7 +294,9 @@ def _dataset_contract_for(
     dataset_spec = dataset_specs.get(name)
     if dataset_spec is None:
         return None, False
-    return _arrow_schema_from_contract(dataset_spec.schema()), True
+    from schema_spec.dataset_spec_ops import dataset_spec_schema
+
+    return _arrow_schema_from_contract(dataset_spec_schema(dataset_spec)), True
 
 
 def _nested_view_nodes(

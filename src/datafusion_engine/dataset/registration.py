@@ -1570,7 +1570,9 @@ def _delta_pruning_predicate(
     dataset_spec = _resolve_dataset_spec(context.name, context.location)
     if dataset_spec is None:
         return None, None
-    query_spec = dataset_spec.query()
+    from schema_spec.dataset_spec_ops import dataset_spec_query
+
+    query_spec = dataset_spec_query(dataset_spec)
     predicate = query_spec.pushdown_predicate or query_spec.predicate
     if predicate is None:
         return None, None

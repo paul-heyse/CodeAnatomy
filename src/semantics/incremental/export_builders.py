@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 
 def _empty_exported_defs(ctx: SessionContext) -> DataFrame:
-    schema_like = dataset_spec("dim_exported_defs_v1").schema()
+    from schema_spec.dataset_spec_ops import dataset_spec_schema
+
+    schema_like = dataset_spec_schema(dataset_spec("dim_exported_defs_v1"))
     schema = cast("pa.Schema", schema_like)
     table = cast("pa.Table", empty_table(schema))
     return ctx.from_arrow(table)

@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
 def _load_payload(path: Path) -> dict[str, dict[str, object]]:
-    payload = json.loads(path.read_text())
+    payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         msg = f"Expected JSON object in {path}."
-        raise ValueError(msg)
+        raise TypeError(msg)
     views = payload.get("views")
     if isinstance(views, dict):
         return {str(name): dict(value) for name, value in views.items() if isinstance(value, dict)}
@@ -58,11 +59,11 @@ def main() -> int:
     after = _load_payload(args.after)
     changed = _diff_views(before, after)
     if not changed:
-        print("Semantic plan fingerprints unchanged.")
+        sys.stdout.write("Semantic plan fingerprints unchanged.\n")
         return 0
-    print("Semantic plan fingerprints changed:")
+    sys.stdout.write("Semantic plan fingerprints changed:\n")
     for name in changed:
-        print(f"- {name}")
+        sys.stdout.write(f"- {name}\n")
     return 2
 
 

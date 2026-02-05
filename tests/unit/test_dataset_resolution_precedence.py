@@ -12,6 +12,7 @@ from datafusion_engine.dataset.registry import (
     resolve_dataset_location,
     resolve_dataset_policies,
 )
+from schema_spec.dataset_spec_ops import dataset_spec_schema
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
@@ -98,7 +99,7 @@ def test_resolved_location_uses_dataset_spec_when_no_override() -> None:
     resolved = resolve_dataset_location(location)
 
     assert resolved.delta_schema_policy == base_policy
-    assert resolved.schema == dataset_spec.schema()
+    assert resolved.schema == dataset_spec_schema(dataset_spec)
 
 
 def test_scan_policy_applies_listing_defaults() -> None:

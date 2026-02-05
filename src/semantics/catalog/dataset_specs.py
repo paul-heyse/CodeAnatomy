@@ -180,6 +180,7 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
     dataset_aliases = _CACHE.dataset_aliases
     aliases_to_name = _CACHE.aliases_to_name
     if dataset_aliases is None or aliases_to_name is None:
+        from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
         from semantics.migrations import migration_for, migration_skeleton
         from semantics.schema_diff import diff_contract_specs
 
@@ -203,7 +204,7 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
                 raise ValueError(msg)
 
             latest_name, _latest_version = max(entries, key=lambda item: item[1] or 0)
-            latest_contract = dataset_spec(latest_name).contract_spec_or_default()
+            latest_contract = dataset_spec_contract_spec_or_default(dataset_spec(latest_name))
             for name, _version in entries:
                 aliases[name] = alias
                 if name == latest_name:
@@ -211,7 +212,7 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
                 if migration_for(name, latest_name) is not None:
                     continue
                 diff = diff_contract_specs(
-                    dataset_spec(name).contract_spec_or_default(),
+                    dataset_spec_contract_spec_or_default(dataset_spec(name)),
                     latest_contract,
                 )
                 if not diff.is_breaking:
@@ -288,8 +289,10 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Dataset schema with metadata.
     """
+    from schema_spec.dataset_spec_ops import dataset_spec_schema
+
     spec = dataset_spec(name)
-    return spec.schema()
+    return dataset_spec_schema(spec)
 
 
 def dataset_input_schema(name: str) -> SchemaLike:
@@ -420,8 +423,10 @@ def dataset_contract(
     ContractSpec
         Contract specification for the dataset.
     """
+    from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
+
     spec = dataset_spec(name, ctx=ctx)
-    return spec.contract_spec_or_default()
+    return dataset_spec_contract_spec_or_default(spec)
 
 
 def dataset_contract_schema(name: str) -> SchemaLike:

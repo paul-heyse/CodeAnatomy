@@ -126,7 +126,7 @@ def false_predicate() -> ExprSpec:
     ExprSpec
         Expression spec that evaluates to false.
     """
-    return ExprSpec(expr_ir=ExprIR(op="literal", value=scalar_literal(False)))
+    return ExprSpec(expr_ir=ExprIR(op="literal", value=scalar_literal(value=False)))
 
 
 def in_set_expr(name: str, values: Sequence[str]) -> ExprSpec:

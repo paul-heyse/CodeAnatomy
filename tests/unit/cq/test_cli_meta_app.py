@@ -85,6 +85,22 @@ class TestCommandRegistration:
             print_error=False,
         )
 
+    def test_run_command_parse(self) -> None:
+        """Test that run command can be parsed."""
+        _cmd, _bound, _ignored = app.parse_args(
+            ["run", "--step", '{"type":"q","query":"entity=function name=foo"}'],
+            exit_on_error=False,
+            print_error=False,
+        )
+
+    def test_chain_command_parse(self) -> None:
+        """Test that chain command can be parsed."""
+        _cmd, _bound, _ignored = app.parse_args(
+            ["chain", "q", "entity=function name=foo", "AND", "calls", "foo"],
+            exit_on_error=False,
+            print_error=False,
+        )
+
 
 class TestContextInjection:
     """Tests for context injection via parse=False."""

@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tests.e2e.cq._support.goldens import assert_json_snapshot, load_golden_query_spec
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
+
+from tests.e2e.cq._support.goldens import assert_json_snapshot, load_golden_query_spec
 
 
 @pytest.fixture

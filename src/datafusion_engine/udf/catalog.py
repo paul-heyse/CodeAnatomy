@@ -834,8 +834,10 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
 
         Raises
         ------
+        TypeError
+            Raised when the snapshot payload has invalid types.
         ValueError
-            Raised when the snapshot payload is invalid or mismatched.
+            Raised when the snapshot payload is mismatched.
         """
         if isinstance(snapshot, UdfCatalogSnapshot):
             specs = snapshot.specs
@@ -844,7 +846,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
             specs = snapshot.get("specs")
             if not isinstance(specs, Mapping):
                 msg = "UdfCatalogAdapter snapshot missing specs mapping."
-                raise ValueError(msg)
+                raise TypeError(msg)
             snapshot_hash = snapshot.get("function_factory_hash")
         if (
             snapshot_hash is not None
@@ -866,7 +868,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
                 resolved_specs[str(key)] = DataFusionUdfSpec.from_snapshot(value)
             else:
                 msg = f"UdfCatalogAdapter snapshot has unsupported spec type: {type(value)}."
-                raise ValueError(msg)
+                raise TypeError(msg)
         self.catalog.replace_custom_specs(resolved_specs)
 
 

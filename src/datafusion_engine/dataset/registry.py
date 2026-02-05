@@ -529,7 +529,9 @@ def _resolve_dataset_schema_internal(
     if table_spec is not None:
         return table_spec.to_arrow_schema()
     if location.dataset_spec is not None:
-        return location.dataset_spec.schema()
+        from schema_spec.dataset_spec_ops import dataset_spec_schema
+
+        return dataset_spec_schema(location.dataset_spec)
     if location.format == "delta":
         from datafusion_engine.delta.service import delta_service_for_profile
 

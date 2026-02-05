@@ -743,7 +743,13 @@ def _prepare_plan_context(
 def _dataset_spec_map(session: SessionContext) -> Mapping[str, DatasetSpec]:
     dataset_specs = known_dataset_specs(ctx=session)
     semantic_outputs = _semantic_output_names()
-    return {spec.name: spec for spec in dataset_specs if spec.name not in semantic_outputs}
+    from schema_spec.dataset_spec_ops import dataset_spec_name
+
+    return {
+        dataset_spec_name(spec): spec
+        for spec in dataset_specs
+        if dataset_spec_name(spec) not in semantic_outputs
+    }
 
 
 def _semantic_output_names() -> set[str]:

@@ -29,6 +29,7 @@ from datafusion_engine.arrow.metadata import (
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.schema.policy import CastErrorPolicy, SchemaTransform
+from schema_spec.arrow_type_coercion import coerce_arrow_type
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from serde_msgspec import StructBaseStrict
@@ -444,8 +445,8 @@ def prefixed_span_bundle(prefix: str) -> FieldBundle:
     if prefix and not prefix.endswith("_"):
         normalized = f"{prefix}_"
     fields = (
-        FieldSpec(name=f"{normalized}bstart", dtype=interop.int64()),
-        FieldSpec(name=f"{normalized}bend", dtype=interop.int64()),
+        FieldSpec(name=f"{normalized}bstart", dtype=coerce_arrow_type(interop.int64())),
+        FieldSpec(name=f"{normalized}bend", dtype=coerce_arrow_type(interop.int64())),
     )
     return FieldBundle(name=f"{prefix}span", fields=fields)
 
@@ -460,13 +461,15 @@ def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBu
     """
     normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
     fields = [
-        FieldSpec(name=f"{normalized}start_line", dtype=interop.int32()),
-        FieldSpec(name=f"{normalized}start_char", dtype=interop.int32()),
-        FieldSpec(name=f"{normalized}end_line", dtype=interop.int32()),
-        FieldSpec(name=f"{normalized}end_char", dtype=interop.int32()),
+        FieldSpec(name=f"{normalized}start_line", dtype=coerce_arrow_type(interop.int32())),
+        FieldSpec(name=f"{normalized}start_char", dtype=coerce_arrow_type(interop.int32())),
+        FieldSpec(name=f"{normalized}end_line", dtype=coerce_arrow_type(interop.int32())),
+        FieldSpec(name=f"{normalized}end_char", dtype=coerce_arrow_type(interop.int32())),
     ]
     if include_len:
-        fields.append(FieldSpec(name=f"{normalized}range_len", dtype=interop.int32()))
+        fields.append(
+            FieldSpec(name=f"{normalized}range_len", dtype=coerce_arrow_type(interop.int32()))
+        )
     name = f"{normalized}scip_range" if normalized else "scip_range"
     return FieldBundle(name=name, fields=tuple(fields))
 
@@ -482,10 +485,12 @@ def provenance_bundle() -> FieldBundle:
     return FieldBundle(
         name="provenance",
         fields=(
-            FieldSpec(name=PROVENANCE_COLS[0], dtype=interop.string()),
-            FieldSpec(name=PROVENANCE_COLS[1], dtype=interop.int32()),
-            FieldSpec(name=PROVENANCE_COLS[2], dtype=interop.int32()),
-            FieldSpec(name=PROVENANCE_COLS[3], dtype=interop.bool_()),
+            FieldSpec(
+                name=PROVENANCE_COLS[0], dtype=coerce_arrow_type(interop.string())
+            ),
+            FieldSpec(name=PROVENANCE_COLS[1], dtype=coerce_arrow_type(interop.int32())),
+            FieldSpec(name=PROVENANCE_COLS[2], dtype=coerce_arrow_type(interop.int32())),
+            FieldSpec(name=PROVENANCE_COLS[3], dtype=coerce_arrow_type(interop.bool_())),
         ),
     )
 

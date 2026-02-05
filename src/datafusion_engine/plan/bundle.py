@@ -60,9 +60,20 @@ if TYPE_CHECKING:
 
 
 try:
+    from datafusion import _internal as _datafusion_internal
+except ImportError:
+    _datafusion_internal = None
+
+try:
     from datafusion.substrait import Producer as SubstraitProducer
 except ImportError:
     SubstraitProducer = None
+
+_SUBSTRAIT_INTERNAL = (
+    getattr(_datafusion_internal, "substrait", None)
+    if _datafusion_internal is not None
+    else None
+)
 
 # Type alias for DataFrame builder functions
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -1402,7 +1413,38 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
         msg = "Substrait serialization requires an optimized logical plan."
         raise ValueError(msg)
     normalized = normalize_substrait_plan(ctx, cast("DataFusionLogicalPlan", optimized))
+
+    def _encode_plan(plan_obj: object) -> bytes:
+        encode = getattr(plan_obj, "encode", None)
+        if not callable(encode):
+            msg = "Substrait plan missing encode method."
+            raise TypeError(msg)
+        try:
+            encoded = encode()
+        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            msg = f"Failed to encode Substrait plan bytes: {exc}"
+            raise ValueError(msg) from exc
+        if not isinstance(encoded, (bytes, bytearray)):
+            msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
+            raise TypeError(msg)
+        return bytes(encoded)
+
+    if _SUBSTRAIT_INTERNAL is not None:
+        internal_producer = getattr(_SUBSTRAIT_INTERNAL, "Producer", None)
+        to_substrait = getattr(internal_producer, "to_substrait_plan", None)
+        if callable(to_substrait):
+            raw_plan = getattr(normalized, "_raw_plan", normalized)
+            try:
+                substrait_plan = to_substrait(raw_plan, ctx.ctx)
+            except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+                msg = f"Failed to encode Substrait plan bytes: {exc}"
+                raise ValueError(msg) from exc
+            return _encode_plan(substrait_plan)
+
     # Use Producer.to_substrait_plan(logical_plan, ctx) -> Plan, then Plan.encode() -> bytes
+    if SubstraitProducer is None:
+        msg = "Substrait producer is unavailable."
+        raise ValueError(msg)
     to_substrait = getattr(SubstraitProducer, "to_substrait_plan", None)
     if not callable(to_substrait):
         msg = "Substrait producer missing to_substrait_plan."
@@ -1412,19 +1454,7 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
         msg = f"Failed to encode Substrait plan bytes: {exc}"
         raise ValueError(msg) from exc
-    encode = getattr(substrait_plan, "encode", None)
-    if not callable(encode):
-        msg = "Substrait plan missing encode method."
-        raise TypeError(msg)
-    try:
-        encoded = encode()
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Failed to encode Substrait plan bytes: {exc}"
-        raise ValueError(msg) from exc
-    if not isinstance(encoded, (bytes, bytearray)):
-        msg = f"Substrait encode returned {type(encoded).__name__}, expected bytes."
-        raise TypeError(msg)
-    return bytes(encoded)
+    return _encode_plan(substrait_plan)
 
 
 def _capture_explain_analyze(

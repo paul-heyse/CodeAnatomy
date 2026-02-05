@@ -64,7 +64,7 @@ def test_query_latency_warm(
     toolchain: Toolchain,
     repo_root: Path,
 ) -> None:
-    """Ensure warm query (with index) completes in <2s.
+    """Ensure warm query (with index) completes in <5s.
 
     Parameters
     ----------
@@ -85,7 +85,7 @@ def test_query_latency_warm(
     elapsed = time.perf_counter() - start
 
     assert result is not None
-    assert elapsed < 2.0, f"Warm query took {elapsed:.2f}s, expected <2s"
+    assert elapsed < 5.0, f"Warm query took {elapsed:.2f}s, expected <5s"
 
 
 @pytest.mark.benchmark

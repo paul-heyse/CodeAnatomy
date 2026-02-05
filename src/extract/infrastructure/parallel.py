@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sys
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TypeVar
@@ -38,14 +39,17 @@ def gil_disabled() -> bool:
 
 
 def supports_fork() -> bool:
-    """Return True when the multiprocessing runtime supports fork.
+    """Return True when the multiprocessing runtime can safely use fork.
 
     Returns
     -------
     bool
-        ``True`` when the fork start method is available.
+        ``True`` when the fork start method is available and the process
+        is not multi-threaded.
     """
-    return "fork" in multiprocessing.get_all_start_methods()
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return False
+    return threading.active_count() <= 1
 
 
 def _process_executor(
@@ -60,16 +64,10 @@ def _process_executor(
             context = propagate.extract(carrier_payload)
             otel_context.attach(context)
 
-    if supports_fork():
-        ctx = multiprocessing.get_context("fork")
-        return ProcessPoolExecutor(
-            max_workers=max_workers,
-            mp_context=ctx,
-            initializer=_worker_init,
-            initargs=(carrier,),
-        )
+    ctx = multiprocessing.get_context("fork") if supports_fork() else multiprocessing.get_context("spawn")
     return ProcessPoolExecutor(
         max_workers=max_workers,
+        mp_context=ctx,
         initializer=_worker_init,
         initargs=(carrier,),
     )

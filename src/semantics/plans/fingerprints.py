@@ -319,6 +319,32 @@ def _encode_substrait_plan(
     bytes | None
         Encoded Substrait bytes, or None if encoding fails.
     """
+    def _encode_plan(plan_obj: object) -> bytes | None:
+        encode_method = getattr(plan_obj, "encode", None)
+        if not callable(encode_method):
+            return None
+        encoded = encode_method()
+        if isinstance(encoded, (bytes, bytearray)):
+            return bytes(encoded)
+        return None
+
+    try:
+        from datafusion import _internal as _datafusion_internal
+    except ImportError:
+        _datafusion_internal = None
+
+    if _datafusion_internal is not None:
+        internal_substrait = getattr(_datafusion_internal, "substrait", None)
+        internal_producer = getattr(internal_substrait, "Producer", None)
+        to_substrait = getattr(internal_producer, "to_substrait_plan", None)
+        if callable(to_substrait):
+            raw_plan = getattr(optimized_plan, "_raw_plan", optimized_plan)
+            try:
+                substrait_plan = to_substrait(raw_plan, ctx.ctx)
+                return _encode_plan(substrait_plan)
+            except (RuntimeError, TypeError, ValueError, AttributeError):
+                return None
+
     try:
         from datafusion.substrait import Producer as SubstraitProducer
     except ImportError:
@@ -330,20 +356,10 @@ def _encode_substrait_plan(
 
     try:
         substrait_plan = to_substrait(optimized_plan, ctx)
-        if substrait_plan is None:
-            return None
-
-        encode_method = getattr(substrait_plan, "encode", None)
-        if not callable(encode_method):
-            return None
-
-        encoded = encode_method()
-        if isinstance(encoded, (bytes, bytearray)):
-            return bytes(encoded)
     except (RuntimeError, TypeError, ValueError, AttributeError):
-        pass
+        return None
 
-    return None
+    return _encode_plan(substrait_plan)
 
 
 def _compute_substrait_hash(

@@ -10,8 +10,8 @@ import msgspec
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.interop import FieldLike
 from datafusion_engine.arrow.metadata import ENCODING_META
-from schema_spec.arrow_type_coercion import ArrowTypeLike, coerce_arrow_type
-from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
+from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
 from serde_msgspec import StructBaseStrict
 
 
@@ -23,7 +23,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
     """Specification for a single Arrow field."""
 
     name: str
-    dtype: ArrowTypeLike
+    dtype: ArrowTypeSpec
     nullable: bool = True
     metadata: dict[str, str] = msgspec.field(default_factory=dict)
     default_value: str | None = None

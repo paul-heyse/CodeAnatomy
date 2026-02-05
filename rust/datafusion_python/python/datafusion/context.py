@@ -47,7 +47,6 @@ if TYPE_CHECKING:
     import pathlib
     from collections.abc import Sequence
 
-    import pandas as pd
     import polars as pl
 
     from datafusion.catalog import CatalogProvider, Table
@@ -759,7 +758,7 @@ class SessionContext:
         ``__arrow_c_stream__`` or ``__arrow_c_array__``. For the latter, it must return
         a struct array.
 
-        Arrow data can be Polars, Pandas, Pyarrow etc.
+        Arrow data can be Polars or PyArrow sources, or any Arrow C data providers.
 
         Args:
             data: Arrow data source.
@@ -777,18 +776,6 @@ class SessionContext:
         This is an alias for :py:func:`from_arrow`.
         """
         return self.from_arrow(data, name)
-
-    def from_pandas(self, data: pd.DataFrame, name: str | None = None) -> DataFrame:
-        """Create a :py:class:`~datafusion.dataframe.DataFrame` from a Pandas DataFrame.
-
-        Args:
-            data: Pandas DataFrame.
-            name: Name of the DataFrame.
-
-        Returns:
-            DataFrame representation of the Pandas DataFrame.
-        """
-        return DataFrame(self.ctx.from_pandas(data, name))
 
     def from_polars(self, data: pl.DataFrame, name: str | None = None) -> DataFrame:
         """Create a :py:class:`~datafusion.dataframe.DataFrame` from a Polars DataFrame.

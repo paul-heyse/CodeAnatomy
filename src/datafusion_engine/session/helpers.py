@@ -6,7 +6,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING
 
-from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from utils.uuid_factory import uuid7_hex
@@ -21,7 +20,7 @@ def register_temp_table(
     *,
     prefix: str = "__temp_",
 ) -> str:
-    """Register a PyArrow table as a temporary table.
+    """Register an Arrow-like input as a temporary table.
 
     Parameters
     ----------
@@ -38,8 +37,7 @@ def register_temp_table(
         The generated table name.
     """
     name = f"{prefix}{uuid7_hex()}"
-    resolved = to_arrow_table(table)
-    datafusion_from_arrow(ctx, name=name, value=resolved)
+    datafusion_from_arrow(ctx, name=name, value=table)
     return name
 
 

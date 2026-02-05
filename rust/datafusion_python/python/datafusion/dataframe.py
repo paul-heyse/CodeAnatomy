@@ -57,7 +57,6 @@ if TYPE_CHECKING:
     import pathlib
     from collections.abc import Callable
 
-    import pandas as pd
     import polars as pl
     import pyarrow as pa
 
@@ -372,7 +371,7 @@ class DataFrame:
         Only summarized numeric datatypes at the moments and returns nulls
         for non-numeric datatypes.
 
-        The output format is modeled after pandas.
+        The output format follows standard dataframe describe semantics.
 
         Returns:
             A summary DataFrame containing statistics.
@@ -1241,14 +1240,6 @@ class DataFrame:
         """
         streams = self.df.execute_stream_partitioned()
         return [RecordBatchStream(rbs) for rbs in streams]
-
-    def to_pandas(self) -> pd.DataFrame:
-        """Execute the :py:class:`DataFrame` and convert it into a Pandas DataFrame.
-
-        Returns:
-            Pandas DataFrame.
-        """
-        return self.df.to_pandas()
 
     def to_pylist(self) -> list[dict[str, Any]]:
         """Execute the :py:class:`DataFrame` and convert it into a list of dictionaries.

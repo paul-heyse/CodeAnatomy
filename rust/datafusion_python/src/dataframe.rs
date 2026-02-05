@@ -1113,16 +1113,6 @@ impl PyDataFrame {
         Ok(streams.into_iter().map(PyRecordBatchStream::new).collect())
     }
 
-    /// Convert to pandas dataframe with pyarrow
-    /// Collect the batches, pass to Arrow Table & then convert to Pandas DataFrame
-    fn to_pandas(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let table = self.to_arrow_table(py)?;
-
-        // See also: https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table.to_pandas
-        let result = table.call_method0(py, "to_pandas")?;
-        Ok(result)
-    }
-
     /// Convert to Python list using pyarrow
     /// Each list item represents one row encoded as dictionary
     fn to_pylist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

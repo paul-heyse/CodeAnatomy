@@ -11,6 +11,7 @@ __all__ = (
     "DeltaWritePolicy",
     "DeltaWriteResult",
     "cleanup_delta_log",
+    "coerce_delta_input",
     "coerce_delta_table",
     "create_delta_checkpoint",
     "delta_commit_metadata",
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     DeltaWritePolicy = _storage_io.DeltaWritePolicy
     DeltaWriteResult = _storage_io.DeltaWriteResult
     cleanup_delta_log = _storage_io.cleanup_delta_log
+    coerce_delta_input = _storage_io.coerce_delta_input
     coerce_delta_table = _storage_io.coerce_delta_table
     create_delta_checkpoint = _storage_io.create_delta_checkpoint
     delta_commit_metadata = _storage_io.delta_commit_metadata

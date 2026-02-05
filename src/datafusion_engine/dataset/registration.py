@@ -101,6 +101,7 @@ from datafusion_engine.schema.validation import _datafusion_type_name
 from datafusion_engine.session.runtime import (
     DATAFUSION_MAJOR_VERSION,
     DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION,
+    cache_prefix_for_delta_snapshot,
     record_runtime_setting_override,
     schema_introspector_for_profile,
 )
@@ -1028,6 +1029,7 @@ def _validate_constraints_and_defaults(
     context: DataFusionRegistrationContext,
     *,
     enable_information_schema: bool,
+    cache_prefix: str | None = None,
 ) -> None:
     if not enable_information_schema:
         return
@@ -1040,7 +1042,11 @@ def _validate_constraints_and_defaults(
         return
     sql_options = _sql_options.sql_options_for_profile(context.runtime_profile)
     if context.runtime_profile is not None:
-        introspector = schema_introspector_for_profile(context.runtime_profile, context.ctx)
+        introspector = schema_introspector_for_profile(
+            context.runtime_profile,
+            context.ctx,
+            cache_prefix=cache_prefix,
+        )
     else:
         introspector = SchemaIntrospector(context.ctx, sql_options=sql_options)
     if key_fields:
@@ -1353,19 +1359,26 @@ def _resolve_registry_options(
 def _invalidate_information_schema_cache(
     runtime_profile: DataFusionRuntimeProfile | None,
     ctx: SessionContext,
+    *,
+    cache_prefix: str | None = None,
 ) -> None:
     if runtime_profile is None or not runtime_profile.catalog.enable_information_schema:
         return
     invalidate_introspection_cache(ctx)
-    introspector = schema_introspector_for_profile(runtime_profile, ctx)
+    introspector = schema_introspector_for_profile(
+        runtime_profile,
+        ctx,
+        cache_prefix=cache_prefix,
+    )
     introspector.invalidate_cache()
 
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
     if context.options.provider == "listing":
         df = _register_listing_table(context)
+        cache_prefix = None
     else:
-        df = _register_delta_provider(context)
+        df, cache_prefix = _register_delta_provider(context)
     scan = context.options.scan
     projection_exprs = scan.projection_exprs if scan is not None else ()
     if not projection_exprs and context.options.schema is not None:
@@ -1381,7 +1394,11 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
             sql_options=_sql_options.sql_options_for_profile(context.runtime_profile),
             runtime_profile=context.runtime_profile,
         )
-    _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
+    _invalidate_information_schema_cache(
+        context.runtime_profile,
+        context.ctx,
+        cache_prefix=cache_prefix,
+    )
     _validate_schema_contracts(context)
     return df
 
@@ -1630,10 +1647,22 @@ def _provider_for_registration(provider: object) -> object:
     return TableProviderCapsule(provider)
 
 
-def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
+def _register_delta_provider(  # noqa: C901
+    context: DataFusionRegistrationContext,
+) -> tuple[DataFrame, str | None]:
     location = context.location
     registration = _build_delta_provider_registration(context)
     resolution = registration.resolution
+    cache_prefix: str | None = None
+    if (
+        context.runtime_profile is not None
+        and context.runtime_profile.policies.snapshot_pinned_mode == "delta_version"
+    ):
+        cache_prefix = cache_prefix_for_delta_snapshot(
+            context.runtime_profile,
+            dataset_name=context.name,
+            snapshot=resolution.delta_snapshot,
+        )
     provider = resolution.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
     provider_to_register = _provider_for_registration(provider)
@@ -1697,8 +1726,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
                 snapshot=resolution.delta_snapshot,
             ),
         )
-        _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
-        return _maybe_cache(context, df)
+        return _maybe_cache(context, df), cache_prefix
     artifact_details = _delta_provider_artifact_payload(
         location,
         context=_DeltaProviderArtifactContext(
@@ -1764,7 +1792,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         name=context.name,
         supports_insert=True,
     )
-    return _maybe_cache(context, df)
+    return _maybe_cache(context, df), cache_prefix
 
 
 def _delta_provider_artifact_payload(
@@ -2746,16 +2774,21 @@ def _adapter_factory_payload(factory: object | None) -> str | None:
     return repr(factory)
 
 
-def _table_provenance_snapshot(
+def _table_provenance_snapshot(  # noqa: PLR0913
     ctx: SessionContext,
     *,
     name: str,
     enable_information_schema: bool,
     sql_options: SQLOptions,
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    cache_prefix: str | None = None,
 ) -> dict[str, object]:
     if runtime_profile is not None:
-        introspector = schema_introspector_for_profile(runtime_profile, ctx)
+        introspector = schema_introspector_for_profile(
+            runtime_profile,
+            ctx,
+            cache_prefix=cache_prefix,
+        )
     else:
         introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     table_definition = introspector.table_definition(name)
@@ -2813,12 +2846,14 @@ def _partition_column_rows(
     *,
     table_name: str,
     runtime_profile: DataFusionRuntimeProfile | None = None,
+    cache_prefix: str | None = None,
 ) -> tuple[list[dict[str, object]] | None, str | None]:
     try:
         if runtime_profile is not None:
             table = schema_introspector_for_profile(
                 runtime_profile,
                 ctx,
+                cache_prefix=cache_prefix,
             ).table_columns_with_ordinal(table_name)
         else:
             sql_options = _sql_options.sql_options_for_profile(runtime_profile)

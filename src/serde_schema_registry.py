@@ -13,7 +13,11 @@ import msgspec
 
 from cli.config_models import (
     CacheConfigSpec,
+    DataFusionCacheConfigSpec,
+    DataFusionCachePolicySpec,
     DeltaConfigSpec,
+    DiskCacheProfileSpec,
+    DiskCacheSettingsSpec,
     DocstringsConfigSpec,
     DocstringsPolicyConfigSpec,
     HamiltonConfigSpec,
@@ -217,6 +221,10 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     OtelConfigSpec,
     PlanConfigSpec,
     CacheConfigSpec,
+    DataFusionCachePolicySpec,
+    DiskCacheSettingsSpec,
+    DiskCacheProfileSpec,
+    DataFusionCacheConfigSpec,
     IncrementalConfigSpec,
     DeltaConfigSpec,
     DocstringsPolicyConfigSpec,

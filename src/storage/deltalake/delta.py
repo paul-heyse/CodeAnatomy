@@ -16,7 +16,12 @@ from deltalake import CommitProperties, Transaction
 from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.encoding import EncodingPolicy
-from datafusion_engine.arrow.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from datafusion_engine.arrow.interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    coerce_table_like,
+)
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.schema.alignment import align_table
@@ -544,7 +549,7 @@ class DeltaMergeArrowRequest:
     """Inputs required to merge Arrow data into a Delta table."""
 
     path: str
-    source: pa.Table
+    source: TableLike | RecordBatchReaderLike
     predicate: str
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
@@ -2409,7 +2414,55 @@ def coerce_delta_table(
     TableLike
         Transformed Arrow table ready for Delta writes.
     """
-    table = to_arrow_table(value)
+    delta_input = coerce_delta_input(
+        value,
+        schema=schema,
+        encoding_policy=encoding_policy,
+        prefer_reader=False,
+    )
+    data = delta_input.data
+    if isinstance(data, RecordBatchReaderLike):
+        return data.read_all()
+    return data
+
+
+@dataclass(frozen=True)
+class DeltaInput:
+    """Normalized Delta input with optional row counts."""
+
+    data: TableLike | RecordBatchReaderLike
+    row_count: int | None
+    schema: SchemaLike
+
+
+def coerce_delta_input(
+    value: TableLike | RecordBatchReaderLike,
+    *,
+    schema: SchemaLike | None = None,
+    encoding_policy: EncodingPolicy | None = None,
+    prefer_reader: bool = False,
+) -> DeltaInput:
+    """Normalize Delta inputs with explicit streaming behavior.
+
+    Returns
+    -------
+    DeltaInput
+        Normalized input wrapper with schema and optional row count.
+    """
+    resolved = coerce_table_like(value, requested_schema=None)
+    if schema is None and encoding_policy is None:
+        if isinstance(resolved, RecordBatchReaderLike):
+            return DeltaInput(
+                data=resolved,
+                row_count=None,
+                schema=resolved.schema,
+            )
+        return DeltaInput(
+            data=resolved,
+            row_count=int(resolved.num_rows),
+            schema=resolved.schema,
+        )
+    table = to_arrow_table(resolved)
     if schema is not None:
         table = align_table(
             table,
@@ -2419,7 +2472,15 @@ def coerce_delta_table(
         )
     if encoding_policy is not None:
         table = apply_encoding(table, policy=encoding_policy)
-    return table
+    row_count = int(table.num_rows)
+    data: TableLike | RecordBatchReaderLike = table
+    if prefer_reader:
+        data = to_reader(table)
+    return DeltaInput(
+        data=data,
+        row_count=row_count,
+        schema=table.schema,
+    )
 
 
 def read_delta_cdf(
@@ -2649,12 +2710,13 @@ def delta_merge_arrow(  # noqa: PLR0914
     Mapping[str, object]
         Control-plane mutation report payload.
     """
+    delta_input = coerce_delta_input(request.source, prefer_reader=True)
     attrs = _storage_span_attributes(
         operation="merge",
         table_path=request.path,
         dataset_name=request.dataset_name,
         extra={
-            "codeanatomy.source_rows": request.source.num_rows,
+            "codeanatomy.source_rows": delta_input.row_count,
             "codeanatomy.has_filters": bool(request.predicate),
         },
     )
@@ -2683,7 +2745,7 @@ def delta_merge_arrow(  # noqa: PLR0914
             operation="merge",
             updates_present=updates_present,
         )
-        source_table = register_temp_table(ctx, request.source)
+        source_table = register_temp_table(ctx, delta_input.data)
         commit_options = _delta_commit_options(
             commit_properties=request.commit_properties,
             commit_metadata=request.commit_metadata,
@@ -2794,8 +2856,11 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
         if not callable(checker):
             msg = "Delta data checker is unavailable in the extension module."
             raise TypeError(msg)
-        table = to_arrow_table(request.data)
-        payload = ipc_bytes(cast("pa.Table", table))
+        delta_input = coerce_delta_input(request.data, prefer_reader=False)
+        data = delta_input.data
+        if isinstance(data, RecordBatchReaderLike):
+            data = data.read_all()
+        payload = ipc_bytes(cast("pa.Table", data))
         storage = merged_storage_options(request.storage_options, request.log_storage_options)
         storage_payload = list(storage.items()) if storage else None
         constraints_payload = (

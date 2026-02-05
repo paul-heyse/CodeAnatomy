@@ -72,7 +72,6 @@ def _collect_versions() -> dict[str, str]:
         "libcst",
         "hamilton",
         "numpy",
-        "pandas",
         "pytest",
         "ruff",
         "pyrefly",

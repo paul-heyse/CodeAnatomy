@@ -11,7 +11,7 @@ Usage
 >>> ctx = SessionContext()
 >>> # ... register relationship tables ...
 >>> metrics_df = build_relationship_quality_metrics(ctx, "rel_docstring_owner")
->>> print(metrics_df.to_pandas())
+>>> print(metrics_df.to_polars())
 """
 
 from __future__ import annotations

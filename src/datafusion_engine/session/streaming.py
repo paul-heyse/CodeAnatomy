@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 
 if TYPE_CHECKING:
+    import polars as pl
     from datafusion import DataFrame, SessionContext, SQLOptions
 
 from datafusion import SQLOptions
@@ -43,7 +44,7 @@ class StreamingExecutionResult:
     Lazy execution result that can be consumed as Arrow stream OR collected.
 
     Implements deferred materialization - no data is executed until
-    a terminal operation (to_table, to_pandas, pipe_to_*) is called.
+    a terminal operation (to_table, to_polars, pipe_to_*) is called.
 
     Parameters
     ----------
@@ -151,26 +152,23 @@ class StreamingExecutionResult:
             schema=self.schema,
         )
 
-    def to_pandas(self) -> Any:
+    def to_polars(self) -> pl.DataFrame:
         """
-        Materialize as pandas DataFrame.
+        Materialize as polars DataFrame.
 
         Returns
         -------
-        pd.DataFrame
-            Pandas DataFrame with all query results.
+        pl.DataFrame
+            Polars DataFrame with all query results.
 
         Warnings
         --------
         This method materializes the entire result in memory.
         For large datasets, prefer streaming methods.
-
-        Notes
-        -----
-        Pandas is not a strict dependency. This method will
-        fail if pandas is not installed.
         """
-        return self.to_table().to_pandas()
+        import polars as pl
+
+        return cast("pl.DataFrame", pl.from_arrow(self.to_table()))
 
     def pipe_to_dataset(
         self,

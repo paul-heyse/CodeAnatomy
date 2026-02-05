@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import ConfigDict, Field
 
 from hamilton_pipeline.types import GraphAdapterConfig
@@ -33,6 +35,47 @@ class CacheConfigRuntime(RuntimeBase):
     default_loader_behavior: str | None = None
     default_saver_behavior: str | None = None
     default_nodes: tuple[str, ...] | None = None
+
+
+class DataFusionCachePolicyRuntime(RuntimeBase):
+    """Validated DataFusion cache policy config."""
+
+    listing_cache_size: int | None = Field(default=None, ge=0)
+    metadata_cache_size: int | None = Field(default=None, ge=0)
+    stats_cache_size: int | None = Field(default=None, ge=0)
+
+
+class DiskCacheSettingsRuntime(RuntimeBase):
+    """Validated DiskCache settings overrides."""
+
+    size_limit_bytes: int | None = Field(default=None, ge=0)
+    cull_limit: int | None = Field(default=None, ge=0)
+    eviction_policy: str | None = None
+    statistics: bool | None = None
+    tag_index: bool | None = None
+    shards: int | None = Field(default=None, ge=0)
+    timeout_seconds: float | None = Field(default=None, ge=0)
+    disk_min_file_size: int | None = Field(default=None, ge=0)
+    sqlite_journal_mode: str | None = None
+    sqlite_mmap_size: int | None = Field(default=None, ge=0)
+    sqlite_synchronous: str | None = None
+
+
+class DiskCacheProfileRuntime(RuntimeBase):
+    """Validated DiskCache profile overrides."""
+
+    root: str | None = None
+    base_settings: DiskCacheSettingsRuntime | None = None
+    overrides: dict[str, DiskCacheSettingsRuntime] | None = None
+    ttl_seconds: dict[str, float | None] | None = None
+
+
+class DataFusionCacheConfigRuntime(RuntimeBase):
+    """Validated DataFusion cache configuration."""
+
+    cache_policy: DataFusionCachePolicyRuntime | None = None
+    diskcache_profile: DiskCacheProfileRuntime | None = None
+    snapshot_pinned_mode: Literal["off", "delta_version"] = "off"
 
 
 class IncrementalConfigRuntime(RuntimeBase):
@@ -122,6 +165,7 @@ class RootConfigRuntime(RuntimeBase):
 
     plan: PlanConfigRuntime | None = None
     cache: CacheConfigRuntime | None = None
+    datafusion_cache: DataFusionCacheConfigRuntime | None = None
     graph_adapter: GraphAdapterConfig | None = None
     incremental: IncrementalConfigRuntime | None = None
     delta: DeltaConfigRuntime | None = None
@@ -132,9 +176,13 @@ class RootConfigRuntime(RuntimeBase):
 
 __all__ = [
     "CacheConfigRuntime",
+    "DataFusionCacheConfigRuntime",
+    "DataFusionCachePolicyRuntime",
     "DeltaConfigRuntime",
     "DeltaExportConfigRuntime",
     "DeltaRestoreConfigRuntime",
+    "DiskCacheProfileRuntime",
+    "DiskCacheSettingsRuntime",
     "DocstringsConfigRuntime",
     "DocstringsPolicyConfigRuntime",
     "HamiltonConfigRuntime",

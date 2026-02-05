@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from tools.cq.core.locations import SourceSpan
 from tools.cq.search.classifier import QueryMode, clear_caches
 from tools.cq.search.smart_search import (
     SMART_SEARCH_LIMITS,
@@ -22,6 +23,21 @@ from tools.cq.search.smart_search import (
     compute_relevance_score,
     smart_search,
 )
+
+
+def _span(
+    file: str,
+    line: int,
+    col: int = 0,
+    end_col: int | None = None,
+) -> SourceSpan:
+    return SourceSpan(
+        file=file,
+        start_line=line,
+        start_col=col,
+        end_line=line,
+        end_col=end_col,
+    )
 
 
 @pytest.fixture
@@ -112,9 +128,7 @@ class TestRawMatch:
     def test_raw_match_creation(self) -> None:
         """Test RawMatch creation."""
         raw = RawMatch(
-            file="src/module.py",
-            line=10,
-            col=4,
+            span=_span("src/module.py", 10, 9, 20),
             text="result = build_graph(data)",
             match_text="build_graph",
             match_start=9,
@@ -122,15 +136,13 @@ class TestRawMatch:
         )
         assert raw.file == "src/module.py"
         assert raw.line == 10
-        assert raw.col == 4
+        assert raw.col == 9
         assert raw.match_text == "build_graph"
 
     def test_raw_match_no_context_fields(self) -> None:
         """RawMatch should not store line-context payloads."""
         raw = RawMatch(
-            file="src/module.py",
-            line=10,
-            col=4,
+            span=_span("src/module.py", 10, 9, 20),
             text="result = build_graph(data)",
             match_text="build_graph",
             match_start=9,
@@ -176,9 +188,7 @@ class TestEnrichedMatch:
     def test_enriched_match_creation(self) -> None:
         """Test EnrichedMatch creation."""
         match = EnrichedMatch(
-            file="src/module.py",
-            line=10,
-            col=4,
+            span=_span("src/module.py", 10, 4),
             text="result = build_graph(data)",
             match_text="build_graph",
             category="callsite",
@@ -196,9 +206,7 @@ class TestRelevanceScoring:
     def test_definition_scores_highest(self) -> None:
         """Test that definitions score highest."""
         definition = EnrichedMatch(
-            file="src/module.py",
-            line=1,
-            col=0,
+            span=_span("src/module.py", 1, 0),
             text="def build_graph():",
             match_text="build_graph",
             category="definition",
@@ -206,9 +214,7 @@ class TestRelevanceScoring:
             evidence_kind="resolved_ast",
         )
         callsite = EnrichedMatch(
-            file="src/module.py",
-            line=10,
-            col=0,
+            span=_span("src/module.py", 10, 0),
             text="build_graph()",
             match_text="build_graph",
             category="callsite",
@@ -220,9 +226,7 @@ class TestRelevanceScoring:
     def test_src_files_score_higher_than_tests(self) -> None:
         """Test that src files score higher than tests."""
         src_match = EnrichedMatch(
-            file="src/module.py",
-            line=1,
-            col=0,
+            span=_span("src/module.py", 1, 0),
             text="def build_graph():",
             match_text="build_graph",
             category="definition",
@@ -230,9 +234,7 @@ class TestRelevanceScoring:
             evidence_kind="resolved_ast",
         )
         test_match = EnrichedMatch(
-            file="tests/test_module.py",
-            line=1,
-            col=0,
+            span=_span("tests/test_module.py", 1, 0),
             text="def test_build_graph():",
             match_text="build_graph",
             category="definition",
@@ -244,9 +246,7 @@ class TestRelevanceScoring:
     def test_comment_match_scores_low(self) -> None:
         """Test that comment matches score low."""
         comment = EnrichedMatch(
-            file="src/module.py",
-            line=1,
-            col=0,
+            span=_span("src/module.py", 1, 0),
             text="# build_graph is important",
             match_text="build_graph",
             category="comment_match",
@@ -254,9 +254,7 @@ class TestRelevanceScoring:
             evidence_kind="heuristic",
         )
         definition = EnrichedMatch(
-            file="src/module.py",
-            line=1,
-            col=0,
+            span=_span("src/module.py", 1, 0),
             text="def build_graph():",
             match_text="build_graph",
             category="definition",
@@ -273,9 +271,7 @@ class TestClassifyMatch:
         """Test classification of comment match."""
         clear_caches()
         raw = RawMatch(
-            file="src/module_a.py",
-            line=1,
-            col=20,
+            span=_span("src/module_a.py", 1, 2, 13),
             text="# build_graph is here",
             match_text="build_graph",
             match_start=2,
@@ -291,9 +287,7 @@ class TestClassifyMatch:
         """Test classification of import match."""
         clear_caches()
         raw = RawMatch(
-            file="src/module_a.py",
-            line=1,
-            col=7,
+            span=_span("src/module_a.py", 1, 7, 18),
             text="import build_graph",
             match_text="build_graph",
             match_start=7,
@@ -311,9 +305,7 @@ class TestBuildFinding:
     def test_build_finding_basic(self, sample_repo: Path) -> None:
         """Test basic Finding construction."""
         match = EnrichedMatch(
-            file="src/module.py",
-            line=10,
-            col=4,
+            span=_span("src/module.py", 10, 4),
             text="result = build_graph(data)",
             match_text="build_graph",
             category="callsite",
@@ -329,9 +321,7 @@ class TestBuildFinding:
     def test_build_finding_with_scope(self, sample_repo: Path) -> None:
         """Test Finding with containing scope."""
         match = EnrichedMatch(
-            file="src/module.py",
-            line=10,
-            col=4,
+            span=_span("src/module.py", 10, 4),
             text="result = build_graph(data)",
             match_text="build_graph",
             category="callsite",
@@ -350,9 +340,7 @@ class TestBuildFollowups:
         """Test follow-ups when definitions found."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="def build_graph():",
                 match_text="build_graph",
                 category="definition",
@@ -370,9 +358,7 @@ class TestBuildFollowups:
         """Test follow-ups when callsites found."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=10,
-                col=0,
+                span=_span("src/module.py", 10, 0),
                 text="build_graph()",
                 match_text="build_graph",
                 category="callsite",
@@ -389,9 +375,7 @@ class TestBuildFollowups:
         """Test no follow-ups for regex mode."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="def build_graph():",
                 match_text="build_graph",
                 category="definition",
@@ -416,9 +400,7 @@ class TestBuildSummary:
         )
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="def build_graph():",
                 match_text="build_graph",
                 category="definition",
@@ -467,9 +449,7 @@ class TestBuildSections:
         """Test that Top Contexts section is included."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="def build_graph():",
                 match_text="build_graph",
                 category="definition",
@@ -485,9 +465,7 @@ class TestBuildSections:
         """Test that Definitions section is included for identifier mode."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="def build_graph():",
                 match_text="build_graph",
                 category="definition",
@@ -503,9 +481,7 @@ class TestBuildSections:
         """Test that non-code matches section is collapsed."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=1,
-                col=0,
+                span=_span("src/module.py", 1, 0),
                 text="# build_graph comment",
                 match_text="build_graph",
                 category="comment_match",
@@ -522,9 +498,7 @@ class TestBuildSections:
         """Top contexts should group by containing scope within a file."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=10,
-                col=4,
+                span=_span("src/module.py", 10, 4),
                 text="build_graph()",
                 match_text="build_graph",
                 category="callsite",
@@ -533,9 +507,7 @@ class TestBuildSections:
                 containing_scope="helper",
             ),
             EnrichedMatch(
-                file="src/module.py",
-                line=11,
-                col=4,
+                span=_span("src/module.py", 11, 4),
                 text="build_graph()",
                 match_text="build_graph",
                 category="callsite",
@@ -544,9 +516,7 @@ class TestBuildSections:
                 containing_scope="helper",
             ),
             EnrichedMatch(
-                file="src/module.py",
-                line=20,
-                col=4,
+                span=_span("src/module.py", 20, 4),
                 text="build_graph()",
                 match_text="build_graph",
                 category="callsite",
@@ -566,9 +536,7 @@ class TestBuildSections:
         """Non-code matches should only appear in top contexts when include_strings is set."""
         matches = [
             EnrichedMatch(
-                file="src/module.py",
-                line=2,
-                col=0,
+                span=_span("src/module.py", 2, 0),
                 text="# build_graph comment",
                 match_text="build_graph",
                 category="comment_match",

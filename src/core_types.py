@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, NewType
+from typing import Annotated, Any, Literal, NewType
+
+from msgspec import Meta
+from pydantic import Field
 
 type PathLike = str | Path
 type StrictnessMode = Literal["strict", "tolerant"]
@@ -28,6 +31,53 @@ type RowValueRich = str | int | bool | list[str] | list[dict[str, object]] | Non
 type RowStrict = dict[str, RowValueStrict]
 type RowRich = dict[str, RowValueRich]
 type RowPermissive = dict[str, object]
+
+IdentifierStr = Annotated[
+    str,
+    Meta(
+        pattern=IDENTIFIER_PATTERN,
+        title="Identifier",
+        description="Normalized identifier string.",
+    ),
+    Field(pattern=IDENTIFIER_PATTERN),
+]
+RunIdStr = Annotated[
+    str,
+    Meta(
+        pattern=RUN_ID_PATTERN,
+        title="Run ID",
+        description="Stable run identifier.",
+    ),
+    Field(pattern=RUN_ID_PATTERN),
+]
+HashStr = Annotated[
+    str,
+    Meta(
+        pattern=HASH_PATTERN,
+        title="Hash Value",
+        description="Deterministic hash value.",
+        examples=["sha256:4a7f2b1c9e4d5a6f7b8c9d0e1f2a3b4c"],
+    ),
+    Field(pattern=HASH_PATTERN),
+]
+EventKindStr = Annotated[
+    str,
+    Meta(
+        pattern=EVENT_KIND_PATTERN,
+        title="Event Kind",
+        description="Normalized event kind identifier.",
+    ),
+    Field(pattern=EVENT_KIND_PATTERN),
+]
+StatusStr = Annotated[
+    str,
+    Meta(
+        pattern=STATUS_PATTERN,
+        title="Status",
+        description="Normalized status identifier.",
+    ),
+    Field(pattern=STATUS_PATTERN),
+]
 
 
 class DeterminismTier(StrEnum):
@@ -89,6 +139,9 @@ __all__ = [
     "RUN_ID_PATTERN",
     "STATUS_PATTERN",
     "DeterminismTier",
+    "EventKindStr",
+    "HashStr",
+    "IdentifierStr",
     "JsonDict",
     "JsonPrimitive",
     "JsonValue",
@@ -100,6 +153,8 @@ __all__ = [
     "RowStrict",
     "RowValueRich",
     "RowValueStrict",
+    "RunIdStr",
+    "StatusStr",
     "StrictnessMode",
     "ensure_path",
     "parse_determinism_tier",

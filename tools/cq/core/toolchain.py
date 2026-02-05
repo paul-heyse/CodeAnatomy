@@ -5,11 +5,10 @@ Detects availability and versions of external tools (ast-grep-py, python, rpygre
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from tools.cq.core.structs import CqStruct
 
 
-@dataclass
-class Toolchain:
+class Toolchain(CqStruct, frozen=True):
     """Available tools and their versions.
 
     Parameters

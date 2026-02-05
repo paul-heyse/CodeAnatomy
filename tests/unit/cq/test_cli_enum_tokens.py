@@ -33,7 +33,8 @@ class TestOutputFormatTokens:
     def test_format_token_parsing(self, token: str, expected: OutputFormat) -> None:
         """Test that CLI tokens are correctly parsed to enum values."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", token])
-        assert bound.kwargs["output_format"] == expected
+        global_opts = bound.kwargs["global_opts"]
+        assert global_opts.output_format == expected
 
     def test_mermaid_class_hyphen_form(self) -> None:
         """Test that mermaid-class (with hyphen) works.
@@ -43,8 +44,9 @@ class TestOutputFormatTokens:
         mermaid-class (hyphen).
         """
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", "mermaid-class"])
-        assert bound.kwargs["output_format"] == OutputFormat.mermaid_class
-        assert str(bound.kwargs["output_format"]) == "mermaid-class"
+        global_opts = bound.kwargs["global_opts"]
+        assert global_opts.output_format == OutputFormat.mermaid_class
+        assert str(global_opts.output_format) == "mermaid-class"
 
     def test_invalid_format_fails(self) -> None:
         """Test that invalid format token fails parsing."""

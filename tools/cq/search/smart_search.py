@@ -6,17 +6,18 @@ and symtable enrichment to provide grouped, ranked search results.
 
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import msgspec
 
+from tools.cq.core.locations import SourceSpan
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -24,7 +25,6 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.structs import CqStruct
@@ -47,17 +47,17 @@ from tools.cq.search.classifier import (
 )
 from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
+from tools.cq.search.models import SearchConfig, SearchKwargs
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.rg_events import decode_rg_event
 from tools.cq.search.timeout import search_sync_with_timeout
 
 if TYPE_CHECKING:
     from rpygrep import RipGrepSearch
 
-    from tools.cq.core.toolchain import Toolchain
-
 
 # Derive smart search limits from INTERACTIVE profile
-SMART_SEARCH_LIMITS = replace(
+SMART_SEARCH_LIMITS = msgspec.structs.replace(
     INTERACTIVE,
     max_files=200,
     max_matches_per_file=50,
@@ -93,12 +93,8 @@ class RawMatch(CqStruct, frozen=True):
 
     Parameters
     ----------
-    file
-        Relative file path.
-    line
-        1-indexed line number.
-    col
-        0-indexed column offset.
+    span
+        Source span for the match.
     text
         Full line content.
     match_text
@@ -111,61 +107,27 @@ class RawMatch(CqStruct, frozen=True):
         Which submatch on this line.
     """
 
-    file: str
-    line: Annotated[int, msgspec.Meta(ge=1)]
-    col: Annotated[int, msgspec.Meta(ge=0)]
+    span: SourceSpan
     text: str
     match_text: str
     match_start: int
     match_end: int
     submatch_index: int = 0
 
+    @property
+    def file(self) -> str:
+        """Return the file path for backward compatibility."""
+        return self.span.file
 
-class SmartSearchKwargs(TypedDict, total=False):
-    mode: QueryMode | None
-    include_globs: list[str] | None
-    exclude_globs: list[str] | None
-    include_strings: bool
-    limits: SearchLimits | None
-    tc: Toolchain | None
-    argv: list[str] | None
+    @property
+    def line(self) -> int:
+        """Return the start line for backward compatibility."""
+        return self.span.start_line
 
-
-@dataclass(frozen=True, slots=True)
-class SmartSearchRequest:
-    root: Path
-    query: str
-    mode: QueryMode | None = None
-    include_globs: list[str] | None = None
-    exclude_globs: list[str] | None = None
-    include_strings: bool = False
-    limits: SearchLimits | None = None
-    tc: Toolchain | None = None
-    argv: list[str] | None = None
-
-    @classmethod
-    def from_kwargs(cls, root: Path, query: str, kwargs: SmartSearchKwargs) -> SmartSearchRequest:
-        return cls(
-            root=root,
-            query=query,
-            mode=kwargs.get("mode"),
-            include_globs=kwargs.get("include_globs"),
-            exclude_globs=kwargs.get("exclude_globs"),
-            include_strings=bool(kwargs.get("include_strings", False)),
-            limits=kwargs.get("limits"),
-            tc=kwargs.get("tc"),
-            argv=kwargs.get("argv"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateSearchInputs:
-    root: Path
-    query: str
-    mode: QueryMode
-    limits: SearchLimits
-    include_globs: list[str] | None = None
-    exclude_globs: list[str] | None = None
+    @property
+    def col(self) -> int:
+        """Return the start column for backward compatibility."""
+        return self.span.start_col
 
 
 class CandidateSearchKwargs(TypedDict, total=False):
@@ -175,13 +137,9 @@ class CandidateSearchKwargs(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class SearchSummaryInputs:
-    query: str
-    mode: QueryMode
+    config: SearchConfig
     stats: SearchStats
     matches: list[EnrichedMatch]
-    limits: SearchLimits
-    include: list[str] | None = None
-    exclude: list[str] | None = None
     file_globs: list[str] | None = None
     limit: int | None = None
     pattern: str | None = None
@@ -237,12 +195,8 @@ class EnrichedMatch(CqStruct, frozen=True):
 
     Parameters
     ----------
-    file
-        Relative file path.
-    line
-        1-indexed line number.
-    col
-        0-indexed column offset.
+    span
+        Source span for the match.
     text
         Full line content.
     match_text
@@ -265,9 +219,7 @@ class EnrichedMatch(CqStruct, frozen=True):
         Symtable enrichment data.
     """
 
-    file: str
-    line: Annotated[int, msgspec.Meta(ge=1)]
-    col: Annotated[int, msgspec.Meta(ge=0)]
+    span: SourceSpan
     text: str
     match_text: str
     category: MatchCategory
@@ -278,6 +230,21 @@ class EnrichedMatch(CqStruct, frozen=True):
     context_window: dict[str, int] | None = None
     context_snippet: str | None = None
     symtable: SymtableEnrichment | None = None
+
+    @property
+    def file(self) -> str:
+        """Return the file path for backward compatibility."""
+        return self.span.file
+
+    @property
+    def line(self) -> int:
+        """Return the start line for backward compatibility."""
+        return self.span.start_line
+
+    @property
+    def col(self) -> int:
+        """Return the start column for backward compatibility."""
+        return self.span.start_col
 
 
 # Kind weights for relevance scoring
@@ -325,83 +292,75 @@ def build_candidate_searcher(
     tuple[RipGrepSearch, str]
         Configured searcher and effective pattern string.
     """
-    inputs = CandidateSearchInputs(
+    config = SearchConfig(
         root=root,
         query=query,
         mode=mode,
         limits=limits,
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
+        include_strings=False,
+        argv=[],
+        tc=None,
+        started_ms=0.0,
     )
-    return _build_candidate_searcher(inputs)
+    return _build_candidate_searcher(config)
 
 
-def _build_candidate_searcher(inputs: CandidateSearchInputs) -> tuple[RipGrepSearch, str]:
+def _build_candidate_searcher(config: SearchConfig) -> tuple[RipGrepSearch, str]:
     from rpygrep import RipGrepSearch
 
     searcher = (
         RipGrepSearch()
-        .set_working_directory(inputs.root)
+        .set_working_directory(config.root)
         .add_safe_defaults()
         .include_type("py")
         .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .before_context(1)
         .after_context(1)
-        .max_count(inputs.limits.max_matches_per_file)
-        .max_depth(inputs.limits.max_depth)
-        .max_file_size(inputs.limits.max_file_size_bytes)
+        .max_count(config.limits.max_matches_per_file)
+        .max_depth(config.limits.max_depth)
+        .max_file_size(config.limits.max_file_size_bytes)
         .as_json()
     )
 
-    if inputs.mode == QueryMode.IDENTIFIER:
+    if config.mode == QueryMode.IDENTIFIER:
         # Word boundary match for identifiers
-        pattern = rf"\b{re.escape(inputs.query)}\b"
+        pattern = rf"\b{re.escape(config.query)}\b"
         searcher = searcher.add_pattern(pattern)
-    elif inputs.mode == QueryMode.LITERAL:
+    elif config.mode == QueryMode.LITERAL:
         # Exact literal match (non-regex)
-        pattern = inputs.query
-        searcher = searcher.patterns_are_not_regex().add_pattern(inputs.query)
+        pattern = config.query
+        searcher = searcher.patterns_are_not_regex().add_pattern(config.query)
     else:
         # User-provided regex (pass through)
-        pattern = inputs.query
-        searcher = searcher.add_pattern(inputs.query)
+        pattern = config.query
+        searcher = searcher.add_pattern(config.query)
 
     # Add include globs
-    include_globs = inputs.include_globs or []
+    include_globs = config.include_globs or []
     for glob in include_globs:
         searcher = searcher.include_glob(glob)
 
     # Add exclude globs
-    exclude_globs = inputs.exclude_globs or []
+    exclude_globs = config.exclude_globs or []
     for glob in exclude_globs:
         searcher = searcher.exclude_glob(glob)
 
     return searcher, pattern
 
 
-def _parse_rg_line(line: str) -> dict[str, object] | None:
-    try:
-        return json.loads(line)
-    except json.JSONDecodeError:
-        return None
-
-
-def _collect_candidates_raw(
+def _collect_candidates(
     searcher: RipGrepSearch,
     limits: SearchLimits,
 ) -> RgCollector:
     collector = RgCollector(limits=limits, match_factory=RawMatch)
     for line in searcher.run_direct():
-        payload = _parse_rg_line(line)
-        if not payload:
+        event = decode_rg_event(line)
+        if event is None:
             continue
-        kind = payload.get("type")
-        if kind == "summary":
-            collector.handle_summary(payload)
-            continue
-        if kind != "match":
-            continue
-        collector.handle_match(payload)
+        collector.handle_event(event)
+    collector.finalize()
     return collector
 
 
@@ -455,7 +414,7 @@ def collect_candidates(
     """
     try:
         collector = search_sync_with_timeout(
-            lambda: _collect_candidates_raw(searcher, limits),
+            lambda: _collect_candidates(searcher, limits),
             limits.timeout_seconds,
         )
     except TimeoutError:
@@ -464,6 +423,7 @@ def collect_candidates(
     else:
         timed_out = False
 
+    collector.finalize()
     stats = _build_search_stats(collector, timed_out=timed_out)
     return collector.matches, stats
 
@@ -526,13 +486,12 @@ def _build_heuristic_enriched(
     heuristic: HeuristicResult,
     match_text: str,
 ) -> EnrichedMatch:
+    category = heuristic.category or "text_match"
     return EnrichedMatch(
-        file=raw.file,
-        line=raw.line,
-        col=raw.col,
+        span=raw.span,
         text=raw.text,
         match_text=match_text,
-        category=heuristic.category,
+        category=category,
         confidence=heuristic.confidence,
         evidence_kind="heuristic",
     )
@@ -545,7 +504,9 @@ def _resolve_match_classification(
     root: Path,
 ) -> ClassificationResult:
     if file_path.suffix != ".py":
-        return _classification_from_heuristic(heuristic, default_confidence=0.4, evidence_kind="rg_only")
+        return _classification_from_heuristic(
+            heuristic, default_confidence=0.4, evidence_kind="rg_only"
+        )
 
     record_result = classify_from_records(file_path, root, raw.line, raw.col)
     ast_result = record_result or _classify_from_node(file_path, raw)
@@ -649,9 +610,7 @@ def _build_enriched_match(
     enrichment: MatchEnrichment,
 ) -> EnrichedMatch:
     return EnrichedMatch(
-        file=raw.file,
-        line=raw.line,
-        col=raw.col,
+        span=raw.span,
         text=raw.text,
         match_text=match_text,
         category=classification.category,
@@ -807,7 +766,7 @@ def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     return Finding(
         category=match.category,
         message=_category_message(match.category, match),
-        anchor=Anchor(file=match.file, line=match.line, col=match.col),
+        anchor=Anchor.from_span(match.span),
         severity="info",
         details=details,
     )
@@ -968,14 +927,22 @@ def _coerce_summary_inputs(
         msg = _SUMMARY_ARITY_ERROR
         raise TypeError(msg)
     query, mode, stats, matches, limits = args
-    return SearchSummaryInputs(
+    config = SearchConfig(
+        root=Path(),
         query=cast("str", query),
         mode=cast("QueryMode", mode),
+        limits=cast("SearchLimits", limits),
+        include_globs=cast("list[str] | None", kwargs.get("include")),
+        exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
+        include_strings=False,
+        argv=[],
+        tc=None,
+        started_ms=0.0,
+    )
+    return SearchSummaryInputs(
+        config=config,
         stats=cast("SearchStats", stats),
         matches=cast("list[EnrichedMatch]", matches),
-        limits=cast("SearchLimits", limits),
-        include=cast("list[str] | None", kwargs.get("include")),
-        exclude=cast("list[str] | None", kwargs.get("exclude")),
         file_globs=cast("list[str] | None", kwargs.get("file_globs")),
         limit=cast("int | None", kwargs.get("limit")),
         pattern=cast("str | None", kwargs.get("pattern")),
@@ -983,14 +950,15 @@ def _coerce_summary_inputs(
 
 
 def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
+    config = inputs.config
     return {
-        "query": inputs.query,
-        "mode": inputs.mode.value,
+        "query": config.query,
+        "mode": config.mode.value,
         "file_globs": inputs.file_globs or ["*.py", "*.pyi"],
-        "include": inputs.include or [],
-        "exclude": inputs.exclude or [],
+        "include": config.include_globs or [],
+        "exclude": config.exclude_globs or [],
         "context_lines": {"before": 1, "after": 1},
-        "limit": inputs.limit if inputs.limit is not None else inputs.limits.max_total_matches,
+        "limit": inputs.limit if inputs.limit is not None else config.limits.max_total_matches,
         "scanned_files": inputs.stats.scanned_files,
         "scanned_files_is_estimate": inputs.stats.scanned_files_is_estimate,
         "matched_files": inputs.stats.matched_files,
@@ -1041,7 +1009,11 @@ def build_sections(
     list[Section]
         Organized sections.
     """
-    non_code_categories = {"docstring_match", "comment_match", "string_match"}
+    non_code_categories: set[MatchCategory] = {
+        "docstring_match",
+        "comment_match",
+        "string_match",
+    }
     sorted_matches = sorted(matches, key=compute_relevance_score, reverse=True)
     visible_matches = _filter_visible_matches(
         sorted_matches,
@@ -1120,7 +1092,9 @@ def _build_identifier_sections(
     imps = [m for m in matches if m.category in {"import", "from_import"}]
     calls = [m for m in matches if m.category == "callsite"]
     if defs:
-        sections.append(Section(title="Definitions", findings=[build_finding(m, root) for m in defs[:5]]))
+        sections.append(
+            Section(title="Definitions", findings=[build_finding(m, root) for m in defs[:5]])
+        )
     if imps:
         sections.append(
             Section(
@@ -1195,25 +1169,31 @@ def _build_followups_section(
     return Section(title="Suggested Follow-ups", findings=followup_findings)
 
 
-def _build_search_context(request: SmartSearchRequest) -> SmartSearchContext:
-    started = ms()
-    limits = request.limits or SMART_SEARCH_LIMITS
-    argv = request.argv or ["search", request.query]
+def _build_search_context(
+    root: Path,
+    query: str,
+    kwargs: SearchKwargs,
+) -> SmartSearchContext:
+    started = kwargs.get("started_ms")
+    if started is None:
+        started = ms()
+    limits = kwargs.get("limits") or SMART_SEARCH_LIMITS
+    argv = kwargs.get("argv") or ["search", query]
 
     # Clear caches from previous runs
     clear_caches()
 
-    actual_mode = detect_query_mode(request.query, force_mode=request.mode)
-    return SmartSearchContext(
-        root=request.root,
-        query=request.query,
+    actual_mode = detect_query_mode(query, force_mode=kwargs.get("mode"))
+    return SearchConfig(
+        root=root,
+        query=query,
         mode=actual_mode,
         limits=limits,
-        include_globs=request.include_globs,
-        exclude_globs=request.exclude_globs,
-        include_strings=request.include_strings,
+        include_globs=kwargs.get("include_globs"),
+        exclude_globs=kwargs.get("exclude_globs"),
+        include_strings=bool(kwargs.get("include_strings", False)),
         argv=argv,
-        tc=request.tc,
+        tc=kwargs.get("tc"),
         started_ms=started,
     )
 
@@ -1221,15 +1201,7 @@ def _build_search_context(request: SmartSearchRequest) -> SmartSearchContext:
 def _run_candidate_phase(
     ctx: SmartSearchContext,
 ) -> tuple[list[RawMatch], SearchStats, str]:
-    inputs = CandidateSearchInputs(
-        root=ctx.root,
-        query=ctx.query,
-        mode=ctx.mode,
-        limits=ctx.limits,
-        include_globs=ctx.include_globs,
-        exclude_globs=ctx.exclude_globs,
-    )
-    searcher, pattern = _build_candidate_searcher(inputs)
+    searcher, pattern = _build_candidate_searcher(ctx)
     raw_matches, stats = collect_candidates(searcher, ctx.limits)
     return raw_matches, stats, pattern
 
@@ -1247,13 +1219,9 @@ def _assemble_smart_search_result(
     pattern: str,
 ) -> CqResult:
     summary_inputs = SearchSummaryInputs(
-        query=ctx.query,
-        mode=ctx.mode,
+        config=ctx,
         stats=stats,
         matches=enriched_matches,
-        limits=ctx.limits,
-        include=ctx.include_globs,
-        exclude=ctx.exclude_globs,
         file_globs=["*.py", "*.pyi"],
         limit=ctx.limits.max_total_matches,
         pattern=pattern,
@@ -1267,13 +1235,13 @@ def _assemble_smart_search_result(
         include_strings=ctx.include_strings,
     )
 
-    run = mk_runmeta(
-        macro="search",
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
         argv=ctx.argv,
-        root=str(ctx.root),
+        tc=ctx.tc,
         started_ms=ctx.started_ms,
-        toolchain=ctx.tc.to_dict() if ctx.tc else {},
     )
+    run = run_ctx.to_runmeta("search")
 
     return CqResult(
         run=run,
@@ -1287,7 +1255,7 @@ def _assemble_smart_search_result(
 def smart_search(
     root: Path,
     query: str,
-    **kwargs: Unpack[SmartSearchKwargs],
+    **kwargs: Unpack[SearchKwargs],
 ) -> CqResult:
     """Execute Smart Search pipeline.
 
@@ -1306,8 +1274,7 @@ def smart_search(
     CqResult
         Complete search results.
     """
-    request = SmartSearchRequest.from_kwargs(root, query, kwargs)
-    ctx = _build_search_context(request)
+    ctx = _build_search_context(root, query, kwargs)
     raw_matches, stats, pattern = _run_candidate_phase(ctx)
     enriched_matches = _run_classification_phase(ctx, raw_matches)
     return _assemble_smart_search_result(ctx, stats, enriched_matches, pattern)

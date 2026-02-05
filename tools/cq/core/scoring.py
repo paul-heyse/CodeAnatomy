@@ -5,7 +5,10 @@ Provides standardized scoring for cq findings based on impact and confidence sig
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+
+from tools.cq.core.schema import DetailPayload, ScoreDetails
+from tools.cq.core.structs import CqStruct
 
 # Bucket thresholds
 _HIGH_THRESHOLD = 0.7
@@ -45,8 +48,7 @@ _SEVERITY_MULTIPLIERS: dict[str, float] = {
 }
 
 
-@dataclass(frozen=True)
-class ImpactSignals:
+class ImpactSignals(CqStruct, frozen=True):
     """Signals for computing impact score.
 
     Parameters
@@ -70,8 +72,7 @@ class ImpactSignals:
     ambiguities: int = 0
 
 
-@dataclass(frozen=True)
-class ConfidenceSignals:
+class ConfidenceSignals(CqStruct, frozen=True):
     """Signals for computing confidence score.
 
     Parameters
@@ -171,3 +172,80 @@ def bucket(score: float) -> str:
     if score >= _MED_THRESHOLD:
         return "med"
     return "low"
+
+
+def build_score_details(
+    *,
+    impact: ImpactSignals | None = None,
+    confidence: ConfidenceSignals | None = None,
+    severity: str | None = None,
+) -> ScoreDetails | None:
+    """Build ScoreDetails from impact/confidence signals.
+
+    Returns
+    -------
+    ScoreDetails | None
+        Score details when inputs are provided, otherwise None.
+    """
+    if impact is None and confidence is None:
+        return None
+    impact_value = impact_score(impact, severity=severity) if impact is not None else None
+    confidence_value = confidence_score(confidence) if confidence is not None else None
+    return ScoreDetails(
+        impact_score=impact_value,
+        impact_bucket=bucket(impact_value) if impact_value is not None else None,
+        confidence_score=confidence_value,
+        confidence_bucket=bucket(confidence_value) if confidence_value is not None else None,
+        evidence_kind=confidence.evidence_kind if confidence is not None else None,
+    )
+
+
+def build_detail_payload(
+    *,
+    data: Mapping[str, object] | None = None,
+    score: ScoreDetails | None = None,
+    scoring: Mapping[str, object] | None = None,
+    kind: str | None = None,
+) -> DetailPayload:
+    """Construct a DetailPayload from scoring signals and data.
+
+    Returns
+    -------
+    DetailPayload
+        Structured payload with score and arbitrary data fields.
+    """
+    if score is None and scoring is not None:
+        score = _score_details_from_mapping(scoring)
+    payload_data: dict[str, object] = dict(data) if data else {}
+    return DetailPayload(
+        kind=kind,
+        score=score,
+        data=payload_data,
+    )
+
+
+def _score_details_from_mapping(scoring: Mapping[str, object]) -> ScoreDetails | None:
+    if not scoring:
+        return None
+
+    def _coerce_float(value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def _coerce_str(value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    return ScoreDetails(
+        impact_score=_coerce_float(scoring.get("impact_score")),
+        impact_bucket=_coerce_str(scoring.get("impact_bucket")),
+        confidence_score=_coerce_float(scoring.get("confidence_score")),
+        confidence_bucket=_coerce_str(scoring.get("confidence_bucket")),
+        evidence_kind=_coerce_str(scoring.get("evidence_kind")),
+    )

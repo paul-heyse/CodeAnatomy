@@ -14,23 +14,22 @@ from typing import TYPE_CHECKING, cast
 from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
+from tools.cq.core.locations import SourceSpan
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     RunMeta,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
-    bucket,
-    confidence_score,
-    impact_score,
+    build_detail_payload,
+    build_score_details,
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
@@ -43,7 +42,7 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.ir import MetaVarCapture
+    from tools.cq.query.ir import MetaVarCapture, MetaVarFilter
 from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
@@ -124,20 +123,33 @@ class AstGrepRuleContext:
 class AstGrepMatchSpan:
     """Captured match span for relational filtering."""
 
-    file: str
-    start_line: int
-    end_line: int
+    span: SourceSpan
     match: SgNode
+
+    @property
+    def file(self) -> str:
+        """Return the file path for this match span."""
+        return self.span.file
+
+    @property
+    def start_line(self) -> int:
+        """Return the starting line for this match span."""
+        return self.span.start_line
+
+    @property
+    def end_line(self) -> int:
+        """Return the ending line for this match span."""
+        return self.span.end_line if self.span.end_line is not None else self.span.start_line
 
 
 def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
-    return mk_runmeta(
-        macro="q",
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
         argv=ctx.argv,
-        root=str(ctx.root),
+        tc=ctx.tc,
         started_ms=ctx.started_ms,
-        toolchain=ctx.tc.to_dict(),
     )
+    return run_ctx.to_runmeta("q")
 
 
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
@@ -709,8 +721,8 @@ def _match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord
         message=str(data.get("message", "Pattern match")),
         anchor=anchor,
         severity="info",
-        details=DetailPayload.from_legacy(
-            {
+        details=build_detail_payload(
+            data={
                 "text": data.get("text", ""),
                 "rule_id": data.get("ruleId", "pattern_query"),
             }
@@ -781,9 +793,13 @@ def _collect_ast_grep_match_spans(
                 range_obj = match.range()
                 matches.append(
                     AstGrepMatchSpan(
-                        file=rel_path,
-                        start_line=range_obj.start.line + 1,
-                        end_line=range_obj.end.line + 1,
+                        span=SourceSpan(
+                            file=rel_path,
+                            start_line=range_obj.start.line + 1,
+                            start_col=range_obj.start.column,
+                            end_line=range_obj.end.line + 1,
+                            end_col=range_obj.end.column,
+                        ),
                         match=match,
                     )
                 )
@@ -808,7 +824,7 @@ def _group_match_spans(
 
 def _filter_match_spans_by_metavars(
     matches: list[AstGrepMatchSpan],
-    metavar_filters: tuple[MetaVarCapture, ...],
+    metavar_filters: tuple[MetaVarFilter, ...],
 ) -> dict[str, list[tuple[int, int]]]:
     from tools.cq.query.metavar import apply_metavar_filters
 
@@ -1524,25 +1540,19 @@ def _def_to_finding(
     )
     conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
 
-    impact = impact_score(impact_signals)
-    confidence = confidence_score(conf_signals)
-
+    score = build_score_details(impact=impact_signals, confidence=conf_signals)
     return Finding(
         category="definition",
         message=f"{def_record.kind}: {def_name}",
         anchor=anchor,
         severity="info",
-        details=DetailPayload.from_legacy(
-            {
+        details=build_detail_payload(
+            data={
                 "kind": def_record.kind,
                 "name": def_name,
                 "calls_within": len(calls_within),
-                "impact_score": impact,
-                "impact_bucket": bucket(impact),
-                "confidence_score": confidence,
-                "confidence_bucket": bucket(confidence),
-                "evidence_kind": "resolved_ast",
-            }
+            },
+            score=score,
         ),
     )
 
@@ -1581,8 +1591,8 @@ def _import_to_finding(import_record: SgRecord) -> Finding:
         message=f"{category}: {import_name}",
         anchor=anchor,
         severity="info",
-        details=DetailPayload.from_legacy(
-            {
+        details=build_detail_payload(
+            data={
                 "kind": import_record.kind,
                 "name": import_name,
                 "text": import_record.text.strip(),
@@ -1697,7 +1707,7 @@ def _call_matches_target(
 
 def _build_caller_findings(
     call_contexts: list[tuple[SgRecord, str, SgRecord | None]],
-    evidence_map: dict[tuple[str, int, int], dict[str, object]],
+    evidence_map: dict[tuple[str, int, int, int, int], dict[str, object]],
 ) -> list[Finding]:
     findings: list[Finding] = []
     for call, call_target, containing in call_contexts:
@@ -1713,7 +1723,7 @@ def _build_caller_findings(
                 message=f"caller: {caller_name} calls {call_target}",
                 anchor=anchor,
                 severity="info",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(data=details),
             )
         )
     return findings
@@ -1757,7 +1767,7 @@ def _build_callees_section(
                     message=f"callee: {def_name} calls {call_target}",
                     anchor=anchor,
                     severity="info",
-                    details=DetailPayload.from_legacy(details),
+                    details=build_detail_payload(data=details),
                 )
             )
 
@@ -1827,8 +1837,8 @@ def _build_raises_section(
                 message=f"{category}: {record.text.strip()}",
                 anchor=anchor,
                 severity="info",
-                details=DetailPayload.from_legacy(
-                    {
+                details=build_detail_payload(
+                    data={
                         "context_def": _extract_def_name(containing) or "<module>",
                     }
                 ),
@@ -1878,7 +1888,7 @@ def _build_scope_section(
                 message=message,
                 anchor=base_finding.anchor,
                 severity="info",
-                details=DetailPayload.from_legacy(scope_info),
+                details=build_detail_payload(data=scope_info),
             )
         )
 
@@ -1934,7 +1944,7 @@ def _build_bytecode_surface_section(
                 message=message,
                 anchor=anchor,
                 severity="info",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(data=details),
             )
         )
 
@@ -1972,7 +1982,7 @@ def _call_to_finding(
         message=f"call: {call_target}",
         anchor=anchor,
         severity="info",
-        details=DetailPayload.from_legacy(details),
+        details=build_detail_payload(data=details),
     )
 
 

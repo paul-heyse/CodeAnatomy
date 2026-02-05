@@ -5,7 +5,6 @@ This module contains the index and cache management commands.
 
 from __future__ import annotations
 
-import json
 import sys
 from typing import Annotated
 
@@ -116,6 +115,7 @@ def schema(
     ValueError
         Raised when an unknown schema kind is requested.
     """
+    from tools.cq.core.codec import dumps_json_value
     from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
 
     if ctx is None:
@@ -134,6 +134,6 @@ def schema(
         msg = f"Unknown schema kind: {kind}"
         raise ValueError(msg)
 
-    sys.stdout.write(json.dumps(payload, indent=2))
+    sys.stdout.write(dumps_json_value(payload, indent=2))
     sys.stdout.write("\n")
     return 0

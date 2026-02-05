@@ -12,20 +12,20 @@ from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
     bucket,
+    build_detail_payload,
     confidence_score,
     impact_score,
 )
@@ -279,7 +279,7 @@ def _append_bucket_sections(
                     message=f"{symbol}({site.arg_preview}): {reason}",
                     anchor=Anchor(file=site.file, line=site.line),
                     severity=severity_map[bucket_name],
-                    details=DetailPayload.from_legacy(dict(scoring_details)),
+                    details=build_detail_payload(scoring=scoring_details),
                 )
             )
         if len(bucket_sites) > _MAX_SITES_DISPLAY:
@@ -288,7 +288,7 @@ def _append_bucket_sections(
                     category="truncated",
                     message=f"... and {len(bucket_sites) - _MAX_SITES_DISPLAY} more",
                     severity="info",
-                    details=DetailPayload.from_legacy(dict(scoring_details)),
+                    details=build_detail_payload(scoring=scoring_details),
                 )
             )
         result.sections.append(section)
@@ -303,13 +303,13 @@ def _append_evidence(
 ) -> None:
     for site in all_sites:
         bucket_name, reason = _classify_call(site, new_params)
-        details = {"preview": site.arg_preview, **scoring_details}
+        details = {"preview": site.arg_preview}
         result.evidence.append(
             Finding(
                 category=bucket_name,
                 message=f"{site.context} calls {symbol}: {reason}",
                 anchor=Anchor(file=site.file, line=site.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
 
@@ -332,13 +332,13 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     all_sites = _collect_sites(request.root, request.symbol)
     buckets = _classify_sites(all_sites, new_params)
 
-    run = mk_runmeta(
-        "sig-impact",
-        request.argv,
-        str(request.root),
-        started,
-        request.tc.to_dict(),
+    run_ctx = RunContext.from_parts(
+        root=request.root,
+        argv=request.argv,
+        tc=request.tc,
+        started_ms=started,
     )
+    run = run_ctx.to_runmeta("sig-impact")
     result = mk_result(run)
 
     result.summary = {
@@ -381,7 +381,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="break",
                 message=f"{len(buckets['would_break'])} call sites would break",
                 severity="error",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     if buckets["ambiguous"]:
@@ -390,7 +390,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="ambiguous",
                 message=f"{len(buckets['ambiguous'])} call sites need manual review",
                 severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     if buckets["ok"]:
@@ -399,7 +399,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="ok",
                 message=f"{len(buckets['ok'])} call sites are compatible",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 
@@ -409,7 +409,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
                 category="info",
                 message=f"No call sites found for '{request.symbol}'",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 

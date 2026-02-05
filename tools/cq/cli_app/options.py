@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import TYPE_CHECKING, cast
+from typing import Any
 
 import msgspec
 
 from tools.cq.core.structs import CqStruct
-
-if TYPE_CHECKING:
-    from dataclasses import DataclassInstance
 
 
 class CommonFilters(CqStruct, frozen=True):
@@ -42,13 +39,13 @@ class CommonFilters(CqStruct, frozen=True):
         )
 
 
-class QueryOptions(CommonFilters):
+class QueryOptions(CommonFilters, frozen=True):
     """Options for the q query command."""
 
     explain_files: bool = False
 
 
-class SearchOptions(CommonFilters):
+class SearchOptions(CommonFilters, frozen=True):
     """Options for the search command."""
 
     regex: bool = False
@@ -57,7 +54,7 @@ class SearchOptions(CommonFilters):
     in_dir: str | None = None
 
 
-class ReportOptions(CommonFilters):
+class ReportOptions(CommonFilters, frozen=True):
     """Options for the report command."""
 
     target: str | None = None
@@ -67,45 +64,45 @@ class ReportOptions(CommonFilters):
     bytecode_show: str | None = None
 
 
-class ImpactOptions(CommonFilters):
+class ImpactOptions(CommonFilters, frozen=True):
     """Options for the impact command."""
 
     param: str | None = None
     depth: int = 5
 
 
-class ImportsOptions(CommonFilters):
+class ImportsOptions(CommonFilters, frozen=True):
     """Options for the imports command."""
 
     cycles: bool = False
     module: str | None = None
 
 
-class ExceptionsOptions(CommonFilters):
+class ExceptionsOptions(CommonFilters, frozen=True):
     """Options for the exceptions command."""
 
     function: str | None = None
 
 
-class SigImpactOptions(CommonFilters):
+class SigImpactOptions(CommonFilters, frozen=True):
     """Options for the sig-impact command."""
 
     to: str | None = None
 
 
-class SideEffectsOptions(CommonFilters):
+class SideEffectsOptions(CommonFilters, frozen=True):
     """Options for the side-effects command."""
 
     max_files: int = 2000
 
 
-class BytecodeSurfaceOptions(CommonFilters):
+class BytecodeSurfaceOptions(CommonFilters, frozen=True):
     """Options for the bytecode-surface command."""
 
     show: str = "globals,attrs,constants"
 
 
-def options_from_params[T](params: DataclassInstance, *, type_: type[T]) -> T:
+def options_from_params[T](params: Any, *, type_: type[T]) -> T:
     """Convert a CLI params dataclass into a CQ options struct.
 
     Returns
@@ -113,5 +110,5 @@ def options_from_params[T](params: DataclassInstance, *, type_: type[T]) -> T:
     T
         Parsed options struct of the requested type.
     """
-    data = asdict(cast("DataclassInstance", params))
+    data = asdict(params)
     return msgspec.convert(data, type=type_, strict=True)

@@ -5,8 +5,9 @@ Provides high-level search functions that integrate rpygrep with search profiles
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from rpygrep import RipGrepSearch
 
@@ -17,6 +18,24 @@ from tools.cq.search.profiles import DEFAULT
 from tools.cq.search.timeout import search_sync_with_timeout
 
 _CASE_SENSITIVE_DEFAULT = True
+
+
+class _RgLines(Protocol):
+    text: str | None
+
+
+class _RgMatchData(Protocol):
+    line_number: int
+    lines: _RgLines
+
+
+class _RgMatch(Protocol):
+    data: _RgMatchData
+
+
+class _RgResult(Protocol):
+    path: str
+    matches: Sequence[_RgMatch]
 
 
 def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
@@ -301,12 +320,13 @@ def _collect_content_matches(
         )
     except TimeoutError:
         return []
+    results = cast("list[_RgResult]", results)
     return _collect_content_results(root, results, limits)
 
 
 def _collect_content_results(
     root: Path,
-    results: list[object],
+    results: Sequence[_RgResult],
     limits: SearchLimits,
 ) -> list[tuple[Path, int, str]]:
     matches: list[tuple[Path, int, str]] = []

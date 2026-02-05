@@ -73,7 +73,8 @@ def q(
         Raised when CLI context is unavailable.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.core.schema import mk_result, mk_runmeta, ms
+    from tools.cq.core.run_context import RunContext
+    from tools.cq.core.schema import mk_result, ms
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -110,13 +111,13 @@ def q(
             )
             return CliResult(result=result, context=ctx, filters=options)
         started_ms = ms()
-        run = mk_runmeta(
-            macro="q",
+        run_ctx = RunContext.from_parts(
+            root=ctx.root,
             argv=ctx.argv,
-            root=str(ctx.root),
+            tc=ctx.toolchain,
             started_ms=started_ms,
-            toolchain=ctx.toolchain.to_dict(),
         )
+        run = run_ctx.to_runmeta("q")
         result = mk_result(run)
         result.summary["error"] = str(e)
         return CliResult(result=result, context=ctx, filters=options)

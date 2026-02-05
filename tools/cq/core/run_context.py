@@ -1,0 +1,66 @@
+"""Run context helpers for CQ pipelines."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from tools.cq.core.schema import RunMeta, mk_runmeta
+from tools.cq.core.structs import CqStruct
+
+if TYPE_CHECKING:
+    from tools.cq.core.toolchain import Toolchain
+
+
+class RunContext(CqStruct, frozen=True):
+    """Shared run metadata context for CQ commands."""
+
+    root: Path
+    argv: list[str]
+    tc: Toolchain | None = None
+    started_ms: float = 0.0
+
+    @classmethod
+    def from_parts(
+        cls,
+        *,
+        root: Path,
+        argv: list[str] | None,
+        tc: Toolchain | None,
+        started_ms: float,
+    ) -> RunContext:
+        """Construct a run context from common command inputs.
+
+        Returns
+        -------
+        RunContext
+            Fully populated run context.
+        """
+        return cls(
+            root=root,
+            argv=list(argv) if argv else [],
+            tc=tc,
+            started_ms=started_ms,
+        )
+
+    def to_runmeta(self, macro: str) -> RunMeta:
+        """Build RunMeta from the context.
+
+        Returns
+        -------
+        RunMeta
+            Run metadata for the command.
+        """
+        toolchain = self.tc.to_dict() if self.tc else {}
+        return mk_runmeta(
+            macro=macro,
+            argv=self.argv,
+            root=str(self.root),
+            started_ms=self.started_ms,
+            toolchain=toolchain,
+        )
+
+
+__all__ = [
+    "RunContext",
+]

@@ -13,20 +13,20 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
     bucket,
+    build_detail_payload,
     confidence_score,
     impact_score,
 )
@@ -264,7 +264,7 @@ def _append_surface_section(
                 message=f"{surface.qualname}: {'; '.join(parts)}",
                 anchor=Anchor(file=surface.file, line=surface.line),
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 
@@ -274,7 +274,7 @@ def _append_surface_section(
                 category="truncated",
                 message=f"... and {len(all_surfaces) - _MAX_SURFACES_DISPLAY} more",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(section)
@@ -318,7 +318,7 @@ def _append_global_summary(
                 category="global",
                 message=f"{name}: {count} code objects",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     if len(all_globals) > _MAX_GLOBAL_SUMMARY:
@@ -327,7 +327,7 @@ def _append_global_summary(
                 category="truncated",
                 message=f"... and {len(all_globals) - _MAX_GLOBAL_SUMMARY} more",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(glob_section)
@@ -348,7 +348,7 @@ def _append_opcode_summary(
                 category="opcode",
                 message=f"{op}: {count}",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(op_section)
@@ -364,14 +364,13 @@ def _append_evidence(
             "globals": surface.globals,
             "attrs": surface.attrs,
             "constants_count": len(surface.constants),
-            **scoring_details,
         }
         result.evidence.append(
             Finding(
                 category="bytecode",
                 message=f"{surface.file}::{surface.qualname}",
                 anchor=Anchor(file=surface.file, line=surface.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
 
@@ -395,13 +394,12 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     all_surfaces = _collect_surfaces(request.root, files)
     all_globals, all_attrs, total_opcodes = _aggregate_surfaces(all_surfaces)
 
-    run = mk_runmeta(
-        "bytecode-surface",
-        request.argv,
-        str(request.root),
-        started,
-        request.tc.to_dict(),
-    )
+    run = RunContext.from_parts(
+        root=request.root,
+        argv=request.argv,
+        tc=request.tc,
+        started_ms=started,
+    ).to_runmeta("bytecode-surface")
     result = mk_result(run)
 
     result.summary = {
@@ -439,7 +437,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="globals",
                 message=f"{len(all_globals)} unique global references",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     if all_attrs:
@@ -448,7 +446,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="attrs",
                 message=f"{len(all_attrs)} unique attribute accesses",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     if not all_surfaces:
@@ -457,7 +455,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
                 category="info",
                 message=f"No code objects found for '{request.target}'",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 

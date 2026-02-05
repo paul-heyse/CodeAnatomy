@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 import polars as pl
 
 from tools.cq.core.findings_table import (
@@ -41,12 +43,18 @@ def _make_finding(**overrides: object) -> Finding:
     message = str(overrides.get("message", "test message"))
     file_value = overrides.get("file", "src/foo.py")
     file = None if file_value is None else str(file_value)
-    line_value = overrides.get("line", 10)
-    line = None if line_value is None else int(line_value)
-    severity = str(overrides.get("severity", "info"))
-    impact_score = float(overrides.get("impact_score", 0.5))
+    line_value = cast("int | None", overrides.get("line", 10))
+    line = line_value
+    severity_value = cast("str", overrides.get("severity", "info"))
+    if severity_value not in {"info", "warning", "error"}:
+        severity_value = "info"
+    severity: Literal["info", "warning", "error"] = cast(
+        "Literal['info', 'warning', 'error']",
+        severity_value,
+    )
+    impact_score = float(cast("float | int", overrides.get("impact_score", 0.5)))
     impact_bucket = str(overrides.get("impact_bucket", "med"))
-    confidence_score = float(overrides.get("confidence_score", 0.8))
+    confidence_score = float(cast("float | int", overrides.get("confidence_score", 0.8)))
     confidence_bucket = str(overrides.get("confidence_bucket", "high"))
     evidence_kind = str(overrides.get("evidence_kind", "resolved_ast"))
 

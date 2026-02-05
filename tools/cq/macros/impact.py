@@ -15,20 +15,20 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
     bucket,
+    build_detail_payload,
     confidence_score,
     impact_score,
 )
@@ -606,7 +606,7 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
                 f"reaches {summary.site_count} sites in {len(summary.files_affected)} files"
             ),
             severity="info",
-            details=DetailPayload.from_legacy(dict(scoring_details)),
+            details=build_detail_payload(scoring=scoring_details),
         )
     )
     for depth, count in sorted(summary.depth_counts.items()):
@@ -615,7 +615,7 @@ def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> Non
                 category="depth",
                 message=f"Depth {depth}: {count} taint sites",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 
@@ -635,14 +635,14 @@ def _append_kind_sections(
     for kind, sites in by_kind.items():
         section = Section(title=f"Taint {kind.title()} Sites")
         for site in sites[:_SECTION_SITE_LIMIT]:
-            details = {"depth": site.depth, "param": site.param, **scoring_details}
+            details = {"depth": site.depth, "param": site.param}
             section.findings.append(
                 Finding(
                     category=kind,
                     message=site.description,
                     anchor=Anchor(file=site.file, line=site.line),
                     severity="info",
-                    details=DetailPayload.from_legacy(details),
+                    details=build_detail_payload(scoring=scoring_details, data=details),
                 )
             )
         result.sections.append(section)
@@ -663,7 +663,7 @@ def _append_callers_section(
                 message="Potential call site",
                 anchor=Anchor(file=file, line=line),
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(caller_section)
@@ -680,13 +680,13 @@ def _append_evidence(
         if key in seen:
             continue
         seen.add(key)
-        details = {"depth": site.depth, **scoring_details}
+        details = {"depth": site.depth}
         result.evidence.append(
             Finding(
                 category=site.kind,
                 message=site.description,
                 anchor=Anchor(file=site.file, line=site.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
 
@@ -699,7 +699,13 @@ def _resolve_functions(index: DefIndex, function_name: str) -> list[FnDecl]:
 
 
 def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqResult:
-    run = mk_runmeta("impact", request.argv, str(request.root), started_ms, request.tc.to_dict())
+    run_ctx = RunContext.from_parts(
+        root=request.root,
+        argv=request.argv,
+        tc=request.tc,
+        started_ms=started_ms,
+    )
+    run = run_ctx.to_runmeta("impact")
     result = mk_result(run)
     result.summary = {
         "status": "not_found",
@@ -806,7 +812,13 @@ def _build_impact_result(
     if not ctx.functions:
         return _build_not_found_result(request, started_ms=started_ms)
 
-    run = mk_runmeta("impact", request.argv, str(request.root), started_ms, request.tc.to_dict())
+    run_ctx = RunContext.from_parts(
+        root=request.root,
+        argv=request.argv,
+        tc=request.tc,
+        started_ms=started_ms,
+    )
+    run = run_ctx.to_runmeta("impact")
     result = mk_result(run)
 
     _append_missing_param_warnings(result, ctx.functions, request=request)

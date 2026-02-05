@@ -19,19 +19,18 @@ class TestMetaAppParsing:
         # The meta app should intercept global options
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", "json"])
         # Global options go to the meta launcher
-        assert bound.kwargs.get("output_format") is not None or "output_format" in bound.arguments
+        assert bound.kwargs["global_opts"].output_format is not None
 
     def test_meta_parses_verbose(self) -> None:
         """Test that --verbose flag is parsed by meta app."""
         # Verbose is an int, so provide a value
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--verbose", "1"])
-        verbose_val = bound.kwargs.get("verbose") or bound.arguments.get("verbose")
-        assert verbose_val == 1
+        assert bound.kwargs["global_opts"].verbose == 1
 
     def test_meta_parses_root(self) -> None:
         """Test that --root is parsed by meta app."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--root", "/tmp"])
-        assert bound.kwargs.get("root") is not None or "root" in bound.arguments
+        assert bound.kwargs["global_opts"].root is not None
 
 
 class TestCommandRegistration:
@@ -136,4 +135,4 @@ class TestConfigChain:
     def test_no_config_option_exists(self) -> None:
         """Test that --no-config option is available."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--no-config"])
-        assert bound.kwargs.get("no_config") is True or bound.arguments.get("no_config") is True
+        assert bound.kwargs["config_opts"].no_config is True

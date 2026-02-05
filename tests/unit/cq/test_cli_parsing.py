@@ -33,7 +33,7 @@ class TestImpactCommandParsing:
         _cmd, bound, _extra = app.meta.parse_args(
             ["impact", "foo", "--param", "bar", "--format", "json"]
         )
-        assert bound.kwargs["output_format"] == OutputFormat.json
+        assert bound.kwargs["global_opts"].output_format == OutputFormat.json
 
     def test_impact_missing_param_fails(self) -> None:
         """Test that impact command fails without --param."""
@@ -147,7 +147,7 @@ class TestOutputFormatParsing:
     def test_format_options(self, format_arg: str, expected: OutputFormat) -> None:
         """Test parsing all format options."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--format", format_arg])
-        assert bound.kwargs["output_format"] == expected
+        assert bound.kwargs["global_opts"].output_format == expected
 
 
 class TestReportCommandParsing:

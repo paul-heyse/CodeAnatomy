@@ -14,22 +14,21 @@ from typing import TYPE_CHECKING, TypedDict
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
+    ScoreDetails,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
-    bucket,
-    confidence_score,
-    impact_score,
+    build_detail_payload,
+    build_score_details,
 )
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search import INTERACTIVE, find_call_candidates
@@ -165,7 +164,7 @@ class CallSiteBuildContext:
     rel_path: str
     source: str
     source_lines: list[str]
-    def_lines: list[int]
+    def_lines: list[tuple[int, int]]
     total_lines: int
     tree: ast.AST
     call_index: dict[tuple[int, int], ast.Call]
@@ -849,7 +848,7 @@ def _analyze_sites(
 def _add_shape_section(
     result: CqResult,
     arg_shapes: Counter[str],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     shape_section = Section(title="Argument Shape Histogram")
     for shape, count in arg_shapes.most_common(10):
@@ -858,7 +857,7 @@ def _add_shape_section(
                 category="shape",
                 message=f"{shape}: {count} calls",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(score=score),
             )
         )
     result.sections.append(shape_section)
@@ -867,7 +866,7 @@ def _add_shape_section(
 def _add_kw_section(
     result: CqResult,
     kwarg_usage: Counter[str],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     if not kwarg_usage:
         return
@@ -878,7 +877,7 @@ def _add_kw_section(
                 category="kwarg",
                 message=f"{kw}: {count} uses",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(score=score),
             )
         )
     result.sections.append(kw_section)
@@ -887,7 +886,7 @@ def _add_kw_section(
 def _add_context_section(
     result: CqResult,
     contexts: Counter[str],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     ctx_section = Section(title="Calling Contexts")
     for ctx, count in contexts.most_common(10):
@@ -896,7 +895,7 @@ def _add_context_section(
                 category="context",
                 message=f"{ctx}: {count} calls",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(score=score),
             )
         )
     result.sections.append(ctx_section)
@@ -905,7 +904,7 @@ def _add_context_section(
 def _add_hazard_section(
     result: CqResult,
     hazard_counts: Counter[str],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     if not hazard_counts:
         return
@@ -916,7 +915,7 @@ def _add_hazard_section(
                 category="hazard",
                 message=f"{label}: {count} calls",
                 severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(score=score),
             )
         )
     result.sections.append(hazard_section)
@@ -926,7 +925,7 @@ def _add_sites_section(
     result: CqResult,
     function_name: str,
     all_sites: list[CallSite],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     """Add call sites section to result.
 
@@ -938,8 +937,8 @@ def _add_sites_section(
         Name of the function.
     all_sites : list[CallSite]
         All call sites.
-    scoring_details : dict[str, object]
-        Scoring information.
+    score : ScoreDetails | None
+        Scoring metadata.
     """
     sites_section = Section(title="Call Sites")
     for site in all_sites[:50]:
@@ -953,7 +952,6 @@ def _add_sites_section(
             "hazards": site.hazards,
             "context_window": site.context_window,
             "context_snippet": site.context_snippet,
-            **scoring_details,
         }
         sites_section.findings.append(
             Finding(
@@ -961,7 +959,7 @@ def _add_sites_section(
                 message=f"{function_name}({site.arg_preview})",
                 anchor=Anchor(file=site.file, line=site.line, col=site.col),
                 severity="info",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(score=score, data=details),
             )
         )
     result.sections.append(sites_section)
@@ -971,7 +969,7 @@ def _add_evidence(
     result: CqResult,
     function_name: str,
     all_sites: list[CallSite],
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     """Add evidence findings for each call site.
 
@@ -983,8 +981,8 @@ def _add_evidence(
         Name of the function.
     all_sites : list[CallSite]
         All call sites.
-    scoring_details : dict[str, object]
-        Scoring information.
+    score : ScoreDetails | None
+        Scoring metadata.
     """
     for site in all_sites:
         details: dict[str, object] = {
@@ -995,14 +993,13 @@ def _add_evidence(
             "context_snippet": site.context_snippet,
             "symtable": site.symtable_info,
             "bytecode": site.bytecode_info,
-            **scoring_details,
         }
         result.evidence.append(
             Finding(
                 category="call_site",
                 message=f"{site.context} calls {function_name}",
                 anchor=Anchor(file=site.file, line=site.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(score=score, data=details),
             )
         )
 
@@ -1089,7 +1086,7 @@ def _build_call_scoring(
     hazard_counts: dict[str, int],
     *,
     used_fallback: bool,
-) -> dict[str, object]:
+) -> ScoreDetails | None:
     """Compute scoring details for call-site findings.
 
     Returns
@@ -1120,15 +1117,10 @@ def _build_call_scoring(
     else:
         evidence_kind = "resolved_ast"
     conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    return {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
+    return build_score_details(
+        impact=imp_signals,
+        confidence=conf_signals,
+    )
 
 
 def _build_calls_summary(
@@ -1165,7 +1157,7 @@ def _append_calls_findings(
     ctx: CallsContext,
     scan_result: CallScanResult,
     analysis: CallAnalysisSummary,
-    scoring_details: dict[str, object],
+    score: ScoreDetails | None,
 ) -> None:
     function_name = ctx.function_name
     all_sites = scan_result.all_sites
@@ -1178,7 +1170,7 @@ def _append_calls_findings(
                 f"{scan_result.files_with_calls} files"
             ),
             severity="info",
-            details=DetailPayload.from_legacy(dict(scoring_details)),
+            details=build_detail_payload(score=score),
         )
     )
 
@@ -1188,16 +1180,16 @@ def _append_calls_findings(
                 category="forwarding",
                 message=f"{analysis.forwarding_count} calls use *args/**kwargs forwarding",
                 severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(score=score),
             )
         )
 
-    _add_shape_section(result, analysis.arg_shapes, scoring_details)
-    _add_kw_section(result, analysis.kwarg_usage, scoring_details)
-    _add_context_section(result, analysis.contexts, scoring_details)
-    _add_hazard_section(result, analysis.hazard_counts, scoring_details)
-    _add_sites_section(result, function_name, all_sites, scoring_details)
-    _add_evidence(result, function_name, all_sites, scoring_details)
+    _add_shape_section(result, analysis.arg_shapes, score)
+    _add_kw_section(result, analysis.kwarg_usage, score)
+    _add_context_section(result, analysis.contexts, score)
+    _add_hazard_section(result, analysis.hazard_counts, score)
+    _add_sites_section(result, function_name, all_sites, score)
+    _add_evidence(result, function_name, all_sites, score)
 
 
 def _build_calls_result(
@@ -1206,7 +1198,13 @@ def _build_calls_result(
     *,
     started_ms: float,
 ) -> CqResult:
-    run = mk_runmeta("calls", ctx.argv, str(ctx.root), started_ms, ctx.tc.to_dict())
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=started_ms,
+    )
+    run = run_ctx.to_runmeta("calls")
     result = mk_result(run)
 
     result.summary = _build_calls_summary(ctx.function_name, scan_result)
@@ -1222,14 +1220,14 @@ def _build_calls_result(
         return result
 
     analysis = _summarize_sites(scan_result.all_sites)
-    scoring_details = _build_call_scoring(
+    score = _build_call_scoring(
         scan_result.all_sites,
         scan_result.files_with_calls,
         analysis.forwarding_count,
         analysis.hazard_counts,
         used_fallback=scan_result.used_fallback,
     )
-    _append_calls_findings(result, ctx, scan_result, analysis, scoring_details)
+    _append_calls_findings(result, ctx, scan_result, analysis, score)
     return result
 
 

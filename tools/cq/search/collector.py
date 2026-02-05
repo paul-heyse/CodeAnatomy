@@ -6,7 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from tools.cq.core.locations import SourceSpan, span_from_rg_match
 from tools.cq.search.profiles import SearchLimits
+from tools.cq.search.rg_events import RgEvent
 
 if TYPE_CHECKING:
     from tools.cq.search.smart_search import RawMatch
@@ -16,9 +18,7 @@ if TYPE_CHECKING:
 class MatchPayload:
     """Normalized match payload for raw match creation."""
 
-    file: str
-    line: int
-    col: int
+    span: SourceSpan
     text: str
     match_text: str
     match_start: int
@@ -39,20 +39,26 @@ class RgCollector:
     max_files_hit: bool = False
     max_matches_hit: bool = False
 
-    def handle_summary(self, payload: dict[str, object]) -> None:
-        """Record summary stats from a ripgrep JSON payload."""
-        data = payload.get("data", {})
-        if isinstance(data, dict):
-            stats = data.get("stats")
-            if isinstance(stats, dict):
-                self.summary_stats = stats
+    def handle_event(self, event: RgEvent) -> None:
+        """Dispatch a decoded ripgrep event."""
+        if event.type == "summary":
+            if isinstance(event.data, dict):
+                self.handle_summary(event.data)
+            return
+        if event.type != "match":
+            return
+        if isinstance(event.data, dict):
+            self.handle_match(event.data)
 
-    def handle_match(self, payload: dict[str, object]) -> None:
+    def handle_summary(self, data: dict[str, object]) -> None:
+        """Record summary stats from a ripgrep JSON payload."""
+        stats = data.get("stats")
+        if isinstance(stats, dict):
+            self.summary_stats = stats
+
+    def handle_match(self, data: dict[str, object]) -> None:
         """Process a ripgrep JSON match payload into RawMatch entries."""
         if self.max_matches_hit or self.max_files_hit:
-            return
-        data = payload.get("data", {})
-        if not isinstance(data, dict):
             return
         file_path = self._extract_file_path(data)
         if not file_path or not self._allow_file(file_path):
@@ -77,9 +83,12 @@ class RgCollector:
             return
         self._append_match(
             MatchPayload(
-                file=file_path,
-                line=line_number,
-                col=0,
+                span=span_from_rg_match(
+                    file=file_path,
+                    line=line_number,
+                    start_col=0,
+                    end_col=len(line_text),
+                ),
                 text=line_text,
                 match_text=line_text,
                 match_start=0,
@@ -149,9 +158,12 @@ class RgCollector:
             match_text = line_text[start:end]
         self._append_match(
             MatchPayload(
-                file=file_path,
-                line=line_number,
-                col=start,
+                span=span_from_rg_match(
+                    file=file_path,
+                    line=line_number,
+                    start_col=start,
+                    end_col=end,
+                ),
                 text=line_text,
                 match_text=match_text,
                 match_start=start,
@@ -163,9 +175,7 @@ class RgCollector:
     def _append_match(self, payload: MatchPayload) -> None:
         self.matches.append(
             self.match_factory(
-                file=payload.file,
-                line=payload.line,
-                col=payload.col,
+                span=payload.span,
                 text=payload.text,
                 match_text=payload.match_text,
                 match_start=payload.match_start,
@@ -173,3 +183,13 @@ class RgCollector:
                 submatch_index=payload.submatch_index,
             )
         )
+
+    def finalize(self) -> None:
+        """Finalize summary stats when ripgrep doesn't emit a summary."""
+        if self.summary_stats is not None:
+            return
+        self.summary_stats = {
+            "searches": len(self.seen_files),
+            "searches_with_match": len(self.seen_files),
+            "matches": len(self.matches),
+        }

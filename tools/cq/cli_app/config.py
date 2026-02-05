@@ -11,9 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import msgspec
-from pydantic import ValidationError
 
-from tools.cq.cli_app.config_models import CqConfigModel
 from tools.cq.cli_app.config_types import CqConfig
 
 
@@ -102,8 +100,8 @@ def load_typed_config(
     if data is None:
         return None
 
-    model = _load_config_model(data, from_strings=False)
-    return _to_config_struct(model)
+    coerced = _coerce_config_data(data)
+    return _convert_config_data(coerced)
 
 
 def _resolve_config_path(config_file: str | None) -> Path | None:
@@ -173,28 +171,89 @@ def load_typed_env_config() -> CqConfig | None:
     if not data:
         return None
 
-    model = _load_config_model(data, from_strings=True)
-    return _to_config_struct(model)
+    coerced = _coerce_config_data(data)
+    return _convert_config_data(coerced)
 
 
-def _load_config_model(data: dict[str, object], *, from_strings: bool) -> CqConfigModel | None:
-    try:
-        if from_strings:
-            return CqConfigModel.model_validate_strings(data)
-        return CqConfigModel.model_validate(data)
-    except ValidationError:
+def _coerce_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value in {0, 1}:
+            return bool(value)
         return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
 
 
-def _to_config_struct(model: CqConfigModel | None) -> CqConfig | None:
-    if model is None:
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None
+
+
+def _coerce_str(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    return None
+
+
+def _coerce_config_data(data: dict[str, object]) -> dict[str, object] | None:
+    allowed = {
+        "root",
+        "verbose",
+        "format",
+        "output_format",
+        "artifact_dir",
+        "save_artifact",
+        "no_save_artifact",
+    }
+    coerced: dict[str, object] = {}
+
+    for key, value in data.items():
+        if key not in allowed:
+            return None
+        if value is None:
+            continue
+        normalized_key = "output_format" if key == "format" else key
+        if normalized_key in {"root", "output_format", "artifact_dir"}:
+            coerced_value = _coerce_str(value)
+        elif normalized_key == "verbose":
+            coerced_value = _coerce_int(value)
+        elif normalized_key in {"save_artifact", "no_save_artifact"}:
+            coerced_value = _coerce_bool(value)
+        else:
+            coerced_value = None
+        if coerced_value is None:
+            return None
+        coerced[normalized_key] = coerced_value
+
+    if "no_save_artifact" in coerced and "save_artifact" not in coerced:
+        no_save = coerced.pop("no_save_artifact")
+        if isinstance(no_save, bool):
+            coerced["save_artifact"] = not no_save
+    else:
+        coerced.pop("no_save_artifact", None)
+
+    return coerced or None
+
+
+def _convert_config_data(data: dict[str, object] | None) -> CqConfig | None:
+    if not data:
         return None
-    data = model.model_dump(exclude_none=True, by_alias=False)
-    no_save = data.pop("no_save_artifact", None)
-    if no_save is not None and "save_artifact" not in data:
-        data["save_artifact"] = not no_save
     try:
-        return msgspec.convert(data, type=CqConfig)
+        return msgspec.convert(data, type=CqConfig, strict=True)
     except msgspec.ValidationError:
         return None
 

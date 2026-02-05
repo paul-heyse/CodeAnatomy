@@ -13,20 +13,20 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
-    DetailPayload,
     Finding,
     Section,
     mk_result,
-    mk_runmeta,
     ms,
 )
 from tools.cq.core.scoring import (
     ConfidenceSignals,
     ImpactSignals,
     bucket,
+    build_detail_payload,
     confidence_score,
     impact_score,
 )
@@ -347,7 +347,7 @@ def _append_exception_sections(
                 category="raise",
                 message=f"{exc_type}: {count} sites",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(raise_section)
@@ -360,7 +360,7 @@ def _append_exception_sections(
                 category="catch",
                 message=f"{exc_type}: {count} handlers",
                 severity="info",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
     result.sections.append(catch_section)
@@ -393,7 +393,7 @@ def _append_uncaught_section(
             continue
         if _has_matching_catch(raised, all_catches):
             continue
-        details = dict(scoring_details)
+        details: dict[str, object] = {}
         if raised.message:
             details["message"] = raised.message
         uncaught_section.findings.append(
@@ -402,7 +402,7 @@ def _append_uncaught_section(
                 message=f"{raised.exception_type} raised in {raised.in_function}",
                 anchor=Anchor(file=raised.file, line=raised.line),
                 severity="warning",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
     result.sections.append(uncaught_section)
@@ -418,14 +418,14 @@ def _append_bare_except_section(
         return
     bare_section = Section(title="Bare Except Clauses")
     for caught in bare_excepts[:_BARE_EXCEPT_LIMIT]:
-        details = {"reraises": caught.reraises, **scoring_details}
+        details = {"reraises": caught.reraises}
         bare_section.findings.append(
             Finding(
                 category="bare_except",
                 message=f"in {caught.in_function}",
                 anchor=Anchor(file=caught.file, line=caught.line),
                 severity="warning",
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
     result.sections.append(bare_section)
@@ -446,14 +446,13 @@ def _append_exception_evidence(
             "function": raised.in_function,
             "class": raised.in_class,
             "is_reraise": raised.is_reraise,
-            **scoring_details,
         }
         result.evidence.append(
             Finding(
                 category="raise",
                 message=message,
                 anchor=Anchor(file=raised.file, line=raised.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
     for caught in all_catches:
@@ -462,14 +461,13 @@ def _append_exception_evidence(
             "class": caught.in_class,
             "bare": caught.is_bare_except,
             "reraises": caught.reraises,
-            **scoring_details,
         }
         result.evidence.append(
             Finding(
                 category="catch",
                 message=f"except {', '.join(caught.exception_types)}",
                 anchor=Anchor(file=caught.file, line=caught.line),
-                details=DetailPayload.from_legacy(details),
+                details=build_detail_payload(scoring=scoring_details, data=details),
             )
         )
 
@@ -507,7 +505,12 @@ def cmd_exceptions(
         all_raises = [r for r in all_raises if r.in_function == function]
         all_catches = [c for c in all_catches if c.in_function == function]
 
-    run = mk_runmeta("exceptions", argv, str(root), started, tc.to_dict())
+    run = RunContext.from_parts(
+        root=root,
+        argv=argv,
+        tc=tc,
+        started_ms=started,
+    ).to_runmeta("exceptions")
     result = mk_result(run)
 
     raise_types, catch_types = _summarize_exception_types(all_raises, all_catches)
@@ -548,7 +551,7 @@ def cmd_exceptions(
                 category="warning",
                 message=f"Found {len(bare_excepts)} bare except: clauses",
                 severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 
@@ -559,7 +562,7 @@ def cmd_exceptions(
                 category="warning",
                 message=f"Found {len(empty_handlers)} empty exception handlers",
                 severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
+                details=build_detail_payload(scoring=scoring_details),
             )
         )
 

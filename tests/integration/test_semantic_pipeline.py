@@ -80,14 +80,15 @@ class TestSemanticPipelineIntegration:
         self,
         datafusion_session: SessionContext,
     ) -> None:
-        """Verify fallback dataset names resolve for extract outputs."""
+        """Verify legacy suffixed dataset names do not resolve."""
         from tests.test_helpers.arrow_seed import register_arrow_table
 
         test_data = pa.table({"path": ["test.py"]})
         register_arrow_table(datafusion_session, name="cst_refs_v1", value=test_data)
 
         result = validate_semantic_inputs(datafusion_session)
-        assert result.resolved_names.get("cst_refs") == "cst_refs_v1"
+        assert result.resolved_names.get("cst_refs") is None
+        assert "cst_refs" in result.missing_required
 
     def test_require_semantic_inputs_raises_when_missing(
         self,
@@ -102,6 +103,8 @@ class TestSemanticPipelineIntegration:
         datafusion_session: SessionContext,
     ) -> None:
         """Verify semantic input validation passes with required tables + columns."""
+        from datafusion_engine.arrow.interop import empty_table_for_schema
+        from semantics.catalog.dataset_specs import dataset_schema
         from tests.test_helpers.arrow_seed import register_arrow_table
 
         def _table(columns: tuple[str, ...]) -> pa.Table:
@@ -185,6 +188,11 @@ class TestSemanticPipelineIntegration:
             name="file_line_index_v1",
             value=_table(("path", "line_no", "line_start_byte", "line_text")),
         )
+        register_arrow_table(
+            datafusion_session,
+            name="repo_files_v1",
+            value=empty_table_for_schema(dataset_schema("repo_files_v1")),
+        )
 
         resolved = require_semantic_inputs(datafusion_session)
         validation = validate_semantic_input_columns(
@@ -201,10 +209,10 @@ class TestSemanticPipelineIntegration:
         assert "cpg_nodes" in SEMANTIC_OUTPUT_NAMES
         assert "cpg_edges" in SEMANTIC_OUTPUT_NAMES
 
-        # Verify _v1 suffix applied
-        assert canonical_output_name("scip_occurrences_norm") == "scip_occurrences_norm_v1"
-        assert canonical_output_name("rel_name_symbol") == "rel_name_symbol_v1"
-        assert canonical_output_name("cpg_nodes") == "cpg_nodes_v1"
+        # Verify canonical names are identity-mapped
+        assert canonical_output_name("scip_occurrences_norm") == "scip_occurrences_norm"
+        assert canonical_output_name("rel_name_symbol") == "rel_name_symbol"
+        assert canonical_output_name("cpg_nodes") == "cpg_nodes"
 
         # Verify unknown names pass through unchanged
         assert canonical_output_name("unknown_table") == "unknown_table"

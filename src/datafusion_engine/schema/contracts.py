@@ -873,6 +873,10 @@ class SchemaContract:
         str
             SQL type string
         """
+        from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
+
+        if isinstance(arrow_type, ArrowTypeBase):
+            arrow_type = arrow_type_to_pyarrow(arrow_type)
         # Simplified mapping - extend as needed
         type_map = {
             pa.int64(): "Int64",

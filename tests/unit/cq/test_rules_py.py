@@ -13,6 +13,7 @@ from tools.cq.astgrep.rules_py import (
     get_all_rule_ids,
     get_rules_for_types,
 )
+from tools.cq.astgrep.sgpy_scanner import RecordType
 
 
 class TestPythonFactRules:
@@ -28,7 +29,7 @@ class TestPythonFactRules:
 
     def test_all_rules_have_record_type(self) -> None:
         """All rules should have a valid record type."""
-        valid_types = {"def", "call", "import", "raise", "except", "assign_ctor"}
+        valid_types: set[RecordType] = {"def", "call", "import", "raise", "except", "assign_ctor"}
         for rule in PYTHON_FACT_RULES:
             assert rule.record_type in valid_types, f"Invalid record type: {rule.record_type}"
 
@@ -52,35 +53,40 @@ class TestGetRulesForTypes:
 
     def test_get_rules_for_types_def(self) -> None:
         """Should return def rules for 'def' type."""
-        rules = get_rules_for_types({"def"})
+        record_types: set[RecordType] = {"def"}
+        rules = get_rules_for_types(record_types)
         assert len(rules) > 0
         for rule in rules:
             assert rule.record_type == "def"
 
     def test_get_rules_for_types_call(self) -> None:
         """Should return call rules for 'call' type."""
-        rules = get_rules_for_types({"call"})
+        record_types: set[RecordType] = {"call"}
+        rules = get_rules_for_types(record_types)
         assert len(rules) == 2  # name_call and attr_call
         for rule in rules:
             assert rule.record_type == "call"
 
     def test_get_rules_for_types_import(self) -> None:
         """Should return import rules for 'import' type."""
-        rules = get_rules_for_types({"import"})
+        record_types: set[RecordType] = {"import"}
+        rules = get_rules_for_types(record_types)
         assert len(rules) == 6  # Various import variants
         for rule in rules:
             assert rule.record_type == "import"
 
     def test_get_rules_for_types_raise(self) -> None:
         """Should return raise rules for 'raise' type."""
-        rules = get_rules_for_types({"raise"})
+        record_types: set[RecordType] = {"raise"}
+        rules = get_rules_for_types(record_types)
         assert len(rules) == 3  # raise, raise_from, raise_bare
         for rule in rules:
             assert rule.record_type == "raise"
 
     def test_get_rules_for_types_except(self) -> None:
         """Should return except rules for 'except' type."""
-        rules = get_rules_for_types({"except"})
+        record_types: set[RecordType] = {"except"}
+        rules = get_rules_for_types(record_types)
         assert len(rules) == 3  # except, except_as, except_bare
         for rule in rules:
             assert rule.record_type == "except"
@@ -92,9 +98,12 @@ class TestGetRulesForTypes:
 
     def test_get_rules_for_multiple_types(self) -> None:
         """Should combine rules for multiple types."""
-        rules = get_rules_for_types({"def", "call"})
-        def_rules = get_rules_for_types({"def"})
-        call_rules = get_rules_for_types({"call"})
+        record_types: set[RecordType] = {"def", "call"}
+        rules = get_rules_for_types(record_types)
+        def_types: set[RecordType] = {"def"}
+        call_types: set[RecordType] = {"call"}
+        def_rules = get_rules_for_types(def_types)
+        call_rules = get_rules_for_types(call_types)
         assert len(rules) == len(def_rules) + len(call_rules)
 
 
@@ -103,7 +112,7 @@ class TestRulesByRecordType:
 
     def test_all_record_types_present(self) -> None:
         """All record types should be in the mapping."""
-        expected_types = {"def", "call", "import", "raise", "except", "assign_ctor"}
+        expected_types: set[RecordType] = {"def", "call", "import", "raise", "except", "assign_ctor"}
         assert set(RULES_BY_RECORD_TYPE.keys()) == expected_types
 
     def test_def_rules_count(self) -> None:

@@ -151,18 +151,18 @@ class TestNodeSpecWithFamily:
 
     def test_adds_extra_fields(self) -> None:
         """Verify extra fields are appended."""
-        from datafusion_engine.arrow import interop
+        from schema_spec.arrow_types import ArrowPrimitiveSpec
 
-        extra = [FieldSpec(name="custom_field", dtype=interop.string())]
+        extra = [FieldSpec(name="custom_field", dtype=ArrowPrimitiveSpec(name="string"))]
         spec = node_spec_with_family("test_spec", NodeFamily.CST, extra_fields=extra)
         field_names = [f.name for f in spec.fields]
         assert "custom_field" in field_names
 
     def test_no_duplicate_fields(self) -> None:
         """Verify duplicate field names are not added."""
-        from datafusion_engine.arrow import interop
+        from schema_spec.arrow_types import ArrowPrimitiveSpec
 
-        extra = [FieldSpec(name="node_id", dtype=interop.string())]
+        extra = [FieldSpec(name="node_id", dtype=ArrowPrimitiveSpec(name="string"))]
         spec = node_spec_with_family("test_spec", NodeFamily.CST, extra_fields=extra)
         node_id_count = sum(1 for f in spec.fields if f.name == "node_id")
         assert node_id_count == 1
@@ -193,15 +193,15 @@ class TestMergeFieldBundles:
 
     def test_merges_bundles(self) -> None:
         """Verify bundles are merged correctly."""
-        from datafusion_engine.arrow import interop
+        from schema_spec.arrow_types import ArrowPrimitiveSpec
 
         bundle1 = FieldBundle(
             name="b1",
-            fields=(FieldSpec(name="f1", dtype=interop.string()),),
+            fields=(FieldSpec(name="f1", dtype=ArrowPrimitiveSpec(name="string")),),
         )
         bundle2 = FieldBundle(
             name="b2",
-            fields=(FieldSpec(name="f2", dtype=interop.int32()),),
+            fields=(FieldSpec(name="f2", dtype=ArrowPrimitiveSpec(name="int32")),),
         )
         result = merge_field_bundles(bundle1, bundle2)
         assert len(result) == 2
@@ -211,21 +211,21 @@ class TestMergeFieldBundles:
 
     def test_removes_duplicates(self) -> None:
         """Verify duplicate field names are removed."""
-        from datafusion_engine.arrow import interop
+        from schema_spec.arrow_types import ArrowPrimitiveSpec
 
         bundle1 = FieldBundle(
             name="b1",
-            fields=(FieldSpec(name="shared", dtype=interop.string()),),
+            fields=(FieldSpec(name="shared", dtype=ArrowPrimitiveSpec(name="string")),),
         )
         bundle2 = FieldBundle(
             name="b2",
-            fields=(FieldSpec(name="shared", dtype=interop.int32()),),
+            fields=(FieldSpec(name="shared", dtype=ArrowPrimitiveSpec(name="int32")),),
         )
         result = merge_field_bundles(bundle1, bundle2)
         assert len(result) == 1
         assert result[0].name == "shared"
         # First occurrence wins
-        assert result[0].dtype == interop.string()
+        assert result[0].dtype == ArrowPrimitiveSpec(name="string")
 
     def test_empty_bundles(self) -> None:
         """Verify empty bundles work."""

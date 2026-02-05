@@ -472,7 +472,7 @@ def _resolve_batch_settings(
 
 
 def _build_otel_config(payload: Mapping[str, object]) -> OtelConfig:
-    resolved = OTEL_CONFIG_ADAPTER.validate_strings(payload)
+    resolved = OTEL_CONFIG_ADAPTER.validate_python(payload)
     sampler = _resolve_sampler(
         sampler_name=resolved.sampler,
         sampler_arg=resolved.sampler_arg,

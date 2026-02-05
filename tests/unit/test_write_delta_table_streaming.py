@@ -23,8 +23,9 @@ def test_write_delta_table_streaming_reader(monkeypatch: Any, tmp_path: Path) ->
     seen: dict[str, object] = {}
 
     def fake_datafusion_from_arrow(
-        _ctx: object, *, _name: str, value: object, **_kwargs: object
+        _ctx: object, *, name: str, value: object, **_kwargs: object
     ) -> object:
+        _ = name
         assert isinstance(value, RecordBatchReaderLike)
         seen["value"] = value
         return object()

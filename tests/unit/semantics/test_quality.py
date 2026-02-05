@@ -283,7 +283,7 @@ class TestQualityRelationshipSpec:
             right_view="right_table",
         )
         assert spec.join_file_quality is True
-        assert spec.file_quality_view == "file_quality_v1"
+        assert spec.file_quality_view == "file_quality"
 
     def test_disabled_file_quality(self) -> None:
         """QualityRelationshipSpec can disable file quality join."""
@@ -304,15 +304,15 @@ class TestQualitySpecsRegistry:
         from semantics.quality_specs import QUALITY_RELATIONSHIP_SPECS
 
         expected_names = [
-            "rel_name_symbol_v1",
-            "rel_def_symbol_v1",
-            "rel_import_symbol_v1",
-            "rel_callsite_symbol_v1",
-            "rel_cst_docstring_owner_by_id_v1",
-            "rel_cst_docstring_owner_by_span_v1",
-            "rel_cst_ref_to_scip_symbol_v1",
-            "rel_call_to_def_scip_v1",
-            "rel_call_to_def_name_v1",
+            "rel_name_symbol",
+            "rel_def_symbol",
+            "rel_import_symbol",
+            "rel_callsite_symbol",
+            "rel_cst_docstring_owner_by_id",
+            "rel_cst_docstring_owner_by_span",
+            "rel_cst_ref_to_scip_symbol",
+            "rel_call_to_def_scip",
+            "rel_call_to_def_name",
         ]
         for name in expected_names:
             assert name in QUALITY_RELATIONSHIP_SPECS
@@ -333,7 +333,7 @@ class TestQualitySpecsRegistry:
         """REL_CST_DOCSTRING_OWNER_BY_ID has correct configuration."""
         from semantics.quality_specs import REL_CST_DOCSTRING_OWNER_BY_ID
 
-        assert REL_CST_DOCSTRING_OWNER_BY_ID.name == "rel_cst_docstring_owner_by_id_v1"
+        assert REL_CST_DOCSTRING_OWNER_BY_ID.name == "rel_cst_docstring_owner_by_id"
         assert REL_CST_DOCSTRING_OWNER_BY_ID.signals.base_confidence == 0.98
         assert len(REL_CST_DOCSTRING_OWNER_BY_ID.signals.hard) == 2
         assert REL_CST_DOCSTRING_OWNER_BY_ID.rank is not None

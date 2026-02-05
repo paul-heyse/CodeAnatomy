@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tools.cq.astgrep.rules_py import PY_CALL_NAME, PY_DEF_CLASS, PY_DEF_FUNCTION, PY_IMPORT
 from tools.cq.astgrep.sgpy_scanner import (
+    RecordType,
     RuleSpec,
     SgRecord,
     filter_records_by_type,
@@ -187,7 +188,8 @@ class TestFilterRecordsByType:
             SgRecord("def", "function", "test.py", 1, 0, 2, 0, "def f(): pass", "py_def_function"),
             SgRecord("call", "name_call", "test.py", 3, 0, 3, 5, "foo()", "py_call_name"),
         ]
-        filtered = filter_records_by_type(records, {"def"})
+        record_types: set[RecordType] = {"def"}
+        filtered = filter_records_by_type(records, record_types)
         assert len(filtered) == 1
         assert filtered[0].record == "def"
 

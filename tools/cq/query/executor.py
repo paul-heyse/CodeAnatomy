@@ -180,7 +180,7 @@ def _scan_entity_records(
 ) -> list[SgRecord]:
     return sg_scan(
         paths=paths,
-        record_types=set(ctx.plan.sg_record_types),
+        record_types=ctx.plan.sg_record_types,
         root=ctx.root,
         globs=scope_globs,
     )

@@ -21,7 +21,7 @@ def test_finalize_df_to_contract_adds_missing_columns() -> None:
         name="partial_defs",
     )
     df = ctx.table("partial_defs")
-    finalized = _finalize_df_to_contract(ctx, df=df, view_name="dim_exported_defs_v1")
+    finalized = _finalize_df_to_contract(ctx, df=df, view_name="dim_exported_defs")
 
     contract = dataset_spec_contract(dataset_spec("dim_exported_defs_v1"))
     expected_schema = contract.schema

@@ -6,17 +6,17 @@
       "anchor": {
         "col": 0,
         "end_col": 24,
-        "end_line": 6,
+        "end_line": 7,
         "file": "tools/cq/index/files.py",
-        "line": 6
+        "line": 7
       },
       "category": "from_import",
       "details": {
         "data": {
+          "kind": "from_import",
           "name": "Path",
           "text": "from pathlib import Path"
-        },
-        "kind": "from_import"
+        }
       },
       "message": "from_import: Path",
       "severity": "info"
@@ -28,7 +28,7 @@
     "root": "/home/paul/CodeAnatomy",
     "schema_version": "cq.v1",
     "toolchain": {
-      "python": "3.13.11",
+      "python": "3.13.12",
       "rpygrep": "0.2.1",
       "sgpy": "0.40.5"
     }
@@ -37,6 +37,6 @@
   "summary": {
     "files_scanned": 1,
     "matches": 1,
-    "total_imports": 15
+    "total_imports": 7
   }
 }

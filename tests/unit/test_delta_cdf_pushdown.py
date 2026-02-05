@@ -58,7 +58,7 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
         ctx,
         name="cdf_table",
         location=DatasetLocation(
-            path=table_path,
+            path=str(table_path),
             format="delta",
             delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),
@@ -104,7 +104,7 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
         ctx,
         name="cdf_table",
         location=DatasetLocation(
-            path=table_path,
+            path=str(table_path),
             format="delta",
             delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),

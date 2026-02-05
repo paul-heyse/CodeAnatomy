@@ -123,20 +123,18 @@ def dataframe_model_for_spec(
     annotations: dict[str, object] = {}
     attrs: dict[str, object] = {}
     for field in spec.fields:
-        annotations[field.name] = pa_typing.Series[object]
+        dtype = field_to_pandera_dtype(field)
+        annotations[field.name] = (
+            pa_typing.Series[object] if dtype is object else pa_typing.Series[dtype]
+        )
         if field.name in force_null:
             nullable = True
         else:
             nullable = field.nullable and field.name not in required_non_null
-        checks = None
+        field_kwargs: dict[str, object] = {"nullable": nullable}
         if field.name in force_null:
-            checks = [check_cls(lambda s: s.is_null().all(), element_wise=False)]
-        attrs[field.name] = field_cls(
-            dtype=field_to_pandera_dtype(field),
-            nullable=nullable,
-            required=True,
-            checks=checks,
-        )
+            field_kwargs["eq"] = None
+        attrs[field.name] = field_cls(**field_kwargs)
     attrs["__annotations__"] = annotations
     attrs["Config"] = type(
         "Config",

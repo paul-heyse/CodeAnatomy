@@ -435,7 +435,7 @@ RULES_BY_RECORD_TYPE: dict[RecordType, tuple[RuleSpec, ...]] = {
 }
 
 
-def get_rules_for_types(record_types: set[str] | None) -> tuple[RuleSpec, ...]:
+def get_rules_for_types(record_types: set[RecordType] | None) -> tuple[RuleSpec, ...]:
     """Get rules for the specified record types.
 
     Parameters
@@ -454,7 +454,7 @@ def get_rules_for_types(record_types: set[str] | None) -> tuple[RuleSpec, ...]:
     rules: list[RuleSpec] = []
     for record_type in record_types:
         if record_type in RULES_BY_RECORD_TYPE:
-            rules.extend(RULES_BY_RECORD_TYPE[record_type])  # type: ignore[index]
+            rules.extend(RULES_BY_RECORD_TYPE[record_type])
 
     return tuple(rules)
 

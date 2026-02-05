@@ -5,24 +5,24 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 30,
-        "end_line": 221,
+        "end_col": 37,
+        "end_line": 421,
         "file": "tools/cq/query/executor.py",
-        "line": 121
+        "line": 383
       },
       "category": "definition",
       "details": {
         "data": {
-          "calls_within": 0,
+          "calls_within": 4,
+          "kind": "function",
           "name": "execute_plan"
         },
-        "kind": "function",
         "score": {
           "confidence_bucket": "high",
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.0275
+          "impact_score": 0.0455
         }
       },
       "message": "function: execute_plan",
@@ -35,7 +35,7 @@
     "root": "/home/paul/CodeAnatomy",
     "schema_version": "cq.v1",
     "toolchain": {
-      "python": "3.13.11",
+      "python": "3.13.12",
       "rpygrep": "0.2.1",
       "sgpy": "0.40.5"
     }
@@ -44,7 +44,7 @@
   "summary": {
     "files_scanned": 1,
     "matches": 1,
-    "total_calls": 0,
-    "total_defs": 116
+    "total_calls": 464,
+    "total_defs": 86
   }
 }

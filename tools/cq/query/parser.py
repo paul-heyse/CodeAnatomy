@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from tools.cq.query.ir import (
+    CompositeOp,
     CompositeRule,
     DecoratorFilter,
     Expander,
@@ -49,6 +50,7 @@ _MISSING_ENTITY_MESSAGE = (
 )
 _MISSING_PATTERN_MESSAGE = "Pattern query must specify 'pattern'"
 _INVALID_COMPOSITE_MESSAGE = "'not' operator requires exactly one pattern"
+_COMPOSITE_OPS: tuple[CompositeOp, ...] = ("all", "any", "not")
 
 
 def _invalid_entity_message(entity_str: str, valid: tuple[str, ...]) -> str:
@@ -866,7 +868,7 @@ def _parse_composite_rule(tokens: dict[str, str]) -> CompositeRule | None:
     QueryParseError
         If the composite rule is invalid (e.g., ``not`` with multiple patterns).
     """
-    for op in ("all", "any", "not"):
+    for op in _COMPOSITE_OPS:
         value = tokens.get(op)
         if not value:
             continue
@@ -877,10 +879,7 @@ def _parse_composite_rule(tokens: dict[str, str]) -> CompositeRule | None:
         if op == "not" and len(patterns) != 1:
             raise QueryParseError(_INVALID_COMPOSITE_MESSAGE)
 
-        return CompositeRule(
-            operator=op,  # type: ignore[arg-type]
-            patterns=tuple(patterns),
-        )
+        return CompositeRule(operator=op, patterns=tuple(patterns))
 
     return None
 

@@ -51,6 +51,9 @@ def test_listing_refresh_records_event(tmp_path: Path) -> None:
         location=location,
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )
-    refreshes = sink.artifacts_snapshot().get("datafusion_listing_refresh_v1", [])
-    assert refreshes
-    assert refreshes[-1].get("name") == "events"
+    providers = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
+    assert len(providers) >= 2
+    latest = providers[-1]
+    assert latest.get("name") == "events"
+    assert latest.get("listing_mutable") is True
+    assert latest.get("list_files_cache_ttl") == "1s"

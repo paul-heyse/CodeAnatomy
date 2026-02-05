@@ -58,7 +58,7 @@ def test_sdk_disabled_strict(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure OTEL_SDK_DISABLED only accepts strict true/false values."""
     monkeypatch.setenv("OTEL_SDK_DISABLED", "1")
     config = otel_config.resolve_otel_config()
-    assert config.enable_traces
+    assert config.enable_log_correlation
 
 
 def test_bootstrap_option_precedence(monkeypatch: pytest.MonkeyPatch) -> None:

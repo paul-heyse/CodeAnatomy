@@ -48,9 +48,12 @@ def semantic_runtime_from_profile(
     view_names = [spec.name for spec in SEMANTIC_MODEL.outputs]
     output_locations = {
         name: str(location.path)
-        for name in view_names
-        if (location := profile.catalog_ops.dataset_location(name)) is not None
+        for name, location in profile.data_sources.semantic_output.locations.items()
     }
+    for name in view_names:
+        location = profile.catalog_ops.dataset_location(name)
+        if location is not None:
+            output_locations[name] = str(location.path)
 
     # Extract cache policy overrides
     cache_overrides: dict[str, CachePolicy] = {}

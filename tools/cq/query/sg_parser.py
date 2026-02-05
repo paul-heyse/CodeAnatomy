@@ -5,11 +5,13 @@ Parses Python source code into typed records using ast-grep-py.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import cast
 
 from tools.cq.astgrep.rules_py import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import (
+    RecordType,
     SgRecord,
     filter_records_by_type,
     group_records_by_file,
@@ -17,10 +19,10 @@ from tools.cq.astgrep.sgpy_scanner import (
 )
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
+from tools.cq.query.parser import QueryParseError
 
 # Record types from ast-grep rules
-RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
-ALL_RECORD_TYPES: set[str] = {"def", "call", "import", "raise", "except", "assign_ctor"}
+ALL_RECORD_TYPES: set[RecordType] = {"def", "call", "import", "raise", "except", "assign_ctor"}
 
 # Re-export SgRecord from sgpy_scanner for backward compatibility
 __all__ = [
@@ -30,13 +32,14 @@ __all__ = [
     "filter_records_by_kind",
     "group_records_by_file",
     "list_scan_files",
+    "normalize_record_types",
     "sg_scan",
 ]
 
 
 def sg_scan(
     paths: list[Path],
-    record_types: set[str] | None = None,
+    record_types: Iterable[str] | Iterable[RecordType] | None = None,
     root: Path | None = None,
     globs: list[str] | None = None,
 ) -> list[SgRecord]:
@@ -66,12 +69,13 @@ def sg_scan(
     if not files:
         return []
 
-    rules = get_rules_for_types(record_types)
+    normalized_record_types = normalize_record_types(record_types)
+    rules = get_rules_for_types(normalized_record_types)
     if not rules:
         return []
 
     records = scan_files(files, rules, root)
-    return filter_records_by_type(records, record_types)
+    return filter_records_by_type(records, normalized_record_types)
 
 
 def list_scan_files(
@@ -127,22 +131,40 @@ def _tabulate_scan_files(
     return result.files
 
 
-def _filter_records(
-    records: list[SgRecord],
-    record_types: set[str] | None,
-) -> list[SgRecord]:
-    """Filter records by record type.
-
-    Used by ``sg_scan`` to prune records after scanning.
+def normalize_record_types(
+    record_types: Iterable[str] | Iterable[RecordType] | None,
+) -> set[RecordType] | None:
+    """Normalize and validate record types.
 
     Returns
     -------
-    list[SgRecord]
-        Records matching the requested record types.
+    set[RecordType] | None
+        Normalized record types, or None to indicate "all records".
+
+    Raises
+    ------
+    QueryParseError
+        Raised when invalid record types are provided.
     """
     if record_types is None:
-        return records
-    return [record for record in records if record.record in record_types]
+        return None
+    record_set: set[RecordType] = set()
+    invalid: list[str] = []
+    for value in record_types:
+        if value in ALL_RECORD_TYPES:
+            record_set.add(cast("RecordType", value))
+        else:
+            invalid.append(str(value))
+    if not record_set and not invalid:
+        return set()
+    invalid = sorted(invalid)
+    if invalid:
+        msg = (
+            "Invalid record types: "
+            f"{', '.join(invalid)}. Valid types: {', '.join(sorted(ALL_RECORD_TYPES))}"
+        )
+        raise QueryParseError(msg)
+    return record_set
 
 
 def _normalize_file_path(file_path: str, root: Path) -> str:

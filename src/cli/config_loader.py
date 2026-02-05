@@ -234,7 +234,7 @@ def _config_to_mapping(config: RootConfigSpec) -> dict[str, JsonValue]:
 def _validate_root_runtime(config: RootConfigSpec, *, location: str) -> None:
     payload = msgspec.to_builtins(config, str_keys=True)
     try:
-        ROOT_CONFIG_ADAPTER.validate_strings(payload)
+        ROOT_CONFIG_ADAPTER.validate_python(payload)
     except Exception as exc:
         msg = f"Config validation failed for {location}: {exc}"
         raise ValueError(msg) from exc

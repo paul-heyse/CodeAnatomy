@@ -27,7 +27,7 @@ def test_expr_planner_install_records_event() -> None:
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
             diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
             features=FeatureGatesConfig(enable_expr_planners=True),
-            policies=PolicyBundleConfig(expr_planner_names=("codeintel_ops",)),
+            policies=PolicyBundleConfig(expr_planner_names=("codeanatomy_domain",)),
         )
     )
     has_extension = importlib.util.find_spec("datafusion_ext") is not None

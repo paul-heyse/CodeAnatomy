@@ -8,6 +8,14 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from datafusion_engine.arrow.semantic import (
+    byte_span_type,
+    edge_id_type,
+    node_id_type,
+    register_semantic_extension_types,
+    span_id_type,
+    span_type,
+)
 from schema_spec.arrow_types import (
     _PRIMITIVE_BUILDERS,
     ArrowDecimalSpec,
@@ -264,6 +272,18 @@ def _dictionary_dtype(spec: ArrowTypeBase) -> pa.DataType:
 def _opaque_dtype(spec: ArrowTypeBase) -> pa.DataType:
     opaque = cast("ArrowOpaqueSpec", spec)
     try:
+        if opaque.repr.startswith("extension<codeintel."):
+            register_semantic_extension_types()
+            if "codeintel.span_id" in opaque.repr:
+                return span_id_type()
+            if "codeintel.edge_id" in opaque.repr:
+                return edge_id_type()
+            if "codeintel.node_id" in opaque.repr:
+                return node_id_type()
+            if "codeintel.byte_span" in opaque.repr:
+                return byte_span_type()
+            if "codeintel.span" in opaque.repr:
+                return span_type()
         return pa.type_for_alias(opaque.repr)
     except (KeyError, TypeError, ValueError) as exc:
         msg = f"Unsupported opaque Arrow type: {opaque.repr}"

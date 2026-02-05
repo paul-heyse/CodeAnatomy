@@ -107,30 +107,126 @@ def _telemetry_payload(start_time: float, *, emit_telemetry: bool) -> dict[str, 
 def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
     """Replay Substrait bytes into a DataFusion DataFrame.
 
+    Returns
+    -------
+    DataFrame
+        Replayed DataFusion DataFrame.
+
     Raises
     ------
+    TypeError
+        Raised when Substrait replay support or DataFrame construction helpers
+        are unavailable.
     ValueError
-        Raised when Substrait replay is unavailable.
+        Raised when Substrait replay fails.
     """
-    _ = (ctx, payload)
-    msg = "Substrait replay is unavailable in this build."
-    raise ValueError(msg)
+    try:
+        from datafusion.substrait import Consumer as SubstraitConsumer
+        from datafusion.substrait import Serde as SubstraitSerde
+    except ImportError as exc:
+        msg = "Substrait replay requires datafusion.substrait support."
+        raise ValueError(msg) from exc
+    deserialize = getattr(SubstraitSerde, "deserialize_bytes", None)
+    if not callable(deserialize):
+        msg = "Substrait replay requires Serde.deserialize_bytes."
+        raise TypeError(msg)
+    from_substrait = getattr(SubstraitConsumer, "from_substrait_plan", None)
+    if not callable(from_substrait):
+        msg = "Substrait replay requires Consumer.from_substrait_plan."
+        raise TypeError(msg)
+    try:
+        plan = deserialize(payload)
+        logical_plan = from_substrait(ctx, plan)
+    except Exception as exc:
+        msg = f"Substrait replay failed: {exc}"
+        raise ValueError(msg) from exc
+    create = getattr(ctx, "create_dataframe_from_logical_plan", None)
+    if not callable(create):
+        msg = "SessionContext.create_dataframe_from_logical_plan is unavailable."
+        raise TypeError(msg)
+    from datafusion.dataframe import DataFrame as DataFusionDataFrame
+
+    try:
+        candidate = create(logical_plan)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Substrait DataFrame construction failed: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(candidate, DataFusionDataFrame):
+        msg = f"Expected DataFrame from Substrait replay, got {type(candidate).__name__}."
+        raise TypeError(msg)
+    return candidate
 
 
 def validate_substrait_plan(
     substrait_bytes: bytes,
     *,
     df: DataFrame | None = None,
-) -> Mapping[str, object] | None:
+    ctx: SessionContext | None = None,
+) -> Mapping[str, object]:
     """Validate Substrait bytes against a DataFusion DataFrame.
 
     Returns
     -------
-    Mapping[str, object] | None
-        Validation payload or ``None`` when validation is unavailable.
+    Mapping[str, object]
+        Validation payload with status, match, and diagnostics.
     """
-    _ = (substrait_bytes, df)
-    return {"status": "unavailable", "reason": "substrait_deserialization_unavailable"}
+    diagnostics: dict[str, object] = {}
+    if df is None:
+        diagnostics["reason"] = "missing_plan"
+        return {"status": "error", "match": False, "diagnostics": diagnostics}
+    resolved_ctx = ctx or _resolve_df_context(df)
+    if resolved_ctx is None:
+        diagnostics["reason"] = "missing_context"
+        return {"status": "error", "match": False, "diagnostics": diagnostics}
+    try:
+        replay_df = replay_substrait_bytes(resolved_ctx, substrait_bytes)
+    except (ValueError, TypeError) as exc:
+        diagnostics["reason"] = "substrait_replay_failed"
+        diagnostics["error"] = str(exc)
+        return {"status": "error", "match": False, "diagnostics": diagnostics}
+    try:
+        left = _dataframe_table(df)
+        right = _dataframe_table(replay_df)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        diagnostics["reason"] = "arrow_collection_failed"
+        diagnostics["error"] = str(exc)
+        return {"status": "error", "match": False, "diagnostics": diagnostics}
+    diagnostics["left_rows"] = left.num_rows
+    diagnostics["right_rows"] = right.num_rows
+    diagnostics["left_columns"] = list(left.column_names)
+    diagnostics["right_columns"] = list(right.column_names)
+    return {
+        "status": "ok",
+        "match": bool(left.equals(right)),
+        "diagnostics": diagnostics,
+    }
+
+
+def _dataframe_table(df: DataFrame) -> pa.Table:
+    method = getattr(df, "to_arrow_table", None)
+    if not callable(method):
+        msg = "DataFrame.to_arrow_table is unavailable."
+        raise TypeError(msg)
+    table = method()
+    if not isinstance(table, pa.Table):
+        msg = f"Expected pyarrow.Table, got {type(table).__name__}."
+        raise TypeError(msg)
+    return table
+
+
+def _resolve_df_context(df: DataFrame) -> SessionContext | None:
+    for name in ("session_context", "context", "ctx"):
+        value = getattr(df, name, None)
+        if isinstance(value, SessionContext):
+            return value
+        if callable(value):
+            try:
+                candidate = value()
+            except (RuntimeError, TypeError, ValueError, AttributeError):
+                continue
+            if isinstance(candidate, SessionContext):
+                return candidate
+    return None
 
 
 async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordBatch]:

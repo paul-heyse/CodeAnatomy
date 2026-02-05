@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.sql.options import SQLOptions
 
 
 _datafusion_internal = getattr(_datafusion, "_internal", None)
@@ -68,9 +69,7 @@ except ImportError:
     SubstraitProducer = None
 
 _SUBSTRAIT_INTERNAL = (
-    getattr(_datafusion_internal, "substrait", None)
-    if _datafusion_internal is not None
-    else None
+    getattr(_datafusion_internal, "substrait", None) if _datafusion_internal is not None else None
 )
 
 # Type alias for DataFrame builder functions
@@ -1097,7 +1096,11 @@ def _bundle_components(
         options.session_runtime is not None
         and options.session_runtime.profile.diagnostics.substrait_validation
     ):
-        substrait_validation = _substrait_validation_payload(plan_core.substrait_bytes, df=df)
+        substrait_validation = _substrait_validation_payload(
+            plan_core.substrait_bytes,
+            df=df,
+            ctx=ctx,
+        )
 
     merged_delta_inputs = _merged_delta_inputs_for_bundle(
         ctx,
@@ -1496,6 +1499,7 @@ def _substrait_validation_payload(
     substrait_bytes: bytes,
     *,
     df: DataFrame,
+    ctx: SessionContext,
 ) -> Mapping[str, object] | None:
     """Validate Substrait bytes and return the validation payload.
 
@@ -1505,6 +1509,8 @@ def _substrait_validation_payload(
         Serialized Substrait plan bytes.
     df
         DataFusion DataFrame used for cross-validation.
+    ctx
+        Session context used for replay validation.
 
     Returns
     -------
@@ -1518,7 +1524,7 @@ def _substrait_validation_payload(
     """
     from datafusion_engine.plan.execution import validate_substrait_plan
 
-    validation = validate_substrait_plan(substrait_bytes, df=df)
+    validation = validate_substrait_plan(substrait_bytes, df=df, ctx=ctx)
     if validation is None:
         return None
     match = validation.get("match")
@@ -1526,6 +1532,68 @@ def _substrait_validation_payload(
         msg = f"Substrait validation failed: {validation}"
         raise ValueError(msg)
     return validation
+
+
+def _information_schema_sql_options(
+    session_runtime: SessionRuntime,
+) -> SQLOptions | None:
+    try:
+        from datafusion_engine.sql.options import planning_sql_options
+
+        return planning_sql_options(session_runtime.profile)
+    except (RuntimeError, TypeError, ValueError, ImportError):
+        return None
+
+
+def _build_introspector(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None,
+) -> SchemaIntrospector | None:
+    try:
+        return SchemaIntrospector(ctx, sql_options=sql_options)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _table_definitions_snapshot(
+    introspector: SchemaIntrospector,
+    *,
+    tables: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    table_definitions: dict[str, str] = {}
+    for row in tables:
+        name = row.get("table_name")
+        if name is None:
+            continue
+        definition = introspector.table_definition(str(name))
+        if definition:
+            table_definitions[str(name)] = definition
+    return table_definitions
+
+
+def _safe_introspection_rows(
+    fetch: Callable[[], Sequence[Mapping[str, object]]],
+) -> list[Mapping[str, object]]:
+    try:
+        return list(fetch())
+    except (RuntimeError, TypeError, ValueError, Warning):
+        return []
+
+
+def _routine_metadata_snapshot(
+    introspector: SchemaIntrospector,
+    *,
+    capture_udf_metadata: bool,
+) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], list[Mapping[str, object]]]:
+    if not capture_udf_metadata:
+        return [], [], []
+    routines = _safe_introspection_rows(introspector.routines_snapshot)
+    parameters = _safe_introspection_rows(introspector.parameters_snapshot)
+    function_catalog = _safe_introspection_rows(
+        lambda: introspector.function_catalog_snapshot(include_parameters=True)
+    )
+    return routines, parameters, function_catalog
 
 
 def _information_schema_snapshot(
@@ -1549,53 +1617,26 @@ def _information_schema_snapshot(
     """
     if session_runtime is None:
         return {}
-    sql_options = None
-    if session_runtime is not None:
-        try:
-            from datafusion_engine.sql.options import planning_sql_options
-
-            sql_options = planning_sql_options(session_runtime.profile)
-        except (RuntimeError, TypeError, ValueError, ImportError):
-            sql_options = None
-    try:
-        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-    except (RuntimeError, TypeError, ValueError):
+    sql_options = _information_schema_sql_options(session_runtime)
+    introspector = _build_introspector(ctx, sql_options=sql_options)
+    if introspector is None:
         return {}
     tables = introspector.tables_snapshot()
-    table_definitions: dict[str, str] = {}
-    for row in tables:
-        name = row.get("table_name")
-        if name is None:
-            continue
-        definition = introspector.table_definition(str(name))
-        if definition:
-            table_definitions[str(name)] = definition
+    table_definitions = _table_definitions_snapshot(introspector, tables=tables)
     capture_udf_metadata = _capture_udf_metadata_for_plan(session_runtime)
-    routines: Sequence[Mapping[str, object]] = ()
-    parameters: Sequence[Mapping[str, object]] = ()
-    function_catalog: Sequence[Mapping[str, object]] = ()
-    if capture_udf_metadata:
-        try:
-            routines = introspector.routines_snapshot()
-        except (RuntimeError, TypeError, ValueError, Warning):
-            routines = ()
-        try:
-            parameters = introspector.parameters_snapshot()
-        except (RuntimeError, TypeError, ValueError, Warning):
-            parameters = ()
-        try:
-            function_catalog = introspector.function_catalog_snapshot(include_parameters=True)
-        except (RuntimeError, TypeError, ValueError, Warning):
-            function_catalog = ()
+    routines, parameters, function_catalog = _routine_metadata_snapshot(
+        introspector,
+        capture_udf_metadata=capture_udf_metadata,
+    )
     return {
         "df_settings": _df_settings_snapshot(ctx, session_runtime=session_runtime),
         "settings": introspector.settings_snapshot(),
         "tables": tables,
         "schemata": introspector.schemata_snapshot(),
         "columns": introspector.columns_snapshot(),
-        "routines": list(routines),
-        "parameters": list(parameters),
-        "function_catalog": list(function_catalog),
+        "routines": routines,
+        "parameters": parameters,
+        "function_catalog": function_catalog,
         "table_definitions": table_definitions,
     }
 

@@ -47,7 +47,9 @@ def _identity_fields() -> tuple[FieldSpec, ...]:
     """
     return (
         FieldSpec(name="node_id", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
-        FieldSpec(name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
+        FieldSpec(
+            name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False
+        ),
         FieldSpec(name="file_id", dtype=arrow_type_from_pyarrow(interop.string()), nullable=True),
     )
 
@@ -101,7 +103,9 @@ def _task_fields() -> tuple[FieldSpec, ...]:
     """
     return (
         FieldSpec(name="task_name", dtype=arrow_type_from_pyarrow(interop.string()), nullable=True),
-        FieldSpec(name="task_priority", dtype=arrow_type_from_pyarrow(interop.int32()), nullable=True),
+        FieldSpec(
+            name="task_priority", dtype=arrow_type_from_pyarrow(interop.int32()), nullable=True
+        ),
     )
 
 
@@ -208,7 +212,9 @@ def _scip_family_fields() -> tuple[FieldSpec, ...]:
     """
     return (
         FieldSpec(name="node_id", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
-        FieldSpec(name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
+        FieldSpec(
+            name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False
+        ),
         FieldSpec(name="symbol", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
         *_scip_range_fields(),
         *_task_fields(),
@@ -277,7 +283,9 @@ def _runtime_family_fields() -> tuple[FieldSpec, ...]:
     """
     return (
         FieldSpec(name="node_id", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
-        FieldSpec(name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False),
+        FieldSpec(
+            name="node_kind", dtype=arrow_type_from_pyarrow(interop.string()), nullable=False
+        ),
         *_task_fields(),
     )
 

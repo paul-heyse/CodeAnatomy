@@ -6,7 +6,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-import pytest
 import rustworkx as rx
 
 from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
@@ -296,24 +295,11 @@ def test_plan_bundle_prefers_runtime_snapshot_when_context_differs() -> None:
 
 
 def test_plan_bundle_captures_async_udf_settings() -> None:
-    """Ensure async UDF runtime settings are captured in plan artifacts.
+    """Ensure async UDF runtime settings are captured in plan artifacts."""
+    import importlib
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the native extension fails for reasons other than missing
-        async UDF support.
-    """
-    try:
-        import importlib
-
-        importlib.import_module("datafusion.substrait")
-    except ImportError:
-        pytest.skip("datafusion.substrait is required for plan bundle construction.")
-    try:
-        importlib.import_module("datafusion_ext")
-    except ImportError:
-        pytest.skip("datafusion_ext is required for plan bundle construction.")
+    importlib.import_module("datafusion.substrait")
+    importlib.import_module("datafusion_ext")
     from datafusion_engine.session.runtime import (
         DataFusionRuntimeProfile,
         FeatureGatesConfig,
@@ -329,12 +315,7 @@ def test_plan_bundle_captures_async_udf_settings() -> None:
             async_udf_batch_size=async_batch_size,
         ),
     )
-    try:
-        runtime = profile.session_runtime()
-    except RuntimeError as exc:
-        if "async-udf" in str(exc).lower():
-            pytest.skip("async UDF feature is not enabled in the native extension.")
-        raise
+    runtime = profile.session_runtime()
     ctx = runtime.ctx
     register_arrow_table(ctx, name="events", value=pa.table({"id": [1, 2]}))
     df = ctx.sql("SELECT id FROM events")

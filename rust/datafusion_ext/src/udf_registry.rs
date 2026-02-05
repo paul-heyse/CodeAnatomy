@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr::{AggregateUDF, WindowUDF};
 
 #[cfg(feature = "async-udf")]
@@ -63,7 +63,7 @@ pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSp
     }
     #[cfg(not(feature = "async-udf"))]
     {
-        return Err(DataFusionError::Plan(
+        return Err(datafusion_common::DataFusionError::Plan(
             "Async UDFs require the async-udf feature".into(),
         ));
     }

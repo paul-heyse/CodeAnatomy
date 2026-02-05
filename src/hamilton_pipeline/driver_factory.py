@@ -116,8 +116,7 @@ def _patch_hamilton_file_metadata() -> None:
         last_modified = time.time()
         timestamp = datetime.now(UTC).timestamp()
         notes = (
-            "File metadata is unsupported for scheme: "
-            f"{scheme} or path: {path_str} does not exist."
+            f"File metadata is unsupported for scheme: {scheme} or path: {path_str} does not exist."
         )
 
         is_win_path = parsed.scheme and len(parsed.scheme) == 1 and parsed.scheme.isalpha()

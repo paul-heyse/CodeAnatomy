@@ -97,12 +97,6 @@ def test_upsert_partitioned_dataset_alignment_and_deletes(tmp_path: Path) -> Non
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    try:
-        runtime = IncrementalRuntime.build()
-        _ = runtime.session_context()
-    except ImportError as exc:
-        pytest.skip(str(exc))
-    else:
-        return runtime
-    msg = "Incremental runtime unavailable."
-    raise RuntimeError(msg)
+    runtime = IncrementalRuntime.build()
+    _ = runtime.session_context()
+    return runtime

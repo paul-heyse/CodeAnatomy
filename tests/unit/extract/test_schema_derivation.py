@@ -99,9 +99,7 @@ class TestExtractionSchemaBuilder:
 
     def test_builder_with_field_spec(self) -> None:
         """Test builder with FieldSpec objects."""
-        custom_spec = FieldSpec(
-            name="custom_field", dtype=coerce_arrow_type(pa.float64())
-        )
+        custom_spec = FieldSpec(name="custom_field", dtype=coerce_arrow_type(pa.float64()))
         schema = ExtractionSchemaBuilder("test_dataset").with_fields(custom_spec).build()
         field_names = {f.name for f in schema.fields}
         assert "custom_field" in field_names

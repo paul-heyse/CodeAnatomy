@@ -83,9 +83,7 @@ def _byte_span_bundle(prefix: str = "") -> FieldBundle:
     return FieldBundle(
         name=f"{normalized}byte_span" if normalized else "byte_span",
         fields=(
-            FieldSpec(
-                name=f"{normalized}bstart", dtype=arrow_type_from_pyarrow(interop.int64())
-            ),
+            FieldSpec(name=f"{normalized}bstart", dtype=arrow_type_from_pyarrow(interop.int64())),
             FieldSpec(name=f"{normalized}bend", dtype=arrow_type_from_pyarrow(interop.int64())),
         ),
     )
@@ -107,9 +105,7 @@ def _structured_span_bundle(prefix: str = "") -> FieldBundle:
     normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
     return FieldBundle(
         name=f"{normalized}span" if normalized else "span",
-        fields=(
-            FieldSpec(name=f"{normalized}span", dtype=arrow_type_from_pyarrow(SPAN_STORAGE)),
-        ),
+        fields=(FieldSpec(name=f"{normalized}span", dtype=arrow_type_from_pyarrow(SPAN_STORAGE)),),
     )
 
 
@@ -136,12 +132,8 @@ def _line_col_span_bundle(prefix: str = "") -> FieldBundle:
             FieldSpec(
                 name=f"{normalized}start_col", dtype=arrow_type_from_pyarrow(interop.int32())
             ),
-            FieldSpec(
-                name=f"{normalized}end_line", dtype=arrow_type_from_pyarrow(interop.int32())
-            ),
-            FieldSpec(
-                name=f"{normalized}end_col", dtype=arrow_type_from_pyarrow(interop.int32())
-            ),
+            FieldSpec(name=f"{normalized}end_line", dtype=arrow_type_from_pyarrow(interop.int32())),
+            FieldSpec(name=f"{normalized}end_col", dtype=arrow_type_from_pyarrow(interop.int32())),
         ),
     )
 

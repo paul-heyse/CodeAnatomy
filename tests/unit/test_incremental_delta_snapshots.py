@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pytest
 
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_runtime import read_cdf_changes
@@ -74,12 +73,6 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    try:
-        runtime = IncrementalRuntime.build()
-        _ = runtime.session_context()
-    except ImportError as exc:
-        pytest.skip(str(exc))
-    else:
-        return runtime
-    msg = "Incremental runtime unavailable."
-    raise RuntimeError(msg)
+    runtime = IncrementalRuntime.build()
+    _ = runtime.session_context()
+    return runtime

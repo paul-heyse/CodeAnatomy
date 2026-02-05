@@ -209,9 +209,7 @@ def file_identity_field_specs(
     specs.append(FieldSpec(name="file_id", dtype=arrow_type_from_pyarrow(interop.string())))
     specs.append(FieldSpec(name="path", dtype=arrow_type_from_pyarrow(interop.string())))
     if include_sha256:
-        specs.append(
-            FieldSpec(name="file_sha256", dtype=arrow_type_from_pyarrow(interop.string()))
-        )
+        specs.append(FieldSpec(name="file_sha256", dtype=arrow_type_from_pyarrow(interop.string())))
     return tuple(specs)
 
 

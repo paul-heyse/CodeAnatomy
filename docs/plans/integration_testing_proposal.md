@@ -23,7 +23,7 @@ This proposal outlines a systematic approach to integration testing for CodeAnat
 | Three merge strategies | Four strategies: APPEND, UPSERT, REPLACE, DELETE_INSERT | Add DELETE_INSERT tests |
 | Simple task nodes in graph | Bipartite graph: EvidenceNode + TaskNode | Test graph structure |
 | Cursor starts at 0 | `get_start_version()` returns `last_version + 1` | Fix cursor advancement tests |
-| SemanticRuntimeConfig in datafusion_engine | Lives in `semantics/runtime.py`; adapter inverts dependency | Test adapter round-trip |
+| SemanticRuntimeConfig in datafusion_engine | Lives in `semantics/runtime.py`; adapter in `datafusion_engine/semantics_runtime.py` inverts dependency | Test adapter round-trip |
 | Missing inputs raise errors | Evidence plan gating returns LIMIT(0) empty plans | Test graceful gating |
 
 ### Corrections from Final Code Review (v2)
@@ -39,9 +39,52 @@ This proposal outlines a systematic approach to integration testing for CodeAnat
 | `pytest.raises(AttributeError)` | `pytest.raises(FrozenInstanceError)` for dataclasses | Fixed exception type |
 | Immutability via single mechanism | CdfCursor uses custom `__setattr__`; others use frozen decorator | Clarified in tests |
 
+### Corrections from Deep Code Review (v3)
+
+| Original Proposal | Actual Code | Fix Applied |
+|-------------------|-------------|-------------|
+| `DataFusionRuntimeProfile.default()` | No `.default()` classmethod; all fields have `default_factory` | Use `DataFusionRuntimeProfile()` |
+| `EvidencePlan.apply_query_and_project()` | Method doesn't exist; actual API: `requires_dataset()`, `required_columns_for()` | Fixed test descriptions and assertions |
+| `plan_requires_row(plan, "cst_refs")` takes string | `plan_requires_row(plan: EvidencePlan, row: ExtractMetadata)` takes an `ExtractMetadata` object | Use `plan.requires_dataset("cst_refs")` directly |
+| `relationship_spec_with_invalid_expr: RelationshipSpec` | `compile_relationship_with_quality()` takes `QualityRelationshipSpec` (from `semantics.quality`) | Fixed fixture type |
+| `_validate_bundle_udfs()` called directly | Actual function: `validate_required_udfs()` from `datafusion_engine.udf.runtime` | Fixed function name |
+| `infer_deps_from_plan_bundle()` takes `ViewNode` | Takes `InferredDepsInputs` (from `relspec.inferred_deps`), not `ViewNode` | Fixed input type, added `InferredDepsInputs` construction |
+| `bottom_level_costs(TaskGraph)` | Takes `rx.PyDiGraph`, not `TaskGraph`; access via `task_graph.graph` | Fixed parameter type |
+| `bottom_level_costs` in `relspec.rustworkx_schedule` | Lives in `relspec.execution_plan` | Fixed import path |
+| Adapter described as `semantics/adapters.py` | Module is `datafusion_engine/semantics_runtime.py` | Fixed module path reference |
+| `CdfCursorStore` described as dataclass | Is `StructBaseStrict` (msgspec), `frozen=True` | Fixed class description in fixtures |
+
+### Corrections from External Review Integration (v4)
+
+| Review Item | Action Taken |
+|-------------|-------------|
+| Pytest markers in `pyproject.toml` | Fixed: markers live in `pytest.ini`, not `pyproject.toml` |
+| Incremental tests under `tests/integration/incremental/` | Fixed: stateful CDF/Delta tests moved to `tests/incremental/` |
+| Duplicating existing unit coverage | Added annotations marking unit-covered items; keep only boundary variants |
+| `test_schedule_respects_topological_order` uses `TaskNode.inputs` as task names | Fixed: `TaskNode.inputs` are evidence dataset names; check graph predecessor topology |
+| Standalone `tests/integration/conftest.py` | Fixed: reference shared fixtures in `tests/conftest.py` and `tests/test_helpers/` |
+| Performance tests mixed into integration gate | Fixed: marked non-gating, separate CI job |
+| Missing scope: Delta read-after-write contracts | Added: Phase 2 scope expansion |
+| Missing scope: capability negotiation boundaries | Added: Phase 2 scope expansion |
+| Missing scope: evidence-plan-to-extractor pipeline | Added: Phase 1 scope expansion |
+| Missing scope: plan/artifact determinism | Added: Phase 3 scope expansion |
+| Missing scope: diagnostics contract assertions | Added: error handling tests |
+| Missing Phase 0: stabilize existing failures | Added: Phase 0 with 5 known failing tests |
+
+### Existing Unit Coverage (Do Not Duplicate)
+
+The following areas already have unit-level coverage. Integration tests should cover **only boundary-crossing variants**, not duplicate algorithmic behavior:
+
+| Area | Existing Unit Tests | Integration Scope |
+|------|--------------------|--------------------|
+| CDF cursor behavior / `get_start_version()` | `tests/unit/semantics/incremental/test_cdf_cursors.py` | Only cursor ↔ Delta write interaction |
+| Merge strategies (APPEND, UPSERT, etc.) | `tests/unit/semantics/incremental/test_merge_strategies.py` | Only merge ↔ schema evolution boundary |
+| Adapter basics (round-trip) | `tests/unit/datafusion_engine/test_semantics_runtime_bridge.py` | Only profile → session construction path |
+| Streaming write thresholds | `tests/unit/test_incremental_streaming_metrics.py` | Only threshold ↔ materialization path |
+
 ### Newly Identified Test Coverage Gaps
 
-1. **Adapter Bidirectionality** - `profile → semantic_config → profile` round-trip not tested
+1. **Adapter Bidirectionality** - `semantic_runtime_from_profile() → apply_semantic_runtime_config()` round-trip not tested (adapter in `datafusion_engine.semantics_runtime`)
 2. **Immutability Contracts** - `FrozenInstanceError` on mutation for frozen dataclasses
 3. **Cache Policy Merging** - Precedence: config > runtime_config > defaults
 4. **Impact Closure Strategies** - "hybrid", "symbol_closure", "import_closure" options
@@ -76,10 +119,11 @@ The following integration tests already exist and should be built upon:
 
 | Category | Count | Coverage Focus | Gap |
 |----------|-------|----------------|-----|
-| Unit tests | ~179 | Single module behavior | No cross-module interaction |
-| Integration | ~25 | Basic multi-subsystem | Limited boundary coverage |
-| E2E | ~16 | Full pipeline (CQ focus) | Too coarse for debugging |
-| Golden/Contract | ~25 | Output stability | No behavioral testing |
+| Unit tests | 185 files | Single module behavior | No cross-module interaction |
+| Integration | 23 files | Basic multi-subsystem | Limited boundary coverage |
+| E2E | 16 files | Full pipeline (CQ focus) | Too coarse for debugging |
+| Incremental | 1 file | Delta/CDF lifecycle | Minimal stateful coverage |
+| Golden/Contract | ~25 files | Output stability | No behavioral testing |
 
 ### Identified Gaps (Refined)
 
@@ -90,7 +134,7 @@ The following integration tests already exist and should be built upon:
 5. **Schema evolution scenarios** - Delta write policy enforcement partially tested
 6. **Error propagation paths** - Post-process resilience, expression validation graceful skip
 7. **Multi-source consistency** - No tests verify CST/AST/SCIP alignment
-8. **Adapter contracts** - SemanticRuntimeConfig ↔ DataFusionRuntimeProfile round-trip
+8. **Adapter contracts** - SemanticRuntimeConfig ↔ DataFusionRuntimeProfile round-trip (adapter in `datafusion_engine.semantics_runtime`)
 9. **Immutability invariants** - Frozen dataclass mutation prevention
 
 ---
@@ -124,6 +168,8 @@ The following integration tests already exist and should be built upon:
 
 ### Proposed Directory Structure
 
+**Design principle:** Keep stateful Delta/CDF lifecycle tests in `tests/incremental/` (existing directory). Reserve `tests/integration/` for multi-subsystem boundary tests that are not state-store-centric. This preserves the existing separation of concerns.
+
 ```
 tests/
 ├── integration/
@@ -132,50 +178,45 @@ tests/
 │   │   ├── test_normalization_to_relationship.py
 │   │   ├── test_relationship_to_cpg_output.py
 │   │   ├── test_view_dag_to_scheduling.py
-│   │   └── test_cpg_to_materialization.py
+│   │   └── test_evidence_plan_gating.py
 │   │
-│   ├── adapters/                      # NEW: Adapter round-trip tests
-│   │   ├── test_semantic_runtime_adapter.py
-│   │   └── test_cache_policy_merging.py
+│   ├── adapters/                      # NEW: Adapter round-trip tests (small set)
+│   │   └── test_semantic_runtime_bridge_integration.py
 │   │
 │   ├── contracts/                     # NEW: Data contract validation
 │   │   ├── test_extraction_schema_contracts.py
 │   │   ├── test_semantic_view_contracts.py
-│   │   ├── test_cpg_output_contracts.py
-│   │   ├── test_delta_write_contracts.py
-│   │   └── test_immutability_contracts.py
-│   │
-│   ├── incremental/                   # EXTEND existing
-│   │   ├── test_cdf_cursor_tracking.py
-│   │   ├── test_incremental_impact_propagation.py
-│   │   ├── test_impact_closure_strategies.py   # NEW
-│   │   ├── test_merge_strategies.py            # NEW
-│   │   └── test_fingerprint_invalidation.py
+│   │   └── test_immutability_contracts.py  # Smoke only; keep unit-level
 │   │
 │   ├── scheduling/                    # NEW: Graph and schedule tests
+│   │   ├── test_schedule_tasks_boundaries.py
 │   │   ├── test_bipartite_graph_structure.py
-│   │   ├── test_cost_modeling.py
-│   │   ├── test_column_level_deps.py
-│   │   └── test_schedule_generation.py
+│   │   └── test_column_level_deps.py
 │   │
 │   ├── error_handling/                # NEW: Error paths and recovery
-│   │   ├── test_missing_input_handling.py
+│   │   ├── test_extract_postprocess_resilience.py
 │   │   ├── test_graceful_degradation.py
-│   │   ├── test_evidence_plan_gating.py        # NEW
-│   │   ├── test_postprocess_resilience.py      # NEW
-│   │   └── test_schema_mismatch_errors.py
+│   │   └── test_capability_negotiation.py     # NEW
 │   │
-│   ├── multi_source/                  # NEW: Cross-extractor consistency
-│   │   ├── test_cst_ast_alignment.py
-│   │   ├── test_scip_byte_span_mapping.py
-│   │   ├── test_symtable_cst_consistency.py
-│   │   └── test_file_context_fallback.py       # NEW
+│   ├── runtime/                       # NEW: Runtime capability contracts
+│   │   └── test_capability_negotiation.py
 │   │
-│   └── performance/                   # NEW: Integration-level performance
+│   ├── multi_source/                  # DEFER: Start with one focused contract
+│   │   └── test_cst_ast_alignment.py
+│   │
+│   └── performance/                   # NON-GATING: Separate CI job
 │       ├── test_plan_compilation_performance.py
-│       ├── test_join_selectivity_performance.py
 │       └── test_materialization_throughput.py
+│
+├── incremental/                       # EXTEND existing (stateful Delta/CDF tests)
+│   ├── test_view_artifacts.py                   # existing
+│   ├── test_impact_closure_strategies.py        # NEW
+│   ├── test_delta_read_after_write_contracts.py # NEW (scope expansion)
+│   └── test_fingerprint_invalidation.py         # NEW
+│
 ```
+
+**Note on `tests/incremental/`:** This directory already exists with `test_view_artifacts.py`. Stateful Delta/CDF lifecycle tests belong here, not under `tests/integration/incremental/`.
 
 ---
 
@@ -229,25 +270,23 @@ class TestExtractionToNormalization:
     # ─────────────────────────────────────────────────────────────
     # Test 1.2: Evidence plan gating (NEW)
     # ─────────────────────────────────────────────────────────────
-    def test_evidence_plan_gating_returns_empty_plan(
+    def test_evidence_plan_gating_excludes_unrequired_datasets(
         self,
-        df_ctx: SessionContext,
         evidence_plan_without_dataset: EvidencePlan,
     ) -> None:
-        """Verify gated datasets return LIMIT(0) empty plans, not errors."""
+        """Verify gated datasets are excluded via requires_dataset()."""
         # Given: Evidence plan that doesn't require ast_files
-        # When: apply_query_and_project() called for ast_files
-        # Then: Returns empty plan with correct schema (not an error)
+        # When: evidence_plan.requires_dataset("ast_files") called
+        # Then: Returns False (dataset excluded from plan)
 
-    def test_evidence_plan_projects_only_required_columns(
+    def test_evidence_plan_required_columns_for_dataset(
         self,
-        df_ctx: SessionContext,
         evidence_plan_with_columns: EvidencePlan,
     ) -> None:
-        """Verify only required columns are projected when constrained."""
-        # Given: Evidence plan requiring only file_id, bstart, bend
-        # When: Materializing extraction plan
-        # Then: Only those columns present in output
+        """Verify required_columns_for() returns only constrained columns."""
+        # Given: Evidence plan requiring only file_id, bstart, bend for cst_nodes
+        # When: evidence_plan.required_columns_for("cst_nodes") called
+        # Then: Returns ("file_id", "bstart", "bend")
 
     # ─────────────────────────────────────────────────────────────
     # Test 1.3: FileContext fallback chain (NEW)
@@ -328,11 +367,15 @@ class TestNormalizationToRelationship:
     def test_quality_relationship_compilation_skips_invalid_expressions(
         self,
         df_ctx: SessionContext,
-        relationship_spec_with_invalid_expr: RelationshipSpec,
+        quality_spec_with_invalid_expr: QualityRelationshipSpec,
     ) -> None:
-        """Verify invalid expressions are skipped with warning, not failure."""
-        # Given: RelationshipSpec with an expression that fails validation
-        # When: compile_relationship_with_quality() called
+        """Verify invalid expressions are skipped with warning, not failure.
+
+        Note: compile_relationship_with_quality() takes QualityRelationshipSpec
+        (from semantics.quality), not RelationshipSpec.
+        """
+        # Given: QualityRelationshipSpec with an expression that fails validation
+        # When: SemanticCompiler.compile_relationship_with_quality() called
         # Then: Invalid expression skipped, valid expressions processed
         # And: Warning logged via _record_expr_issue()
 
@@ -365,32 +408,41 @@ class TestViewDagToScheduling:
     def test_inferred_deps_from_plan_bundle(
         self,
         df_ctx: SessionContext,
-        view_node_with_plan: ViewNode,
+        inferred_deps_inputs: InferredDepsInputs,
     ) -> None:
-        """Verify infer_deps_from_plan_bundle() extracts correct inputs."""
-        # Given: ViewNode with compiled DataFusionPlanBundle
-        # When: infer_deps_from_plan_bundle() called
+        """Verify infer_deps_from_plan_bundle() extracts correct inputs.
+
+        Note: infer_deps_from_plan_bundle() takes InferredDepsInputs
+        (from relspec.inferred_deps), not ViewNode directly. Construct
+        InferredDepsInputs from ViewNode.plan_bundle.
+        """
+        # Given: InferredDepsInputs built from ViewNode's plan_bundle
+        # When: infer_deps_from_plan_bundle(inputs) called
         # Then: InferredDeps.inputs matches tables scanned in plan
 
     def test_column_level_requirements_extracted(
         self,
         df_ctx: SessionContext,
-        view_node_with_projection: ViewNode,
+        inferred_deps_inputs_with_projection: InferredDepsInputs,
     ) -> None:
         """Verify column-level requirements extracted from plan."""
-        # Given: ViewNode selecting subset of columns
-        # When: Extracting InferredDeps
-        # Then: required_columns[table] lists only used columns
+        # Given: InferredDepsInputs for a view selecting subset of columns
+        # When: infer_deps_from_plan_bundle(inputs) called
+        # Then: InferredDeps.required_columns[table] lists only used columns
 
     def test_udf_requirements_validated_against_snapshot(
         self,
         df_ctx: SessionContext,
-        view_node_with_udf: ViewNode,
+        inferred_deps_inputs_with_udf: InferredDepsInputs,
         udf_snapshot: dict[str, object],
     ) -> None:
-        """Verify required_udfs validated against snapshot."""
-        # Given: ViewNode using stable_hash64 UDF
-        # When: _validate_bundle_udfs() called
+        """Verify required_udfs validated against snapshot.
+
+        Note: Actual function is validate_required_udfs() from
+        datafusion_engine.udf.runtime, not _validate_bundle_udfs().
+        """
+        # Given: InferredDepsInputs for view using stable_hash64 UDF
+        # When: validate_required_udfs(snapshot, required=resolved_udfs) called
         # Then: No error if UDF in snapshot; error if missing
 
     # ─────────────────────────────────────────────────────────────
@@ -434,27 +486,45 @@ class TestViewDagToScheduling:
     def test_bottom_level_costs_computed(
         self,
         task_graph_with_costs: TaskGraph,
+        task_costs: dict[str, float],
     ) -> None:
-        """Verify bottom_level_costs() computes weighted longest paths."""
+        """Verify bottom_level_costs() computes weighted longest paths.
+
+        Note: bottom_level_costs() is in relspec.execution_plan (not
+        rustworkx_schedule) and takes rx.PyDiGraph, not TaskGraph.
+        Access the graph via task_graph.graph.
+        """
+        from relspec.execution_plan import bottom_level_costs
+
         # Given: TaskGraph with task_costs annotations
-        # When: bottom_level_costs() computed
+        # When: bottom_level_costs(task_graph.graph, task_costs=task_costs)
         # Then: Each task has bottom cost = self_cost + max(successor costs)
 
     def test_slack_computation(
         self,
         task_graph_with_costs: TaskGraph,
+        task_costs: dict[str, float],
     ) -> None:
-        """Verify slack = latest_start - earliest_start."""
+        """Verify slack = latest_start - earliest_start.
+
+        Note: task_slack_by_task() is in relspec.execution_plan and takes
+        rx.PyDiGraph, not TaskGraph.
+        """
+        from relspec.execution_plan import task_slack_by_task
+
         # Given: TaskGraph with computed schedule
-        # When: task_slack_by_task() computed
+        # When: task_slack_by_task(task_graph.graph, task_costs=task_costs)
         # Then: Critical path tasks have zero slack
 
     def test_critical_path_has_zero_slack(
         self,
         task_graph_with_costs: TaskGraph,
+        task_costs: dict[str, float],
     ) -> None:
         """Verify critical path identified by zero slack."""
-        # Given: TaskGraph with computed slack
+        from relspec.execution_plan import bottom_level_costs, task_slack_by_task
+
+        # Given: TaskGraph with computed slack via task_slack_by_task(graph.graph)
         # Then: Tasks on critical path have slack == 0
 ```
 
@@ -516,14 +586,20 @@ class TestCpgToMaterialization:
         # Then: Failure recorded as diagnostic event, not exception
 
     # ─────────────────────────────────────────────────────────────
-    # Test 4.3: Streaming write tracking (NEW)
+    # Test 4.3: Streaming write tracking (DEFERRED — unit coverage exists)
     # ─────────────────────────────────────────────────────────────
     def test_large_write_records_streaming_artifact(
         self,
         tmp_path: Path,
         large_table: pa.Table,  # >100k rows
     ) -> None:
-        """Verify large writes (>100k rows) record streaming artifacts."""
+        """Verify large writes (>100k rows) record streaming artifacts.
+
+        Note: Streaming threshold behavior is already covered by
+        tests/unit/test_incremental_streaming_metrics.py. Only add
+        integration variant if threshold ↔ materialization path needs
+        coverage.
+        """
         # Given: Table with 150,000 rows
         # When: write_overwrite_dataset() called
         # Then: Streaming write artifact recorded
@@ -533,13 +609,28 @@ class TestCpgToMaterialization:
 
 ## Phase 2: Adapter and Contract Tests
 
-### Test Suite 5: Semantic Runtime Adapter (NEW)
+### Test Suite 5: Semantic Runtime Adapter (NEW — Reduced Breadth)
 
-**File:** `tests/integration/adapters/test_semantic_runtime_adapter.py`
+**File:** `tests/integration/adapters/test_semantic_runtime_bridge_integration.py`
 
 **Purpose:** Validate bidirectional adapter between DataFusionRuntimeProfile and SemanticRuntimeConfig.
 
+**Scope note:** Basic adapter round-trip is already covered by `tests/unit/datafusion_engine/test_semantics_runtime_bridge.py`. Keep only a small integration set proving: profile → semantic config → profile behavior inside session construction. Do not duplicate every unit-path adapter behavior.
+
+**Module Notes:**
+- `SemanticRuntimeConfig` lives in `semantics.runtime` (owned by semantics module)
+- Adapter functions live in `datafusion_engine.semantics_runtime` (NOT `semantics/adapters.py`)
+- `semantic_runtime_from_profile(profile)` → extracts semantic config from profile
+- `apply_semantic_runtime_config(profile, semantic_config)` → applies config back to profile
+- Profile update uses `msgspec.structs.replace()` for structural sharing (immutable)
+- Cache merging path: `profile.data_sources.semantic_output.cache_overrides` (not top-level)
+
 ```python
+from datafusion_engine.semantics_runtime import (
+    apply_semantic_runtime_config,
+    semantic_runtime_from_profile,
+)
+
 @pytest.mark.integration
 class TestSemanticRuntimeAdapter:
     """Tests for semantic runtime adapter round-trip."""
@@ -550,7 +641,7 @@ class TestSemanticRuntimeAdapter:
     ) -> None:
         """Verify output locations extracted from profile."""
         # Given: Profile with dataset locations for CPG outputs
-        # When: semantic_runtime_from_profile() called
+        # When: semantic_runtime_from_profile(profile) called
         # Then: SemanticRuntimeConfig.output_locations populated
 
     def test_semantic_config_to_profile_applies_locations(
@@ -558,10 +649,15 @@ class TestSemanticRuntimeAdapter:
         datafusion_profile: DataFusionRuntimeProfile,
         semantic_config: SemanticRuntimeConfig,
     ) -> None:
-        """Verify semantic config locations applied back to profile."""
+        """Verify semantic config locations applied back to profile.
+
+        Note: apply_semantic_runtime_config() updates
+        profile.catalog.registry_catalogs and
+        profile.data_sources.semantic_output.locations.
+        """
         # Given: SemanticRuntimeConfig with custom output_locations
-        # When: apply_semantic_runtime_config() called
-        # Then: Profile's registry_catalogs updated with new locations
+        # When: apply_semantic_runtime_config(profile, semantic_config) called
+        # Then: Profile's catalog.registry_catalogs updated with new locations
 
     def test_adapter_round_trip_preserves_semantic_settings(
         self,
@@ -577,10 +673,15 @@ class TestSemanticRuntimeAdapter:
         datafusion_profile: DataFusionRuntimeProfile,
         semantic_config: SemanticRuntimeConfig,
     ) -> None:
-        """Verify cache policy merging: semantic_config > profile."""
-        # Given: Profile with cache_overrides = {"view_a": "none"}
+        """Verify cache policy merging: semantic_config > profile.
+
+        Note: Profile cache overrides are at
+        profile.data_sources.semantic_output.cache_overrides
+        (not a top-level cache_overrides field).
+        """
+        # Given: Profile with data_sources.semantic_output.cache_overrides = {"view_a": "none"}
         # And: SemanticConfig with cache_policy_overrides = {"view_a": "delta_output"}
-        # When: apply_semantic_runtime_config() called
+        # When: apply_semantic_runtime_config(profile, semantic_config) called
         # Then: Merged result has {"view_a": "delta_output"} (semantic wins)
 
     def test_immutable_update_via_msgspec_replace(
@@ -588,23 +689,29 @@ class TestSemanticRuntimeAdapter:
         datafusion_profile: DataFusionRuntimeProfile,
         semantic_config: SemanticRuntimeConfig,
     ) -> None:
-        """Verify profile update uses structural sharing (no mutation)."""
+        """Verify profile update uses structural sharing (no mutation).
+
+        Note: apply_semantic_runtime_config() uses msgspec.structs.replace()
+        to produce a new profile without mutating the original.
+        """
         # Given: Original profile
-        # When: apply_semantic_runtime_config() called
+        # When: apply_semantic_runtime_config(profile, semantic_config) called
         # Then: Original profile unchanged, new profile returned
 ```
 
-### Test Suite 6: Immutability Contracts (NEW)
+### Test Suite 6: Immutability Contracts (NEW — Smoke Only)
 
 **File:** `tests/integration/contracts/test_immutability_contracts.py`
 
 **Purpose:** Validate frozen dataclass/struct mutation prevention.
 
+**Scope note:** Immutability tests are primarily unit-level. Keep only a smoke assertion here where immutability affects subsystem behavior (e.g., confirming that adapter round-trip produces new objects, not mutations). The individual type assertions below can remain as quick smoke checks.
+
 **Implementation Notes:**
-- `CdfCursor`: msgspec.Struct with custom `__setattr__` that raises `FrozenInstanceError`
-- `SemanticRuntimeConfig`: `@dataclass(frozen=True)` - raises `FrozenInstanceError`
-- `InferredDeps`: `StructBaseStrict, frozen=True` (msgspec) - raises `AttributeError`
-- `FileContext`: `@dataclass(frozen=True)` - raises `FrozenInstanceError`
+- `CdfCursor`: `msgspec.Struct` with custom `__setattr__` that raises `FrozenInstanceError` (in `semantics.incremental.cdf_cursors`)
+- `SemanticRuntimeConfig`: `@dataclass(frozen=True)` - raises `FrozenInstanceError` (in `semantics.runtime`)
+- `InferredDeps`: `StructBaseStrict, frozen=True` (msgspec) - raises `AttributeError` (in `relspec.inferred_deps`)
+- `FileContext`: `@dataclass(frozen=True)` - raises `FrozenInstanceError` (in `extract.coordination.context`)
 
 ```python
 from dataclasses import FrozenInstanceError
@@ -668,9 +775,11 @@ class TestImmutabilityContracts:
 
 ### Test Suite 7: CDF Cursor Tracking (Corrected)
 
-**File:** `tests/integration/incremental/test_cdf_cursor_tracking.py`
+**File:** `tests/incremental/test_cdf_cursor_tracking.py` *(moved from integration/incremental/)*
 
 **Purpose:** Validate CDF cursor tracking with corrected behavior.
+
+**Scope note:** Algorithmic cursor behavior (start version, persistence, listing) is already covered by `tests/unit/semantics/incremental/test_cdf_cursors.py`. Keep only boundary-crossing tests here: cursor ↔ Delta write interaction, cursor recovery after failed writes.
 
 ```python
 @pytest.mark.integration
@@ -747,9 +856,11 @@ class TestCdfCursorTracking:
 
 ### Test Suite 8: CDF Filter Policies and Merge Strategies (NEW)
 
-**File:** `tests/integration/incremental/test_merge_strategies.py`
+**File:** `tests/incremental/test_merge_strategies.py` *(moved from integration/incremental/)*
 
 **Purpose:** Validate all four merge strategies and filter policies.
+
+**Scope note:** Merge strategy algorithms are already covered by `tests/unit/semantics/incremental/test_merge_strategies.py`. Keep only boundary-crossing integration variants here: merge strategy ↔ schema evolution boundary, merge result ↔ Delta write path.
 
 ```python
 @pytest.mark.integration
@@ -882,17 +993,23 @@ class TestCdfFilterPolicies:
 
 ### Test Suite 9: Impact Closure Strategies (NEW)
 
-**File:** `tests/integration/incremental/test_impact_closure_strategies.py`
+**File:** `tests/incremental/test_impact_closure_strategies.py` *(moved from integration/incremental/)*
 
 **Purpose:** Validate the three impact closure computation strategies.
 
 **Key Signature Notes:**
 - `merge_impacted_files(runtime: IncrementalRuntime, inputs: ImpactedFileInputs, *, strategy: str) -> pa.Table`
-- Strategies: `"hybrid"` (default), `"symbol_closure"`, `"import_closure"`
-- `impacted_importers_from_changed_exports(*, runtime, changed_exports, prev_imports_resolved) -> pa.Table`
+- Strategies: `"hybrid"` (default/else), `"symbol_closure"`, `"import_closure"`
+- `impacted_importers_from_changed_exports(*, runtime: IncrementalRuntime, changed_exports: TableLike, prev_imports_resolved: str | None) -> pa.Table`
+- `ImpactedFileInputs` fields: `changed_files`, `callers`, `importers`, `import_closure_only` (all `TableLike | None` except changed_files)
 
 ```python
-from semantics.incremental.impact import merge_impacted_files, impacted_importers_from_changed_exports
+from semantics.incremental.impact import (
+    merge_impacted_files,
+    impacted_importers_from_changed_exports,
+    ImpactedFileInputs,
+)
+from semantics.incremental.runtime import IncrementalRuntime
 
 @pytest.mark.integration
 class TestImpactClosureStrategies:
@@ -1002,35 +1119,47 @@ class TestImpactClosureStrategies:
 class TestEvidencePlanGating:
     """Tests for evidence plan gating behavior."""
 
-    def test_gated_dataset_returns_empty_schema_aligned_plan(
+    def test_gated_dataset_excluded_from_plan(
         self,
-        df_ctx: SessionContext,
         evidence_plan: EvidencePlan,
     ) -> None:
-        """Verify gated datasets return LIMIT(0) plans, not errors."""
+        """Verify gated datasets are excluded via requires_dataset().
+
+        Note: EvidencePlan has no apply_query_and_project() method.
+        Use requires_dataset(name) to check inclusion and
+        required_columns_for(name) for column projection.
+        """
         # Given: Evidence plan not requiring "optional_dataset"
-        # When: apply_query_and_project() for "optional_dataset"
-        # Then: Returns plan with correct schema, zero rows
+        # When: evidence_plan.requires_dataset("optional_dataset")
+        # Then: Returns False (dataset excluded)
 
-    def test_enabled_when_condition_respected(
-        self,
-        df_ctx: SessionContext,
-        dataset_with_enabled_when: str,
-    ) -> None:
-        """Verify enabled_when feature flag respected."""
-        # Given: Dataset with enabled_when="feature_flag_xyz"
-        # And: feature_flag_xyz=False in execution options
-        # When: apply_query_and_project()
-        # Then: Returns empty plan (gated by condition)
-
-    def test_plan_requires_row_check(
+    def test_plan_feature_flags_disable_unrequired_extractors(
         self,
         evidence_plan: EvidencePlan,
     ) -> None:
-        """Verify plan_requires_row() correctly identifies requirements."""
+        """Verify plan_feature_flags() disables unrequired extractors.
+
+        Note: Feature-flag gating is via plan_feature_flags() from
+        extract.coordination.spec_helpers, not enabled_when on datasets.
+        """
+        from extract.coordination.spec_helpers import plan_feature_flags
+
+        # Given: Evidence plan not requiring bytecode datasets
+        # When: plan_feature_flags("bytecode", evidence_plan) called
+        # Then: Returns {flag: False} for bytecode feature flags
+
+    def test_plan_requires_dataset_check(
+        self,
+        evidence_plan: EvidencePlan,
+    ) -> None:
+        """Verify requires_dataset() correctly identifies requirements.
+
+        Note: plan_requires_row() takes (plan, row: ExtractMetadata),
+        not a string. For direct string checks, use plan.requires_dataset().
+        """
         # Given: Evidence plan with sources=("cst_refs", "ast_files")
-        # Then: plan_requires_row(plan, "cst_refs") returns True
-        # And: plan_requires_row(plan, "bytecode") returns False
+        # Then: plan.requires_dataset("cst_refs") returns True
+        # And: plan.requires_dataset("bytecode") returns False
 ```
 
 ---
@@ -1052,6 +1181,7 @@ class TestEvidencePlanGating:
 ```python
 from relspec.rustworkx_schedule import schedule_tasks, ScheduleOptions, TaskSchedule
 from relspec.rustworkx_graph import TaskGraph
+from relspec.evidence import EvidenceCatalog
 
 @pytest.mark.integration
 class TestScheduleGeneration:
@@ -1064,23 +1194,39 @@ class TestScheduleGeneration:
     ) -> None:
         """Verify every task scheduled after its dependencies.
 
-        Note: ordered_tasks is tuple[str, ...] (task names), so we must
-        look up task details via the graph to check dependencies.
+        IMPORTANT: TaskNode.inputs are evidence dataset names, NOT task names.
+        Dependency ordering must be checked via predecessor task nodes in
+        graph topology, not by comparing TaskNode.inputs against scheduled
+        task names (which would silently pass while missing real ordering
+        regressions).
+
+        Approach: For each task node, find predecessor task nodes in the
+        bipartite graph (task → evidence → task path) and verify they
+        appear earlier in the schedule.
         """
+        import rustworkx as rx
+
         schedule = schedule_tasks(task_graph, evidence=evidence_catalog)
         task_positions = {name: i for i, name in enumerate(schedule.ordered_tasks)}
 
-        # For each task, verify all its input dependencies appear earlier
+        # For each task, check predecessor tasks via graph topology
         for task_name in schedule.ordered_tasks:
             task_idx = task_graph.task_idx.get(task_name)
             if task_idx is None:
                 continue
-            node = task_graph.graph[task_idx]
-            if hasattr(node.payload, "inputs"):
-                for dep in node.payload.inputs:
-                    if dep in task_positions:
-                        assert task_positions[dep] < task_positions[task_name], (
-                            f"{task_name} scheduled before dependency {dep}"
+            # Walk predecessor chain: task ← evidence ← predecessor_task
+            # In bipartite graph: evidence nodes connect tasks
+            for evidence_idx in task_graph.graph.predecessor_indices(task_idx):
+                evidence_node = task_graph.graph[evidence_idx]
+                # Skip if not an evidence node
+                if not hasattr(evidence_node, "name"):
+                    continue
+                # Find tasks that produce this evidence
+                for pred_task_idx in task_graph.graph.predecessor_indices(evidence_idx):
+                    pred_node = task_graph.graph[pred_task_idx]
+                    if hasattr(pred_node, "name") and pred_node.name in task_positions:
+                        assert task_positions[pred_node.name] < task_positions[task_name], (
+                            f"{task_name} scheduled before predecessor {pred_node.name}"
                         )
 
     def test_generations_allow_parallel_execution(
@@ -1143,39 +1289,243 @@ class TestScheduleGeneration:
 
 ---
 
-## Fixture Library (Updated)
+## Phase 6: Scope Expansions (From Review)
 
-### Core Test Fixtures
+The following scope expansions were identified during external review as high-value additions not strongly captured in the original proposal.
 
-**File:** `tests/integration/conftest.py`
+### Expansion 1: Delta Read-After-Write and Provider Registration Contracts (High Priority)
+
+**File:** `tests/incremental/test_delta_read_after_write_contracts.py`
+
+**Motivation:** Current integration failures show this boundary is unstable:
+- `test_schema_mode_merge_allows_new_columns` (failing)
+- `test_upsert_partitioned_dataset_alignment_and_deletes` (failing)
+- `test_table_provider_registry_records_delta_capsule` (failing)
+- `test_delta_pruning_predicate_from_dataset_spec` (failing)
+- `test_write_overwrite_dataset_roundtrip` (failing)
 
 ```python
+@pytest.mark.integration
+class TestDeltaReadAfterWriteContracts:
+    """Verify schema resolution and provider registration after Delta writes."""
+
+    def test_schema_visible_after_write_plain_location(
+        self,
+        tmp_path: Path,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify schema is queryable immediately after Delta write."""
+        # Given: Write a table to a plain Delta location
+        # When: Register as table provider and query
+        # Then: Schema matches written table, no stale metadata
+
+    def test_schema_visible_after_write_dataset_spec_location(
+        self,
+        tmp_path: Path,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify schema resolution for dataset-spec-backed locations."""
+        # Given: Write via dataset spec with partition_by
+        # When: Register provider and query
+        # Then: Partitioned schema visible, pruning predicates work
+
+    def test_provider_registration_after_schema_evolution(
+        self,
+        tmp_path: Path,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify provider registry handles schema evolution correctly."""
+        # Given: Existing Delta table, write with new nullable column (merge mode)
+        # When: Re-register table provider
+        # Then: New column visible in provider schema
+```
+
+### Expansion 2: Capability Negotiation and Graceful Fallback Boundaries
+
+**File:** `tests/integration/runtime/test_capability_negotiation.py`
+
+**Motivation:** Recent failures indicate fragile behavior around extension capabilities and replay errors. Tests should ensure deterministic failure payloads (not uncaught exceptions).
+
+```python
+@pytest.mark.integration
+class TestCapabilityNegotiation:
+    """Verify deterministic failure payloads for unsupported capabilities."""
+
+    def test_substrait_decode_failure_produces_diagnostic(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify Substrait payload decode failure returns structured error."""
+        # Given: Invalid or corrupt Substrait payload
+        # When: Attempt to decode and execute
+        # Then: Structured error with diagnostic context, not uncaught exception
+
+    def test_unsupported_async_udf_produces_diagnostic(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify async UDF request fails gracefully if unsupported."""
+        # Given: Runtime build without async UDF capability
+        # When: Plan requires async UDF
+        # Then: Deterministic failure payload with capability name and suggestion
+```
+
+### Expansion 3: Evidence-Plan-to-Extractor-Options Pipeline
+
+**File:** `tests/integration/boundaries/test_evidence_plan_to_extractor.py`
+
+**Motivation:** Proposal covers EvidencePlan methods, but should also include end-to-end gating from plan to extractor options.
+
+```python
+@pytest.mark.integration
+class TestEvidencePlanToExtractorPipeline:
+    """Verify plan gating flows through to extractor configuration."""
+
+    def test_plan_feature_flags_propagate_to_rule_execution_options(
+        self,
+        evidence_plan: EvidencePlan,
+    ) -> None:
+        """Verify plan_feature_flags() disables extractors via rule_execution_options()."""
+        # Given: Evidence plan not requiring bytecode
+        # When: rule_execution_options(evidence_plan) called
+        # Then: Bytecode extractor disabled in options
+
+    def test_enabled_when_stage_gating(
+        self,
+        evidence_plan: EvidencePlan,
+    ) -> None:
+        """Verify enabled_when stage gating excludes irrelevant stages."""
+        # Given: Evidence plan with restricted stage set
+        # When: Checking extractor enablement
+        # Then: Only enabled stages have their extractors active
+
+    def test_projected_column_subset_propagates_to_scan(
+        self,
+        evidence_plan: EvidencePlan,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify required_columns_for() projection reaches DataFusion scan."""
+        # Given: Evidence plan requiring only (file_id, bstart, bend)
+        # When: Building scan plan for that dataset
+        # Then: DataFusion plan only references projected columns
+```
+
+### Expansion 4: Plan and Artifact Determinism Boundaries
+
+**File:** `tests/integration/boundaries/test_plan_determinism.py`
+
+**Motivation:** Targeted integration tests validating when fingerprints/artifacts should and should not change.
+
+```python
+@pytest.mark.integration
+class TestPlanDeterminism:
+    """Verify fingerprint stability and expected change boundaries."""
+
+    def test_fingerprint_stable_under_unchanged_query_and_runtime(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify plan fingerprint is identical across runs with same inputs."""
+        # Given: Same query, same runtime config
+        # When: Compile plan twice
+        # Then: Fingerprints are identical
+
+    def test_fingerprint_changes_with_runtime_policy_toggle(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify fingerprint changes when meaningful policy changes."""
+        # Given: Plan compiled with cdf_enabled=False
+        # When: Recompile with cdf_enabled=True
+        # Then: Fingerprint differs (meaningful policy change)
+
+    def test_fingerprint_stable_under_irrelevant_config_change(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify fingerprint ignores non-semantic config changes."""
+        # Given: Plan compiled with storage_options={"a": "1"}
+        # When: Recompile with storage_options={"a": "2"}
+        # Then: Fingerprint unchanged if storage options are not semantic
+```
+
+### Expansion 5: Diagnostics Contract Assertions for Error-Path Observability
+
+**Integration into existing Test Suites 4 and 10.**
+
+For all resilience/error-path tests, assert both:
+1. **Event presence** — the diagnostic event is recorded
+2. **Stable status taxonomy** — the event uses canonical status names
+
+```python
+# Add to TestCpgToMaterialization (Suite 4) and TestEvidencePlanGating (Suite 10):
+
+def test_register_view_failed_event_has_stable_taxonomy(
+    self,
+    df_ctx: SessionContext,
+) -> None:
+    """Verify register_view_failed events use canonical status taxonomy."""
+    # Given: View that fails during registration
+    # When: Event recorded
+    # Then: event.status == "register_view_failed" (exact string)
+    # And: event.stage == "postprocess" (canonical stage name)
+
+def test_schema_contract_failed_event_has_stable_taxonomy(
+    self,
+    df_ctx: SessionContext,
+) -> None:
+    """Verify schema_contract_failed events use canonical status taxonomy."""
+    # Given: Table violating schema contract
+    # When: Event recorded
+    # Then: event.status == "schema_contract_failed" (exact string)
+
+def test_view_artifact_failed_event_has_stable_taxonomy(
+    self,
+    df_ctx: SessionContext,
+) -> None:
+    """Verify view_artifact_failed events use canonical status taxonomy."""
+    # Given: View artifact that fails to materialize
+    # When: Event recorded
+    # Then: event.status == "view_artifact_failed" (exact string)
+```
+
+**Rationale:** Asserting stable status taxonomy keeps tests resilient (won't break on wording changes) and operationally useful (dashboards/alerting can rely on canonical names).
+
+---
+
+## Fixture Library (Updated)
+
+### Shared Fixture Reuse Policy
+
+**Do not create a standalone `tests/integration/conftest.py` that bypasses shared fixtures.** Reuse the shared fixtures and helpers that already encode environment/capability checks and diagnostics conventions:
+
+| Shared Resource | Purpose | Key Exports |
+|----------------|---------|-------------|
+| `tests/conftest.py` | Root conftest with diagnostics, crash context | Session-level fixtures |
+| `tests/test_helpers/datafusion_runtime.py` | DataFusion session/profile setup | `df_profile()`, `df_ctx()` |
+| `tests/test_helpers/optional_deps.py` | Capability checking | `require_datafusion()` |
+| `tests/test_helpers/delta_seed.py` | Delta table creation | `write_delta_table()`, `DeltaSeedOptions` |
+| `tests/test_helpers/arrow_seed.py` | Arrow table registration | `register_arrow_table()` |
+| `tests/test_helpers/diagnostics.py` | Test diagnostics helpers | Various |
+| `tests/test_helpers/semantic_registry_runtime.py` | Semantic registry setup | Various |
+
+### Integration-Specific Fixtures (Minimal Additions)
+
+New integration tests should add only fixtures not already provided by the shared helpers. Place new integration-specific fixtures in the test file or a minimal subdirectory conftest:
+
+```python
+# tests/integration/boundaries/conftest.py
+# Only add what shared helpers don't provide.
+# Reuse df_profile() and df_ctx() from tests/test_helpers/datafusion_runtime.py.
+
 import pytest
-from dataclasses import FrozenInstanceError
 from pathlib import Path
-import pyarrow as pa
-from datafusion import SessionContext
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from semantics.runtime import SemanticRuntimeConfig
-from semantics.incremental.cdf_cursors import CdfCursorStore, CdfCursor
+from semantics.incremental.cdf_cursors import CdfCursorStore
 from extract.coordination.context import FileContext
-from relspec.rustworkx_graph import TaskGraph
-from relspec.rustworkx_schedule import ScheduleOptions
 from relspec.evidence import EvidenceCatalog
-
-
-@pytest.fixture
-def df_ctx() -> SessionContext:
-    """Create clean DataFusion session for each test."""
-    from datafusion import SessionContext as DFSessionContext
-    return DFSessionContext()
-
-
-@pytest.fixture
-def datafusion_profile() -> DataFusionRuntimeProfile:
-    """Create default DataFusion runtime profile."""
-    return DataFusionRuntimeProfile.default()
+from tests.test_helpers.datafusion_runtime import df_profile
 
 
 @pytest.fixture
@@ -1199,7 +1549,8 @@ def cursors_dir(tmp_path: Path) -> Path:
 def cursor_store(cursors_dir: Path) -> CdfCursorStore:
     """Create cursor store in temporary directory.
 
-    Note: CdfCursorStore takes cursors_path directly, not state_dir.
+    Note: CdfCursorStore is a StructBaseStrict (msgspec), not a dataclass.
+    Takes cursors_path directly, not state_dir.
     """
     return CdfCursorStore(cursors_path=cursors_dir)
 
@@ -1253,39 +1604,79 @@ def file_context_text_only() -> FileContext:
 def evidence_catalog() -> EvidenceCatalog:
     """Create empty evidence catalog for scheduling tests.
 
-    Note: EvidenceCatalog is mutable dataclass with sets/dicts.
-    Tests should populate with specific evidence as needed.
+    Note: EvidenceCatalog is a mutable @dataclass (not frozen) with
+    sets/dicts all having default_factory. Has a clone() method for
+    staged updates. Tests should populate with specific evidence as needed.
     """
     return EvidenceCatalog()
 ```
 
+**Key construction notes:**
+- `DataFusionRuntimeProfile()` — no `.default()` classmethod; all fields have `default_factory`
+- `CdfCursorStore(cursors_path=...)` — is `StructBaseStrict` (msgspec), not a dataclass
+- `EvidenceCatalog()` — mutable `@dataclass` with `clone()` for staged updates
+
 ---
 
-## Implementation Priorities (Revised)
+## Implementation Priorities (Revised per Review)
 
-### Phase 1 (Critical - Week 1-2)
-1. **Adapter round-trip tests** - Verify profile ↔ semantic config consistency
-2. **Immutability contract tests** - Prevent mutation bugs in frozen dataclasses
-3. **Evidence plan gating tests** - Verify graceful empty-plan behavior
-4. **Bipartite graph structure tests** - Validate evidence/task node distinction
+### Phase 0: Stabilize Existing Integration Failures (Immediate)
 
-### Phase 2 (High Priority - Week 3-4)
-5. **CDF cursor tracking (corrected)** - Fix start_version = last + 1 tests
-6. **Merge strategy tests** - All four strategies: APPEND, UPSERT, REPLACE, DELETE_INSERT
-7. **Impact closure strategy tests** - hybrid, symbol_closure, import_closure
-8. **Post-process resilience tests** - Failures recorded, not propagated
+Before adding new tests, resolve and lock down the 5 currently failing integration tests. Add regression assertions around the fixed behavior.
 
-### Phase 3 (Medium Priority - Week 5-6)
-9. **Column-level dependency tests** - GraphEdge.required_columns validation
-10. **Cost modeling tests** - Bottom-level costs, slack computation
-11. **Schedule generation tests** - Topological order, parallel generations
-12. **FileContext fallback tests** - bytes → text → disk chain
+**Known failures** (from `uv run pytest tests/integration -q`: 41 passed, 5 failed, 4 skipped):
 
-### Phase 4 (Lower Priority - Week 7-8)
-13. **Multi-source alignment tests** - CST/AST/SCIP consistency
-14. **Streaming artifact tests** - Large write (>100k) tracking
-15. **Expression validation skip tests** - Graceful degradation on invalid exprs
-16. **Performance baseline tests** - Compilation and join selectivity
+1. `tests/integration/test_delta_protocol_and_schema_mode.py::test_schema_mode_merge_allows_new_columns`
+2. `tests/integration/test_incremental_partitioned_updates.py::test_upsert_partitioned_dataset_alignment_and_deletes`
+3. `tests/integration/test_pycapsule_provider_registry.py::test_table_provider_registry_records_delta_capsule`
+4. `tests/integration/test_pycapsule_provider_registry.py::test_delta_pruning_predicate_from_dataset_spec`
+5. `tests/integration/test_semantic_incremental_overwrite.py::test_write_overwrite_dataset_roundtrip`
+
+**Action:** Fix root causes, add regression assertions, confirm green gate before proceeding.
+
+### Phase 1: Core Boundary Contracts (Highest Value)
+
+Focus on areas with highest ROI that are currently under-tested:
+
+1. **Evidence plan gating and projection behavior** (Suites 1, 10, Expansion 3)
+   - `tests/integration/boundaries/test_evidence_plan_gating.py`
+   - `tests/integration/boundaries/test_evidence_plan_to_extractor.py`
+   - Covers `requires_dataset()` + `required_columns_for()` + `plan_feature_flags()` interaction
+2. **Scheduling behavior contracts** (Suite 11)
+   - `tests/integration/scheduling/test_schedule_tasks_boundaries.py`
+   - Direct tests for `schedule_tasks()` behavior under missing evidence, reduced graph, and cost context
+3. **Extract postprocess resilience** (Suite 4, Expansion 5)
+   - `tests/integration/error_handling/test_extract_postprocess_resilience.py`
+   - `register_view_failed` / `view_artifact_failed` / `schema_contract_failed` event recording
+4. **Incremental impact closure** (Suite 9)
+   - `tests/incremental/test_impact_closure_strategies.py`
+   - `merge_impacted_files()` and `impacted_importers_from_changed_exports()` have no direct tests
+
+### Phase 2: Delta and Runtime Capability Contracts
+
+1. **Delta read-after-write contracts** (Expansion 1)
+   - `tests/incremental/test_delta_read_after_write_contracts.py`
+   - Schema resolution and provider registration after writes
+2. **Capability negotiation boundaries** (Expansion 2)
+   - `tests/integration/runtime/test_capability_negotiation.py`
+   - Deterministic failure payloads for Substrait decode, async UDF
+3. **Adapter integration** (Suite 5 — small set only)
+   - `tests/integration/adapters/test_semantic_runtime_bridge_integration.py`
+   - Profile → semantic config → profile behavior inside session construction
+
+### Phase 3: Selective Expansion
+
+1. **Plan and artifact determinism** (Expansion 4)
+   - `tests/integration/boundaries/test_plan_determinism.py`
+   - Fingerprint stability / expected change boundaries
+2. **Bipartite graph structure and cost modeling** (Suites 3.2, 3.3)
+   - Graph structure validation, bottom-level costs, slack computation
+3. **Immutability smoke assertions** (Suite 6 — smoke only)
+   - Keep mostly unit-level; integration has only smoke where immutability affects subsystem behavior
+4. **One multi-source alignment contract** (deferred from full cross-product)
+   - Start with CST/AST alignment only, not full 5-source matrix
+5. **Non-gating performance baseline tests** (separate CI job)
+   - Add after boundary contracts are stable
 
 ---
 
@@ -1293,35 +1684,52 @@ def evidence_catalog() -> EvidenceCatalog:
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
-| Adapter coverage | Round-trip tests pass | profile → config → profile consistency |
-| Immutability enforcement | 100% frozen classes tested | FrozenInstanceError on all frozen types |
-| Gating behavior | Zero exceptions from missing optional | Empty plans returned, not errors |
-| CDF correctness | All 4 merge strategies tested | APPEND, UPSERT, REPLACE, DELETE_INSERT |
-| Impact strategies | All 3 closure types tested | hybrid, symbol_closure, import_closure |
-| Graph structure | Bipartite invariant verified | Evidence/task node types validated |
-| Schedule correctness | Topological order guaranteed | No task before dependencies |
-| Test execution time | < 90s for full integration suite | CI timing |
+| Phase 0 gate | All 5 existing failures fixed | `uv run pytest tests/integration -q` → 0 failures |
+| Evidence plan gating | Gating + projection tested | `requires_dataset()` + `required_columns_for()` |
+| Scheduling behavior | Topology + partial + cost tested | `schedule_tasks()` under multiple scenarios |
+| Postprocess resilience | Event taxonomy verified | Canonical status names asserted |
+| Impact closure | All 3 closure types tested | hybrid, symbol_closure, import_closure |
+| Delta read-after-write | Schema visible after write | Provider registration post-write verified |
+| Adapter coverage | Round-trip in session context | profile → config → profile in session construction |
+| Plan determinism | Fingerprint stability verified | Unchanged inputs → same fingerprint |
+| Test execution time | < 90s for integration gate | CI timing (excludes performance/incremental jobs) |
 
 ---
 
-## Appendix: Test Markers (Revised)
+## Appendix: Test Markers and CI Configuration
 
-```python
-# In pyproject.toml
+**Source of truth:** `pytest.ini` (not `pyproject.toml`). Do not add markers to `pyproject.toml`.
 
-[tool.pytest.ini_options]
-markers = [
-    "integration: Multi-subsystem integration tests",
-    "boundary: Subsystem boundary tests",
-    "adapter: Adapter round-trip tests",
-    "contract: Schema and immutability contract tests",
-    "incremental: CDF and incremental behavior tests",
-    "scheduling: Graph construction and schedule tests",
-    "error_handling: Error path and resilience tests",
-    "multi_source: Cross-extractor consistency tests",
-    "performance: Integration-level performance tests",
-]
+### Existing Markers (in `pytest.ini`)
+
+Reuse these existing markers; avoid marker explosion:
+
+```ini
+# In pytest.ini
+markers =
+    smoke: quick end-to-end API smoke tests using fixtures
+    e2e: long-running end-to-end tests that exercise external surfaces
+    integration: validates coordinated behavior across multiple subsystems
+    benchmark: performance, non-gating
+    performance: integration/performance tests that may take longer to run
+    serial: run tests serially in the same xdist worker to avoid isolation issues
 ```
+
+### Proposed New Markers (add only if needed)
+
+```ini
+    boundary: subsystem boundary integration tests
+    incremental_contract: CDF and stateful Delta lifecycle tests
+```
+
+**Guideline:** Prefer combining existing markers (e.g., `@pytest.mark.integration` + class-level grouping) over adding new markers for every test category.
+
+### CI Recommendations
+
+1. **Default integration gate:** `uv run pytest tests/integration -q` — fast and deterministic.
+2. **Performance tests:** Run `@pytest.mark.benchmark` / `@pytest.mark.performance` in a separate, non-gating CI job to avoid noisy failures from host variance.
+3. **Incremental/Delta tests:** Run `uv run pytest tests/incremental -q` as a separate job (may require Delta Lake setup).
+4. **Serial tests:** `@pytest.mark.serial` tests run in same xdist worker via `--dist loadgroup`.
 
 ---
 
@@ -1329,16 +1737,34 @@ markers = [
 
 **Completed:**
 - ✅ Initial code review corrections documented (v1)
-- ✅ Final deep code review completed (v2) - All test expectations verified against production code
+- ✅ Final deep code review completed (v2) — All test expectations verified against production code
+- ✅ Deep code review completed (v3) — Fixed non-existent API references, import paths, function signatures
+- ✅ External review integrated (v4) — Scope calibration, phasing, fixture reuse, marker config, directory structure
 
 **Ready for Implementation:**
-1. **Implement Phase 1** - Critical adapter and immutability tests (verified correct)
-2. **Create fixtures** - Build synthetic data matching verified signatures
-3. **Prioritize based on recent bugs** - Focus on areas with known issues
-4. **Iterate** - Add tests as new behaviors discovered
+1. **Phase 0: Fix existing failures** — Resolve 5 known integration test failures before adding new tests
+2. **Phase 1: Core boundary contracts** — Evidence plan gating, scheduler behavior, postprocess resilience, impact closure
+3. **Phase 2: Delta/runtime contracts** — Read-after-write, capability negotiation, adapter integration (small set)
+4. **Phase 3: Selective expansion** — Plan determinism, graph structure, multi-source (one contract), performance (non-gating)
+
+**Scope Calibration (from review):**
+- Keep boundary-crossing tests; do not duplicate unit-level algorithmic coverage
+- Stateful CDF/Delta tests go in `tests/incremental/`, not `tests/integration/incremental/`
+- Adapter tests: small integration set only, unit tests cover basics
+- Immutability tests: smoke assertions only at integration level
+- Performance tests: non-gating, separate CI job
+- Multi-source alignment: start with one focused contract, not full cross-product
 
 **Code Review Confidence:**
 - All function signatures verified against source code with line numbers
 - All field names verified (CdfFilterPolicy, TaskSchedule, etc.)
 - All exception types verified (FrozenInstanceError vs AttributeError)
 - All default values verified (constructor vs config defaults)
+- Adapter module path verified (`datafusion_engine/semantics_runtime.py`)
+- EvidencePlan API verified (`requires_dataset()`, not `apply_query_and_project()`)
+- InferredDepsInputs wrapper verified for `infer_deps_from_plan_bundle()`
+- Cost functions verified in `relspec.execution_plan` (not `rustworkx_schedule`)
+- DataFusionRuntimeProfile construction verified (no `.default()` classmethod)
+- Scheduling test topology check uses graph predecessors, not `TaskNode.inputs` (evidence names)
+- Pytest markers confirmed in `pytest.ini`, not `pyproject.toml`
+- Shared test fixtures confirmed in `tests/test_helpers/` (datafusion_runtime, optional_deps, delta_seed)

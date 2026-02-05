@@ -112,7 +112,14 @@ class TestRulesByRecordType:
 
     def test_all_record_types_present(self) -> None:
         """All record types should be in the mapping."""
-        expected_types: set[RecordType] = {"def", "call", "import", "raise", "except", "assign_ctor"}
+        expected_types: set[RecordType] = {
+            "def",
+            "call",
+            "import",
+            "raise",
+            "except",
+            "assign_ctor",
+        }
         assert set(RULES_BY_RECORD_TYPE.keys()) == expected_types
 
     def test_def_rules_count(self) -> None:
@@ -154,7 +161,9 @@ class TestRuleConfigStructure:
         """Call rules should have 'has' constraint."""
         config = PY_CALL_NAME.to_config()
         assert "has" in config
-        assert config["has"]["kind"] == "identifier"
+        has_constraint = config["has"]
+        assert isinstance(has_constraint, dict)
+        assert has_constraint.get("kind") == "identifier"
 
     def test_import_rule_has_kind(self) -> None:
         """Import rule should have kind."""

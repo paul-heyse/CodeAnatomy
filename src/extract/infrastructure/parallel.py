@@ -64,7 +64,11 @@ def _process_executor(
             context = propagate.extract(carrier_payload)
             otel_context.attach(context)
 
-    ctx = multiprocessing.get_context("fork") if supports_fork() else multiprocessing.get_context("spawn")
+    ctx = (
+        multiprocessing.get_context("fork")
+        if supports_fork()
+        else multiprocessing.get_context("spawn")
+    )
     return ProcessPoolExecutor(
         max_workers=max_workers,
         mp_context=ctx,

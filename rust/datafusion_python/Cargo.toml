@@ -38,7 +38,7 @@ repository = "https://github.com/apache/datafusion-python"
 
 [features]
 default = ["mimalloc"]
-async-udf = []
+async-udf = ["datafusion_ext/async-udf"]
 protoc = ["datafusion-substrait/protoc"]
 substrait = ["dep:datafusion-substrait"]
 

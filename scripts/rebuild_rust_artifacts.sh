@@ -29,18 +29,38 @@ if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
   uv sync
 fi
 
-uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile}
+datafusion_python_features=("substrait" "async-udf")
+if [ "${CODEANATOMY_SUBSTRAIT_PROTOC:-}" = "1" ]; then
+  datafusion_python_features+=("protoc")
+fi
+feature_csv="$(IFS=,; echo "${datafusion_python_features[*]}")"
+datafusion_feature_flags=(--features "${feature_csv}")
+
+uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
 uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile}
 
 wheel_dir="dist/wheels"
 mkdir -p "${wheel_dir}"
 manylinux_args=()
-if [ "$(uname -s)" = "Linux" ]; then
-  manylinux_args=(--manylinux 2_39)
+compatibility="${CODEANATOMY_WHEEL_COMPATIBILITY:-linux}"
+case "${compatibility}" in
+  linux|off|pypi)
+    ;;
+  *)
+    echo "Invalid CODEANATOMY_WHEEL_COMPATIBILITY: ${compatibility}. Use 'linux', 'off', or 'pypi'." >&2
+    exit 1
+    ;;
+esac
+compatibility_args=(--compatibility "${compatibility}")
+if [ "$(uname -s)" = "Linux" ] && [ "${compatibility}" = "pypi" ]; then
+  manylinux_policy="${CODEANATOMY_WHEEL_MANYLINUX:-2014}"
+  if [ "${manylinux_policy}" != "off" ]; then
+    manylinux_args=(--manylinux "${manylinux_policy}")
+  fi
 fi
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 (

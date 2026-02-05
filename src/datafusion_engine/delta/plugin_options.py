@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import base64
-import importlib
 import json
 from collections.abc import Mapping, MutableMapping
 from typing import Protocol, cast
 
 from datafusion import SessionContext
 
+from datafusion_engine.delta.capabilities import (
+    invoke_delta_entrypoint,
+    resolve_delta_extension_module,
+)
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 
 
@@ -24,22 +27,22 @@ class _DeltaScanExtension(Protocol):
 
 
 def _resolve_delta_extension() -> _DeltaScanExtension:
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError as exc:
-        msg = "Delta plugin options require the datafusion_ext module."
-        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
-    entrypoint = getattr(module, "delta_scan_config_from_session", None)
-    if not callable(entrypoint):
-        msg = "Delta scan config entrypoint delta_scan_config_from_session is unavailable."
+    resolved = resolve_delta_extension_module(entrypoint="delta_scan_config_from_session")
+    if resolved is None:
+        msg = "Delta plugin options require a DataFusion Delta extension module."
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
-    return cast("_DeltaScanExtension", module)
+    return cast("_DeltaScanExtension", resolved.module)
 
 
 def _delta_scan_defaults(ctx: SessionContext) -> Mapping[str, object]:
     module = _resolve_delta_extension()
     try:
-        payload = module.delta_scan_config_from_session(ctx, None, None, None, None, None)
+        _ctx_kind, payload = invoke_delta_entrypoint(
+            module,
+            "delta_scan_config_from_session",
+            ctx=ctx,
+            args=(None, None, None, None, None),
+        )
     except Exception as exc:  # pragma: no cover - error paths depend on extension behavior
         msg = "Failed to derive Delta scan defaults from session."
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc

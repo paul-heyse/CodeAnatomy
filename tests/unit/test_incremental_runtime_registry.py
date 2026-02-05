@@ -26,12 +26,6 @@ def test_temp_table_registry_registers_and_cleans() -> None:
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    try:
-        runtime = IncrementalRuntime.build()
-        _ = runtime.session_context()
-    except ImportError as exc:
-        pytest.skip(str(exc))
-    else:
-        return runtime
-    msg = "Incremental runtime unavailable."
-    raise RuntimeError(msg)
+    runtime = IncrementalRuntime.build()
+    _ = runtime.session_context()
+    return runtime

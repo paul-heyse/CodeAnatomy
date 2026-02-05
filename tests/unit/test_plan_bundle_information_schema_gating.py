@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from datafusion_engine.plan import bundle as plan_bundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 
 
 def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ensure plan snapshots do not query routine metadata with UDFs disabled."""
     profile = DataFusionRuntimeProfile(features=FeatureGatesConfig(enable_udfs=False))
@@ -15,7 +17,7 @@ def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
     ctx = runtime.ctx
 
     class _FakeIntrospector:
-        def __init__(self, _ctx, *, sql_options=None) -> None:
+        def __init__(self, _ctx: object, *, sql_options: object | None = None) -> None:
             _ = (_ctx, sql_options)
 
         def tables_snapshot(self) -> list[dict[str, object]]:
@@ -52,7 +54,8 @@ def test_information_schema_snapshot_skips_udf_catalog_when_udfs_disabled(
 
     monkeypatch.setattr(plan_bundle, "SchemaIntrospector", _FakeIntrospector)
 
-    snapshot = plan_bundle._information_schema_snapshot(ctx, session_runtime=runtime)
+    snapshot_fn = plan_bundle._information_schema_snapshot  # noqa: SLF001
+    snapshot = snapshot_fn(ctx, session_runtime=runtime)
     assert snapshot["routines"] == []
     assert snapshot["parameters"] == []
     assert snapshot["function_catalog"] == []

@@ -5,8 +5,14 @@ High-signal code queries for LLM agents.
 ## Quick Start
 
 ```bash
-# Via skill (recommended)
+# Smart search (recommended for code discovery)
+/cq search build_graph
+
+# Find all callers
 /cq calls build_graph_product
+
+# Trace parameter impact
+/cq impact build_graph --param root
 
 # Direct invocation
 uv run python -c "from tools.cq.cli_app import main; main()" calls build_graph_product
@@ -65,6 +71,7 @@ save_artifact = true
 
 | Command | Purpose | Example |
 |---------|---------|---------|
+| `search` | Smart code search with enrichment | `/cq search build_graph` |
 | `impact` | Trace data flow from a parameter | `/cq impact build_graph --param root` |
 | `calls` | Census all call sites for a function | `/cq calls DefIndex.build` |
 | `sig-impact` | Test signature change viability | `/cq sig-impact foo --to "foo(a, *, b=None)"` |

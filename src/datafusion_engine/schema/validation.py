@@ -11,6 +11,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from pyarrow import Table as ArrowTable
 
+from core_types import NonNegativeInt
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.interop import (
     DataTypeLike,
@@ -77,7 +78,7 @@ class ArrowValidationOptions(StructBaseStrict, frozen=True):
 
     strict: bool | Literal["filter"] = "filter"
     coerce: bool = False
-    max_errors: int | None = None
+    max_errors: NonNegativeInt | None = None
     emit_invalid_rows: bool = True
     emit_error_table: bool = True
 

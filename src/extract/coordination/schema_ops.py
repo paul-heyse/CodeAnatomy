@@ -246,28 +246,21 @@ def _validate_extract_result(
 ) -> None:
     spec = dataset_spec(name)
     policy = spec.policies.dataframe_validation
-    if policy is None or not policy.enabled:
-        return
-    from schema_spec.pandera_bridge import validate_dataframe
+    constraints: tuple[str, ...] = ()
+    if spec.contract_spec is not None:
+        constraints = tuple(spec.contract_spec.constraints)
+    if spec.delta_constraints:
+        constraints = (*constraints, *spec.delta_constraints)
+    from schema_spec.pandera_bridge import validate_with_policy
 
-    try:
-        validate_dataframe(
-            result.good,
-            schema_spec=spec.table_spec,
-            policy=policy,
-        )
-    except Exception as exc:
-        sink = runtime_profile.diagnostics.diagnostics_sink
-        if sink is not None:
-            from obs.diagnostics import record_dataframe_validation_error
-
-            record_dataframe_validation_error(
-                sink,
-                name=name,
-                error=exc,
-                policy=policy,
-            )
-        raise
+    validate_with_policy(
+        result.good,
+        schema_spec=spec.table_spec,
+        policy=policy,
+        constraints=constraints,
+        diagnostics=runtime_profile.diagnostics.diagnostics_sink,
+        name=name,
+    )
 
 
 __all__ = [

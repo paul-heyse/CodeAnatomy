@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.registry import DatasetLocation, resolve_delta_maintenance_policy
+from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.control_plane import (
     DeltaCheckpointRequest,
     DeltaCommitOptions,
@@ -74,7 +74,7 @@ def resolve_delta_maintenance_plan(
     """
     resolved = request.policy
     if resolved is None and request.dataset_location is not None:
-        resolved = resolve_delta_maintenance_policy(request.dataset_location)
+        resolved = request.dataset_location.resolved.delta_maintenance_policy
     if resolved is None:
         return None
     if not _has_maintenance(resolved):

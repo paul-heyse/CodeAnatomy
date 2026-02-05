@@ -16,7 +16,6 @@ from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
     resolve_dataset_location,
-    resolve_delta_feature_gate,
 )
 from datafusion_engine.delta.maintenance import (
     DeltaMaintenancePlanInput,
@@ -210,7 +209,7 @@ def run_delta_maintenance_if_configured(
                 log_storage_options=log_storage_options,
             ),
             delta_timestamp=None,
-            feature_gate=resolve_delta_feature_gate(dataset_location)
+            feature_gate=dataset_location.resolved.delta_feature_gate
             if dataset_location is not None
             else None,
             policy=None,

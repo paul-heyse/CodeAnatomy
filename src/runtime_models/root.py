@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field
 
 from hamilton_pipeline.types import GraphAdapterConfig
 from runtime_models.base import RuntimeBase
@@ -117,6 +117,7 @@ class RootConfigRuntime(RuntimeBase):
         validate_default=True,
         frozen=True,
         arbitrary_types_allowed=True,
+        revalidate_instances="always",
     )
 
     plan: PlanConfigRuntime | None = None
@@ -129,10 +130,7 @@ class RootConfigRuntime(RuntimeBase):
     hamilton: HamiltonConfigRuntime | None = None
 
 
-ROOT_CONFIG_ADAPTER = TypeAdapter(RootConfigRuntime)
-
 __all__ = [
-    "ROOT_CONFIG_ADAPTER",
     "CacheConfigRuntime",
     "DeltaConfigRuntime",
     "DeltaExportConfigRuntime",

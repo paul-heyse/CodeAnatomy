@@ -60,6 +60,7 @@ def test_cmd_calls_finds_call_sites(tmp_path: Path) -> None:
 
     result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
     assert result.summary["scan_method"] == "ast-grep"
+    assert not result.evidence
     sites = [
         finding
         for section in result.sections
@@ -67,6 +68,7 @@ def test_cmd_calls_finds_call_sites(tmp_path: Path) -> None:
         if finding.category == "call"
     ]
     assert sites
+    assert len(sites) == result.summary["total_sites"]
     details = cast("Mapping[str, object]", sites[0].details or {})
     # Basic call site fields should be present
     assert "context" in details

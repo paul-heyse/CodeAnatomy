@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
+from core_types import IdentifierStr
 from datafusion_engine.sql.guard import safe_sql
 from schema_spec.specs import TableSchemaSpec
 from serde_msgspec import StructBaseStrict
@@ -28,7 +29,7 @@ class ViewSpecInputs:
     """Inputs needed to construct a ViewSpec."""
 
     ctx: SessionContext
-    name: str
+    name: IdentifierStr
     builder: Callable[[SessionContext], DataFrame]
     schema: pa.Schema | None = None
 
@@ -38,7 +39,7 @@ class ViewSpecSqlInputs:
     """Inputs needed to construct a ViewSpec from SQL."""
 
     ctx: SessionContext
-    name: str
+    name: IdentifierStr
     sql: str
     schema: pa.Schema | None = None
     sql_options: SQLOptions | None = None
@@ -48,7 +49,7 @@ class ViewSpecSqlInputs:
 class ViewSpec(StructBaseStrict, frozen=True):
     """Serializable view specification for schema contracts."""
 
-    name: str
+    name: IdentifierStr
     schema: TableSchemaSpec | None = None
 
 

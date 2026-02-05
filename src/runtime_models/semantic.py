@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field
 
+from core_types import IdentifierStr
 from runtime_models.base import RuntimeBase
 from runtime_models.types import NonEmptyStr
 from semantics.column_types import ColumnType
@@ -22,7 +23,7 @@ class SemanticConfigRuntime(RuntimeBase):
     """Validated semantic config payload."""
 
     type_patterns: tuple[SemanticTypePatternRuntime, ...] = ()
-    table_overrides: dict[str, dict[ColumnType, str]] = Field(default_factory=dict)
+    table_overrides: dict[IdentifierStr, dict[ColumnType, str]] = Field(default_factory=dict)
     disallow_entity_id_patterns: tuple[NonEmptyStr, ...] = ()
 
     def overrides_for(self, table_name: str | None) -> Mapping[ColumnType, str]:
@@ -38,6 +39,4 @@ class SemanticConfigRuntime(RuntimeBase):
         return self.table_overrides.get(table_name, {})
 
 
-SEMANTIC_CONFIG_ADAPTER = TypeAdapter(SemanticConfigRuntime)
-
-__all__ = ["SEMANTIC_CONFIG_ADAPTER", "SemanticConfigRuntime", "SemanticTypePatternRuntime"]
+__all__ = ["SemanticConfigRuntime", "SemanticTypePatternRuntime"]

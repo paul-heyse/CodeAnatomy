@@ -1057,24 +1057,24 @@ def _cpg_output_view_specs(
         except KeyError:
             return df
         policy = spec.policies.dataframe_validation
-        if policy is None or not policy.enabled:
-            return df
-        from schema_spec.pandera_bridge import validate_dataframe
+        constraints: tuple[str, ...] = ()
+        if spec.contract_spec is not None:
+            constraints = tuple(spec.contract_spec.constraints)
+        if spec.delta_constraints:
+            constraints = (*constraints, *spec.delta_constraints)
+        diagnostics = None
+        if profile is not None:
+            diagnostics = profile.diagnostics.diagnostics_sink
+        from schema_spec.pandera_bridge import validate_with_policy
 
-        try:
-            validate_dataframe(df, schema_spec=spec.table_spec, policy=policy)
-        except Exception as exc:
-            if profile is not None and profile.diagnostics.diagnostics_sink is not None:
-                from obs.diagnostics import record_dataframe_validation_error
-
-                record_dataframe_validation_error(
-                    profile.diagnostics.diagnostics_sink,
-                    name=view_name,
-                    error=exc,
-                    policy=policy,
-                )
-            raise
-        return df
+        return validate_with_policy(
+            df,
+            schema_spec=spec.table_spec,
+            policy=policy,
+            constraints=constraints,
+            diagnostics=diagnostics,
+            name=view_name,
+        )
 
     def _wrap_cpg_builder(
         view_name: str,

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ViewReference:
     """Reference to a registered view in the execution context.
 
@@ -65,7 +65,7 @@ class ViewReference:
     plan_signature: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MaterializedTable:
     """Reference to a materialized table with metadata.
 
@@ -99,7 +99,7 @@ class MaterializedTable:
     storage_path: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MaterializedTableSpec:
     """Metadata for registering a materialized table."""
 
@@ -111,7 +111,7 @@ class MaterializedTableSpec:
     storage_path: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExecutionArtifactSpec:
     """Metadata for registering an execution artifact."""
 
@@ -123,7 +123,7 @@ class ExecutionArtifactSpec:
     storage_path: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExecutionArtifact:
     """Execution result artifact with metadata."""
 
@@ -137,7 +137,7 @@ class ExecutionArtifact:
     storage_path: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class RuntimeArtifacts:
     """Container for runtime artifacts during task execution.
 

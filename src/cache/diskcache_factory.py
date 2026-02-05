@@ -12,6 +12,7 @@ import msgspec
 from diskcache import Cache, Deque, FanoutCache, Index
 
 from core.config_base import config_fingerprint
+from core_types import NonNegativeInt, PositiveFloat, PositiveInt
 from serde_msgspec import StructBaseStrict
 from utils.env_utils import env_value
 
@@ -44,16 +45,16 @@ def _default_cache_root() -> Path:
 class DiskCacheSettings(StructBaseStrict, frozen=True):
     """Settings shared by DiskCache instances."""
 
-    size_limit_bytes: int
-    cull_limit: int = 10
+    size_limit_bytes: NonNegativeInt
+    cull_limit: PositiveInt = 10
     eviction_policy: str = "least-recently-used"
     statistics: bool = True
     tag_index: bool = True
-    shards: int | None = None
-    timeout_seconds: float = 60.0
-    disk_min_file_size: int | None = None
+    shards: PositiveInt | None = None
+    timeout_seconds: PositiveFloat = 60.0
+    disk_min_file_size: NonNegativeInt | None = None
     sqlite_journal_mode: str | None = "wal"
-    sqlite_mmap_size: int | None = None
+    sqlite_mmap_size: NonNegativeInt | None = None
     sqlite_synchronous: str | None = None
 
     def fingerprint_payload(self) -> Mapping[str, object]:

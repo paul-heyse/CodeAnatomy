@@ -6,10 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from datafusion_engine.dataset.registry import (
-    resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
-)
 from datafusion_engine.delta.control_plane import DeltaCdfRequest, DeltaProviderRequest
 from datafusion_engine.delta.payload import settings_bool
 from datafusion_engine.delta.scan_config import (
@@ -141,7 +137,7 @@ def build_delta_provider_contract(
         table_uri=str(location.path),
         storage_options=merged_storage_options(
             location.storage_options,
-            resolve_delta_log_storage_options(location),
+            location.resolved.delta_log_storage_options,
         ),
         version=location.delta_version,
         timestamp=location.delta_timestamp,
@@ -168,12 +164,12 @@ def build_delta_cdf_contract(location: DatasetLocation) -> DeltaCdfContract:
         table_uri=str(location.path),
         storage_options=merged_storage_options(
             location.storage_options,
-            resolve_delta_log_storage_options(location),
+            location.resolved.delta_log_storage_options,
         ),
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         options=location.delta_cdf_options,
-        gate=resolve_delta_feature_gate(location),
+        gate=location.resolved.delta_feature_gate,
     )
 
 

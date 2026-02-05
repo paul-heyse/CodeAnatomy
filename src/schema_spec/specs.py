@@ -16,6 +16,7 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
+from core_types import IdentifierStr
 from datafusion_engine.arrow import interop
 from datafusion_engine.arrow.build import list_view_type
 from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike
@@ -142,7 +143,7 @@ class DerivedFieldSpec(StructBaseStrict, frozen=True):
 class TableSchemaSpec(StructBaseStrict, frozen=True):
     """Specification for a table schema and associated constraints."""
 
-    name: str
+    name: IdentifierStr
     fields: list[FieldSpec]
     version: int | None = None
     required_non_null: tuple[str, ...] = ()
@@ -151,7 +152,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
     @classmethod
     def from_schema(
         cls,
-        name: str,
+        name: IdentifierStr,
         schema: SchemaLike,
         *,
         version: int | None = None,

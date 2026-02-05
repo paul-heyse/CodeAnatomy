@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from arrow_utils.core.expr_types import ScalarValue
-from datafusion_engine.expr.spec import ExprIR, ExprSpec, scalar_literal
+from datafusion_engine.expr.spec import ExprIR, ExprSpec, ScalarLiteralInput, scalar_literal
 from utils.hashing import hash128_from_text
 
 
@@ -391,7 +390,7 @@ def _field_expr(name: str) -> ExprIR:
     return ExprIR(op="field", name=name)
 
 
-def _literal_expr(value: ScalarValue) -> ExprIR:
+def _literal_expr(value: ScalarLiteralInput) -> ExprIR:
     return ExprIR(op="literal", value=scalar_literal(value))
 
 

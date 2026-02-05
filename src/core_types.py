@@ -32,6 +32,11 @@ type RowStrict = dict[str, RowValueStrict]
 type RowRich = dict[str, RowValueRich]
 type RowPermissive = dict[str, object]
 
+PositiveInt = Annotated[int, Meta(gt=0)]
+NonNegativeInt = Annotated[int, Meta(ge=0)]
+PositiveFloat = Annotated[float, Meta(gt=0)]
+NonNegativeFloat = Annotated[float, Meta(ge=0)]
+
 IdentifierStr = Annotated[
     str,
     Meta(
@@ -146,7 +151,11 @@ __all__ = [
     "JsonPrimitive",
     "JsonValue",
     "JsonValueLax",
+    "NonNegativeFloat",
+    "NonNegativeInt",
     "PathLike",
+    "PositiveFloat",
+    "PositiveInt",
     "RepoId",
     "RowPermissive",
     "RowRich",

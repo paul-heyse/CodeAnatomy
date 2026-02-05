@@ -47,6 +47,24 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
 | `/datafusion-stack` | DataFusion/Delta/UDF work | `/datafusion-stack` |
 
+### Default: Start with Smart Search
+
+**For any code discovery task, start with Smart Search:**
+```bash
+/cq search <identifier>
+```
+
+Smart Search automatically:
+- Classifies matches (definition, callsite, import, etc.)
+- Groups by containing function/scope
+- Hides non-code matches (strings/comments)
+- Suggests follow-up commands
+
+Only use pattern queries (`/cq q "pattern=..."`) when you need:
+- Exact AST-level structural matching
+- Zero false positives from strings/comments
+- Complex relational constraints (inside, has, precedes)
+
 ### When to Use cq (Mandatory)
 
 **Before proposing changes to:**

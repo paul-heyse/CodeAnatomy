@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, model_validator
 
 from runtime_models.base import RuntimeBase
 
@@ -60,6 +60,4 @@ class OtelConfigRuntime(RuntimeBase):
         return self
 
 
-OTEL_CONFIG_ADAPTER = TypeAdapter(OtelConfigRuntime)
-
-__all__ = ["OTEL_CONFIG_ADAPTER", "OtelConfigRuntime"]
+__all__ = ["OtelConfigRuntime"]

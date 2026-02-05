@@ -13,15 +13,78 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 
 | Task | Command |
 |------|---------|
+| **Search for code** | `/cq search <query>` |
+| Search with regex | `/cq search "pattern.*" --regex` |
+| Search in directory | `/cq search <query> --in src/` |
 | Find callers | `/cq calls <fn>` |
 | Trace parameter | `/cq impact <fn> --param <p>` |
 | Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
-| Find entity | `/cq q "entity=function name=<name>"` |
-| Pattern search | `/cq q "pattern='<ast-grep-pattern>'"` |
+| Pattern search (AST) | `/cq q "pattern='getattr(\$X, \$Y)'"` |
+| Entity query | `/cq q "entity=function name=<name>"` |
 | Context search | `/cq q "entity=function inside='class <C>'"` |
 | Find closures | `/cq q "entity=function scope=closure"` |
 | Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
 | Security patterns | `/cq q "pattern='eval(\$X)'"` |
+
+## Smart Search (Default for Code Discovery)
+
+Smart Search (`/cq search`) is the **primary tool for finding code**. It provides semantically-enriched results that are superior to grep for code work.
+
+### Basic Usage
+
+```bash
+# Simple identifier search (auto-detected)
+/cq search build_graph
+
+# Regex pattern
+/cq search "config.*path" --regex
+
+# Literal string
+/cq search "hello world" --literal
+
+# Scoped to directory
+/cq search CqResult --in tools/cq/core/
+
+# Include strings/comments/docstrings
+/cq search build_graph --include-strings
+```
+
+### Why Smart Search > grep
+
+| Aspect | Smart Search | grep/rg |
+|--------|--------------|---------|
+| Classification | Defs, calls, imports, refs | Text only |
+| Grouping | By containing function | By file |
+| Non-code | Hidden by default | Mixed in |
+| Follow-ups | Suggested next commands | None |
+| Ranking | By relevance (code > tests) | None |
+
+### Output Sections
+
+- **Top Contexts**: Representative match per containing function
+- **Definitions**: Function/class definitions (identifier mode)
+- **Imports**: Import statements
+- **Callsites**: Function calls
+- **Uses by Kind**: Category breakdown
+- **Non-Code Matches**: Strings/comments (collapsed)
+- **Hot Files**: Files with most matches
+- **Suggested Follow-ups**: Next commands to explore
+
+### Plain Query Fallback
+
+Plain queries in `/cq q` automatically use Smart Search:
+```bash
+/cq q build_graph  # Same as: /cq search build_graph
+```
+
+### When to Use Smart Search vs Pattern Queries
+
+| Need | Use |
+|------|-----|
+| Find where symbol is used | `/cq search <symbol>` |
+| Find structural pattern | `/cq q "pattern='...'"` |
+| Find in strings/comments | `/cq search --include-strings` |
+| Find AST-exact matches | `/cq q "pattern='...'"` |
 
 ## Global Options
 
@@ -41,7 +104,7 @@ All commands support these global options:
 
 | Format | Description |
 |--------|-------------|
-| `md` | Markdown (default) - optimized for Claude context |
+| `md` | Markdown (default) - optimized for Claude and Codex context |
 | `json` | Full JSON - for programmatic use |
 | `both` | Markdown followed by JSON |
 | `summary` | Condensed single-line - for CI |
@@ -108,6 +171,7 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 
 | Command | Purpose | Example |
 |---------|---------|---------|
+| `search` | Smart code search with enrichment | `/cq search build_graph` |
 | `impact` | Trace data flow from a parameter | `/cq impact build_graph_product --param repo_root` |
 | `calls` | Census all call sites for a function | `/cq calls build_graph_product` |
 | `sig-impact` | Test signature change viability | `/cq sig-impact foo --to "foo(a, *, b=None)"` |

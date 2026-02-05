@@ -47,14 +47,7 @@ from datafusion.expr import SortExpr
 
 from core.config_base import config_fingerprint
 from core_types import IDENTIFIER_PATTERN
-from datafusion_engine.dataset.registry import (
-    DatasetLocation,
-    DatasetLocationOverrides,
-    resolve_delta_feature_gate,
-    resolve_delta_maintenance_policy,
-    resolve_delta_schema_policy,
-    resolve_delta_write_policy,
-)
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -270,10 +263,10 @@ def _delta_policy_context(
 ) -> _DeltaPolicyContext:
     write_policy = _delta_write_policy_override(options)
     if write_policy is None:
-        write_policy = resolve_delta_write_policy(dataset_location) if dataset_location else None
+        write_policy = dataset_location.resolved.delta_write_policy if dataset_location else None
     schema_policy = _delta_schema_policy_override(options)
     if schema_policy is None:
-        schema_policy = resolve_delta_schema_policy(dataset_location) if dataset_location else None
+        schema_policy = dataset_location.resolved.delta_schema_policy if dataset_location else None
     table_properties = _delta_table_properties(options)
     policy_partition_by = write_policy.partition_by if write_policy is not None else ()
     partition_by = request_partition_by if request_partition_by is not None else policy_partition_by
@@ -775,26 +768,24 @@ class WritePipeline:
             dataset_spec=dataset_spec,
             overrides=overrides,
         )
-        if policy is None or not policy.enabled:
-            return
-        from schema_spec.pandera_bridge import validate_dataframe
+        constraints: tuple[str, ...] = ()
+        if dataset_spec.contract_spec is not None:
+            constraints = tuple(dataset_spec.contract_spec.constraints)
+        if dataset_spec.delta_constraints:
+            constraints = (*constraints, *dataset_spec.delta_constraints)
+        diagnostics = None
+        if self.runtime_profile is not None:
+            diagnostics = self.runtime_profile.diagnostics.diagnostics_sink
+        from schema_spec.pandera_bridge import validate_with_policy
 
-        try:
-            validate_dataframe(df, schema_spec=dataset_spec.table_spec, policy=policy)
-        except Exception as exc:
-            if (
-                self.runtime_profile is not None
-                and self.runtime_profile.diagnostics.diagnostics_sink is not None
-            ):
-                from obs.diagnostics import record_dataframe_validation_error
-
-                record_dataframe_validation_error(
-                    self.runtime_profile.diagnostics.diagnostics_sink,
-                    name=dataset_spec.name,
-                    error=exc,
-                    policy=policy,
-                )
-            raise
+        validate_with_policy(
+            df,
+            schema_spec=dataset_spec.table_spec,
+            policy=policy,
+            constraints=constraints,
+            diagnostics=diagnostics,
+            name=dataset_spec.name,
+        )
 
     def _dataset_location_for_destination(
         self,
@@ -1299,7 +1290,7 @@ class WritePipeline:
         maintenance_policy = _delta_maintenance_policy_override(options)
         if maintenance_policy is None:
             maintenance_policy = (
-                resolve_delta_maintenance_policy(inputs.dataset_location)
+                inputs.dataset_location.resolved.delta_maintenance_policy
                 if inputs.dataset_location is not None
                 else None
             )
@@ -1312,7 +1303,7 @@ class WritePipeline:
         )
         feature_gate = _delta_feature_gate_override(options)
         if feature_gate is None and inputs.dataset_location is not None:
-            feature_gate = resolve_delta_feature_gate(inputs.dataset_location)
+            feature_gate = inputs.dataset_location.resolved.delta_feature_gate
         stats_decision = _stats_decision_from_policy(
             dataset_name=inputs.dataset_name or request.destination,
             policy_ctx=policy_ctx,
@@ -2213,7 +2204,7 @@ def _resolve_delta_schema_policy(
         return schema_policy
     if dataset_location is None:
         return None
-    return resolve_delta_schema_policy(dataset_location)
+    return dataset_location.resolved.delta_schema_policy
 
 
 def _delta_schema_mode(

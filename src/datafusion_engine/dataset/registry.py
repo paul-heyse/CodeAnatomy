@@ -9,10 +9,16 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import msgspec
 
-from arrow_utils.core.ordering import OrderingLevel
 from core_types import PathLike
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.dataset.policies import (
+    ResolvedDatasetPolicies,
+    apply_scan_policy_defaults,
+)
+from datafusion_engine.dataset.policies import (
+    resolve_dataset_policies as _resolve_dataset_policies,
+)
 from datafusion_engine.identity import schema_identity_hash
 from schema_spec.specs import TableSchemaSpec
 from serde_msgspec import StructBaseStrict, to_builtins
@@ -381,10 +387,7 @@ def _register_location(
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
 
     resolved = apply_delta_store_policy(location, policy=profile.policies.delta_store_policy)
-    resolved = apply_scan_policy_to_location(
-        resolved,
-        policy=profile.policies.scan_policy,
-    )
+    resolved = _apply_scan_policy_overrides(resolved, policy=profile.policies.scan_policy)
     catalog.register(name, resolved)
 
 
@@ -450,123 +453,65 @@ def _resolve_table_spec(
     return None
 
 
-def _merge_delta_bundle(
-    base: DeltaPolicyBundle | None,
-    override: DeltaPolicyBundle | None,
-) -> DeltaPolicyBundle | None:
-    if override is None:
-        return base
-    if base is None:
-        return override
-    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
-
-    return _DeltaPolicyBundle(
-        scan=override.scan or base.scan,
-        cdf_policy=override.cdf_policy or base.cdf_policy,
-        maintenance_policy=override.maintenance_policy or base.maintenance_policy,
-        write_policy=override.write_policy or base.write_policy,
-        schema_policy=override.schema_policy or base.schema_policy,
-        feature_gate=override.feature_gate or base.feature_gate,
-        constraints=override.constraints,
-    )
-
-
-def _resolve_delta_bundle(
+def resolve_dataset_policies(
     location: DatasetLocation,
-    overrides: DatasetLocationOverrides | None,
-) -> DeltaPolicyBundle | None:
-    base = None
-    if location.dataset_spec is not None:
-        base = location.dataset_spec.policies.delta
-    override = overrides.delta if overrides is not None else None
-    return _merge_delta_bundle(base, override)
+    *,
+    overrides: DatasetLocationOverrides | None = None,
+) -> ResolvedDatasetPolicies:
+    """Return resolved policy bundle for a dataset location.
 
-
-def _resolve_datafusion_scan(
-    location: DatasetLocation,
-    overrides: DatasetLocationOverrides | None,
-) -> DataFusionScanOptions | None:
-    scan = None
-    if overrides is not None and overrides.datafusion_scan is not None:
-        scan = overrides.datafusion_scan
-    elif location.dataset_spec is not None:
-        scan = location.dataset_spec.datafusion_scan
-    if scan is None:
-        return None
-    if location.dataset_spec is None:
-        return scan
-    if scan.file_sort_order:
-        return scan
-    ordering = location.dataset_spec.ordering()
-    file_sort_order: tuple[tuple[str, str], ...] = ()
-    if ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
-        file_sort_order = tuple(ordering.keys)
-    elif location.dataset_spec.table_spec.key_fields:
-        file_sort_order = tuple(
-            (name, "ascending") for name in location.dataset_spec.table_spec.key_fields
-        )
-    if not file_sort_order:
-        return scan
-    return msgspec.structs.replace(scan, file_sort_order=file_sort_order)
-
-
-def _resolve_delta_scan(
-    location: DatasetLocation,
-    overrides: DatasetLocationOverrides | None,
-) -> DeltaScanOptions | None:
-    from storage.deltalake.scan_profile import build_delta_scan_config
-
-    delta_scan = None
-    if overrides is not None and overrides.delta is not None:
-        delta_scan = overrides.delta.scan
-    return build_delta_scan_config(
+    Returns
+    -------
+    ResolvedDatasetPolicies
+        Resolved policy bundle for the dataset location.
+    """
+    resolved_overrides = overrides or location.overrides
+    validation_override = None
+    dataframe_validation_override = None
+    if resolved_overrides is not None:
+        validation_override = resolved_overrides.validation
+        dataframe_validation_override = resolved_overrides.dataframe_validation
+    return _resolve_dataset_policies(
         dataset_format=location.format,
         dataset_spec=location.dataset_spec,
-        override=delta_scan,
+        datafusion_scan_override=(
+            resolved_overrides.datafusion_scan if resolved_overrides is not None else None
+        ),
+        delta_policy_override=(
+            resolved_overrides.delta if resolved_overrides is not None else None
+        ),
+        validation_override=validation_override,
+        dataframe_validation_override=dataframe_validation_override,
     )
 
 
-def apply_scan_policy_to_location(
+def _apply_scan_policy_overrides(
     location: DatasetLocation,
     *,
     policy: ScanPolicyConfig | None,
 ) -> DatasetLocation:
-    """Apply scan policy defaults to a dataset location override bundle.
-
-    Returns
-    -------
-    DatasetLocation
-        Updated location with scan policy defaults applied.
-    """
     if policy is None:
         return location
-    overrides = location.overrides
-    datafusion_scan = _resolve_datafusion_scan(location, overrides)
-    delta_scan = _resolve_delta_scan(location, overrides)
-    delta_bundle = _resolve_delta_bundle(location, overrides)
-    from schema_spec.system import apply_delta_scan_policy, apply_scan_policy
-
-    datafusion_scan = apply_scan_policy(
-        datafusion_scan,
+    policies = resolve_dataset_policies(location, overrides=location.overrides)
+    datafusion_scan, delta_scan = apply_scan_policy_defaults(
+        dataset_format=location.format or "delta",
+        datafusion_scan=policies.datafusion_scan,
+        delta_scan=policies.delta_scan,
         policy=policy,
-        dataset_format=location.format,
     )
-    if location.format == "delta":
-        delta_scan = apply_delta_scan_policy(delta_scan, policy=policy)
     if datafusion_scan is None and delta_scan is None:
         return location
-    if overrides is None:
-        overrides = DatasetLocationOverrides()
+    overrides = location.overrides or DatasetLocationOverrides()
     if datafusion_scan is not None:
         overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
     if delta_scan is not None:
+        delta_bundle = policies.delta_bundle
         if delta_bundle is None:
             from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
 
             delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
         else:
             delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
-    if delta_bundle is not None:
         overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
     return msgspec.structs.replace(location, overrides=overrides)
 
@@ -605,7 +550,7 @@ def _resolve_dataset_schema_internal(
     return None
 
 
-def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocation:
+def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocation:  # noqa: PLR0914
     """Return a resolved view of a dataset location.
 
     Returns
@@ -615,9 +560,10 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     """
     overrides = location.overrides
     dataset_spec = location.dataset_spec
-    datafusion_scan = _resolve_datafusion_scan(location, overrides)
-    delta_scan = _resolve_delta_scan(location, overrides)
-    delta_bundle = _resolve_delta_bundle(location, overrides)
+    policies = resolve_dataset_policies(location, overrides=overrides)
+    datafusion_scan = policies.datafusion_scan
+    delta_scan = policies.delta_scan
+    delta_bundle = policies.delta_bundle
     delta_cdf_policy = delta_bundle.cdf_policy if delta_bundle is not None else None
     delta_write_policy = delta_bundle.write_policy if delta_bundle is not None else None
     delta_schema_policy = delta_bundle.schema_policy if delta_bundle is not None else None
@@ -669,21 +615,6 @@ def _resolve_cached_location(location: DatasetLocation) -> ResolvedDatasetLocati
     return resolved
 
 
-def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScanOptions | None:
-    """Return DataFusion scan options for a dataset location.
-
-    Precedence:
-      1) ``DatasetLocationOverrides.datafusion_scan`` overrides everything.
-      2) ``DatasetSpec.datafusion_scan`` provides defaults when overrides are absent.
-
-    Returns
-    -------
-    DataFusionScanOptions | None
-        Scan options derived from the dataset location, when present.
-    """
-    return location.resolved.datafusion_scan
-
-
 def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider | None:
     """Return the effective DataFusion provider for a dataset location.
 
@@ -693,72 +624,6 @@ def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider
         Resolved provider for the dataset location, when available.
     """
     return location.resolved.datafusion_provider
-
-
-def resolve_delta_cdf_policy(location: DatasetLocation) -> DeltaCdfPolicy | None:
-    """Return Delta CDF policy for a dataset location.
-
-    Returns
-    -------
-    DeltaCdfPolicy | None
-        Resolved Delta CDF policy when configured.
-    """
-    return location.resolved.delta_cdf_policy
-
-
-def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
-    """Return Delta log-store options for a dataset location.
-
-    Returns
-    -------
-    Mapping[str, str] | None
-        Log-store options for Delta table access.
-    """
-    return location.resolved.delta_log_storage_options
-
-
-def resolve_delta_write_policy(location: DatasetLocation) -> DeltaWritePolicy | None:
-    """Return Delta write policy for a dataset location.
-
-    Returns
-    -------
-    DeltaWritePolicy | None
-        Delta write policy derived from the dataset location, when present.
-    """
-    return location.resolved.delta_write_policy
-
-
-def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy | None:
-    """Return Delta schema policy for a dataset location.
-
-    Returns
-    -------
-    DeltaSchemaPolicy | None
-        Delta schema policy derived from the dataset location, when present.
-    """
-    return location.resolved.delta_schema_policy
-
-
-def resolve_delta_maintenance_policy(location: DatasetLocation) -> DeltaMaintenancePolicy | None:
-    """Return Delta maintenance policy for a dataset location.
-
-    Returns
-    -------
-    DeltaMaintenancePolicy | None
-        Delta maintenance policy derived from the dataset location, when present.
-    """
-    return location.resolved.delta_maintenance_policy
-
-
-def resolve_delta_feature_gate(location: DatasetLocation) -> DeltaFeatureGate | None:
-    """Return Delta protocol/feature gate requirements for a dataset location.
-
-    Returns
-    -------
-    DeltaFeatureGate | None
-        Feature gate requirements for the dataset when configured.
-    """
-    return location.resolved.delta_feature_gate
 
 
 def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
@@ -774,30 +639,18 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
 
 __all__ = [
     "DataFusionProvider",
-    "DataFusionScanOptions",
     "DatasetCatalog",
     "DatasetFormat",
     "DatasetLocation",
     "DatasetLocationOverrides",
-    "DatasetSpec",
-    "DeltaScanOptions",
-    "DeltaSchemaPolicy",
-    "DeltaWritePolicy",
     "PathLike",
     "ResolvedDatasetLocation",
-    "apply_scan_policy_to_location",
     "dataset_catalog_from_profile",
     "registry_snapshot",
     "resolve_datafusion_provider",
-    "resolve_datafusion_scan_options",
     "resolve_dataset_location",
+    "resolve_dataset_policies",
     "resolve_dataset_schema",
-    "resolve_delta_cdf_policy",
-    "resolve_delta_feature_gate",
-    "resolve_delta_log_storage_options",
-    "resolve_delta_maintenance_policy",
-    "resolve_delta_schema_policy",
-    "resolve_delta_write_policy",
 ]
 
 

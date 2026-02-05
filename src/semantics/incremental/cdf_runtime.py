@@ -10,12 +10,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.dataset.registry import (
-    DatasetLocation,
-    DatasetLocationOverrides,
-    resolve_delta_cdf_policy,
-    resolve_delta_log_storage_options,
-)
+from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -96,13 +91,13 @@ def _resolve_cdf_inputs(
         if profile_location.storage_options:
             resolved_storage = profile_location.storage_options
         resolved_log_storage = (
-            resolve_delta_log_storage_options(profile_location) or resolved_log_storage
+            profile_location.resolved.delta_log_storage_options or resolved_log_storage
         )
         resolved_scan = resolve_delta_scan_options(
             profile_location,
             scan_policy=runtime.profile.policies.scan_policy,
         )
-        cdf_policy = resolve_delta_cdf_policy(profile_location)
+        cdf_policy = profile_location.resolved.delta_cdf_policy
     current_version = runtime.profile.delta_service().table_version(
         path=str(path),
         storage_options=resolved_storage,
@@ -187,7 +182,9 @@ def read_cdf_changes(
     """
     profile = context.runtime.profile
     profile_location = profile.dataset_location(dataset_name)
-    cdf_policy = resolve_delta_cdf_policy(profile_location) if profile_location else None
+    cdf_policy = (
+        profile_location.resolved.delta_cdf_policy if profile_location is not None else None
+    )
     inputs = _resolve_cdf_inputs(context, dataset_path=dataset_path, dataset_name=dataset_name)
     if inputs is None:
         if cdf_policy is not None and cdf_policy.required:

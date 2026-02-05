@@ -1057,9 +1057,7 @@ def _cache_partition_by(
 ) -> tuple[str, ...]:
     policy_partition_by: tuple[str, ...] = ()
     if location is not None:
-        from datafusion_engine.dataset.registry import resolve_delta_write_policy
-
-        policy = resolve_delta_write_policy(location)
+        policy = location.resolved.delta_write_policy
         if policy is not None:
             policy_partition_by = tuple(str(name) for name in policy.partition_by)
     available = set(schema.names)
@@ -1079,9 +1077,7 @@ def _default_partition_candidates(schema: pa.Schema) -> tuple[str, ...]:
 
 
 def _allow_schema_evolution(location: DatasetLocation) -> bool:
-    from datafusion_engine.dataset.registry import resolve_delta_schema_policy
-
-    policy = resolve_delta_schema_policy(location)
+    policy = location.resolved.delta_schema_policy
     schema_mode = getattr(policy, "schema_mode", None) if policy is not None else None
     if isinstance(schema_mode, str):
         normalized = schema_mode.strip().lower()

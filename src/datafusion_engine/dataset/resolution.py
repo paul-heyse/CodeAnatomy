@@ -12,7 +12,6 @@ from datafusion_engine.catalog.introspection import invalidate_introspection_cac
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     resolve_datafusion_provider,
-    resolve_delta_feature_gate,
 )
 from datafusion_engine.delta.contracts import (
     build_delta_cdf_contract,
@@ -107,7 +106,7 @@ def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution
         request.location,
         runtime_profile=request.runtime_profile,
     )
-    gate = resolve_delta_feature_gate(request.location)
+    gate = request.location.resolved.delta_feature_gate
     provider_request = contract.to_request(
         predicate=request.predicate,
         gate=gate,

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, model_validator
 
+from core_types import IdentifierStr
 from runtime_models.base import RuntimeBase
 
 
@@ -17,7 +18,7 @@ class DataFusionCompileOptionsRuntime(RuntimeBase):
     param_identifier_allowlist: tuple[str, ...] | None = None
     prepared_statements: bool = True
     prepared_param_types: Mapping[str, str] | None = None
-    sql_policy_name: str | None = None
+    sql_policy_name: IdentifierStr | None = None
     enforce_sql_policy: bool = True
     enforce_preflight: bool = True
     dialect: str = "datafusion"
@@ -44,6 +45,4 @@ class DataFusionCompileOptionsRuntime(RuntimeBase):
         return self
 
 
-COMPILE_OPTIONS_ADAPTER = TypeAdapter(DataFusionCompileOptionsRuntime)
-
-__all__ = ["COMPILE_OPTIONS_ADAPTER", "DataFusionCompileOptionsRuntime"]
+__all__ = ["DataFusionCompileOptionsRuntime"]

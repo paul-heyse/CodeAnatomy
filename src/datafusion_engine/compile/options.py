@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from datafusion import SQLOptions
 
 from core.config_base import config_fingerprint
+from core_types import IdentifierStr, NonNegativeInt, RunIdStr
 from serde_msgspec import StructBaseStrict, to_builtins
 
 if TYPE_CHECKING:
@@ -79,11 +80,11 @@ class DataFusionCompileOptionsSpec(StructBaseStrict, frozen=True):
     """Serializable compile-time options for DataFusion execution."""
 
     cache: bool | None = None
-    cache_max_columns: int | None = 64
+    cache_max_columns: NonNegativeInt | None = 64
     param_identifier_allowlist: tuple[str, ...] | None = None
     prepared_statements: bool = True
     prepared_param_types: Mapping[str, str] | None = None
-    sql_policy_name: str | None = None
+    sql_policy_name: IdentifierStr | None = None
     enforce_sql_policy: bool = True
     enforce_preflight: bool = True
     dialect: str = "datafusion"
@@ -158,7 +159,7 @@ class DataFusionCacheEvent:
     """
 
     cache_enabled: bool
-    cache_max_columns: int | None
+    cache_max_columns: NonNegativeInt | None
     column_count: int
     reason: str
     profile_hash: str | None = None
@@ -175,7 +176,7 @@ class DataFusionSubstraitFallbackEvent:
     reason: str
     expr_type: str
     profile_hash: str | None = None
-    run_id: str | None = None
+    run_id: RunIdStr | None = None
     plan_fingerprint: str | None = None
 
 
@@ -204,7 +205,7 @@ class DataFusionCompileOptions:
     schema_map_hash: str | None = None
     optimize: bool = True
     cache: bool | None = None
-    cache_max_columns: int | None = 64
+    cache_max_columns: NonNegativeInt | None = 64
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | None = None
     named_params: Mapping[str, object] | None = None
@@ -236,7 +237,7 @@ class DataFusionCompileOptions:
     plan_cache: PlanCache | None = None
     profile_hash: str | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
-    run_id: str | None = None
+    run_id: RunIdStr | None = None
     prefer_substrait: bool = False
     prefer_ast_execution: bool = True
     record_substrait_gaps: bool = False
@@ -258,10 +259,10 @@ def compile_options_runtime(
     DataFusionCompileOptionsRuntime
         Validated runtime compile options.
     """
-    from runtime_models.compile import COMPILE_OPTIONS_ADAPTER
+    from runtime_models.adapters import COMPILE_OPTIONS_ADAPTER
 
     payload = to_builtins(spec, str_keys=True)
-    return COMPILE_OPTIONS_ADAPTER.validate_python(payload)
+    return COMPILE_OPTIONS_ADAPTER.validate_strings(payload)
 
 
 def compile_options_from_spec(

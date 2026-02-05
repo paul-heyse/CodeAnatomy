@@ -223,6 +223,83 @@ Based on evidence quality:
 
 ## Commands Reference
 
+### search - Smart Search (Code Discovery)
+
+The default tool for finding code patterns with semantic enrichment.
+
+```bash
+/cq search <QUERY> [--regex] [--literal] [--in DIR] [--include-strings]
+```
+
+**Query Modes:**
+| Mode | Flag | Pattern |
+|------|------|---------|
+| Identifier | (default) | Word-boundary: `\bquery\b` |
+| Regex | `--regex` | User regex pattern |
+| Literal | `--literal` | Exact string match |
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--in DIR` | Restrict search to directory |
+| `--include-strings` | Include matches in strings/comments/docstrings |
+| `--include PATTERN` | Include files matching glob |
+| `--exclude PATTERN` | Exclude files matching glob |
+
+**How it works:**
+1. **Candidate Generation**: rpygrep scans files for pattern matches
+2. **Heuristic Classification**: O(1) line-based pattern detection (comment, import, def)
+3. **AST Classification**: ast-grep-py node lookup for structural context
+4. **Symtable Enrichment**: Optional scope analysis for high-value matches
+5. **Result Assembly**: Grouped by containing function, ranked by relevance
+
+**Classification Categories:**
+| Category | Description |
+|----------|-------------|
+| `definition` | Function/class/method definitions |
+| `callsite` | Function/method calls |
+| `import`, `from_import` | Import statements |
+| `reference` | Name/attribute access |
+| `assignment` | Variable assignments |
+| `annotation` | Type hints |
+| `docstring_match` | In docstrings (hidden by default) |
+| `comment_match` | In comments (hidden by default) |
+| `string_match` | In string literals (hidden by default) |
+
+**Relevance Scoring:**
+- Kind weights: definition (1.0) > callsite (0.8) > import (0.7) > reference (0.6)
+- File role: src/ > tests/ > docs/
+- Confidence from classification evidence
+
+**Output sections:**
+- Summary: stats, pattern, mode
+- Top Contexts: grouped by containing function
+- Definitions/Imports/Callsites: category-specific (identifier mode)
+- Uses by Kind: category counts
+- Non-Code Matches: strings/comments (collapsed)
+- Hot Files: files with most matches
+- Suggested Follow-ups: next commands
+
+**Examples:**
+```bash
+# Find all uses of build_graph
+/cq search build_graph
+
+# Find config patterns with regex
+/cq search "config.*path" --regex
+
+# Search only in core directory
+/cq search CqResult --in tools/cq/core/
+
+# Include documentation matches
+/cq search api_key --include-strings
+
+# Plain query fallback (same result)
+/cq q build_graph
+```
+
+---
+
 ### impact - Parameter Taint Analysis
 
 Traces data flow from a function parameter to identify downstream consumers.

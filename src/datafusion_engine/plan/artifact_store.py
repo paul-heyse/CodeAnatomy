@@ -16,8 +16,6 @@ import pyarrow as pa
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    resolve_delta_feature_gate,
-    resolve_delta_log_storage_options,
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -938,7 +936,7 @@ def _hamilton_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocat
 
 def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
     resolved_scan = resolve_delta_scan_options(location)
-    resolved_log = resolve_delta_log_storage_options(location)
+    resolved_log = location.resolved.delta_log_storage_options
     overrides = location.overrides
     if resolved_scan is not None:
         from schema_spec.system import DeltaPolicyBundle
@@ -967,7 +965,7 @@ def _delta_schema_available(
             log_storage_options=location.delta_log_storage_options or None,
             version=location.delta_version,
             timestamp=location.delta_timestamp,
-            gate=resolve_delta_feature_gate(location),
+            gate=location.resolved.delta_feature_gate,
         )
     )
     return schema is not None

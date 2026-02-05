@@ -19,6 +19,8 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Find callers | `/cq calls <fn>` |
 | Trace parameter | `/cq impact <fn> --param <p>` |
 | Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
+| Multi-step run | `/cq run --steps '[{"type":"q","query":"entity=function name=foo"},{"type":"calls","function":"foo"}]'` |
+| Command chaining | `/cq chain q "entity=function name=foo" AND calls foo` |
 | Pattern search (AST) | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | Entity query | `/cq q "entity=function name=<name>"` |
 | Context search | `/cq q "entity=function inside='class <C>'"` |
@@ -181,6 +183,8 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 | `scopes` | Analyze closure captures | `/cq scopes path/to/file.py` |
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
 | `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
+| `run` | Multi-step execution (shared scan) | `/cq run --steps '[{"type":"q","query":"entity=function name=foo"},{"type":"calls","function":"foo"}]'` |
+| `chain` | Command chaining frontend | `/cq chain q "entity=function name=foo" AND calls foo` |
 
 ## Command Details
 

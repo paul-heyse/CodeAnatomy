@@ -59,6 +59,14 @@ def build_semantic_dataset_catalog(
     >>> catalog.has("cst_refs_norm_v1")
     True
     """
+    from schema_spec.dataset_spec_ops import (
+        dataset_spec_delta_cdf_policy,
+        dataset_spec_delta_constraints,
+        dataset_spec_delta_feature_gate,
+        dataset_spec_delta_maintenance_policy,
+        dataset_spec_delta_schema_policy,
+        dataset_spec_delta_write_policy,
+    )
     from schema_spec.system import DeltaPolicyBundle
 
     catalog = DatasetCatalog()
@@ -85,12 +93,12 @@ def build_semantic_dataset_catalog(
                     dataset_spec=spec,
                     overrides=DatasetLocationOverrides(
                         delta=DeltaPolicyBundle(
-                            cdf_policy=spec.delta_cdf_policy,
-                            maintenance_policy=spec.delta_maintenance_policy,
-                            write_policy=spec.delta_write_policy,
-                            schema_policy=spec.delta_schema_policy,
-                            feature_gate=spec.delta_feature_gate,
-                            constraints=spec.delta_constraints,
+                            cdf_policy=dataset_spec_delta_cdf_policy(spec),
+                            maintenance_policy=dataset_spec_delta_maintenance_policy(spec),
+                            write_policy=dataset_spec_delta_write_policy(spec),
+                            schema_policy=dataset_spec_delta_schema_policy(spec),
+                            feature_gate=dataset_spec_delta_feature_gate(spec),
+                            constraints=dataset_spec_delta_constraints(spec),
                         ),
                     ),
                 ),
@@ -134,6 +142,14 @@ def semantic_dataset_location(
     KeyError
         Raised when the dataset name is not found in the semantic catalog.
     """
+    from schema_spec.dataset_spec_ops import (
+        dataset_spec_delta_cdf_policy,
+        dataset_spec_delta_constraints,
+        dataset_spec_delta_feature_gate,
+        dataset_spec_delta_maintenance_policy,
+        dataset_spec_delta_schema_policy,
+        dataset_spec_delta_write_policy,
+    )
     from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_rows import dataset_row
 
@@ -150,12 +166,12 @@ def semantic_dataset_location(
         dataset_spec=spec,
         overrides=DatasetLocationOverrides(
             delta=DeltaPolicyBundle(
-                cdf_policy=spec.delta_cdf_policy,
-                maintenance_policy=spec.delta_maintenance_policy,
-                write_policy=spec.delta_write_policy,
-                schema_policy=spec.delta_schema_policy,
-                feature_gate=spec.delta_feature_gate,
-                constraints=spec.delta_constraints,
+                cdf_policy=dataset_spec_delta_cdf_policy(spec),
+                maintenance_policy=dataset_spec_delta_maintenance_policy(spec),
+                write_policy=dataset_spec_delta_write_policy(spec),
+                schema_policy=dataset_spec_delta_schema_policy(spec),
+                feature_gate=dataset_spec_delta_feature_gate(spec),
+                constraints=dataset_spec_delta_constraints(spec),
             ),
         ),
     )

@@ -6,6 +6,7 @@ from functools import cache
 
 import pytest
 
+from schema_spec.dataset_spec_ops import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_rows import SemanticDatasetRow
 from semantics.catalog.dataset_specs import (
     dataset_alias,
@@ -33,9 +34,8 @@ class TestDatasetSpec:
         if all_rows:
             first_row = all_rows[0]
             spec = dataset_spec(first_row.name)
-            # Verify it has expected attributes
-            assert hasattr(spec, "name")
-            assert hasattr(spec, "schema")
+            assert dataset_spec_name(spec) == first_row.name
+            assert dataset_spec_schema(spec) is not None
 
     def test_raises_keyerror_for_missing(self) -> None:
         """dataset_spec raises KeyError for unknown name."""
@@ -48,7 +48,7 @@ class TestDatasetSpec:
         if all_rows:
             first_row = all_rows[0]
             spec = dataset_spec(first_row.name)
-            assert spec.name == first_row.name
+            assert dataset_spec_name(spec) == first_row.name
 
 
 class TestDatasetSpecs:

@@ -12,6 +12,7 @@ from datafusion_engine.session.runtime import (
     SemanticOutputConfig,
     normalize_dataset_locations_for_profile,
 )
+from schema_spec.dataset_spec_ops import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.ir_pipeline import build_semantic_ir
 
@@ -47,9 +48,9 @@ def test_normalize_locations_use_semantic_ir(tmp_path: Path) -> None:
     assert sample_location.dataset_spec is not None
 
     spec = dataset_spec(sample_name)
-    assert sample_location.dataset_spec.name == spec.name
+    assert dataset_spec_name(sample_location.dataset_spec) == dataset_spec_name(spec)
     assert str(sample_location.path).endswith(str(tmp_path / sample_name))
 
-    expected_schema = _as_schema(spec.schema())
-    resolved_schema = _as_schema(sample_location.dataset_spec.schema())
+    expected_schema = _as_schema(dataset_spec_schema(spec))
+    resolved_schema = _as_schema(dataset_spec_schema(sample_location.dataset_spec))
     assert expected_schema.equals(resolved_schema, check_metadata=True)

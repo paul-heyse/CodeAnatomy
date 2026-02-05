@@ -88,9 +88,11 @@ class EvidenceCatalog:
         ctx: SessionContext | None = None,
     ) -> None:
         """Register an evidence dataset using a DatasetSpec."""
+        from schema_spec.dataset_spec_ops import dataset_spec_schema
+
         contract = schema_contract_from_dataset_spec(name=name, spec=spec)
         self.register_contract(name, contract, snapshot=snapshot, ctx=ctx)
-        metadata = spec.schema().metadata
+        metadata = dataset_spec_schema(spec).metadata
         if metadata:
             self.metadata_by_dataset.setdefault(name, {}).update(metadata)
 
@@ -223,7 +225,9 @@ def initial_evidence_from_views(
         task_names=task_names,
         snapshot=snapshot,
     )
-    spec_map = {spec.name: spec for spec in dataset_specs or ()}
+    from schema_spec.dataset_spec_ops import dataset_spec_name
+
+    spec_map = {dataset_spec_name(spec): spec for spec in dataset_specs or ()}
     if nodes:
         semantic_roles = _semantic_roles_by_name()
         spec_sources = {name for name in spec_map if semantic_roles.get(name, "input") == "input"}

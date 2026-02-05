@@ -12,6 +12,13 @@ from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationO
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.io.write import WriteViewRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from schema_spec.dataset_spec_ops import (
+    dataset_spec_delta_constraints,
+    dataset_spec_delta_feature_gate,
+    dataset_spec_delta_maintenance_policy,
+    dataset_spec_delta_schema_policy,
+    dataset_spec_delta_write_policy,
+)
 from schema_spec.system import DeltaPolicyBundle
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.pipeline import SemanticOutputWriteContext, _write_semantic_output
@@ -55,11 +62,11 @@ def _dataset_location(view_name: str) -> DatasetLocation:
         dataset_spec=spec,
         overrides=DatasetLocationOverrides(
             delta=DeltaPolicyBundle(
-                write_policy=spec.delta_write_policy,
-                schema_policy=spec.delta_schema_policy,
-                maintenance_policy=spec.delta_maintenance_policy,
-                feature_gate=spec.delta_feature_gate,
-                constraints=spec.delta_constraints,
+                write_policy=dataset_spec_delta_write_policy(spec),
+                schema_policy=dataset_spec_delta_schema_policy(spec),
+                maintenance_policy=dataset_spec_delta_maintenance_policy(spec),
+                feature_gate=dataset_spec_delta_feature_gate(spec),
+                constraints=dataset_spec_delta_constraints(spec),
             ),
         ),
     )
@@ -71,7 +78,7 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
     view_name = "py_bc_blocks_norm_v1"
     location = _dataset_location(view_name)
     spec = dataset_spec(view_name)
-    assert spec.delta_write_policy is not None
+    assert dataset_spec_delta_write_policy(spec) is not None
 
     captured = _CapturedWrite()
     pipeline = _FakePipeline(captured)
@@ -125,11 +132,13 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
     assert captured.request is not None
     request = captured.request
     assert isinstance(request, WriteViewRequest)
-    assert tuple(spec.delta_write_policy.partition_by) == request.partition_by
+    assert tuple(dataset_spec_delta_write_policy(spec).partition_by) == request.partition_by
     assert request.format_options is not None
-    assert request.format_options["delta_write_policy"] is spec.delta_write_policy
-    assert request.format_options["delta_schema_policy"] is spec.delta_schema_policy
-    assert request.format_options["delta_maintenance_policy"] is spec.delta_maintenance_policy
+    assert request.format_options["delta_write_policy"] is dataset_spec_delta_write_policy(spec)
+    assert request.format_options["delta_schema_policy"] is dataset_spec_delta_schema_policy(spec)
+    assert request.format_options["delta_maintenance_policy"] is dataset_spec_delta_maintenance_policy(
+        spec
+    )
     assert captured_policy[0].mode == "additive"
 
 

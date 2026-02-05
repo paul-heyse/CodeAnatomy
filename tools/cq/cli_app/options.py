@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 import msgspec
@@ -100,6 +101,15 @@ class BytecodeSurfaceOptions(CommonFilters, frozen=True):
     """Options for the bytecode-surface command."""
 
     show: str = "globals,attrs,constants"
+
+
+class RunOptions(CommonFilters, frozen=True):
+    """Options for the run command."""
+
+    plan: Path | None = None
+    step: list[dict[str, object]] = msgspec.field(default_factory=list)
+    steps: list[dict[str, object]] = msgspec.field(default_factory=list)
+    stop_on_error: bool = False
 
 
 def options_from_params[T](params: Any, *, type_: type[T]) -> T:

@@ -44,7 +44,9 @@ def _is_incremental_schema(schema: SchemaLike) -> bool:
 
 
 def _incremental_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy | None:
-    schema = spec.schema()
+    from schema_spec.dataset_spec_ops import dataset_spec_schema
+
+    schema = dataset_spec_schema(spec)
     resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
     candidates = ("file_id", "path", "node_id", "edge_id", "span_id")
     z_order_cols = tuple(name for name in candidates if name in resolved.names)

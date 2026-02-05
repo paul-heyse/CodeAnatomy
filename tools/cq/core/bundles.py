@@ -8,15 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
-from tools.cq.core.schema import (
-    CqResult,
-    DetailPayload,
-    Finding,
-    Section,
-    mk_result,
-    ms,
-)
+from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.exceptions import cmd_exceptions
@@ -246,41 +240,15 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
         "bundle": preset,
         "target": f"{ctx.target.kind}:{ctx.target.value}",
         "in_dir": ctx.in_dir,
-        "steps": [result.run.macro for result in results],
-        "macro_summaries": {result.run.macro: result.summary for result in results},
     }
 
     for result in results:
         macro = result.run.macro
-        for finding in result.key_findings:
-            merged.key_findings.append(_clone_finding_with_macro(finding, macro))
-        for evidence in result.evidence:
-            merged.evidence.append(_clone_finding_with_macro(evidence, macro))
-        for section in result.sections:
-            merged.sections.append(
-                Section(
-                    title=f"{macro}: {section.title}",
-                    findings=[_clone_finding_with_macro(f, macro) for f in section.findings],
-                    collapsed=section.collapsed,
-                )
-            )
-        merged.artifacts.extend(result.artifacts)
+        merge_step_results(merged, macro, result)
+
+    merged.summary["macro_summaries"] = merged.summary.get("step_summaries", {})
 
     return merged
-
-
-def _clone_finding_with_macro(finding: Finding, macro: str) -> Finding:
-    details = finding.details
-    data = dict(details.data)
-    data["source_macro"] = macro
-    details = DetailPayload(kind=details.kind, score=details.score, data=data)
-    return Finding(
-        category=finding.category,
-        message=finding.message,
-        anchor=finding.anchor,
-        severity=finding.severity,
-        details=details,
-    )
 
 
 def _bundle_steps(preset: str, ctx: BundleContext) -> list[BundleStepResult]:

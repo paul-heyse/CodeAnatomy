@@ -16,6 +16,12 @@ High-signal code queries for LLM agents.
 
 # Direct invocation
 uv run python -c "from tools.cq.cli_app import main; main()" calls build_graph_product
+
+# Multi-step execution (shared scan for q steps)
+/cq run --steps '[{"type":"search","query":"build_graph_product"},{"type":"q","query":"entity=function name=build_graph_product"},{"type":"calls","function":"build_graph_product"}]'
+
+# Chained command frontend
+/cq chain q "entity=function name=build_graph_product" AND calls build_graph_product AND search build_graph_product
 ```
 
 ## Global Options
@@ -82,6 +88,8 @@ save_artifact = true
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
 | `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
 | `report` | Target-scoped report bundles | `/cq report refactor-impact --target function:foo` |
+| `run` | Multi-step execution (shared scan) | `/cq run --plan docs/plans/cq_run_example.toml` |
+| `chain` | Command chaining frontend | `/cq chain q "entity=function" AND calls foo` |
 
 ### Administration Commands
 

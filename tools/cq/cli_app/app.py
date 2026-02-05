@@ -267,60 +267,49 @@ def launcher(
 # Register Analysis Commands
 # ============================================================================
 
-from tools.cq.cli_app.commands.analysis import (
-    bytecode_surface,
-    calls,
-    exceptions,
-    impact,
-    imports,
-    scopes,
-    side_effects,
-    sig_impact,
+app.command("tools.cq.cli_app.commands.analysis:impact", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:calls", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:imports", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:exceptions", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:sig_impact", name="sig-impact", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:side_effects", name="side-effects", group=analysis_group)
+app.command("tools.cq.cli_app.commands.analysis:scopes", group=analysis_group)
+app.command(
+    "tools.cq.cli_app.commands.analysis:bytecode_surface",
+    name="bytecode-surface",
+    group=analysis_group,
 )
-
-app.command(impact, group=analysis_group)
-app.command(calls, group=analysis_group)
-app.command(imports, group=analysis_group)
-app.command(exceptions, group=analysis_group)
-app.command(sig_impact, name="sig-impact", group=analysis_group)
-app.command(side_effects, name="side-effects", group=analysis_group)
-app.command(scopes, group=analysis_group)
-app.command(bytecode_surface, name="bytecode-surface", group=analysis_group)
 
 
 # ============================================================================
 # Register Query Command
 # ============================================================================
 
-from tools.cq.cli_app.commands.query import q
-
-app.command(q, group=analysis_group)
+app.command("tools.cq.cli_app.commands.query:q", group=analysis_group)
 
 
 # ============================================================================
 # Register Search Command
 # ============================================================================
 
-from tools.cq.cli_app.commands.search import search
-
-app.command(search, group=analysis_group)
+app.command("tools.cq.cli_app.commands.search:search", group=analysis_group)
 
 
 # ============================================================================
 # Register Report Command
 # ============================================================================
 
-from tools.cq.cli_app.commands.report import report
-
-app.command(report, group=analysis_group)
+app.command("tools.cq.cli_app.commands.report:report", group=analysis_group)
 
 
 # ============================================================================
 # Register Admin Commands
 # ============================================================================
 
-from tools.cq.cli_app.commands.admin import cache, index, schema
+app.command("tools.cq.cli_app.commands.admin:index", group=admin_group)
+app.command("tools.cq.cli_app.commands.admin:cache", group=admin_group)
+app.command("tools.cq.cli_app.commands.admin:schema", group=admin_group)
 
-app.command(index, group=admin_group)
-app.command(cache, group=admin_group)
-app.command(schema, group=admin_group)
+# Run/chain commands
+app.command("tools.cq.cli_app.commands.run:run", group=analysis_group)
+app.command("tools.cq.cli_app.commands.chain:chain", group=analysis_group)

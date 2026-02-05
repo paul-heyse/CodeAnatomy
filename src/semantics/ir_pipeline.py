@@ -865,6 +865,7 @@ def _parse_versioned_name(name: str) -> tuple[str, int | None]:
 
 
 def _validate_schema_migrations(rows: Sequence[object]) -> None:
+    from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
     from semantics.catalog.dataset_specs import dataset_spec
     from semantics.migrations import migration_for, migration_skeleton
     from semantics.schema_diff import diff_contract_specs
@@ -885,14 +886,14 @@ def _validate_schema_migrations(rows: Sequence[object]) -> None:
             raise ValueError(msg)
         entries_sorted = sorted(entries, key=lambda item: item[1] or 0)
         latest_name, _ = entries_sorted[-1]
-        latest_contract = dataset_spec(latest_name).contract_spec_or_default()
+        latest_contract = dataset_spec_contract_spec_or_default(dataset_spec(latest_name))
         for name, _version in entries_sorted:
             if name == latest_name:
                 continue
             if migration_for(name, latest_name) is not None:
                 continue
             diff = diff_contract_specs(
-                dataset_spec(name).contract_spec_or_default(),
+                dataset_spec_contract_spec_or_default(dataset_spec(name)),
                 latest_contract,
             )
             if not diff.is_breaking:

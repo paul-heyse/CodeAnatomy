@@ -21,27 +21,23 @@ import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrow_utils.core.ordering import Ordering, OrderingLevel
+from arrow_utils.core.ordering import OrderingLevel
 from core.config_base import config_fingerprint
 from core_types import IdentifierStr, NonNegativeInt
 from datafusion_engine.arrow.build import register_schema_extensions
-from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
 from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
-    encoding_policy_from_spec,
-    merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
 from datafusion_engine.delta.protocol import DeltaFeatureGate
-from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.kernels import DedupeSpec, SortKey
-from datafusion_engine.schema.alignment import CastErrorPolicy, SchemaEvolutionSpec
-from datafusion_engine.schema.finalize import Contract, FinalizeContext
+from datafusion_engine.schema.alignment import SchemaEvolutionSpec
+from datafusion_engine.schema.finalize import Contract
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema.registry import extract_nested_dataset_names
 from datafusion_engine.schema.validation import ArrowValidationOptions, validate_table
 from schema_spec.arrow_types import (
@@ -50,7 +46,6 @@ from schema_spec.arrow_types import (
     arrow_type_from_pyarrow,
     arrow_type_to_pyarrow,
 )
-from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from schema_spec.view_specs import ViewSpec
@@ -836,268 +831,6 @@ class DatasetSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Validate dataset spec invariants."""
         _validate_view_specs(self.view_specs, label="dataset")
-
-    @property
-    def name(self) -> str:
-        """Return the dataset name.
-
-        Returns
-        -------
-        str
-            Dataset name.
-        """
-        return self.table_spec.name
-
-    @property
-    def datafusion_scan(self) -> DataFusionScanOptions | None:
-        """Return DataFusion scan options from policy bundle."""
-        return self.policies.datafusion_scan
-
-    @property
-    def delta_scan(self) -> DeltaScanOptions | None:
-        """Return Delta scan options from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.scan
-
-    @property
-    def delta_cdf_policy(self) -> DeltaCdfPolicy | None:
-        """Return Delta CDF policy from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.cdf_policy
-
-    @property
-    def delta_maintenance_policy(self) -> DeltaMaintenancePolicy | None:
-        """Return Delta maintenance policy from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.maintenance_policy
-
-    @property
-    def delta_write_policy(self) -> DeltaWritePolicy | None:
-        """Return Delta write policy from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.write_policy
-
-    @property
-    def delta_schema_policy(self) -> DeltaSchemaPolicy | None:
-        """Return Delta schema policy from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.schema_policy
-
-    @property
-    def delta_feature_gate(self) -> DeltaFeatureGate | None:
-        """Return Delta feature gate from policy bundle."""
-        if self.policies.delta is None:
-            return None
-        return self.policies.delta.feature_gate
-
-    @property
-    def delta_constraints(self) -> tuple[str, ...]:
-        """Return Delta constraints from policy bundle."""
-        if self.policies.delta is None:
-            return ()
-        return self.policies.delta.constraints
-
-    @property
-    def validation(self) -> ArrowValidationOptions | None:
-        """Return validation options from policy bundle."""
-        return self.policies.validation
-
-    @property
-    def dataframe_validation(self) -> ValidationPolicySpec | None:
-        """Return DataFrame validation policy from policy bundle."""
-        return self.policies.dataframe_validation
-
-    def schema(self) -> SchemaLike:
-        """Return the Arrow schema with dataset metadata applied.
-
-        Returns
-        -------
-        SchemaLike
-            Arrow schema with metadata.
-        """
-        ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
-        delta_policy = self.policies.delta
-        if (
-            ordering is None
-            and delta_policy is not None
-            and delta_policy.write_policy is not None
-            and delta_policy.write_policy.zorder_by
-        ):
-            keys = tuple((name, "ascending") for name in delta_policy.write_policy.zorder_by)
-            ordering = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
-        merged = merge_metadata_specs(self.metadata_spec, ordering)
-        return merged.apply(self.table_spec.to_arrow_schema())
-
-    def ordering(self) -> Ordering:
-        """Return ordering metadata derived from the dataset spec.
-
-        Returns
-        -------
-        Ordering
-            Ordering metadata inferred from contract and schema settings.
-        """
-        if self.contract_spec is not None and self.contract_spec.canonical_sort:
-            keys = tuple((key.column, key.order) for key in self.contract_spec.canonical_sort)
-            return Ordering.explicit(keys)
-        if self.table_spec.key_fields:
-            return Ordering.implicit()
-        return Ordering.unordered()
-
-    def query(self) -> QuerySpec:
-        """Return the query spec, deriving it from the table spec if needed.
-
-        Returns
-        -------
-        QuerySpec
-            Query spec for scanning.
-        """
-        if self.query_spec is not None:
-            return self.query_spec
-        cols = tuple(field.name for field in self.table_spec.fields)
-        derived = {spec.name: spec.expr for spec in self.derived_fields}
-        return QuerySpec(
-            projection=ProjectionSpec(base=cols, derived=derived),
-            predicate=self.predicate,
-            pushdown_predicate=self.pushdown_predicate,
-        )
-
-    def contract_spec_or_default(self) -> ContractSpec:
-        """Return the contract spec, deriving a default when missing.
-
-        Returns
-        -------
-        ContractSpec
-            Contract spec with validation applied.
-        """
-        if self.contract_spec is not None:
-            validation = self.policies.validation
-            if validation is None or self.contract_spec.validation is not None:
-                return self.contract_spec
-            return msgspec.structs.replace(self.contract_spec, validation=validation)
-        return ContractSpec(
-            name=self.table_spec.name,
-            table_schema=self.table_spec,
-            version=self.table_spec.version,
-            validation=self.policies.validation,
-        )
-
-    def contract(self) -> Contract:
-        """Return a runtime contract derived from the contract spec.
-
-        Returns
-        -------
-        Contract
-            Runtime contract instance.
-        """
-        return self.contract_spec_or_default().to_contract()
-
-    def to_handle(self) -> DatasetHandle:
-        """Return a DatasetHandle for this dataset spec.
-
-        Returns
-        -------
-        DatasetHandle
-            Dataset handle bound to this spec.
-        """
-        return DatasetHandle(spec=self)
-
-    def resolved_view_specs(self) -> tuple[ViewSpec, ...]:
-        """Return the merged view specs for this dataset.
-
-        Returns
-        -------
-        tuple[ViewSpec, ...]
-            View specs from both the dataset and its contract.
-        """
-        specs: list[ViewSpec] = []
-        seen: set[str] = set()
-        if self.contract_spec is not None:
-            for view in self.contract_spec.view_specs:
-                if view.name in seen:
-                    continue
-                specs.append(view)
-                seen.add(view.name)
-        for view in self.view_specs:
-            if view.name in seen:
-                continue
-            specs.append(view)
-            seen.add(view.name)
-        return tuple(specs)
-
-    @property
-    def is_streaming(self) -> bool:
-        """Return True if this dataset represents a streaming source.
-
-        Returns
-        -------
-        bool
-            True if the dataset has unbounded DataFusion scan options.
-        """
-        if self.policies.datafusion_scan is not None:
-            return self.policies.datafusion_scan.unbounded
-        return False
-
-    def finalize_context(self) -> FinalizeContext:
-        """Return a FinalizeContext for this dataset spec.
-
-        Returns
-        -------
-        FinalizeContext
-            Finalize context configured for this dataset.
-        """
-        contract = self.contract()
-        ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
-        metadata = merge_metadata_specs(self.metadata_spec, ordering)
-        policy = schema_policy_factory(
-            self.table_spec,
-            options=SchemaPolicyOptions(
-                schema=contract.with_versioned_schema(),
-                encoding=self.encoding_policy(),
-                metadata=metadata,
-                validation=contract.validation,
-            ),
-        )
-        return FinalizeContext(contract=contract, schema_policy=policy)
-
-    def unify_tables(
-        self,
-        tables: Sequence[TableLike],
-        *,
-        safe_cast: bool = True,
-        keep_extra_columns: bool = False,
-    ) -> TableLike:
-        """Unify table schemas using the evolution spec and execution context.
-
-        Returns
-        -------
-        TableLike
-            Unified table with aligned schema.
-        """
-        on_error: CastErrorPolicy = "unsafe" if safe_cast else "raise"
-        return self.evolution_spec.unify_and_cast(
-            tables,
-            safe_cast=safe_cast,
-            on_error=on_error,
-            keep_extra_columns=keep_extra_columns,
-        )
-
-    def encoding_policy(self) -> EncodingPolicy | None:
-        """Return an encoding policy derived from the schema spec.
-
-        Returns
-        -------
-        EncodingPolicy | None
-            Encoding policy when encoding hints are present.
-        """
-        policy = encoding_policy_from_spec(self.table_spec)
-        if not policy.specs:
-            return None
-        return policy
 
 
 class DatasetOpenSpec(StructBaseStrict, frozen=True):

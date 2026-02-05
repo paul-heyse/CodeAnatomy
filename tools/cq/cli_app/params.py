@@ -7,16 +7,24 @@ flattened into command signatures.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated
 
-from cyclopts import Parameter
+from cyclopts import Group, Parameter, validators
 
+from tools.cq.cli_app.step_types import RunStepCli
 from tools.cq.cli_app.types import (
     ConfidenceBucket,
     ImpactBucket,
     SeverityLevel,
     comma_separated_enum,
     comma_separated_list,
+)
+
+search_mode = Group("Search Mode", validator=validators.mutually_exclusive)
+run_input = Group(
+    "Run Input",
+    validator=validators.LimitedChoice(min=1, max=3),
 )
 
 
@@ -94,8 +102,22 @@ class QueryParams(FilterParams):
 class SearchParams(FilterParams):
     """Options for the search command."""
 
-    regex: Annotated[bool, Parameter(name="--regex", help="Treat query as regex")] = False
-    literal: Annotated[bool, Parameter(name="--literal", help="Treat query as literal")] = False
+    regex: Annotated[
+        bool,
+        Parameter(
+            name="--regex",
+            help="Treat query as regex",
+            group=search_mode,
+        ),
+    ] = False
+    literal: Annotated[
+        bool,
+        Parameter(
+            name="--literal",
+            help="Treat query as literal",
+            group=search_mode,
+        ),
+    ] = False
     include_strings: Annotated[
         bool,
         Parameter(
@@ -172,3 +194,45 @@ class BytecodeSurfaceParams(FilterParams):
     show: Annotated[str, Parameter(help="What to show: globals,attrs,constants,opcodes")] = (
         "globals,attrs,constants"
     )
+
+
+@dataclass(kw_only=True)
+class RunParams(FilterParams):
+    """Options for the run command."""
+
+    plan: Annotated[
+        Path | None,
+        Parameter(
+            name="--plan",
+            group=run_input,
+            validator=validators.Path(exists=True, file_okay=True, dir_okay=False),
+            help="Path to a run plan TOML file",
+        ),
+    ] = None
+    step: Annotated[
+        list[RunStepCli],
+        Parameter(
+            name="--step",
+            group=run_input,
+            n_tokens=1,
+            accepts_keys=False,
+            help='Repeatable JSON step object (e.g., \'{"type":"q","query":"..."}\')',
+        ),
+    ] = field(default_factory=list)
+    steps: Annotated[
+        list[RunStepCli],
+        Parameter(
+            name="--steps",
+            group=run_input,
+            n_tokens=1,
+            accepts_keys=False,
+            help='JSON array of steps (e.g., \'[{"type":"q",...},{"type":"calls",...}]\')',
+        ),
+    ] = field(default_factory=list)
+    stop_on_error: Annotated[
+        bool,
+        Parameter(
+            name="--stop-on-error",
+            help="Stop execution on the first step error",
+        ),
+    ] = False

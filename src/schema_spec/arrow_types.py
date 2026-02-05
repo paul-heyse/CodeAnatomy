@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal, TypeAlias
+from typing import Literal
 
 import msgspec
 import pyarrow as pa
@@ -162,7 +162,7 @@ class ArrowOpaqueSpec(ArrowTypeBase, tag="opaque", frozen=True):
     repr: str
 
 
-ArrowTypeSpec: TypeAlias = (
+type ArrowTypeSpec = (
     ArrowPrimitiveSpec
     | ArrowTimestampSpec
     | ArrowDurationSpec
@@ -226,81 +226,9 @@ def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
     ArrowTypeSpec
         Serializable Arrow type specification.
     """
-    if pa.types.is_null(dtype):
-        return ArrowPrimitiveSpec(name="null")
-    if pa.types.is_boolean(dtype):
-        return ArrowPrimitiveSpec(name="bool")
-    if pa.types.is_int8(dtype):
-        return ArrowPrimitiveSpec(name="int8")
-    if pa.types.is_int16(dtype):
-        return ArrowPrimitiveSpec(name="int16")
-    if pa.types.is_int32(dtype):
-        return ArrowPrimitiveSpec(name="int32")
-    if pa.types.is_int64(dtype):
-        return ArrowPrimitiveSpec(name="int64")
-    if pa.types.is_uint8(dtype):
-        return ArrowPrimitiveSpec(name="uint8")
-    if pa.types.is_uint16(dtype):
-        return ArrowPrimitiveSpec(name="uint16")
-    if pa.types.is_uint32(dtype):
-        return ArrowPrimitiveSpec(name="uint32")
-    if pa.types.is_uint64(dtype):
-        return ArrowPrimitiveSpec(name="uint64")
-    if pa.types.is_float16(dtype):
-        return ArrowPrimitiveSpec(name="float16")
-    if pa.types.is_float32(dtype):
-        return ArrowPrimitiveSpec(name="float32")
-    if pa.types.is_float64(dtype):
-        return ArrowPrimitiveSpec(name="float64")
-    if pa.types.is_string(dtype):
-        return ArrowPrimitiveSpec(name="string")
-    if pa.types.is_large_string(dtype):
-        return ArrowPrimitiveSpec(name="large_string")
-    if pa.types.is_binary(dtype):
-        return ArrowPrimitiveSpec(name="binary")
-    if pa.types.is_large_binary(dtype):
-        return ArrowPrimitiveSpec(name="large_binary")
-    if pa.types.is_date32(dtype):
-        return ArrowPrimitiveSpec(name="date32")
-    if pa.types.is_date64(dtype):
-        return ArrowPrimitiveSpec(name="date64")
-    if pa.types.is_time32(dtype):
-        return ArrowPrimitiveSpec(name=f"time32[{dtype.unit}]")
-    if pa.types.is_time64(dtype):
-        return ArrowPrimitiveSpec(name=f"time64[{dtype.unit}]")
-    if pa.types.is_timestamp(dtype):
-        return ArrowTimestampSpec(unit=dtype.unit, timezone=dtype.tz)
-    if pa.types.is_duration(dtype):
-        return ArrowDurationSpec(unit=dtype.unit)
-    if pa.types.is_decimal(dtype):
-        bit_width = 128 if dtype.bit_width == 128 else 256
-        return ArrowDecimalSpec(precision=dtype.precision, scale=dtype.scale, bit_width=bit_width)
-    if pa.types.is_fixed_size_binary(dtype):
-        return ArrowFixedSizeBinarySpec(byte_width=dtype.byte_width)
-    if pa.types.is_fixed_size_list(dtype):
-        return ArrowFixedSizeListSpec(
-            item=ArrowFieldSpec.from_pyarrow(dtype.value_field),
-            list_size=dtype.list_size,
-        )
-    if pa.types.is_large_list(dtype):
-        return ArrowLargeListSpec(item=ArrowFieldSpec.from_pyarrow(dtype.value_field))
-    if pa.types.is_list(dtype):
-        return ArrowListSpec(item=ArrowFieldSpec.from_pyarrow(dtype.value_field))
-    if pa.types.is_map(dtype):
-        return ArrowMapSpec(
-            key=ArrowFieldSpec.from_pyarrow(dtype.key_field),
-            item=ArrowFieldSpec.from_pyarrow(dtype.item_field),
-            keys_sorted=dtype.keys_sorted,
-        )
-    if pa.types.is_struct(dtype):
-        return ArrowStructSpec(fields=tuple(ArrowFieldSpec.from_pyarrow(field) for field in dtype))
-    if pa.types.is_dictionary(dtype):
-        return ArrowDictionarySpec(
-            index_type=arrow_type_from_pyarrow(dtype.index_type),
-            value_type=arrow_type_from_pyarrow(dtype.value_type),
-            ordered=dtype.ordered,
-        )
-    return ArrowOpaqueSpec(repr=str(dtype))
+    from schema_spec.arrow_type_registry import arrow_type_from_pyarrow as _arrow_type_from_pyarrow
+
+    return _arrow_type_from_pyarrow(dtype)
 
 
 def arrow_type_to_pyarrow(spec: ArrowTypeSpec) -> pa.DataType:
@@ -310,48 +238,10 @@ def arrow_type_to_pyarrow(spec: ArrowTypeSpec) -> pa.DataType:
     -------
     pyarrow.DataType
         PyArrow data type for the spec.
-
-    Raises
-    ------
-    TypeError
-        Raised when the spec is unsupported.
     """
-    if isinstance(spec, ArrowPrimitiveSpec):
-        return _PRIMITIVE_BUILDERS[spec.name]
-    if isinstance(spec, ArrowTimestampSpec):
-        return pa.timestamp(spec.unit, tz=spec.timezone)
-    if isinstance(spec, ArrowDurationSpec):
-        return pa.duration(spec.unit)
-    if isinstance(spec, ArrowDecimalSpec):
-        if spec.bit_width == 256:
-            return pa.decimal256(spec.precision, spec.scale)
-        return pa.decimal128(spec.precision, spec.scale)
-    if isinstance(spec, ArrowFixedSizeBinarySpec):
-        return pa.binary(spec.byte_width)
-    if isinstance(spec, ArrowFixedSizeListSpec):
-        return pa.list_(spec.item.to_pyarrow(), list_size=spec.list_size)
-    if isinstance(spec, ArrowLargeListSpec):
-        return pa.large_list(spec.item.to_pyarrow())
-    if isinstance(spec, ArrowListSpec):
-        return pa.list_(spec.item.to_pyarrow())
-    if isinstance(spec, ArrowMapSpec):
-        return pa.map_(
-            spec.key.to_pyarrow(),
-            spec.item.to_pyarrow(),
-            keys_sorted=spec.keys_sorted,
-        )
-    if isinstance(spec, ArrowStructSpec):
-        return pa.struct([field.to_pyarrow() for field in spec.fields])
-    if isinstance(spec, ArrowDictionarySpec):
-        return pa.dictionary(
-            arrow_type_to_pyarrow(spec.index_type),
-            arrow_type_to_pyarrow(spec.value_type),
-            ordered=spec.ordered,
-        )
-    if isinstance(spec, ArrowOpaqueSpec):
-        return pa.data_type(spec.repr)
-    msg = f"Unsupported Arrow type spec: {spec!r}"
-    raise TypeError(msg)
+    from schema_spec.arrow_type_registry import arrow_type_to_pyarrow as _arrow_type_to_pyarrow
+
+    return _arrow_type_to_pyarrow(spec)
 
 
 __all__ = [

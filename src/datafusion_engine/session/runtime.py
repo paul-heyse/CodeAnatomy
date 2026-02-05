@@ -559,12 +559,14 @@ def normalize_dataset_locations_for_profile(
     if normalize_root is None:
         return {}
     root = Path(normalize_root)
+    from schema_spec.dataset_spec_ops import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
     for spec in dataset_specs():
-        locations[spec.name] = DatasetLocation(
-            path=str(root / spec.name),
+        name = dataset_spec_name(spec)
+        locations[name] = DatasetLocation(
+            path=str(root / name),
             format="delta",
             dataset_spec=spec,
         )

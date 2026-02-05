@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from ast_grep_py import SgNode
 
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.index.files import FileFilterDecision
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter
 from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
@@ -210,13 +211,16 @@ def _apply_rule_spans(
     paths: list[Path],
     scope_globs: list[str] | None,
     candidates: EntityCandidates,
+    *,
+    match_spans: dict[str, list[tuple[int, int]]] | None = None,
 ) -> EntityCandidates:
     plan = ctx.plan
     query = ctx.query
     if not plan.sg_rules:
         return candidates
 
-    match_spans = _collect_match_spans(plan.sg_rules, paths, ctx.root, query, scope_globs)
+    if match_spans is None:
+        match_spans = _collect_match_spans(plan.sg_rules, paths, ctx.root, query, scope_globs)
     if not match_spans:
         return candidates
 
@@ -309,19 +313,37 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
     )
 
 
-def _apply_entity_handlers(state: EntityExecutionState, result: CqResult) -> None:
+def _apply_entity_handlers(
+    state: EntityExecutionState,
+    result: CqResult,
+    *,
+    symtable: SymtableEnricher | None = None,
+) -> None:
     query = state.ctx.query
     root = state.ctx.root
     candidates = state.candidates
 
     if query.entity == "import":
-        _process_import_query(candidates.import_records, query, result, root)
+        _process_import_query(
+            candidates.import_records,
+            query,
+            result,
+            root,
+            symtable=symtable,
+        )
     elif query.entity == "decorator":
         _process_decorator_query(state.scan, query, result, root, candidates.def_records)
     elif query.entity == "callsite":
         _process_call_query(state.scan, query, result, root)
     else:
-        _process_def_query(state.scan, query, result, root, candidates.def_records)
+        _process_def_query(
+            state.scan,
+            query,
+            result,
+            root,
+            candidates.def_records,
+            symtable=symtable,
+        )
 
 
 def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> None:
@@ -420,6 +442,58 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     return result
 
 
+def execute_entity_query_from_records(
+    *,
+    plan: ToolPlan,
+    query: Query,
+    tc: Toolchain,
+    root: Path,
+    records: list[SgRecord],
+    paths: list[Path],
+    scope_globs: list[str] | None,
+    argv: list[str] | None = None,
+    match_spans: dict[str, list[tuple[int, int]]] | None = None,
+    symtable: SymtableEnricher | None = None,
+) -> CqResult:
+    """Execute an entity query using pre-scanned records.
+
+    Returns
+    -------
+    CqResult
+        Query result with findings and summary metadata.
+    """
+    ctx = QueryExecutionContext(
+        plan=plan,
+        query=query,
+        tc=tc,
+        root=root,
+        argv=argv or [],
+        started_ms=ms(),
+    )
+    scan_ctx = _build_scan_context(records)
+    candidates = _build_entity_candidates(scan_ctx, records)
+    candidates = _apply_rule_spans(
+        ctx,
+        paths,
+        scope_globs,
+        candidates,
+        match_spans=match_spans,
+    )
+    state = EntityExecutionState(
+        ctx=ctx,
+        paths=paths,
+        scope_globs=scope_globs,
+        records=records,
+        scan=scan_ctx,
+        candidates=candidates,
+    )
+    result = mk_result(_build_runmeta(ctx))
+    _apply_entity_handlers(state, result, symtable=symtable)
+    result.summary["files_scanned"] = len({r.file for r in state.records})
+    _maybe_add_entity_explain(state, result)
+    return result
+
+
 def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules.
 
@@ -431,6 +505,73 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     state = _prepare_pattern_state(ctx)
     if isinstance(state, CqResult):
         return state
+
+    findings, records, _ = _execute_ast_grep_rules(
+        state.ctx.plan.sg_rules,
+        state.file_result.files,
+        state.ctx.root,
+        state.ctx.query,
+        None,
+    )
+
+    result = mk_result(_build_runmeta(ctx))
+    result.key_findings.extend(findings)
+
+    if state.ctx.query.scope_filter and findings:
+        enricher = SymtableEnricher(state.ctx.root)
+        result.key_findings = filter_by_scope(
+            result.key_findings,
+            state.ctx.query.scope_filter,
+            enricher,
+            records,
+        )
+
+    if state.ctx.query.limit and len(result.key_findings) > state.ctx.query.limit:
+        result.key_findings = result.key_findings[: state.ctx.query.limit]
+
+    result.summary["matches"] = len(result.key_findings)
+    result.summary["files_scanned"] = len({r.file for r in records})
+    _maybe_add_pattern_explain(state, result)
+    return result
+
+
+def execute_pattern_query_with_files(
+    *,
+    plan: ToolPlan,
+    query: Query,
+    tc: Toolchain,
+    root: Path,
+    files: list[Path],
+    argv: list[str] | None = None,
+    decisions: list[FileFilterDecision] | None = None,
+) -> CqResult:
+    """Execute a pattern query using a pre-tabulated file list.
+
+    Returns
+    -------
+    CqResult
+        Query result with findings and summary metadata.
+    """
+    ctx = QueryExecutionContext(
+        plan=plan,
+        query=query,
+        tc=tc,
+        root=root,
+        argv=argv or [],
+        started_ms=ms(),
+    )
+
+    if not files:
+        result = _empty_result(ctx, "No files match scope after filtering")
+        if plan.explain and decisions is not None:
+            result.summary["file_filters"] = [asdict(decision) for decision in decisions]
+        return result
+
+    state = PatternExecutionState(
+        ctx=ctx,
+        scope_globs=scope_to_globs(plan.scope),
+        file_result=FileTabulationResult(files=files, decisions=decisions or []),
+    )
 
     findings, records, _ = _execute_ast_grep_rules(
         state.ctx.plan.sg_rules,
@@ -964,6 +1105,8 @@ def _process_import_query(
     query: Query,
     result: CqResult,
     root: Path,
+    *,
+    symtable: SymtableEnricher | None = None,
 ) -> None:
     """Process an import entity query."""
     matching_imports = _filter_to_matching(import_records, query)
@@ -974,7 +1117,7 @@ def _process_import_query(
 
     # Apply scope filter if present
     if query.scope_filter and matching_imports:
-        enricher = SymtableEnricher(root)
+        enricher = symtable if symtable is not None else SymtableEnricher(root)
         result.key_findings = filter_by_scope(
             result.key_findings,
             query.scope_filter,
@@ -992,6 +1135,8 @@ def _process_def_query(
     result: CqResult,
     root: Path,
     def_candidates: list[SgRecord] | None = None,
+    *,
+    symtable: SymtableEnricher | None = None,
 ) -> None:
     """Process a definition entity query."""
     candidate_records = def_candidates if def_candidates is not None else ctx.def_records
@@ -1004,7 +1149,7 @@ def _process_def_query(
 
     # Apply scope filter if present
     if query.scope_filter:
-        enricher = SymtableEnricher(root)
+        enricher = symtable if symtable is not None else SymtableEnricher(root)
         result.key_findings = filter_by_scope(
             result.key_findings,
             query.scope_filter,

@@ -12,9 +12,21 @@ from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ValidationPolicySpec
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
+
+
+class DataframeValidationRequest(StructBaseStrict, frozen=True):
+    """Validation request for Pandera dataframe checks."""
+
+    df: object
+    schema_spec: TableSchemaSpec
+    policy: ValidationPolicySpec | None
+    constraints: Iterable[str] | None = None
+    diagnostics: DiagnosticsSink | None = None
+    name: str = "unknown"
 
 
 def _arrow_to_pandas_dtype(dtype: pa.DataType) -> object:
@@ -292,15 +304,7 @@ def validate_dataframe(
     return original
 
 
-def validate_with_policy(
-    df: object,
-    *,
-    schema_spec: TableSchemaSpec,
-    policy: ValidationPolicySpec | None,
-    constraints: Iterable[str] | None = None,
-    diagnostics: DiagnosticsSink | None,
-    name: str,
-) -> object:
+def validate_with_policy(request: DataframeValidationRequest) -> object:
     """Validate a dataframe-like object and emit diagnostics on failure.
 
     Returns
@@ -308,24 +312,24 @@ def validate_with_policy(
     object
         Original dataframe-like object after validation.
     """
-    if policy is None or not policy.enabled:
-        return df
+    if request.policy is None or not request.policy.enabled:
+        return request.df
     try:
         return validate_dataframe(
-            df,
-            schema_spec=schema_spec,
-            policy=policy,
-            constraints=constraints,
+            request.df,
+            schema_spec=request.schema_spec,
+            policy=request.policy,
+            constraints=request.constraints,
         )
     except Exception as exc:
-        if diagnostics is not None:
+        if request.diagnostics is not None:
             from obs.diagnostics import record_dataframe_validation_error
 
             record_dataframe_validation_error(
-                diagnostics,
-                name=name,
+                request.diagnostics,
+                name=request.name,
                 error=exc,
-                policy=policy,
+                policy=request.policy,
             )
         raise
 
@@ -357,6 +361,7 @@ def validation_policy_payload(policy: ValidationPolicySpec | None) -> Mapping[st
 
 
 __all__ = [
+    "DataframeValidationRequest",
     "dataframe_model_for_spec",
     "field_to_pandera_dtype",
     "to_pandera_schema",

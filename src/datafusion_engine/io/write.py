@@ -58,6 +58,7 @@ from datafusion_engine.session.runtime import (
     semantic_output_locations_for_profile,
 )
 from datafusion_engine.sql.options import sql_options_for_profile
+from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
@@ -450,6 +451,30 @@ class WriteResult:
 
 
 @dataclass(frozen=True)
+class StreamingWriteContext:
+    """Prepared context for streaming write execution."""
+
+    request: WriteRequest
+    start: float
+    df: DataFrame
+    dataset_name: str | None
+    dataset_location: DatasetLocation | None
+    schema_columns: tuple[str, ...]
+    lineage_columns: tuple[str, ...]
+    table_target: str | None
+
+
+@dataclass(frozen=True)
+class StreamingWriteOutcome:
+    """Outcome metadata for streaming writes."""
+
+    method: WriteMethod
+    sql_text: str | None
+    rows_written: int | None
+    delta_outcome: DeltaWriteOutcome | None = None
+
+
+@dataclass(frozen=True)
 class DeltaWriteSpec:
     """Declarative specification for deterministic Delta writes."""
 
@@ -764,6 +789,7 @@ class WritePipeline:
     ) -> None:
         if dataset_spec is None:
             return
+
         policy = self._resolve_dataframe_validation_policy(
             dataset_spec=dataset_spec,
             overrides=overrides,
@@ -771,21 +797,23 @@ class WritePipeline:
         constraints: tuple[str, ...] = ()
         if dataset_spec.contract_spec is not None:
             constraints = tuple(dataset_spec.contract_spec.constraints)
-        if dataset_spec.delta_constraints:
-            constraints = (*constraints, *dataset_spec.delta_constraints)
+        delta_constraints = dataset_spec_delta_constraints(dataset_spec)
+        if delta_constraints:
+            constraints = (*constraints, *delta_constraints)
         diagnostics = None
         if self.runtime_profile is not None:
             diagnostics = self.runtime_profile.diagnostics.diagnostics_sink
-        from schema_spec.pandera_bridge import validate_with_policy
+        from schema_spec.pandera_bridge import DataframeValidationRequest, validate_with_policy
 
-        validate_with_policy(
-            df,
+        request = DataframeValidationRequest(
+            df=df,
             schema_spec=dataset_spec.table_spec,
             policy=policy,
             constraints=constraints,
             diagnostics=diagnostics,
-            name=dataset_spec.name,
+            name=dataset_spec_name(dataset_spec),
         )
+        validate_with_policy(request)
 
     def _dataset_location_for_destination(
         self,
@@ -872,6 +900,109 @@ class WritePipeline:
             return None, None
         return binding
 
+    def _prepare_streaming_context(self, request: WriteRequest) -> StreamingWriteContext:
+        start = time.perf_counter()
+        df = self._source_df(request)
+        dataset_name, dataset_location = self._dataset_binding(request.destination)
+        dataset_spec = dataset_location.dataset_spec if dataset_location is not None else None
+        overrides = dataset_location.overrides if dataset_location is not None else None
+        self._validate_dataframe(
+            df,
+            dataset_spec=dataset_spec,
+            overrides=overrides,
+        )
+        schema_columns = _schema_columns(df)
+        lineage_columns = _delta_lineage_columns(df)
+        df = _apply_zorder_sort(
+            df,
+            request=request,
+            dataset_location=dataset_location,
+            schema_columns=schema_columns,
+            lineage_columns=lineage_columns,
+        )
+        table_target = self._table_target(request)
+        return StreamingWriteContext(
+            request=request,
+            start=start,
+            df=df,
+            dataset_name=dataset_name,
+            dataset_location=dataset_location,
+            schema_columns=schema_columns,
+            lineage_columns=lineage_columns,
+            table_target=table_target,
+        )
+
+    def _write_streaming_table_target(
+        self,
+        context: StreamingWriteContext,
+    ) -> WriteResult | None:
+        if context.table_target is None:
+            return None
+        rows_written = self._maybe_count_rows(context.df)
+        sql_text = self._write_insert(
+            context.df,
+            request=context.request,
+            table_name=context.table_target,
+        )
+        duration_ms = (time.perf_counter() - context.start) * 1000.0
+        write_result = WriteResult(
+            request=context.request,
+            method=WriteMethod.INSERT,
+            sql=sql_text,
+            duration_ms=duration_ms,
+            rows_written=rows_written,
+        )
+        self._record_write_artifact(write_result)
+        return write_result
+
+    def _streaming_outcome(self, context: StreamingWriteContext) -> StreamingWriteOutcome:
+        from datafusion_engine.session.streaming import StreamingExecutionResult
+
+        result = StreamingExecutionResult(df=context.df)
+        if context.request.format == WriteFormat.DELTA:
+            streaming_spec = self._delta_write_spec(
+                context.request,
+                method_label="delta_writer",
+                inputs=_DeltaWriteSpecInputs(
+                    dataset_name=context.dataset_name,
+                    dataset_location=context.dataset_location,
+                    schema_columns=context.schema_columns,
+                    lineage_columns=context.lineage_columns,
+                ),
+            )
+            delta_outcome = self._write_delta(
+                result,
+                request=context.request,
+                spec=streaming_spec,
+            )
+            return StreamingWriteOutcome(method=WriteMethod.STREAMING, sql_text=None, rows_written=None, delta_outcome=delta_outcome)
+        rows_written = self._maybe_count_rows(context.df)
+        sql_text = self._write_copy(context.df, request=context.request)
+        return StreamingWriteOutcome(method=WriteMethod.COPY, sql_text=sql_text, rows_written=rows_written)
+
+    def _finalize_streaming_result(
+        self,
+        context: StreamingWriteContext,
+        outcome: StreamingWriteOutcome,
+    ) -> WriteResult:
+        duration_ms = (time.perf_counter() - context.start) * 1000.0
+        delta_outcome = outcome.delta_outcome
+        write_result = WriteResult(
+            request=context.request,
+            method=outcome.method,
+            sql=outcome.sql_text,
+            duration_ms=duration_ms,
+            rows_written=outcome.rows_written,
+            delta_result=delta_outcome.delta_result if delta_outcome is not None else None,
+            delta_features=(
+                delta_outcome.enabled_features if delta_outcome is not None else None
+            ),
+            commit_app_id=delta_outcome.commit_app_id if delta_outcome is not None else None,
+            commit_version=delta_outcome.commit_version if delta_outcome is not None else None,
+        )
+        self._record_write_artifact(write_result)
+        return write_result
+
     def write_via_streaming(
         self,
         request: WriteRequest,
@@ -897,84 +1028,12 @@ class WritePipeline:
         WriteResult
             Write result metadata for the streaming operation.
         """
-        from datafusion_engine.session.streaming import StreamingExecutionResult
-
-        start = time.perf_counter()
-        df = self._source_df(request)
-        dataset_name, dataset_location = self._dataset_binding(request.destination)
-        dataset_spec = dataset_location.dataset_spec if dataset_location is not None else None
-        overrides = dataset_location.overrides if dataset_location is not None else None
-        self._validate_dataframe(
-            df,
-            dataset_spec=dataset_spec,
-            overrides=overrides,
-        )
-        schema_columns = _schema_columns(df)
-        lineage_columns = _delta_lineage_columns(df)
-        df = _apply_zorder_sort(
-            df,
-            request=request,
-            dataset_location=dataset_location,
-            schema_columns=schema_columns,
-            lineage_columns=lineage_columns,
-        )
-        result = StreamingExecutionResult(df=df)
-
-        table_target = self._table_target(request)
-        if table_target is not None:
-            rows_written = self._maybe_count_rows(df)
-            sql_text = self._write_insert(df, request=request, table_name=table_target)
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            write_result = WriteResult(
-                request=request,
-                method=WriteMethod.INSERT,
-                sql=sql_text,
-                duration_ms=duration_ms,
-                rows_written=rows_written,
-            )
-            self._record_write_artifact(write_result)
-            return write_result
-
-        # Write based on format
-        delta_outcome: DeltaWriteOutcome | None = None
-        sql_text: str | None = None
-        method = WriteMethod.STREAMING
-        rows_written: int | None = None
-        if request.format == WriteFormat.DELTA:
-            streaming_spec = self._delta_write_spec(
-                request,
-                method_label="delta_writer",
-                inputs=_DeltaWriteSpecInputs(
-                    dataset_name=dataset_name,
-                    dataset_location=dataset_location,
-                    schema_columns=schema_columns,
-                    lineage_columns=lineage_columns,
-                ),
-            )
-            delta_outcome = self._write_delta(
-                result,
-                request=request,
-                spec=streaming_spec,
-            )
-        else:
-            method = WriteMethod.COPY
-            rows_written = self._maybe_count_rows(df)
-            sql_text = self._write_copy(df, request=request)
-
-        duration_ms = (time.perf_counter() - start) * 1000.0
-        write_result = WriteResult(
-            request=request,
-            method=method,
-            sql=sql_text,
-            duration_ms=duration_ms,
-            rows_written=rows_written,
-            delta_result=delta_outcome.delta_result if delta_outcome is not None else None,
-            delta_features=(delta_outcome.enabled_features if delta_outcome is not None else None),
-            commit_app_id=delta_outcome.commit_app_id if delta_outcome is not None else None,
-            commit_version=delta_outcome.commit_version if delta_outcome is not None else None,
-        )
-        self._record_write_artifact(write_result)
-        return write_result
+        context = self._prepare_streaming_context(request)
+        table_result = self._write_streaming_table_target(context)
+        if table_result is not None:
+            return table_result
+        outcome = self._streaming_outcome(context)
+        return self._finalize_streaming_result(context, outcome)
 
     def write(
         self,

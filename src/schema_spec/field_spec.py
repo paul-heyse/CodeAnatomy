@@ -61,7 +61,13 @@ class FieldSpec(StructBaseStrict, frozen=True):
         return interop.field(self.name, dtype, nullable=self.nullable, metadata=encoded)
 
     def to_pandera_dtype(self) -> object:
-        """Return a Pandera-compatible dtype for this field."""
+        """Return a Pandera-compatible dtype for this field.
+
+        Returns
+        -------
+        object
+            Pandera-compatible dtype object.
+        """
         from schema_spec.pandera_bridge import field_to_pandera_dtype
 
         return field_to_pandera_dtype(self)

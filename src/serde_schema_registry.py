@@ -140,6 +140,7 @@ from serde_artifacts import (
     WriteArtifactRow,
 )
 from serde_msgspec import dumps_msgpack
+from serde_msgspec_inspect import inspect_to_builtins
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from utils.hashing import hash_sha256_hex
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
@@ -559,24 +560,6 @@ def openapi_contract_payload() -> dict[str, object]:
     }
 
 
-def _schema_enc_hook(obj: object) -> object:
-    if obj is msgspec.NODEFAULT:
-        return "NODEFAULT"
-    if obj.__class__.__module__ == "msgspec.inspect":
-        return {field: _schema_enc_hook(getattr(obj, field)) for field in obj.__struct_fields__}
-    if hasattr(obj, "__struct_fields__"):
-        return {field: _schema_enc_hook(getattr(obj, field)) for field in obj.__struct_fields__}
-    if isinstance(obj, type):
-        return f"{obj.__module__}.{obj.__qualname__}"
-    if isinstance(obj, Path):
-        return str(obj)
-    if isinstance(obj, msgspec.Raw):
-        return bytes(obj).hex()
-    if isinstance(obj, (bytes, bytearray, memoryview)):
-        return bytes(obj).hex()
-    return str(obj)
-
-
 def schema_contract_index() -> list[dict[str, object]]:
     """Return a structured contract index from msgspec.inspect.
 
@@ -589,7 +572,7 @@ def schema_contract_index() -> list[dict[str, object]]:
     type_info = msgspec.inspect.multi_type_info(schema_types)
     entries: list[dict[str, object]] = []
     for schema_type, info in zip(schema_types, type_info, strict=False):
-        payload = _schema_enc_hook(info)
+        payload = inspect_to_builtins(info, mapping_mode="stringify", fallback=str)
         entries.append({"name": schema_type.__name__, "type_info": payload})
     entries.sort(key=lambda item: cast("str", item.get("name", "")))
     return entries

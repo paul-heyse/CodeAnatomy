@@ -263,7 +263,9 @@ def _required_metadata_for_tables(
         spec = _dataset_spec_for_table(table_name, ctx=ctx)
         if spec is None:
             continue
-        metadata = spec.schema().metadata
+        from schema_spec.dataset_spec_ops import dataset_spec_schema
+
+        metadata = dataset_spec_schema(spec).metadata
         if metadata:
             required[table_name] = tuple(sorted(metadata.items(), key=lambda item: item[0]))
     return required
@@ -381,7 +383,9 @@ def _schema_contract_for_table(
         from datafusion_engine.schema.contracts import schema_contract_from_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
+    from schema_spec.dataset_spec_ops import dataset_spec_name
+
+    return schema_contract_from_dataset_spec(name=dataset_spec_name(spec), spec=spec)
 
 
 def _types_from_contract(

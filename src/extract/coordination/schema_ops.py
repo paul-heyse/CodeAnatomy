@@ -20,6 +20,7 @@ from datafusion_engine.schema.finalize import FinalizeContext, FinalizeResult, F
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicy
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, sql_options_for_profile
+from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
 
 
 def schema_policy_for_dataset(
@@ -172,7 +173,9 @@ def finalize_context_for_dataset(
         runtime_profile=runtime_profile,
         normalize=normalize,
     )
-    contract = dataset_spec(name).contract()
+    from schema_spec.dataset_spec_ops import dataset_spec_contract
+
+    contract = dataset_spec_contract(dataset_spec(name))
     return FinalizeContext(contract=contract, schema_policy=policy)
 
 
@@ -245,22 +248,25 @@ def _validate_extract_result(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     spec = dataset_spec(name)
+
     policy = spec.policies.dataframe_validation
     constraints: tuple[str, ...] = ()
     if spec.contract_spec is not None:
         constraints = tuple(spec.contract_spec.constraints)
-    if spec.delta_constraints:
-        constraints = (*constraints, *spec.delta_constraints)
-    from schema_spec.pandera_bridge import validate_with_policy
+    delta_constraints = dataset_spec_delta_constraints(spec)
+    if delta_constraints:
+        constraints = (*constraints, *delta_constraints)
+    from schema_spec.pandera_bridge import DataframeValidationRequest, validate_with_policy
 
-    validate_with_policy(
-        result.good,
+    request = DataframeValidationRequest(
+        df=result.good,
         schema_spec=spec.table_spec,
         policy=policy,
         constraints=constraints,
         diagnostics=runtime_profile.diagnostics.diagnostics_sink,
         name=name,
     )
+    validate_with_policy(request)
 
 
 __all__ = [

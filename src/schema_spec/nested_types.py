@@ -95,12 +95,8 @@ class NestedTypeBuilder:
         Self
             Builder instance for chaining.
         """
-        resolved_dtype = (
-            arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype
-        )
-        self.fields.append(
-            pa.field(name, resolved_dtype, nullable=nullable, metadata=metadata)
-        )
+        resolved_dtype = arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype
+        self.fields.append(pa.field(name, resolved_dtype, nullable=nullable, metadata=metadata))
         return self
 
     def add_struct(
@@ -197,9 +193,7 @@ class NestedTypeBuilder:
             Builder instance for chaining.
         """
         resolved_item = (
-            arrow_type_to_pyarrow(item_type)
-            if isinstance(item_type, ArrowTypeBase)
-            else item_type
+            arrow_type_to_pyarrow(item_type) if isinstance(item_type, ArrowTypeBase) else item_type
         )
         list_type = pa.large_list(resolved_item) if large else pa.list_(resolved_item)
         self.fields.append(pa.field(name, list_type, nullable=nullable, metadata=metadata))
@@ -233,9 +227,7 @@ class NestedTypeBuilder:
         """
         resolved = options or MapFieldOptions()
         resolved_key = (
-            arrow_type_to_pyarrow(key_type)
-            if isinstance(key_type, ArrowTypeBase)
-            else key_type
+            arrow_type_to_pyarrow(key_type) if isinstance(key_type, ArrowTypeBase) else key_type
         )
         resolved_value = (
             arrow_type_to_pyarrow(value_type)

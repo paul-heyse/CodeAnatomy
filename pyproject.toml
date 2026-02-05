@@ -54,6 +54,7 @@ dependencies = [
     "libcst",
     "pygit2>=1.19.1",
     "msgspec>=0.20.0",
+    "pydantic>=2.10.0",
     "polars>=1.37.1",
     "maturin>=1.11.5",
     "rustup>=1.28.2.1",

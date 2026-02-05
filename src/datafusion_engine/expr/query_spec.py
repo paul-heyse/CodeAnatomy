@@ -9,7 +9,7 @@ from datafusion import col
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.expr.spec import ExprIR, ExprSpec
+from datafusion_engine.expr.spec import ExprIR, ExprSpec, scalar_literal
 from serde_msgspec import StructBaseStrict
 
 
@@ -126,7 +126,7 @@ def false_predicate() -> ExprSpec:
     ExprSpec
         Expression spec that evaluates to false.
     """
-    return ExprSpec(expr_ir=ExprIR(op="literal", value=False))
+    return ExprSpec(expr_ir=ExprIR(op="literal", value=scalar_literal(False)))
 
 
 def in_set_expr(name: str, values: Sequence[str]) -> ExprSpec:
@@ -141,7 +141,7 @@ def in_set_expr(name: str, values: Sequence[str]) -> ExprSpec:
         return false_predicate()
     args = (
         ExprIR(op="field", name=name),
-        *(ExprIR(op="literal", value=value) for value in values),
+        *(ExprIR(op="literal", value=scalar_literal(value)) for value in values),
     )
     return ExprSpec(expr_ir=ExprIR(op="call", name="in_set", args=args))
 

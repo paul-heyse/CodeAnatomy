@@ -332,6 +332,7 @@ def classify_heuristic(line: str, col: int, match_text: str) -> HeuristicResult:
     Handles the common cases that don't need AST parsing.
     """
     stripped = line.lstrip()
+    result = HeuristicResult(category=None, confidence=0.0, skip_deeper=False)
 
     # Check comment (match position is after #)
     hash_pos = line.find("#")
@@ -344,58 +345,49 @@ def classify_heuristic(line: str, col: int, match_text: str) -> HeuristicResult:
 
     # Check definition patterns (high confidence)
     if stripped.startswith(("def ", "async def ")):
-        return HeuristicResult(
+        result = HeuristicResult(
             category="definition",
             confidence=0.90,
             skip_deeper=False,  # AST can confirm
         )
-
-    if stripped.startswith("class "):
-        return HeuristicResult(
+    elif stripped.startswith("class "):
+        result = HeuristicResult(
             category="definition",
             confidence=0.90,
             skip_deeper=False,
         )
-
     # Check import patterns (very high confidence)
-    if stripped.startswith("import "):
-        return HeuristicResult(
+    elif stripped.startswith("import "):
+        result = HeuristicResult(
             category="import",
             confidence=0.95,
             skip_deeper=True,
         )
-
-    if stripped.startswith("from ") and " import " in stripped:
-        return HeuristicResult(
+    elif stripped.startswith("from ") and " import " in stripped:
+        result = HeuristicResult(
             category="from_import",
             confidence=0.95,
             skip_deeper=True,
         )
+    else:
+        # Check for call pattern (name followed by parenthesis)
+        # This is a weaker signal, needs AST confirmation
+        rest = line[col + len(match_text) :]
+        if rest.lstrip().startswith("("):
+            result = HeuristicResult(
+                category="callsite",
+                confidence=0.70,  # Needs AST confirmation
+                skip_deeper=False,
+            )
+        # Check for docstring context (triple quotes)
+        elif '"""' in line or "'''" in line:
+            result = HeuristicResult(
+                category="docstring_match",
+                confidence=0.60,  # Uncertain without AST
+                skip_deeper=False,
+            )
 
-    # Check for call pattern (name followed by parenthesis)
-    # This is a weaker signal, needs AST confirmation
-    rest = line[col + len(match_text) :]
-    if rest.lstrip().startswith("("):
-        return HeuristicResult(
-            category="callsite",
-            confidence=0.70,  # Needs AST confirmation
-            skip_deeper=False,
-        )
-
-    # Check for docstring context (triple quotes)
-    if '"""' in line or "'''" in line:
-        return HeuristicResult(
-            category="docstring_match",
-            confidence=0.60,  # Uncertain without AST
-            skip_deeper=False,
-        )
-
-    # No confident classification
-    return HeuristicResult(
-        category=None,
-        confidence=0.0,
-        skip_deeper=False,
-    )
+    return result
 
 
 def get_record_context(file_path: Path, root: Path) -> RecordContext:
@@ -416,11 +408,9 @@ def get_record_context(file_path: Path, root: Path) -> RecordContext:
     records = scan_files([file_path], rules, root)
     record_index = IntervalIndex.from_records(records)
     def_records = [record for record in records if record.record == "def"]
-    def_index: IntervalIndex[SgRecord]
-    if def_records:
-        def_index = IntervalIndex.from_records(def_records)
-    else:
-        def_index = IntervalIndex([])
+    def_index: IntervalIndex[SgRecord] = (
+        IntervalIndex.from_records(def_records) if def_records else IntervalIndex([])
+    )
 
     context = RecordContext(
         records=records,
@@ -608,48 +598,42 @@ def classify_from_node(
     NodeClassification | None
         Classification result, or None if no classifiable node found.
     """
+    result: NodeClassification | None = None
     node = _find_node_at_position(sg_root, line, col)
-    if node is None:
-        return None
 
-    kind = node.kind()
-
-    # Direct classification from node kind
-    if kind in NODE_KIND_MAP:
-        category, confidence = NODE_KIND_MAP[kind]
-
-        # Special handling for strings that might be docstrings
-        if category == "string_match" and _is_docstring_context(node):
-            category = "docstring_match"
-            confidence = 0.95
-
-        return NodeClassification(
-            category=category,
-            confidence=confidence,
-            node_kind=kind,
-            containing_scope=_find_containing_scope(node),
-        )
-
-    # Walk up to find a classifiable parent
-    max_parent_depth = 5
-    parent = node.parent()
-    depth = 0
-    while parent and depth < max_parent_depth:
-        parent_kind = parent.kind()
-        if parent_kind in NODE_KIND_MAP:
-            category, confidence = NODE_KIND_MAP[parent_kind]
-            # Reduce confidence for indirect classification
-            return NodeClassification(
+    if node is not None:
+        kind = node.kind()
+        if kind in NODE_KIND_MAP:
+            category, confidence = NODE_KIND_MAP[kind]
+            if category == "string_match" and _is_docstring_context(node):
+                category = "docstring_match"
+                confidence = 0.95
+            result = NodeClassification(
                 category=category,
-                confidence=confidence * 0.9,
-                node_kind=parent_kind,
-                containing_scope=_find_containing_scope(parent),
-                evidence_kind="resolved_ast_heuristic",
+                confidence=confidence,
+                node_kind=kind,
+                containing_scope=_find_containing_scope(node),
             )
-        parent = parent.parent()
-        depth += 1
+        else:
+            max_parent_depth = 5
+            parent = node.parent()
+            depth = 0
+            while parent and depth < max_parent_depth:
+                parent_kind = parent.kind()
+                if parent_kind in NODE_KIND_MAP:
+                    category, confidence = NODE_KIND_MAP[parent_kind]
+                    result = NodeClassification(
+                        category=category,
+                        confidence=confidence * 0.9,
+                        node_kind=parent_kind,
+                        containing_scope=_find_containing_scope(parent),
+                        evidence_kind="resolved_ast_heuristic",
+                    )
+                    break
+                parent = parent.parent()
+                depth += 1
 
-    return None
+    return result
 
 
 def classify_from_records(

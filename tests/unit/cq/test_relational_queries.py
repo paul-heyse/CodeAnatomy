@@ -8,6 +8,9 @@ Verifies:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
 from tools.cq.query.ir import Query, RelationalConstraint
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -66,9 +69,10 @@ class TestRelationalConstraint:
             operator="inside",
             pattern="class Config",
         )
-        d = constraint.to_ast_grep_dict()
+        d = cast("Mapping[str, object]", constraint.to_ast_grep_dict())
         assert "inside" in d
-        assert d["inside"]["pattern"] == "class Config"
+        inside = cast("Mapping[str, object]", d["inside"])
+        assert inside["pattern"] == "class Config"
 
     def test_to_ast_grep_dict_with_stop_by(self) -> None:
         """Convert constraint with stop_by to ast-grep dict."""
@@ -77,8 +81,9 @@ class TestRelationalConstraint:
             pattern="class Config",
             stop_by="end",
         )
-        d = constraint.to_ast_grep_dict()
-        assert d["inside"]["stopBy"] == "end"
+        d = cast("Mapping[str, object]", constraint.to_ast_grep_dict())
+        inside = cast("Mapping[str, object]", d["inside"])
+        assert inside["stopBy"] == "end"
 
 
 class TestRelationalQueryParsing:

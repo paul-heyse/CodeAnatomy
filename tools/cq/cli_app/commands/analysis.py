@@ -11,21 +11,33 @@ from typing import Annotated
 from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
-from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
+from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.options import (
+    BytecodeSurfaceOptions,
+    CommonFilters,
+    ExceptionsOptions,
+    ImpactOptions,
+    ImportsOptions,
+    SideEffectsOptions,
+    SigImpactOptions,
+    options_from_params,
+)
+from tools.cq.cli_app.params import (
+    BytecodeSurfaceParams,
+    ExceptionsParams,
+    FilterParams,
+    ImpactParams,
+    ImportsParams,
+    SideEffectsParams,
+    SigImpactParams,
+)
 
 
 def impact(
     function: Annotated[str, Parameter(help="Function name to analyze")],
     *,
-    param: Annotated[str, Parameter(help="Parameter name to trace")],
-    depth: Annotated[int, Parameter(help="Maximum call depth")] = 5,
+    opts: Annotated[ImpactParams, Parameter(name="*")],
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Trace data flow from a function parameter.
 
@@ -46,30 +58,29 @@ def impact(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    options = options_from_params(opts, type_=ImpactOptions)
+    if options.param is None:
+        msg = "Parameter name is required"
+        raise RuntimeError(msg)
+
     request = ImpactRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
         function_name=function,
-        param_name=param,
-        max_depth=depth,
+        param_name=options.param,
+        max_depth=options.depth,
     )
     result = cmd_impact(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def calls(
     function: Annotated[str, Parameter(help="Function name to find calls for")],
     *,
+    opts: Annotated[FilterParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Census all call sites for a function.
 
@@ -90,6 +101,10 @@ def calls(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = FilterParams()
+    options = options_from_params(opts, type_=CommonFilters)
+
     result = cmd_calls(
         tc=ctx.toolchain,
         root=ctx.root,
@@ -97,21 +112,13 @@ def calls(
         function_name=function,
     )
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def imports(
     *,
-    cycles: Annotated[bool, Parameter(help="Run cycle detection")] = False,
-    module: Annotated[str | None, Parameter(help="Focus on specific module")] = None,
+    opts: Annotated[ImportsParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Analyze import structure and cycles.
 
@@ -132,29 +139,26 @@ def imports(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = ImportsParams()
+    options = options_from_params(opts, type_=ImportsOptions)
+
     request = ImportRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
-        cycles=cycles,
-        module=module,
+        cycles=options.cycles,
+        module=options.module,
     )
     result = cmd_imports(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def exceptions(
     *,
-    function: Annotated[str | None, Parameter(help="Focus on specific function")] = None,
+    opts: Annotated[ExceptionsParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Analyze exception handling patterns.
 
@@ -175,28 +179,25 @@ def exceptions(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = ExceptionsParams()
+    options = options_from_params(opts, type_=ExceptionsOptions)
+
     result = cmd_exceptions(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
-        function=function,
+        function=options.function,
     )
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def sig_impact(
     symbol: Annotated[str, Parameter(help="Function name to analyze")],
     *,
-    to: Annotated[str, Parameter(help='New signature (e.g., "foo(a, b, *, c=None)")')],
+    opts: Annotated[SigImpactParams, Parameter(name="*")],
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Analyze impact of a signature change.
 
@@ -217,29 +218,27 @@ def sig_impact(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    options = options_from_params(opts, type_=SigImpactOptions)
+    if options.to is None:
+        msg = "Signature value is required"
+        raise RuntimeError(msg)
+
     request = SigImpactRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
         symbol=symbol,
-        to=to,
+        to=options.to,
     )
     result = cmd_sig_impact(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def side_effects(
     *,
-    max_files: Annotated[int, Parameter(help="Maximum files to scan")] = 2000,
+    opts: Annotated[SideEffectsParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Detect import-time side effects.
 
@@ -260,28 +259,26 @@ def side_effects(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = SideEffectsParams()
+    options = options_from_params(opts, type_=SideEffectsOptions)
+
     request = SideEffectsRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
-        max_files=max_files,
+        max_files=options.max_files,
     )
     result = cmd_side_effects(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def scopes(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
+    opts: Annotated[FilterParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Analyze scope capture (closures).
 
@@ -302,6 +299,10 @@ def scopes(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = FilterParams()
+    options = options_from_params(opts, type_=CommonFilters)
+
     request = ScopeRequest(
         tc=ctx.toolchain,
         root=ctx.root,
@@ -310,23 +311,14 @@ def scopes(
     )
     result = cmd_scopes(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
+    return CliResult(result=result, context=ctx, filters=options)
 
 
 def bytecode_surface(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
-    show: Annotated[
-        str, Parameter(help="What to show: globals,attrs,constants,opcodes")
-    ] = "globals,attrs,constants",
+    opts: Annotated[BytecodeSurfaceParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Analyze bytecode for hidden dependencies.
 
@@ -347,77 +339,17 @@ def bytecode_surface(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = BytecodeSurfaceParams()
+    options = options_from_params(opts, type_=BytecodeSurfaceOptions)
+
     request = BytecodeSurfaceRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
         target=target,
-        show=show,
+        show=options.show,
     )
     result = cmd_bytecode_surface(request)
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
-
-
-def _build_filters(
-    include: list[str] | None,
-    exclude: list[str] | None,
-    impact: str | None,
-    confidence: str | None,
-    severity: str | None,
-    limit: int | None,
-) -> FilterConfig:
-    """Build a FilterConfig from CLI arguments.
-
-    Parameters
-    ----------
-    include
-        Include patterns.
-    exclude
-        Exclude patterns.
-    impact
-        Comma-separated impact buckets.
-    confidence
-        Comma-separated confidence buckets.
-    severity
-        Comma-separated severity levels.
-    limit
-        Maximum findings.
-
-    Returns
-    -------
-    FilterConfig
-        Filter configuration.
-    """
-    from tools.cq.cli_app.context import FilterConfig
-
-    impact_list: list[str] = []
-    if impact:
-        for part in impact.split(","):
-            segment = part.strip()
-            if segment:
-                impact_list.append(segment)
-
-    confidence_list: list[str] = []
-    if confidence:
-        for part in confidence.split(","):
-            segment = part.strip()
-            if segment:
-                confidence_list.append(segment)
-
-    severity_list: list[str] = []
-    if severity:
-        for part in severity.split(","):
-            segment = part.strip()
-            if segment:
-                severity_list.append(segment)
-
-    return FilterConfig(
-        include=list(include) if include else [],
-        exclude=list(exclude) if exclude else [],
-        impact=impact_list,
-        confidence=confidence_list,
-        severity=severity_list,
-        limit=limit,
-    )
+    return CliResult(result=result, context=ctx, filters=options)

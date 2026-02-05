@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 from tools.cq.search.classifier import QueryMode, clear_caches
@@ -603,8 +605,11 @@ class TestSmartSearch:
         """Smart search should report exact scanned file counts when available."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
-        assert result.summary["scanned_files_is_estimate"] is False
-        assert result.summary["scanned_files"] >= result.summary["matched_files"]
+        summary = cast("Mapping[str, object]", result.summary)
+        assert summary["scanned_files_is_estimate"] is False
+        scanned_files = cast("int", summary["scanned_files"])
+        matched_files = cast("int", summary["matched_files"])
+        assert scanned_files >= matched_files
 
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""

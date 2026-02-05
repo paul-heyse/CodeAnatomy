@@ -11,6 +11,10 @@ import msgspec
 
 from tools.cq import SCHEMA_VERSION
 
+# Schema evolution notes:
+# - New fields must have defaults to preserve backward compatibility.
+# - For array-like structs, append fields only; never reorder.
+# - Do not change existing field types; add new fields instead.
 _SCORE_FIELDS: tuple[str, ...] = (
     "impact_score",
     "impact_bucket",

@@ -13,7 +13,9 @@ from datafusion_engine.dataset.registry import (
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
+    DatasetPolicies,
     DatasetSpec,
+    DeltaPolicyBundle,
     DeltaScanPolicyDefaults,
     ScanPolicyConfig,
     ScanPolicyDefaults,
@@ -35,9 +37,12 @@ def test_resolved_location_prefers_overrides() -> None:
     base_policy = DeltaSchemaPolicy(schema_mode="merge")
     override_policy = DeltaSchemaPolicy(schema_mode="overwrite")
 
-    dataset_spec = DatasetSpec(table_spec=base_spec, delta_schema_policy=base_policy)
+    dataset_spec = DatasetSpec(
+        table_spec=base_spec,
+        policies=DatasetPolicies(delta=DeltaPolicyBundle(schema_policy=base_policy)),
+    )
     overrides = DatasetLocationOverrides(
-        delta_schema_policy=override_policy,
+        delta=DeltaPolicyBundle(schema_policy=override_policy),
         table_spec=override_spec,
     )
     location = DatasetLocation(
@@ -57,7 +62,10 @@ def test_resolved_location_uses_dataset_spec_when_no_override() -> None:
     """Dataset spec values are used when overrides are absent."""
     base_spec = _table_spec("events", "id")
     base_policy = DeltaSchemaPolicy(schema_mode="merge")
-    dataset_spec = DatasetSpec(table_spec=base_spec, delta_schema_policy=base_policy)
+    dataset_spec = DatasetSpec(
+        table_spec=base_spec,
+        policies=DatasetPolicies(delta=DeltaPolicyBundle(schema_policy=base_policy)),
+    )
     location = DatasetLocation(
         path="/tmp/events",
         format="delta",

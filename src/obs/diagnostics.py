@@ -18,6 +18,7 @@ from datafusion_engine.schema.contracts import ValidationViolation
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
+from schema_spec.pandera_bridge import validation_policy_payload
 from serde_msgspec import StructBaseCompat
 from utils.uuid_factory import uuid7_str
 
@@ -253,6 +254,37 @@ def record_view_contract_violations(
     recorder_sink.record_artifact("view_contract_violations_v1", payload)
 
 
+def record_dataframe_validation_error(
+    sink: DiagnosticsSink,
+    *,
+    name: str,
+    error: Exception,
+    policy: object | None = None,
+) -> None:
+    """Record a dataframe validation error payload."""
+    failure_cases_payload = None
+    failure_cases = getattr(error, "failure_cases", None)
+    if failure_cases is not None:
+        try:
+            head = getattr(failure_cases, "head", None)
+            if callable(head):
+                failure_cases = head(50)
+            to_dict = getattr(failure_cases, "to_dict", None)
+            if callable(to_dict):
+                failure_cases_payload = to_dict(orient="records")
+        except Exception:  # noqa: BLE001
+            failure_cases_payload = None
+    payload = {
+        "name": name,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "policy": validation_policy_payload(policy) if policy is not None else None,
+        "failure_cases": failure_cases_payload,
+    }
+    recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
+    recorder_sink.record_artifact("dataframe_validation_errors_v1", payload)
+
+
 def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionViewArtifact) -> None:
     """Record a deterministic view artifact payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
@@ -281,6 +313,7 @@ __all__ = [
     "SemanticQualityArtifact",
     "prepared_statement_hook",
     "record_cache_lineage",
+    "record_dataframe_validation_error",
     "record_rust_udf_snapshot",
     "record_semantic_quality_artifact",
     "record_semantic_quality_events",

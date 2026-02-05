@@ -20,6 +20,7 @@ from schema_spec.system import (
     DatasetSpec,
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,
+    ValidationPolicySpec,
     make_dataset_spec,
     make_table_spec,
 )
@@ -45,6 +46,7 @@ class DatasetRegistration:
     evolution_spec: SchemaEvolutionSpec | None = None
     metadata_spec: SchemaMetadataSpec | None = None
     validation: ArrowValidationOptions | None = None
+    dataframe_validation: ValidationPolicySpec | None = None
 
 
 class TableSpecInputKwargs(TypedDict, total=False):
@@ -106,6 +108,7 @@ def register_dataset(
         evolution_spec=registration.evolution_spec,
         metadata_spec=registration.metadata_spec,
         validation=registration.validation,
+        dataframe_validation=registration.dataframe_validation,
     )
 
 

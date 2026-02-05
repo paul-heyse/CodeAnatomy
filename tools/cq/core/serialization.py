@@ -6,13 +6,22 @@ from typing import Any
 
 import msgspec
 
+from tools.cq.core.codec import (
+    JSON_ENCODER as _JSON_ENCODER,
+)
+from tools.cq.core.codec import (
+    JSON_RESULT_DECODER as _JSON_DECODER,
+)
+from tools.cq.core.codec import (
+    MSGPACK_DECODER as _GENERIC_MSGPACK_DECODER,
+)
+from tools.cq.core.codec import (
+    MSGPACK_ENCODER as _MSGPACK_ENCODER,
+)
+from tools.cq.core.codec import (
+    MSGPACK_RESULT_DECODER as _MSGPACK_DECODER,
+)
 from tools.cq.core.schema import CqResult
-
-_JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
-_JSON_DECODER = msgspec.json.Decoder(type=CqResult)
-_MSGPACK_ENCODER = msgspec.msgpack.Encoder()
-_MSGPACK_DECODER = msgspec.msgpack.Decoder(type=CqResult)
-_GENERIC_MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
 
 
 def dumps_json(result: CqResult, *, indent: int | None = 2) -> str:

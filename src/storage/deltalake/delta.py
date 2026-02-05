@@ -429,7 +429,11 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         try:
             overrides = None
             if request.gate is not None:
-                overrides = DatasetLocationOverrides(delta_feature_gate=request.gate)
+                from schema_spec.system import DeltaPolicyBundle
+
+                overrides = DatasetLocationOverrides(
+                    delta=DeltaPolicyBundle(feature_gate=request.gate)
+                )
             location = DatasetLocation(
                 path=request.path,
                 format="delta",
@@ -512,7 +516,11 @@ def read_delta_table(request: DeltaReadRequest) -> TableLike:
         try:
             overrides = None
             if request.gate is not None:
-                overrides = DatasetLocationOverrides(delta_feature_gate=request.gate)
+                from schema_spec.system import DeltaPolicyBundle
+
+                overrides = DatasetLocationOverrides(
+                    delta=DeltaPolicyBundle(feature_gate=request.gate)
+                )
             location = DatasetLocation(
                 path=request.path,
                 format="delta",
@@ -2823,6 +2831,22 @@ def _delta_cdf_table_provider(
     log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
 ) -> DeltaCdfProviderBundle | None:
+    from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
+
+    def _cdf_spec(value: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec | None:
+        if value is None:
+            return None
+        columns = tuple(value.columns) if value.columns is not None else None
+        return DeltaCdfOptionsSpec(
+            starting_version=value.starting_version,
+            ending_version=value.ending_version,
+            starting_timestamp=value.starting_timestamp,
+            ending_timestamp=value.ending_timestamp,
+            columns=columns,
+            predicate=value.predicate,
+            allow_out_of_range=value.allow_out_of_range,
+        )
+
     storage = merged_storage_options(storage_options, log_storage_options)
     try:
         from datafusion_engine.delta.control_plane import DeltaCdfRequest, delta_cdf_provider
@@ -2833,7 +2857,7 @@ def _delta_cdf_table_provider(
                 storage_options=storage or None,
                 version=None,
                 timestamp=None,
-                options=options,
+                options=_cdf_spec(options),
             )
         )
     except (ImportError, RuntimeError, TypeError, ValueError):

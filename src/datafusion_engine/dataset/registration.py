@@ -985,9 +985,7 @@ def _build_pyarrow_dataset(
 
 def _scan_details(scan: DataFusionScanOptions) -> dict[str, object]:
     return {
-        "partition_cols": [
-            (col, str(dtype)) for col, dtype in scan.partition_cols_pyarrow()
-        ],
+        "partition_cols": [(col, str(dtype)) for col, dtype in scan.partition_cols_pyarrow()],
         "file_sort_order": [list(value) for value in scan.file_sort_order],
         "file_extension": scan.file_extension,
         "parquet_pruning": scan.parquet_pruning,
@@ -2670,8 +2668,7 @@ def _table_schema_contract_payload(
     return {
         "file_schema": schema_to_dict(contract.file_schema),
         "partition_cols": [
-            {"name": name, "dtype": str(dtype)}
-            for name, dtype in contract.partition_cols_pyarrow()
+            {"name": name, "dtype": str(dtype)} for name, dtype in contract.partition_cols_pyarrow()
         ],
         "partition_schema": schema_to_dict(partition_schema)
         if partition_schema is not None

@@ -11,8 +11,11 @@ by spec changes only without pipeline edits.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
+
+import msgspec
+
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from semantics.joins.strategies import JoinStrategyType
@@ -21,8 +24,7 @@ SpanUnit = Literal["byte"]
 JoinHint = Literal["overlap", "contains", "ownership"]
 
 
-@dataclass(frozen=True)
-class SpanBinding:
+class SpanBinding(StructBaseStrict, frozen=True):
     """Bind a semantic span role to concrete source columns."""
 
     start_col: str
@@ -33,8 +35,7 @@ class SpanBinding:
     canonical_span: str = "span"
 
 
-@dataclass(frozen=True)
-class IdDerivation:
+class IdDerivation(StructBaseStrict, frozen=True):
     """Derive an ID from path + span with a stable namespace."""
 
     out_col: str
@@ -46,8 +47,7 @@ class IdDerivation:
     canonical_entity_id: str | None = "entity_id"
 
 
-@dataclass(frozen=True)
-class ForeignKeyDerivation:
+class ForeignKeyDerivation(StructBaseStrict, frozen=True):
     """Derive a foreign-key ID using a reference span."""
 
     out_col: str
@@ -59,22 +59,20 @@ class ForeignKeyDerivation:
     guard_null_if: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class SemanticTableSpec:
+class SemanticTableSpec(StructBaseStrict, frozen=True):
     """Declarative spec for semantic normalization."""
 
     table: str
     path_col: str = "path"
-    primary_span: SpanBinding = field(default_factory=lambda: SpanBinding("bstart", "bend"))
-    entity_id: IdDerivation = field(
+    primary_span: SpanBinding = msgspec.field(default_factory=lambda: SpanBinding("bstart", "bend"))
+    entity_id: IdDerivation = msgspec.field(
         default_factory=lambda: IdDerivation(out_col="entity_id", namespace="entity")
     )
     foreign_keys: tuple[ForeignKeyDerivation, ...] = ()
     text_cols: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class RelationshipSpec:
+class RelationshipSpec(StructBaseStrict, frozen=True):
     """Declarative specification for a semantic relationship.
 
     Relationships connect two normalized tables (left entity table, right symbol

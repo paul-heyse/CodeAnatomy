@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from schema_spec.registration import DatasetRegistration, register_dataset
-from schema_spec.system import ContractRow, make_contract_spec, make_table_spec
+from schema_spec.system import (
+    ContractRow,
+    ValidationPolicySpec,
+    make_contract_spec,
+    make_table_spec,
+)
 from semantics.incremental.registry_rows import DatasetRow
 
 if TYPE_CHECKING:
@@ -20,6 +25,9 @@ def _metadata_spec(row: DatasetRow) -> SchemaMetadataSpec:
     }
     meta.update(row.metadata_extra)
     return SchemaMetadataSpec(schema_metadata=meta)
+
+
+_INCREMENTAL_VALIDATION_POLICY = ValidationPolicySpec(enabled=True, lazy=True, sample=1000)
 
 
 def build_table_spec(row: DatasetRow) -> TableSchemaSpec:
@@ -75,6 +83,7 @@ def build_dataset_spec(row: DatasetRow) -> DatasetSpec:
     registration = DatasetRegistration(
         contract_spec=contract_spec,
         metadata_spec=_metadata_spec(row),
+        dataframe_validation=_INCREMENTAL_VALIDATION_POLICY,
     )
     return register_dataset(table_spec=table_spec, registration=registration)
 

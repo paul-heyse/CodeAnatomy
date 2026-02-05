@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from datafusion_engine.delta.specs import DeltaCdfOptionsSpec, DeltaCommitOptionsSpec
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from serde_msgspec import dumps_msgpack, to_builtins
 
@@ -49,7 +50,7 @@ def schema_ipc_payload(schema: object | None) -> bytes | None:
 
 
 def commit_payload(
-    options: DeltaCommitOptions | None,
+    options: DeltaCommitOptions | DeltaCommitOptionsSpec | None,
 ) -> tuple[
     list[tuple[str, str]] | None,
     str | None,
@@ -86,7 +87,9 @@ def commit_payload(
     )
 
 
-def cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object]:
+def cdf_options_payload(
+    options: DeltaCdfOptions | DeltaCdfOptionsSpec | None,
+) -> dict[str, object]:
     """Return a normalized payload for CDF options.
 
     Returns

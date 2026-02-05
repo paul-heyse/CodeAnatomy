@@ -26,14 +26,14 @@ if TYPE_CHECKING:
         ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
-        DatasetPolicies,
-        DeltaPolicyBundle,
         DeltaCdfPolicy,
         DeltaMaintenancePolicy,
+        DeltaPolicyBundle,
         DeltaScanOptions,
         DeltaSchemaPolicy,
         DeltaWritePolicy,
         ScanPolicyConfig,
+        ValidationPolicySpec,
     )
 
 type DatasetFormat = str
@@ -46,6 +46,7 @@ class DatasetLocationOverrides(StructBaseStrict, frozen=True):
     datafusion_scan: DataFusionScanOptions | None = None
     delta: DeltaPolicyBundle | None = None
     validation: ArrowValidationOptions | None = None
+    dataframe_validation: ValidationPolicySpec | None = None
     table_spec: TableSchemaSpec | None = None
 
 
@@ -457,7 +458,9 @@ def _merge_delta_bundle(
         return base
     if base is None:
         return override
-    return DeltaPolicyBundle(
+    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+
+    return _DeltaPolicyBundle(
         scan=override.scan or base.scan,
         cdf_policy=override.cdf_policy or base.cdf_policy,
         maintenance_policy=override.maintenance_policy or base.maintenance_policy,
@@ -558,7 +561,9 @@ def apply_scan_policy_to_location(
         overrides = msgspec.structs.replace(overrides, datafusion_scan=datafusion_scan)
     if delta_scan is not None:
         if delta_bundle is None:
-            delta_bundle = DeltaPolicyBundle(scan=delta_scan)
+            from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+
+            delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
         else:
             delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
     if delta_bundle is not None:
@@ -616,9 +621,7 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
     delta_cdf_policy = delta_bundle.cdf_policy if delta_bundle is not None else None
     delta_write_policy = delta_bundle.write_policy if delta_bundle is not None else None
     delta_schema_policy = delta_bundle.schema_policy if delta_bundle is not None else None
-    delta_maintenance_policy = (
-        delta_bundle.maintenance_policy if delta_bundle is not None else None
-    )
+    delta_maintenance_policy = delta_bundle.maintenance_policy if delta_bundle is not None else None
     delta_feature_gate = delta_bundle.feature_gate if delta_bundle is not None else None
     delta_constraints = delta_bundle.constraints if delta_bundle is not None else ()
     table_spec = _resolve_table_spec(location, overrides)

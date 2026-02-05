@@ -398,7 +398,10 @@ def _resolve_bootstrap_state(
 ) -> _ResolvedBootstrapState:
     resolved_service_name = service_name or resolve_service_name()
     overrides = options or OtelBootstrapOptions()
-    config = resolve_otel_config(_config_overrides_from_options(overrides))
+    config = resolve_otel_config(
+        None,
+        _config_overrides_from_options(overrides),
+    )
     base_resource = build_resource(
         resolved_service_name,
         ResourceOptions(

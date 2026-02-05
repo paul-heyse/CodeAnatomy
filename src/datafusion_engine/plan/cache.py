@@ -13,6 +13,7 @@ from cache.diskcache_factory import (
     evict_cache_tag,
 )
 from core.fingerprinting import CompositeFingerprint
+from serde_msgspec import StructBaseCompat
 from utils.hashing import CacheKeyBuilder
 
 if TYPE_CHECKING:
@@ -24,8 +25,7 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class PlanProtoCacheEntry:
+class PlanProtoCacheEntry(StructBaseCompat, frozen=True):
     """Cached plan proto payloads keyed by plan identity hash."""
 
     plan_identity_hash: str
@@ -144,8 +144,7 @@ def _plan_proto_cache_key(plan_identity_hash: str) -> str:
 # -----------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class PlanCacheKey:
+class PlanCacheKey(StructBaseCompat, frozen=True):
     """Cache key for Substrait plan bytes."""
 
     profile_hash: str
@@ -214,8 +213,7 @@ class PlanCacheKey:
         return "plan:" + ":".join(parts)
 
 
-@dataclass(frozen=True)
-class PlanCacheEntry:
+class PlanCacheEntry(StructBaseCompat, frozen=True):
     """Cached Substrait plan bytes keyed by profile and Substrait hashes."""
 
     profile_hash: str

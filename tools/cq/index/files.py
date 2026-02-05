@@ -41,6 +41,18 @@ class RepoFileIndex:
     ignore_spec: GitIgnoreSpec
 
 
+@dataclass(frozen=True)
+class UntrackedScanConfig:
+    """Inputs for scanning untracked files."""
+
+    repo_root: Path
+    scope_root: Path
+    tracked: set[str]
+    ignore_spec: GitIgnoreSpec
+    extensions: Sequence[str]
+    explain: bool
+
+
 def build_repo_file_index(repo_context: RepoContext) -> RepoFileIndex:
     """Build repo file index with tracked set and ignore spec.
 
@@ -92,14 +104,15 @@ def tabulate_files(
     untracked_files: set[Path] = set()
     ignored_decisions: list[FileFilterDecision] = []
     for scope_root in scope_roots:
-        files, decisions = _collect_untracked_files(
-            repo_index.repo_root,
-            scope_root,
-            repo_index.tracked,
-            repo_index.ignore_spec,
-            extensions,
+        config = UntrackedScanConfig(
+            repo_root=repo_index.repo_root,
+            scope_root=scope_root,
+            tracked=repo_index.tracked,
+            ignore_spec=repo_index.ignore_spec,
+            extensions=extensions,
             explain=explain,
         )
+        files, decisions = _collect_untracked_files(config)
         untracked_files.update(files)
         ignored_decisions.extend(decisions)
 
@@ -186,59 +199,67 @@ def _path_is_under(rel_path: str, scope_rel: Path) -> bool:
 
 
 def _collect_untracked_files(
-    repo_root: Path,
-    scope_root: Path,
-    tracked: set[str],
-    ignore_spec: GitIgnoreSpec,
-    extensions: Sequence[str],
-    *,
-    explain: bool,
+    config: UntrackedScanConfig,
 ) -> tuple[set[Path], list[FileFilterDecision]]:
     files: set[Path] = set()
     decisions: list[FileFilterDecision] = []
-    if not _is_relative_to(scope_root, repo_root):
+    if not _is_relative_to(config.scope_root, config.repo_root):
         return files, decisions
-    if scope_root.is_file():
-        if _is_candidate_file(scope_root, extensions):
-            rel = scope_root.relative_to(repo_root).as_posix()
-            if rel not in tracked and not ignore_spec.match_file(rel):
-                files.add(scope_root.resolve())
-            elif explain and rel not in tracked:
-                result = ignore_spec.check_file(rel)
-                decisions.append(
-                    FileFilterDecision(
-                        file=rel,
-                        ignored=result.include is False,
-                        ignore_rule_index=result.index,
-                        glob_excluded=False,
-                        scope_excluded=False,
-                    )
-                )
-        return files, decisions
+    if config.scope_root.is_file():
+        return _collect_untracked_file(config)
+    return _collect_untracked_tree(config)
 
-    for path in scope_root.rglob("*"):
+
+def _collect_untracked_file(
+    config: UntrackedScanConfig,
+) -> tuple[set[Path], list[FileFilterDecision]]:
+    files: set[Path] = set()
+    decisions: list[FileFilterDecision] = []
+    if _is_candidate_file(config.scope_root, config.extensions):
+        rel = config.scope_root.relative_to(config.repo_root).as_posix()
+        if rel not in config.tracked and not config.ignore_spec.match_file(rel):
+            files.add(config.scope_root.resolve())
+        elif config.explain and rel not in config.tracked:
+            _record_ignore_decision(decisions, rel, config.ignore_spec)
+    return files, decisions
+
+
+def _collect_untracked_tree(
+    config: UntrackedScanConfig,
+) -> tuple[set[Path], list[FileFilterDecision]]:
+    files: set[Path] = set()
+    decisions: list[FileFilterDecision] = []
+    for path in config.scope_root.rglob("*"):
         if ".git" in path.parts:
             continue
-        if not _is_candidate_file(path, extensions):
+        if not _is_candidate_file(path, config.extensions):
             continue
-        rel = path.relative_to(repo_root).as_posix()
-        if rel in tracked:
+        rel = path.relative_to(config.repo_root).as_posix()
+        if rel in config.tracked:
             continue
-        if ignore_spec.match_file(rel):
-            if explain:
-                result = ignore_spec.check_file(rel)
-                decisions.append(
-                    FileFilterDecision(
-                        file=rel,
-                        ignored=result.include is False,
-                        ignore_rule_index=result.index,
-                        glob_excluded=False,
-                        scope_excluded=False,
-                    )
-                )
+        if config.ignore_spec.match_file(rel):
+            if config.explain:
+                _record_ignore_decision(decisions, rel, config.ignore_spec)
             continue
         files.add(path.resolve())
     return files, decisions
+
+
+def _record_ignore_decision(
+    decisions: list[FileFilterDecision],
+    rel: str,
+    ignore_spec: GitIgnoreSpec,
+) -> None:
+    result = ignore_spec.check_file(rel)
+    decisions.append(
+        FileFilterDecision(
+            file=rel,
+            ignored=result.include is False,
+            ignore_rule_index=result.index,
+            glob_excluded=False,
+            scope_excluded=False,
+        )
+    )
 
 
 def _is_candidate_file(path: Path, extensions: Sequence[str]) -> bool:

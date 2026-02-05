@@ -50,10 +50,12 @@ class TestCliContext:
         assert ctx.toolchain is not None
 
     def test_build_with_env_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test building context with CQ_ROOT env var."""
+        """Test building context ignores CQ_ROOT env var."""
+        from tools.cq.index.repo import resolve_repo_context
+
         monkeypatch.setenv("CQ_ROOT", str(tmp_path))
         ctx = CliContext.build(argv=["test"])
-        assert ctx.root == tmp_path
+        assert ctx.root == resolve_repo_context().repo_root
 
     def test_build_auto_detect(self) -> None:
         """Test building context with auto-detected root."""

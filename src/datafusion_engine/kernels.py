@@ -29,14 +29,14 @@ from datafusion_engine.arrow.metadata import (
     metadata_spec_from_schema,
     ordering_from_schema,
 )
+from serde_msgspec import StructBaseStrict
 
 # =============================================================================
 # Kernel Specification Types (formerly kernel_specs.py)
 # =============================================================================
 
 
-@dataclass(frozen=True)
-class SortKey:
+class SortKey(StructBaseStrict, frozen=True):
     """Sort key specification for deterministic ordering."""
 
     column: str
@@ -51,8 +51,7 @@ type DedupeStrategy = Literal[
 ]
 
 
-@dataclass(frozen=True)
-class DedupeSpec:
+class DedupeSpec(StructBaseStrict, frozen=True):
     """Dedupe semantics for a table."""
 
     keys: tuple[str, ...]
@@ -60,8 +59,7 @@ class DedupeSpec:
     strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
 
 
-@dataclass(frozen=True)
-class IntervalAlignOptions:
+class IntervalAlignOptions(StructBaseStrict, frozen=True):
     """Interval alignment configuration."""
 
     mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
@@ -86,8 +84,7 @@ class IntervalAlignOptions:
     right_suffix: str = "__r"
 
 
-@dataclass(frozen=True)
-class AsofJoinSpec:
+class AsofJoinSpec(StructBaseStrict, frozen=True):
     """As-of join specification for nearest-match joins."""
 
     on: str

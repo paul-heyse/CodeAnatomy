@@ -4,20 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol
 
 from datafusion.expr import Expr
 
-from cpg.kind_catalog import EntityKind
+from cpg.kind_catalog import EdgeKindId, EntityKind, NodeKindId
 from cpg.prop_transforms import (
     expr_context_expr,
     expr_context_value,
     flag_to_bool,
     flag_to_bool_expr,
 )
-
-if TYPE_CHECKING:
-    from cpg.kind_catalog import EdgeKindId, NodeKindId
+from serde_msgspec import StructBaseStrict
 
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
 type PropTransformFn = Callable[[object | None], object | None]
@@ -132,8 +130,7 @@ def filter_fields(
     return selected
 
 
-@dataclass(frozen=True)
-class EdgeEmitSpec:
+class EdgeEmitSpec(StructBaseStrict, frozen=True):
     """Mapping for emitting edges from a relation table."""
 
     edge_kind: EdgeKindId
@@ -146,8 +143,7 @@ class EdgeEmitSpec:
     bend_cols: tuple[str, ...] = ("bend",)
 
 
-@dataclass(frozen=True)
-class NodeEmitSpec:
+class NodeEmitSpec(StructBaseStrict, frozen=True):
     """Spec for emitting anchored nodes."""
 
     node_kind: NodeKindId
@@ -158,8 +154,7 @@ class NodeEmitSpec:
     file_id_cols: tuple[str, ...] = ("file_id",)
 
 
-@dataclass(frozen=True)
-class NodePlanSpec:
+class NodePlanSpec(StructBaseStrict, frozen=True):
     """Spec for emitting a node family from a table."""
 
     name: str
@@ -168,8 +163,7 @@ class NodePlanSpec:
     preprocessor_id: str | None = None
 
 
-@dataclass(frozen=True)
-class PropFieldSpec:
+class PropFieldSpec(StructBaseStrict, frozen=True):
     """Spec for emitting a property from a source column."""
 
     prop_key: str

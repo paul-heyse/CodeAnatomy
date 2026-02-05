@@ -13,7 +13,9 @@ Example query strings:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Literal, cast
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from tools.cq.query.ir import (
     CompositeRule,
@@ -34,6 +36,8 @@ if TYPE_CHECKING:
     from tools.cq.query.ir import EntityType, ExpanderKind, FieldType, RelationalOp, StrictnessMode
 
 JoinType = Literal["used_by", "defines", "raises", "exports"]
+
+_TokenHandler = Callable[[dict[str, str], Any], None]
 
 
 class QueryParseError(ValueError):
@@ -73,6 +77,125 @@ def _invalid_expander_kind_message(kind: str, valid: tuple[str, ...]) -> str:
 
 def _invalid_field_message(field: str, valid: tuple[str, ...]) -> str:
     return f"Invalid field: {field!r}. Valid fields: {', '.join(valid)}"
+
+
+@dataclass
+class _EntityQueryState:
+    entity: EntityType
+    name: str | None = None
+    expand: tuple[Expander, ...] = ()
+    scope: Scope = field(default_factory=Scope)
+    fields: tuple[FieldType, ...] = field(default_factory=tuple)
+    limit: int | None = None
+    explain: bool = False
+    relational: tuple[RelationalConstraint, ...] = ()
+    scope_filter: ScopeFilter | None = None
+    decorator_filter: DecoratorFilter | None = None
+    joins: tuple[JoinConstraint, ...] = ()
+    metavar_filters: tuple[MetaVarFilter, ...] = ()
+    composite: CompositeRule | None = None
+    nth_child: NthChildSpec | None = None
+
+    def build(self) -> Query:
+        return Query(
+            entity=self.entity,
+            name=self.name,
+            expand=self.expand,
+            scope=self.scope,
+            fields=self.fields,
+            limit=self.limit,
+            explain=self.explain,
+            relational=self.relational,
+            scope_filter=self.scope_filter,
+            decorator_filter=self.decorator_filter,
+            joins=self.joins,
+            metavar_filters=self.metavar_filters,
+            composite=self.composite,
+            nth_child=self.nth_child,
+        )
+
+
+@dataclass
+class _PatternQueryState:
+    pattern_spec: PatternSpec
+    scope: Scope = field(default_factory=Scope)
+    fields: tuple[FieldType, ...] = field(default_factory=tuple)
+    limit: int | None = None
+    explain: bool = False
+    relational: tuple[RelationalConstraint, ...] = ()
+    metavar_filters: tuple[MetaVarFilter, ...] = ()
+    composite: CompositeRule | None = None
+    nth_child: NthChildSpec | None = None
+
+    def build(self) -> Query:
+        return Query(
+            pattern_spec=self.pattern_spec,
+            scope=self.scope,
+            fields=self.fields,
+            limit=self.limit,
+            explain=self.explain,
+            relational=self.relational,
+            metavar_filters=self.metavar_filters,
+            composite=self.composite,
+            nth_child=self.nth_child,
+        )
+
+
+def _apply_token_handlers(
+    tokens: dict[str, str],
+    handlers: dict[str, _TokenHandler],
+    order: tuple[str, ...],
+    state: object,
+) -> None:
+    for key in order:
+        handler = handlers.get(key)
+        if handler is not None:
+            handler(tokens, state)
+
+
+def _handle_name(tokens: dict[str, str], state: _EntityQueryState) -> None:
+    state.name = tokens.get("name")
+
+
+def _handle_expand(tokens: dict[str, str], state: _EntityQueryState) -> None:
+    expand_str = tokens.get("expand", "")
+    state.expand = _parse_expanders(expand_str) if expand_str else ()
+
+
+def _handle_scope(tokens: dict[str, str], state: Any) -> None:
+    state.scope = _parse_scope(tokens)
+
+
+def _handle_fields(tokens: dict[str, str], state: Any) -> None:
+    state.fields = _parse_fields(tokens.get("fields", "def"))
+
+
+def _handle_limit(tokens: dict[str, str], state: Any) -> None:
+    limit_str = tokens.get("limit")
+    state.limit = int(limit_str) if limit_str else None
+
+
+def _handle_explain(tokens: dict[str, str], state: Any) -> None:
+    state.explain = tokens.get("explain", "").lower() in {"true", "1", "yes"}
+
+
+_ENTITY_TOKEN_HANDLERS: dict[str, _TokenHandler] = {
+    "name": _handle_name,
+    "expand": _handle_expand,
+    "scope": _handle_scope,
+    "fields": _handle_fields,
+    "limit": _handle_limit,
+    "explain": _handle_explain,
+}
+_ENTITY_HANDLER_ORDER = ("name", "expand", "scope", "fields", "limit", "explain")
+
+_PATTERN_TOKEN_HANDLERS: dict[str, _TokenHandler] = {
+    "scope": _handle_scope,
+    "fields": _handle_fields,
+    "limit": _handle_limit,
+    "explain": _handle_explain,
+}
+_PATTERN_HANDLER_ORDER = ("scope", "fields", "limit", "explain")
 
 
 def parse_query(query_string: str) -> Query:
@@ -163,71 +286,20 @@ def _parse_entity_query(tokens: dict[str, str]) -> Query:
     QueryParseError
         If required entity fields are missing or invalid.
     """
-    # Parse entity (required for entity queries)
     entity_str = tokens.get("entity")
     if not entity_str:
         raise QueryParseError(_MISSING_ENTITY_MESSAGE)
 
-    entity = _parse_entity(entity_str)
-
-    # Parse optional name
-    name = tokens.get("name")
-
-    # Parse expanders
-    expand_str = tokens.get("expand", "")
-    expanders = _parse_expanders(expand_str) if expand_str else ()
-
-    # Parse scope
-    scope = _parse_scope(tokens)
-
-    # Parse fields
-    fields_str = tokens.get("fields", "def")
-    fields = _parse_fields(fields_str)
-
-    # Parse limit
-    limit_str = tokens.get("limit")
-    limit = int(limit_str) if limit_str else None
-
-    # Parse explain
-    explain = tokens.get("explain", "").lower() in {"true", "1", "yes"}
-
-    # Parse relational constraints
-    relational = _parse_relational_constraints(tokens)
-
-    # Parse scope filter
-    scope_filter = _parse_scope_filter(tokens)
-
-    # Parse decorator filter
-    decorator_filter = _parse_decorator_filter(tokens)
-
-    # Parse joins
-    joins = _parse_joins(tokens)
-
-    # Parse metavar filters (for entity queries with relational constraints)
-    metavar_filters = _parse_metavar_filters(tokens)
-
-    # Parse composite rule
-    composite = _parse_composite_rule(tokens)
-
-    # Parse nthChild
-    nth_child = _parse_nth_child(tokens)
-
-    return Query(
-        entity=entity,
-        name=name,
-        expand=expanders,
-        scope=scope,
-        fields=fields,
-        limit=limit,
-        explain=explain,
-        relational=relational,
-        scope_filter=scope_filter,
-        decorator_filter=decorator_filter,
-        joins=joins,
-        metavar_filters=metavar_filters,
-        composite=composite,
-        nth_child=nth_child,
-    )
+    state = _EntityQueryState(entity=_parse_entity(entity_str))
+    _apply_token_handlers(tokens, _ENTITY_TOKEN_HANDLERS, _ENTITY_HANDLER_ORDER, state)
+    state.relational = _parse_relational_constraints(tokens)
+    state.scope_filter = _parse_scope_filter(tokens)
+    state.decorator_filter = _parse_decorator_filter(tokens)
+    state.joins = _parse_joins(tokens)
+    state.metavar_filters = _parse_metavar_filters(tokens)
+    state.composite = _parse_composite_rule(tokens)
+    state.nth_child = _parse_nth_child(tokens)
+    return state.build()
 
 
 def _parse_pattern_query(tokens: dict[str, str]) -> Query:
@@ -241,46 +313,13 @@ def _parse_pattern_query(tokens: dict[str, str]) -> Query:
         Query configured for ast-grep pattern execution.
 
     """
-    # Parse pattern specification (supports both simple and object notation)
-    pattern_spec = _parse_pattern_object(tokens)
-
-    # Parse scope
-    scope = _parse_scope(tokens)
-
-    # Parse fields
-    fields_str = tokens.get("fields", "def")
-    fields = _parse_fields(fields_str)
-
-    # Parse limit
-    limit_str = tokens.get("limit")
-    limit = int(limit_str) if limit_str else None
-
-    # Parse explain
-    explain = tokens.get("explain", "").lower() in {"true", "1", "yes"}
-
-    # Parse relational constraints
-    relational = _parse_relational_constraints(tokens)
-
-    # Parse metavar filters
-    metavar_filters = _parse_metavar_filters(tokens)
-
-    # Parse composite rule
-    composite = _parse_composite_rule(tokens)
-
-    # Parse nthChild
-    nth_child = _parse_nth_child(tokens)
-
-    return Query(
-        pattern_spec=pattern_spec,
-        scope=scope,
-        fields=fields,
-        limit=limit,
-        explain=explain,
-        relational=relational,
-        metavar_filters=metavar_filters,
-        composite=composite,
-        nth_child=nth_child,
-    )
+    state = _PatternQueryState(pattern_spec=_parse_pattern_object(tokens))
+    _apply_token_handlers(tokens, _PATTERN_TOKEN_HANDLERS, _PATTERN_HANDLER_ORDER, state)
+    state.relational = _parse_relational_constraints(tokens)
+    state.metavar_filters = _parse_metavar_filters(tokens)
+    state.composite = _parse_composite_rule(tokens)
+    state.nth_child = _parse_nth_child(tokens)
+    return state.build()
 
 
 def _parse_pattern_object(tokens: dict[str, str]) -> PatternSpec:

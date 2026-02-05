@@ -246,7 +246,11 @@ def read_cdf_changes(
         try:
             overrides = None
             if state.inputs.scan_options is not None:
-                overrides = DatasetLocationOverrides(delta_scan=state.inputs.scan_options)
+                from schema_spec.system import DeltaPolicyBundle
+
+                overrides = DatasetLocationOverrides(
+                    delta=DeltaPolicyBundle(scan=state.inputs.scan_options)
+                )
             location = DatasetLocation(
                 path=str(state.inputs.path),
                 format="delta",

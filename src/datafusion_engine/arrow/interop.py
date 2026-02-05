@@ -16,6 +16,32 @@ class DataTypeLike(Protocol):
     """Protocol for pyarrow.DataType."""
 
 
+def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
+    """Return a concrete pyarrow.DataType for known spec types.
+
+    Returns
+    -------
+    pa.DataType
+        Resolved Arrow data type.
+
+    Raises
+    ------
+    TypeError
+        If the input cannot be coerced into a pyarrow.DataType.
+    """
+    if isinstance(dtype, pa.DataType):
+        return dtype
+    try:
+        from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
+    except ImportError:
+        ArrowTypeBase = ()
+        arrow_type_to_pyarrow = None
+    if ArrowTypeBase and isinstance(dtype, ArrowTypeBase):
+        return arrow_type_to_pyarrow(dtype)
+    msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
+    raise TypeError(msg)
+
+
 @runtime_checkable
 class FieldLike(Protocol):
     """Protocol for pyarrow.Field."""
@@ -784,6 +810,7 @@ __all__ = [
     "concat_tables",
     "dictionary",
     "empty_table_for_schema",
+    "ensure_arrow_dtype",
     "ensure_expression",
     "field",
     "float32",

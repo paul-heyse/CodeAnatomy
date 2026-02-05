@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
 import msgspec
 import pyarrow as pa
@@ -26,15 +26,13 @@ from datafusion_engine.arrow.metadata import (
     dict_field_metadata,
 )
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
+from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.schema.policy import CastErrorPolicy, SchemaTransform
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from serde_msgspec import StructBaseStrict
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
-
-if TYPE_CHECKING:
-    from datafusion_engine.expr.spec import ExprSpec
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+
+import msgspec
 
 from core.config_base import FingerprintableConfig, config_fingerprint
 from datafusion_engine.tables.param import ParamTablePolicy
+from serde_msgspec import StructBaseStrict
 
 
-@dataclass(frozen=True)
-class DiagnosticsPolicy(FingerprintableConfig):
+class DiagnosticsPolicy(StructBaseStrict, FingerprintableConfig, frozen=True):
     """Diagnostics capture policy for pipeline execution."""
 
     capture_datafusion_metrics: bool = True
@@ -50,12 +51,11 @@ class DiagnosticsPolicy(FingerprintableConfig):
         return config_fingerprint(self.fingerprint_payload())
 
 
-@dataclass(frozen=True)
-class PipelinePolicy(FingerprintableConfig):
+class PipelinePolicy(StructBaseStrict, FingerprintableConfig, frozen=True):
     """Centralized pipeline policy for execution and diagnostics."""
 
-    param_table_policy: ParamTablePolicy = field(default_factory=ParamTablePolicy)
-    diagnostics: DiagnosticsPolicy = field(default_factory=DiagnosticsPolicy)
+    param_table_policy: ParamTablePolicy = msgspec.field(default_factory=ParamTablePolicy)
+    diagnostics: DiagnosticsPolicy = msgspec.field(default_factory=DiagnosticsPolicy)
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the pipeline policy.

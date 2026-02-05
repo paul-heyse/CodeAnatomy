@@ -8,7 +8,6 @@ with all other properties derived from standard patterns.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -25,6 +24,7 @@ from schema_spec.system import (
     VirtualFieldSpec,
     make_contract_spec,
 )
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -39,8 +39,7 @@ SpecAccessor = Callable[["SessionContext | None"], DatasetSpec]
 # =============================================================================
 
 
-@dataclass(frozen=True)
-class RelationshipData:
+class RelationshipData(StructBaseStrict, frozen=True):
     """Minimal data defining a relationship - everything else is derived.
 
     Attributes

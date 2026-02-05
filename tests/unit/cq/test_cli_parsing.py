@@ -18,14 +18,14 @@ class TestImpactCommandParsing:
         """Test parsing impact command with required arguments."""
         _cmd, bound, _extra = app.parse_args(["impact", "build_graph", "--param", "root"])
         assert bound.args[0] == "build_graph"  # positional arg
-        assert bound.kwargs["param"] == "root"
+        assert bound.kwargs["opts"].param == "root"
 
     def test_impact_with_depth(self) -> None:
         """Test parsing impact command with depth option."""
         _cmd, bound, _extra = app.parse_args(["impact", "foo", "--param", "bar", "--depth", "10"])
         assert bound.args[0] == "foo"  # positional arg
-        assert bound.kwargs["param"] == "bar"
-        assert bound.kwargs["depth"] == 10
+        assert bound.kwargs["opts"].param == "bar"
+        assert bound.kwargs["opts"].depth == 10
 
     def test_impact_with_format(self) -> None:
         """Test parsing impact command with format option (global option via meta app)."""
@@ -64,9 +64,10 @@ class TestCallsCommandParsing:
             ]
         )
         assert bound.args[0] == "foo"  # positional arg
-        assert bound.kwargs["include"] == ["src/"]
-        assert bound.kwargs["exclude"] == ["tests/"]
-        assert bound.kwargs["limit"] == 50
+        opts = bound.kwargs["opts"]
+        assert opts.include == ["src/"]
+        assert opts.exclude == ["tests/"]
+        assert opts.limit == 50
 
 
 class TestQueryCommandParsing:
@@ -80,7 +81,7 @@ class TestQueryCommandParsing:
     def test_query_with_explain(self) -> None:
         """Test parsing query command with explain option."""
         _cmd, bound, _extra = app.parse_args(["q", "entity=function", "--explain-files"])
-        assert bound.kwargs["explain_files"] is True
+        assert bound.kwargs["opts"].explain_files is True
 
 
 class TestSigImpactCommandParsing:
@@ -97,7 +98,7 @@ class TestSigImpactCommandParsing:
             ]
         )
         assert bound.args[0] == "foo"  # positional arg
-        assert bound.kwargs["to"] == "foo(a, b, *, c=None)"
+        assert bound.kwargs["opts"].to == "foo(a, b, *, c=None)"
 
 
 class TestIndexCommandParsing:
@@ -163,7 +164,7 @@ class TestReportCommandParsing:
             ]
         )
         assert bound.args[0] == "refactor-impact"  # positional arg
-        assert bound.kwargs["target"] == "function:build_graph"
+        assert bound.kwargs["opts"].target == "function:build_graph"
 
     def test_report_with_options(self) -> None:
         """Test parsing report command with various options."""
@@ -182,7 +183,8 @@ class TestReportCommandParsing:
             ]
         )
         assert bound.args[0] == "safety-reliability"  # positional arg
-        assert bound.kwargs["target"] == "class:MyClass"
-        assert bound.kwargs["in_dir"] == "src/"
-        assert bound.kwargs["param"] == "config"
-        assert bound.kwargs["signature"] == "foo(a, b)"
+        opts = bound.kwargs["opts"]
+        assert opts.target == "class:MyClass"
+        assert opts.in_dir == "src/"
+        assert opts.param == "config"
+        assert opts.signature == "foo(a, b)"

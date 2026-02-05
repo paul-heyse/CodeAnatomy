@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
+import msgspec
 from diskcache import Cache, Deque, FanoutCache, Index
 
 from core.config_base import config_fingerprint
+from serde_msgspec import StructBaseStrict
 from utils.env_utils import env_value
 
 type DiskCacheKind = Literal[
@@ -39,8 +41,7 @@ def _default_cache_root() -> Path:
     return Path.home() / ".cache" / "codeanatomy" / "diskcache"
 
 
-@dataclass(frozen=True)
-class DiskCacheSettings:
+class DiskCacheSettings(StructBaseStrict, frozen=True):
     """Settings shared by DiskCache instances."""
 
     size_limit_bytes: int
@@ -99,16 +100,15 @@ class DiskCacheKwargs(TypedDict, total=False):
     sqlite_synchronous: str
 
 
-@dataclass(frozen=True)
-class DiskCacheProfile:
+class DiskCacheProfile(StructBaseStrict, frozen=True):
     """DiskCache profile with per-kind overrides and TTL defaults."""
 
-    root: Path = field(default_factory=_default_cache_root)
-    base_settings: DiskCacheSettings = field(
+    root: Path = msgspec.field(default_factory=_default_cache_root)
+    base_settings: DiskCacheSettings = msgspec.field(
         default_factory=lambda: DiskCacheSettings(size_limit_bytes=2 * 1024 * 1024 * 1024)
     )
-    overrides: Mapping[DiskCacheKind, DiskCacheSettings] = field(default_factory=dict)
-    ttl_seconds: Mapping[DiskCacheKind, float | None] = field(default_factory=dict)
+    overrides: Mapping[DiskCacheKind, DiskCacheSettings] = msgspec.field(default_factory=dict)
+    ttl_seconds: Mapping[DiskCacheKind, float | None] = msgspec.field(default_factory=dict)
 
     def settings_for(self, kind: DiskCacheKind) -> DiskCacheSettings:
         """Return settings for a cache kind.

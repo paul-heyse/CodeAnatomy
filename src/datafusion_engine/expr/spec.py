@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
-from arrow_utils.core.expr_types import ScalarValue
+import msgspec
+
 from datafusion_engine.arrow.interop import ScalarLike
 from datafusion_engine.udf.expr import udf_expr
 from serde_msgspec import StructBaseStrict
@@ -33,26 +34,119 @@ _MIN_MAP_NORMALIZE_SORT_KEYS_ARGS = 3
 _MAX_STRUCT_PICK_FIELDS = 6
 
 
-def _sql_literal(value: ScalarValue) -> str:
+class ScalarLiteralBase(StructBaseStrict, frozen=True, tag=True, tag_field="type"):
+    """Tagged scalar literal specification."""
+
+
+class ScalarNullLiteral(ScalarLiteralBase, tag="null", frozen=True):
+    """Null literal specification."""
+
+
+class ScalarBoolLiteral(ScalarLiteralBase, tag="bool", frozen=True):
+    """Boolean literal specification."""
+
+    value: bool
+
+
+class ScalarIntLiteral(ScalarLiteralBase, tag="int", frozen=True):
+    """Integer literal specification."""
+
+    value: int
+
+
+class ScalarFloatLiteral(ScalarLiteralBase, tag="float", frozen=True):
+    """Float literal specification."""
+
+    value: float
+
+
+class ScalarStringLiteral(ScalarLiteralBase, tag="string", frozen=True):
+    """String literal specification."""
+
+    value: str
+
+
+class ScalarBytesLiteral(ScalarLiteralBase, tag="bytes", frozen=True):
+    """Bytes literal specification."""
+
+    data: bytes
+
+
+ScalarLiteralSpec: TypeAlias = (
+    ScalarNullLiteral
+    | ScalarBoolLiteral
+    | ScalarIntLiteral
+    | ScalarFloatLiteral
+    | ScalarStringLiteral
+    | ScalarBytesLiteral
+)
+ScalarSpecValue: TypeAlias = ScalarLiteralSpec
+
+
+def scalar_literal(
+    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+) -> ScalarLiteralSpec:
+    """Return a tagged scalar literal spec for primitive values."""
+    if isinstance(value, ScalarLiteralBase):
+        return value
     if value is None:
-        return "NULL"
+        return ScalarNullLiteral()
     if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
+        return ScalarBoolLiteral(value=value)
+    if isinstance(value, int):
+        return ScalarIntLiteral(value=value)
+    if isinstance(value, float):
+        return ScalarFloatLiteral(value=value)
     if isinstance(value, bytes):
-        text = value.decode("utf-8", errors="replace")
-        return _sql_literal(text)
+        return ScalarBytesLiteral(data=value)
     if isinstance(value, str):
-        escaped = value.replace("'", "''")
-        return f"'{escaped}'"
+        return ScalarStringLiteral(value=value)
     if isinstance(value, ScalarLike):
-        resolved = value.as_py()
-        if isinstance(resolved, (bool, int, float, str, bytes)) or resolved is None:
-            return _sql_literal(resolved)
-        msg = f"Unsupported literal value: {type(resolved).__name__}."
-        raise TypeError(msg)
+        return scalar_literal(value.as_py())
     msg = f"Unsupported literal value: {type(value).__name__}."
+    raise TypeError(msg)
+
+
+def scalar_literal_value(
+    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+) -> bool | int | float | str | bytes | None:
+    """Return the Python scalar value for a literal spec."""
+    literal = scalar_literal(value)
+    if isinstance(literal, ScalarNullLiteral):
+        return None
+    if isinstance(literal, ScalarBoolLiteral):
+        return literal.value
+    if isinstance(literal, ScalarIntLiteral):
+        return literal.value
+    if isinstance(literal, ScalarFloatLiteral):
+        return literal.value
+    if isinstance(literal, ScalarStringLiteral):
+        return literal.value
+    if isinstance(literal, ScalarBytesLiteral):
+        return literal.data
+    msg = f"Unsupported literal value: {type(literal).__name__}."
+    raise TypeError(msg)
+
+
+def _sql_literal(
+    value: ScalarLiteralSpec | ScalarLike | bool | float | str | bytes | None,
+) -> str:
+    literal = scalar_literal(value)
+    if isinstance(literal, ScalarNullLiteral):
+        return "NULL"
+    if isinstance(literal, ScalarBoolLiteral):
+        return "TRUE" if literal.value else "FALSE"
+    if isinstance(literal, ScalarIntLiteral):
+        return str(literal.value)
+    if isinstance(literal, ScalarFloatLiteral):
+        return str(literal.value)
+    if isinstance(literal, ScalarBytesLiteral):
+        text = literal.data.decode("utf-8", errors="replace")
+        return _sql_literal(text)
+    if isinstance(literal, ScalarStringLiteral):
+        escaped = literal.value.replace("'", "''")
+        return f"'{escaped}'"
+    msg = f"Unsupported literal value: {type(literal).__name__}."
     raise TypeError(msg)
 
 
@@ -66,8 +160,11 @@ class ExprIR(StructBaseStrict, frozen=True):
 
     op: str
     name: str | None = None
-    value: ScalarValue | None = None
+    value: ScalarSpecValue = msgspec.field(default_factory=ScalarNullLiteral)
     args: tuple[ExprIR, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", scalar_literal(self.value))
 
     def to_sql(self) -> str:
         """Return DataFusion SQL expression text for this spec.
@@ -120,7 +217,7 @@ class ExprIR(StructBaseStrict, frozen=True):
         if self.op == "literal":
             from datafusion import lit
 
-            return lit(self.value)
+            return lit(scalar_literal_value(self.value))
         if self.op != "call":
             msg = f"Unsupported ExprIR op: {self.op!r}."
             raise ValueError(msg)
@@ -166,7 +263,7 @@ def _validate_call_name(name: str, args: Sequence[object]) -> None:
 
 
 def _literal_prefix(args: Sequence[ExprIR], *, name: str) -> str:
-    prefix = args[0].value
+    prefix = scalar_literal_value(args[0].value)
     if not isinstance(prefix, str):
         msg = f"{name} expects a literal string prefix."
         raise TypeError(msg)
@@ -177,7 +274,7 @@ def _literal_string_arg(args: Sequence[ExprIR], *, name: str, index: int) -> str
     if not args:
         msg = f"{name} expects a literal string argument."
         raise ValueError(msg)
-    literal = args[index].value
+    literal = scalar_literal_value(args[index].value)
     if not isinstance(literal, str):
         msg = f"{name} expects a literal string argument."
         raise TypeError(msg)
@@ -188,7 +285,7 @@ def _literal_bool_arg(args: Sequence[ExprIR], *, name: str, index: int) -> bool:
     if not args:
         msg = f"{name} expects a literal boolean argument."
         raise ValueError(msg)
-    literal = args[index].value
+    literal = scalar_literal_value(args[index].value)
     if not isinstance(literal, bool):
         msg = f"{name} expects a literal boolean argument."
         raise TypeError(msg)
@@ -473,10 +570,8 @@ def _expr_lead_window(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 def _window_offset(ir_args: Sequence[ExprIR], *, index: int, default: int) -> int:
     resolved = default
     if len(ir_args) > index:
-        raw = ir_args[index].value
+        raw = scalar_literal_value(ir_args[index].value)
         if raw is not None:
-            if isinstance(raw, ScalarLike):
-                raw = raw.as_py()
             if isinstance(raw, bool):
                 return resolved
             if isinstance(raw, int):
@@ -659,4 +754,10 @@ class ExprSpec(StructBaseStrict, frozen=True):
         raise ValueError(msg)
 
 
-__all__ = ["ExprIR", "ExprSpec"]
+__all__ = [
+    "ExprIR",
+    "ExprSpec",
+    "ScalarLiteralSpec",
+    "ScalarSpecValue",
+    "scalar_literal",
+]

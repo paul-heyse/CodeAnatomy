@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict, Unpack
 
+from tools.cq.cli_app.options import CommonFilters
+from tools.cq.core.structs import CqStruct
 from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
@@ -14,8 +15,45 @@ if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
 
-@dataclass
-class CliContext:
+class CliContextKwargs(TypedDict, total=False):
+    """Keyword overrides for CLI context construction."""
+
+    root: Path | None
+    verbose: int
+    output_format: OutputFormat | None
+    artifact_dir: Path | None
+    save_artifact: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CliContextOptions:
+    """Optional CLI context overrides."""
+
+    root: Path | None = None
+    verbose: int = 0
+    output_format: OutputFormat | None = None
+    artifact_dir: Path | None = None
+    save_artifact: bool = True
+
+    @classmethod
+    def from_kwargs(cls, kwargs: CliContextKwargs) -> CliContextOptions:
+        """Build options from legacy keyword arguments.
+
+        Returns
+        -------
+        CliContextOptions
+            Normalized option bundle.
+        """
+        return cls(
+            root=kwargs.get("root"),
+            verbose=int(kwargs.get("verbose", 0)),
+            output_format=kwargs.get("output_format"),
+            artifact_dir=kwargs.get("artifact_dir"),
+            save_artifact=bool(kwargs.get("save_artifact", True)),
+        )
+
+
+class CliContext(CqStruct, frozen=True):
     """Runtime context for CLI commands.
 
     Parameters
@@ -48,12 +86,8 @@ class CliContext:
     def build(
         cls,
         argv: list[str],
-        root: Path | None = None,
-        verbose: int = 0,
-        output_format: OutputFormat | None = None,
-        artifact_dir: Path | None = None,
-        *,
-        save_artifact: bool = True,
+        options: CliContextOptions | None = None,
+        **kwargs: Unpack[CliContextKwargs],
     ) -> CliContext:
         """Build a CLI context from arguments.
 
@@ -61,6 +95,8 @@ class CliContext:
         ----------
         argv
             Command-line arguments.
+        options
+            Pre-constructed CLI context options.
         root
             Optional explicit repository root.
         verbose
@@ -76,17 +112,25 @@ class CliContext:
         -------
         CliContext
             Resolved context.
+
+        Raises
+        ------
+        ValueError
+            If both options and legacy keyword overrides are provided.
         """
         from tools.cq.core.toolchain import Toolchain
 
-        # Resolve root from explicit arg, env var, or auto-detect
+        if options is None:
+            options = CliContextOptions.from_kwargs(kwargs)
+        elif kwargs:
+            msg = "Pass either options or legacy keyword overrides, not both."
+            raise ValueError(msg)
+
+        # Resolve root from explicit arg or auto-detect
+        root = options.root
         if root is None:
-            env_root = os.environ.get("CQ_ROOT")
-            if env_root:
-                root = Path(env_root)
-            else:
-                repo_context = resolve_repo_context()
-                root = repo_context.repo_root
+            repo_context = resolve_repo_context()
+            root = repo_context.repo_root
 
         root = root.resolve()
         toolchain = Toolchain.detect()
@@ -95,55 +139,17 @@ class CliContext:
             argv=argv,
             root=root,
             toolchain=toolchain,
-            verbose=verbose,
-            output_format=output_format,
-            artifact_dir=artifact_dir,
-            save_artifact=save_artifact,
+            verbose=options.verbose,
+            output_format=options.output_format,
+            artifact_dir=options.artifact_dir,
+            save_artifact=options.save_artifact,
         )
 
 
-@dataclass
-class FilterConfig:
-    """Configuration for result filtering.
-
-    Parameters
-    ----------
-    include
-        File include patterns.
-    exclude
-        File exclude patterns.
-    impact
-        Impact bucket filters.
-    confidence
-        Confidence bucket filters.
-    severity
-        Severity level filters.
-    limit
-        Maximum number of results.
-    """
-
-    include: list[str] = field(default_factory=list)
-    exclude: list[str] = field(default_factory=list)
-    impact: list[str] = field(default_factory=list)
-    confidence: list[str] = field(default_factory=list)
-    severity: list[str] = field(default_factory=list)
-    limit: int | None = None
-
-    @property
-    def has_filters(self) -> bool:
-        """Check if any filters are configured."""
-        return bool(
-            self.include
-            or self.exclude
-            or self.impact
-            or self.confidence
-            or self.severity
-            or self.limit is not None
-        )
+FilterConfig = CommonFilters
 
 
-@dataclass
-class CliResult:
+class CliResult(CqStruct, frozen=True):
     """Result from a CLI command execution.
 
     Parameters

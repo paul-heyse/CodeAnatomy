@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -147,6 +148,15 @@ class ImportRequest(msgspec.Struct, frozen=True):
     argv: list[str]
     cycles: bool = False
     module: str | None = None
+
+
+@dataclass(frozen=True)
+class ImportContext:
+    """Execution context for imports analysis."""
+
+    request: ImportRequest
+    deps: dict[str, ModuleDeps]
+    all_imports: list[ImportInfo]
 
 
 def _file_to_module(file: str) -> str:
@@ -489,6 +499,102 @@ def _filter_to_module(
     return filtered_deps, filtered_imports
 
 
+def _prepare_import_context(request: ImportRequest) -> ImportContext:
+    deps, all_imports = _collect_imports(request.root)
+    if request.module:
+        deps, all_imports = _filter_to_module(deps, all_imports, request.module)
+    return ImportContext(request=request, deps=deps, all_imports=all_imports)
+
+
+def _build_imports_summary(
+    ctx: ImportContext,
+    *,
+    external_deps: set[str],
+    internal_deps: set[str],
+    cycles_found: int,
+) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "total_files": len(ctx.deps),
+        "total_imports": len(ctx.all_imports),
+        "internal_dependencies": len(internal_deps),
+        "external_dependencies": len(external_deps),
+    }
+    if ctx.request.module:
+        summary["module_filter"] = ctx.request.module
+    if ctx.request.cycles:
+        summary["cycles_found"] = cycles_found
+    return summary
+
+
+def _build_imports_scoring(
+    ctx: ImportContext,
+    *,
+    max_cycle_len: int,
+) -> dict[str, object]:
+    imp_signals = ImpactSignals(
+        sites=len(ctx.all_imports),
+        files=len(ctx.deps),
+        depth=max_cycle_len,
+        breakages=0,
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    return {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+
+
+def _build_imports_result(
+    ctx: ImportContext,
+    *,
+    started_ms: float,
+) -> CqResult:
+    run = mk_runmeta(
+        "imports",
+        ctx.request.argv,
+        str(ctx.request.root),
+        started_ms,
+        ctx.request.tc.to_dict(),
+    )
+    result = mk_result(run)
+
+    internal_prefix = _resolve_internal_prefix(ctx.deps)
+    external_deps, internal_deps = _partition_dependencies(ctx.all_imports, internal_prefix)
+
+    found_cycles: list[list[str]] = []
+    max_cycle_len = 0
+    if ctx.request.cycles:
+        found_cycles = _find_import_cycles(ctx.deps, internal_prefix)
+        max_cycle_len = max((len(cycle) for cycle in found_cycles), default=0)
+
+    result.summary = _build_imports_summary(
+        ctx,
+        external_deps=external_deps,
+        internal_deps=internal_deps,
+        cycles_found=len(found_cycles),
+    )
+
+    scoring_details = _build_imports_scoring(ctx, max_cycle_len=max_cycle_len)
+
+    if ctx.request.cycles:
+        _append_cycle_section(result, found_cycles, scoring_details)
+
+    _append_external_section(result, ctx.all_imports, external_deps, scoring_details)
+    relative_imports = [imp for imp in ctx.all_imports if imp.is_relative]
+    _append_relative_section(result, relative_imports, scoring_details)
+    if ctx.request.module:
+        _append_module_focus(result, ctx.deps, ctx.request.module, scoring_details)
+    _append_import_evidence(result, ctx.all_imports, scoring_details)
+
+    return result
+
+
 def cmd_imports(request: ImportRequest) -> CqResult:
     """Analyze import structure and optionally detect cycles.
 
@@ -503,61 +609,5 @@ def cmd_imports(request: ImportRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
-    deps, all_imports = _collect_imports(request.root)
-    run = mk_runmeta("imports", request.argv, str(request.root), started, request.tc.to_dict())
-    result = mk_result(run)
-
-    # Filter to module if specified
-    if request.module:
-        deps, all_imports = _filter_to_module(deps, all_imports, request.module)
-
-    internal_prefix = _resolve_internal_prefix(deps)
-    external_deps, internal_deps = _partition_dependencies(all_imports, internal_prefix)
-
-    result.summary = {
-        "total_files": len(deps),
-        "total_imports": len(all_imports),
-        "internal_dependencies": len(internal_deps),
-        "external_dependencies": len(external_deps),
-    }
-
-    if request.module:
-        result.summary["module_filter"] = request.module
-
-    # Compute scoring signals
-    max_cycle_len = 0
-    found_cycles: list[list[str]] = []
-    if request.cycles:
-        found_cycles = _find_import_cycles(deps, internal_prefix)
-        result.summary["cycles_found"] = len(found_cycles)
-        max_cycle_len = max((len(c) for c in found_cycles), default=0)
-
-    imp_signals = ImpactSignals(
-        sites=len(all_imports),
-        files=len(deps),
-        depth=max_cycle_len,
-        breakages=0,
-        ambiguities=0,
-    )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
-
-    if request.cycles:
-        _append_cycle_section(result, found_cycles, scoring_details)
-
-    _append_external_section(result, all_imports, external_deps, scoring_details)
-    relative_imports = [imp for imp in all_imports if imp.is_relative]
-    _append_relative_section(result, relative_imports, scoring_details)
-    if request.module:
-        _append_module_focus(result, deps, request.module, scoring_details)
-    _append_import_evidence(result, all_imports, scoring_details)
-
-    return result
+    ctx = _prepare_import_context(request)
+    return _build_imports_result(ctx, started_ms=started)

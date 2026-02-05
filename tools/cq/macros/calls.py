@@ -136,6 +136,42 @@ class CallSite(msgspec.Struct):
     context_snippet: str | None = None
 
 
+@dataclass(frozen=True)
+class CallsContext:
+    """Execution context for the calls macro."""
+
+    tc: Toolchain
+    root: Path
+    argv: list[str]
+    function_name: str
+
+
+@dataclass(frozen=True)
+class CallAnalysisSummary:
+    """Derived analysis aggregates for call sites."""
+
+    arg_shapes: Counter[str]
+    kwarg_usage: Counter[str]
+    forwarding_count: int
+    contexts: Counter[str]
+    hazard_counts: Counter[str]
+
+
+@dataclass(frozen=True)
+class CallSiteBuildContext:
+    """Cached context for call-site construction from records."""
+
+    root: Path
+    rel_path: str
+    source: str
+    source_lines: list[str]
+    def_lines: list[int]
+    total_lines: int
+    tree: ast.AST
+    call_index: dict[tuple[int, int], ast.Call]
+    function_name: str
+
+
 def _get_containing_function(tree: ast.AST, lineno: int) -> str:
     """Find the function/method containing a line.
 
@@ -695,58 +731,70 @@ def _collect_call_sites_from_records(
             tree = ast.parse(source, filename=rel_path)
         except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
             continue
-        # Split source for snippet extraction and context window computation
         source_lines = source.splitlines()
-        def_lines = find_def_lines(filepath)
-        total_lines = len(source_lines)
-        call_index = _build_call_index(tree)
+        ctx = CallSiteBuildContext(
+            root=root,
+            rel_path=rel_path,
+            source=source,
+            source_lines=source_lines,
+            def_lines=find_def_lines(filepath),
+            total_lines=len(source_lines),
+            tree=tree,
+            call_index=_build_call_index(tree),
+            function_name=function_name,
+        )
         for record in file_records:
-            call_node = call_index.get((record.start_line, record.start_col))
-            if call_node is None:
-                call_node = _parse_call_expr(record.text)
-            if call_node is None:
-                continue
-            if not _matches_target_expr(call_node.func, function_name):
-                continue
-            info = _analyze_call(call_node)
-            context = _get_containing_function(tree, record.start_line)
-            callee, _is_method, receiver = _get_call_name(call_node.func)
-            hazards = _detect_hazards(call_node, info)
-            # Compute enrichment, context window, and snippet
-            enrichment = _enrich_call_site(source, context, rel_path)
-            context_window = _compute_context_window(record.start_line, def_lines, total_lines)
-            context_snippet = _extract_context_snippet(
-                source_lines,
-                context_window["start_line"],
-                context_window["end_line"],
-            )
-            site = CallSite(
-                file=rel_path,
-                line=record.start_line,
-                col=record.start_col,
-                num_args=info["num_args"],
-                num_kwargs=info["num_kwargs"],
-                kwargs=info["kwargs"],
-                has_star_args=info["has_star_args"],
-                has_star_kwargs=info["has_star_kwargs"],
-                context=context,
-                arg_preview=info["arg_preview"],
-                callee=callee,
-                receiver=receiver,
-                resolution_confidence="unresolved",
-                resolution_path="",
-                binding="unresolved",
-                target_names=[],
-                call_id=uuid7_str(),
-                hazards=hazards,
-                symtable_info=enrichment.get("symtable"),
-                bytecode_info=enrichment.get("bytecode"),
-                context_window=context_window,
-                context_snippet=context_snippet,
-            )
-            all_sites.append(site)
+            site = _build_call_site_from_record(ctx, record)
+            if site is not None:
+                all_sites.append(site)
     files_with_calls = len({site.file for site in all_sites})
     return all_sites, files_with_calls
+
+
+def _build_call_site_from_record(
+    ctx: CallSiteBuildContext,
+    record: SgRecord,
+) -> CallSite | None:
+    call_node = ctx.call_index.get((record.start_line, record.start_col))
+    if call_node is None:
+        call_node = _parse_call_expr(record.text)
+    if call_node is None or not _matches_target_expr(call_node.func, ctx.function_name):
+        return None
+    info = _analyze_call(call_node)
+    context = _get_containing_function(ctx.tree, record.start_line)
+    callee, _is_method, receiver = _get_call_name(call_node.func)
+    hazards = _detect_hazards(call_node, info)
+    enrichment = _enrich_call_site(ctx.source, context, ctx.rel_path)
+    context_window = _compute_context_window(record.start_line, ctx.def_lines, ctx.total_lines)
+    context_snippet = _extract_context_snippet(
+        ctx.source_lines,
+        context_window["start_line"],
+        context_window["end_line"],
+    )
+    return CallSite(
+        file=ctx.rel_path,
+        line=record.start_line,
+        col=record.start_col,
+        num_args=info["num_args"],
+        num_kwargs=info["num_kwargs"],
+        kwargs=info["kwargs"],
+        has_star_args=info["has_star_args"],
+        has_star_kwargs=info["has_star_kwargs"],
+        context=context,
+        arg_preview=info["arg_preview"],
+        callee=callee,
+        receiver=receiver,
+        resolution_confidence="unresolved",
+        resolution_path="",
+        binding="unresolved",
+        target_names=[],
+        call_id=uuid7_str(),
+        hazards=hazards,
+        symtable_info=enrichment.get("symtable"),
+        bytecode_info=enrichment.get("bytecode"),
+        context_window=context_window,
+        context_snippet=context_snippet,
+    )
 
 
 def _analyze_sites(
@@ -1083,6 +1131,108 @@ def _build_call_scoring(
     }
 
 
+def _build_calls_summary(
+    function_name: str,
+    scan_result: CallScanResult,
+) -> dict[str, object]:
+    return {
+        "function": function_name,
+        "signature": scan_result.signature_info,
+        "total_sites": len(scan_result.all_sites),
+        "files_with_calls": scan_result.files_with_calls,
+        "total_py_files": scan_result.total_py_files,
+        "candidate_files": len(scan_result.candidate_files),
+        "scanned_files": len(scan_result.scan_files),
+        "call_records": len(scan_result.call_records),
+        "rg_candidates": scan_result.rg_candidates,
+        "scan_method": "ast-grep" if not scan_result.used_fallback else "rpygrep",
+    }
+
+
+def _summarize_sites(all_sites: list[CallSite]) -> CallAnalysisSummary:
+    arg_shapes, kwarg_usage, forwarding_count, contexts, hazard_counts = _analyze_sites(all_sites)
+    return CallAnalysisSummary(
+        arg_shapes=arg_shapes,
+        kwarg_usage=kwarg_usage,
+        forwarding_count=forwarding_count,
+        contexts=contexts,
+        hazard_counts=hazard_counts,
+    )
+
+
+def _append_calls_findings(
+    result: CqResult,
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    analysis: CallAnalysisSummary,
+    scoring_details: dict[str, object],
+) -> None:
+    function_name = ctx.function_name
+    all_sites = scan_result.all_sites
+
+    result.key_findings.append(
+        Finding(
+            category="summary",
+            message=(
+                f"Found {len(all_sites)} calls to {function_name} across "
+                f"{scan_result.files_with_calls} files"
+            ),
+            severity="info",
+            details=DetailPayload.from_legacy(dict(scoring_details)),
+        )
+    )
+
+    if analysis.forwarding_count > 0:
+        result.key_findings.append(
+            Finding(
+                category="forwarding",
+                message=f"{analysis.forwarding_count} calls use *args/**kwargs forwarding",
+                severity="warning",
+                details=DetailPayload.from_legacy(dict(scoring_details)),
+            )
+        )
+
+    _add_shape_section(result, analysis.arg_shapes, scoring_details)
+    _add_kw_section(result, analysis.kwarg_usage, scoring_details)
+    _add_context_section(result, analysis.contexts, scoring_details)
+    _add_hazard_section(result, analysis.hazard_counts, scoring_details)
+    _add_sites_section(result, function_name, all_sites, scoring_details)
+    _add_evidence(result, function_name, all_sites, scoring_details)
+
+
+def _build_calls_result(
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    *,
+    started_ms: float,
+) -> CqResult:
+    run = mk_runmeta("calls", ctx.argv, str(ctx.root), started_ms, ctx.tc.to_dict())
+    result = mk_result(run)
+
+    result.summary = _build_calls_summary(ctx.function_name, scan_result)
+
+    if not scan_result.all_sites:
+        result.key_findings.append(
+            Finding(
+                category="info",
+                message=f"No call sites found for '{ctx.function_name}'",
+                severity="info",
+            )
+        )
+        return result
+
+    analysis = _summarize_sites(scan_result.all_sites)
+    scoring_details = _build_call_scoring(
+        scan_result.all_sites,
+        scan_result.files_with_calls,
+        analysis.forwarding_count,
+        analysis.hazard_counts,
+        used_fallback=scan_result.used_fallback,
+    )
+    _append_calls_findings(result, ctx, scan_result, analysis, scoring_details)
+    return result
+
+
 def cmd_calls(
     tc: Toolchain,
     root: Path,
@@ -1108,82 +1258,11 @@ def cmd_calls(
         Analysis result.
     """
     started = ms()
-    root_path = Path(root)
-
-    run = mk_runmeta("calls", argv, str(root_path), started, tc.to_dict())
-    result = mk_result(run)
-
-    scan_result = _scan_call_sites(root_path, function_name)
-    all_sites = scan_result.all_sites
-
-    result.summary = {
-        "function": function_name,
-        "signature": scan_result.signature_info,
-        "total_sites": len(all_sites),
-        "files_with_calls": scan_result.files_with_calls,
-        "total_py_files": scan_result.total_py_files,
-        "candidate_files": len(scan_result.candidate_files),
-        "scanned_files": len(scan_result.scan_files),
-        "call_records": len(scan_result.call_records),
-        "rg_candidates": scan_result.rg_candidates,
-        "scan_method": "ast-grep" if not scan_result.used_fallback else "rpygrep",
-    }
-
-    if not all_sites:
-        result.key_findings.append(
-            Finding(
-                category="info",
-                message=f"No call sites found for '{function_name}'",
-                severity="info",
-            )
-        )
-        return result
-
-    (
-        arg_shapes,
-        kwarg_usage,
-        forwarding_count,
-        contexts,
-        hazard_counts,
-    ) = _analyze_sites(all_sites)
-
-    # Compute scoring signals
-    scoring_details = _build_call_scoring(
-        all_sites,
-        scan_result.files_with_calls,
-        forwarding_count,
-        hazard_counts,
-        used_fallback=scan_result.used_fallback,
+    ctx = CallsContext(
+        tc=tc,
+        root=Path(root),
+        argv=argv,
+        function_name=function_name,
     )
-
-    # Key findings
-    result.key_findings.append(
-        Finding(
-            category="summary",
-            message=(
-                f"Found {len(all_sites)} calls to {function_name} across "
-                f"{scan_result.files_with_calls} files"
-            ),
-            severity="info",
-            details=DetailPayload.from_legacy(dict(scoring_details)),
-        )
-    )
-
-    if forwarding_count > 0:
-        result.key_findings.append(
-            Finding(
-                category="forwarding",
-                message=f"{forwarding_count} calls use *args/**kwargs forwarding",
-                severity="warning",
-                details=DetailPayload.from_legacy(dict(scoring_details)),
-            )
-        )
-
-    _add_shape_section(result, arg_shapes, scoring_details)
-    _add_kw_section(result, kwarg_usage, scoring_details)
-    _add_context_section(result, contexts, scoring_details)
-    _add_hazard_section(result, hazard_counts, scoring_details)
-    _add_sites_section(result, function_name, all_sites, scoring_details)
-    _add_evidence(result, function_name, all_sites, scoring_details)
-
-    return result
+    scan_result = _scan_call_sites(ctx.root, ctx.function_name)
+    return _build_calls_result(ctx, scan_result, started_ms=started)

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 import pyarrow as pa
 import rustworkx as rx
 
@@ -850,7 +851,7 @@ def _plan_signature_and_diagnostics(
     centrality = task_dependency_betweenness_centrality(reduction.reduced_graph)
     bridge_edges = task_dependency_bridge_edges(reduction.reduced_graph)
     articulation_tasks = task_dependency_articulation_tasks(reduction.reduced_graph)
-    enriched = replace(
+    enriched = msgspec.structs.replace(
         diagnostics,
         full_graph_signature=signature,
         reduced_graph_signature=reduction.reduced_signature,

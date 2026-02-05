@@ -25,6 +25,7 @@ from datafusion_engine.schema.introspection import table_constraint_rows
 from datafusion_engine.schema.spec_protocol import ArrowFieldSpec, TableSchemaSpec
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import sql_options_for_profile
+from serde_msgspec import StructBaseStrict
 from validation.violations import ValidationViolation, ViolationType
 
 if TYPE_CHECKING:
@@ -71,8 +72,7 @@ def _constraints_from_spec(spec: TableSchemaSpec) -> TableConstraints:
     )
 
 
-@dataclass(frozen=True)
-class ArrowValidationOptions:
+class ArrowValidationOptions(StructBaseStrict, frozen=True):
     """Options for DataFusion-backed table validation."""
 
     strict: bool | Literal["filter"] = "filter"

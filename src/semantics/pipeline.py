@@ -1042,37 +1042,81 @@ def _cpg_output_view_specs(
 
     session_runtime = runtime_profile.session_runtime()
 
-    def _wrap_cpg_builder(builder: Callable[[SessionRuntime], DataFrame]) -> DataFrameBuilder:
+    def _maybe_validate_view_df(
+        view_name: str,
+        df: DataFrame,
+        *,
+        profile: DataFusionRuntimeProfile | None,
+    ) -> DataFrame:
+        try:
+            from semantics.catalog.dataset_specs import dataset_spec
+        except Exception:  # noqa: BLE001
+            return df
+        try:
+            spec = dataset_spec(view_name)
+        except KeyError:
+            return df
+        policy = spec.policies.dataframe_validation
+        if policy is None or not policy.enabled:
+            return df
+        from schema_spec.pandera_bridge import validate_dataframe
+
+        try:
+            validate_dataframe(df, schema_spec=spec.table_spec, policy=policy)
+        except Exception as exc:
+            if profile is not None and profile.diagnostics.diagnostics_sink is not None:
+                from obs.diagnostics import record_dataframe_validation_error
+
+                record_dataframe_validation_error(
+                    profile.diagnostics.diagnostics_sink,
+                    name=view_name,
+                    error=exc,
+                    policy=policy,
+                )
+            raise
+        return df
+
+    def _wrap_cpg_builder(
+        view_name: str,
+        builder: Callable[[SessionRuntime], DataFrame],
+    ) -> DataFrameBuilder:
         def _builder(inner_ctx: SessionContext) -> DataFrame:
             _ = inner_ctx
-            return builder(session_runtime)
+            df = builder(session_runtime)
+            return _maybe_validate_view_df(view_name, df, profile=runtime_profile)
 
         return _builder
 
     return [
         (
             canonical_output_name("cpg_nodes"),
-            _wrap_cpg_builder(build_cpg_nodes_df),
+            _wrap_cpg_builder(canonical_output_name("cpg_nodes"), build_cpg_nodes_df),
         ),
         (
             canonical_output_name("cpg_edges"),
-            _wrap_cpg_builder(build_cpg_edges_df),
+            _wrap_cpg_builder(canonical_output_name("cpg_edges"), build_cpg_edges_df),
         ),
         (
             canonical_output_name("cpg_props"),
-            _wrap_cpg_builder(build_cpg_props_df),
+            _wrap_cpg_builder(canonical_output_name("cpg_props"), build_cpg_props_df),
         ),
         (
             canonical_output_name("cpg_props_map"),
-            _wrap_cpg_builder(build_cpg_props_map_df),
+            _wrap_cpg_builder(canonical_output_name("cpg_props_map"), build_cpg_props_map_df),
         ),
         (
             canonical_output_name("cpg_edges_by_src"),
-            _wrap_cpg_builder(build_cpg_edges_by_src_df),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_edges_by_src"),
+                build_cpg_edges_by_src_df,
+            ),
         ),
         (
             canonical_output_name("cpg_edges_by_dst"),
-            _wrap_cpg_builder(build_cpg_edges_by_dst_df),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_edges_by_dst"),
+                build_cpg_edges_by_dst_df,
+            ),
         ),
     ]
 
@@ -1529,6 +1573,7 @@ def _semantic_output_locations(
         Mapping of view name to dataset location.
     """
     from datafusion_engine.dataset.registry import DatasetLocation
+    from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_specs import dataset_spec
 
     storage_options = (
@@ -1546,10 +1591,12 @@ def _semantic_output_locations(
             storage_options=storage_options,
             dataset_spec=spec,
             overrides=DatasetLocationOverrides(
-                delta_write_policy=spec.delta_write_policy,
-                delta_schema_policy=spec.delta_schema_policy,
-                delta_maintenance_policy=spec.delta_maintenance_policy,
-                delta_feature_gate=spec.delta_feature_gate,
+                delta=DeltaPolicyBundle(
+                    write_policy=spec.delta_write_policy,
+                    schema_policy=spec.delta_schema_policy,
+                    maintenance_policy=spec.delta_maintenance_policy,
+                    feature_gate=spec.delta_feature_gate,
+                ),
             ),
         )
     return output_locations

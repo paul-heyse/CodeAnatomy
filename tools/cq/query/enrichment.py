@@ -483,40 +483,57 @@ def filter_by_scope(
         scope_info = enricher.enrich_function_finding(finding, record)
         if not scope_info:
             # No scope info available - include by default unless strict filter
-            if scope_filter.scope_type is None:
+            if _include_without_scope(scope_filter):
                 filtered.append(finding)
             continue
 
-        # Check scope type filter
-        if scope_filter.scope_type:
-            scope_type = scope_filter.scope_type.lower()
-            if scope_type == "closure" and not scope_info.get("is_closure"):
-                continue
-            if scope_type == "nested" and not scope_info.get("is_nested"):
-                continue
-            if scope_type == "toplevel" and scope_info.get("is_nested"):
-                continue
-
-        # Check captures filter
-        if scope_filter.captures:
-            free_vars = scope_info.get("free_vars", [])
-            if not isinstance(free_vars, list):
-                free_vars = []
-            if scope_filter.captures not in free_vars:
-                continue
-
-        # Check has_cells filter
-        if scope_filter.has_cells is not None:
-            cell_vars = scope_info.get("cell_vars", [])
-            if not isinstance(cell_vars, list):
-                cell_vars = []
-            has_cells = len(cell_vars) > 0
-            if scope_filter.has_cells != has_cells:
-                continue
+        if not _matches_scope_type(scope_filter, scope_info):
+            continue
+        if not _matches_captures(scope_filter, scope_info):
+            continue
+        if not _matches_cells(scope_filter, scope_info):
+            continue
 
         filtered.append(finding)
 
     return filtered
+
+
+def _include_without_scope(scope_filter: ScopeFilter) -> bool:
+    return scope_filter.scope_type is None
+
+
+def _matches_scope_type(scope_filter: ScopeFilter, scope_info: dict[str, object]) -> bool:
+    if not scope_filter.scope_type:
+        return True
+    scope_type = scope_filter.scope_type.lower()
+    is_closure = bool(scope_info.get("is_closure"))
+    is_nested = bool(scope_info.get("is_nested"))
+    if scope_type == "closure":
+        return is_closure
+    if scope_type == "nested":
+        return is_nested
+    if scope_type == "toplevel":
+        return not is_nested
+    return True
+
+
+def _get_scope_list(scope_info: dict[str, object], key: str) -> list[str]:
+    value = scope_info.get(key, [])
+    return value if isinstance(value, list) else []
+
+
+def _matches_captures(scope_filter: ScopeFilter, scope_info: dict[str, object]) -> bool:
+    if not scope_filter.captures:
+        return True
+    return scope_filter.captures in _get_scope_list(scope_info, "free_vars")
+
+
+def _matches_cells(scope_filter: ScopeFilter, scope_info: dict[str, object]) -> bool:
+    if scope_filter.has_cells is None:
+        return True
+    cell_vars = _get_scope_list(scope_info, "cell_vars")
+    return scope_filter.has_cells == bool(cell_vars)
 
 
 def extract_decorators_from_function(source: str, lineno: int) -> list[str]:

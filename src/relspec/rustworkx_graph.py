@@ -14,6 +14,7 @@ import rustworkx as rx
 from datafusion_engine.arrow.schema import version_field
 from relspec.errors import RelspecValidationError
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
+from serde_msgspec import StructBaseStrict
 from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
@@ -114,8 +115,7 @@ _BRIDGE_EDGE_TUPLE_LEN = 2
 _BRIDGE_INDEX_TUPLE_LEN = 1
 
 
-@dataclass(frozen=True)
-class EvidenceNode:
+class EvidenceNode(StructBaseStrict, frozen=True):
     """Evidence dataset node payload."""
 
     name: str
@@ -125,8 +125,7 @@ class EvidenceNode:
     scan_candidate_file_count: int | None = None
 
 
-@dataclass(frozen=True)
-class TaskNode:
+class TaskNode(StructBaseStrict, frozen=True):
     """Task node payload."""
 
     name: str
@@ -137,16 +136,14 @@ class TaskNode:
     task_kind: str
 
 
-@dataclass(frozen=True)
-class GraphNode:
+class GraphNode(StructBaseStrict, frozen=True):
     """Graph node wrapper with explicit kind."""
 
     kind: NodeKind
     payload: EvidenceNode | TaskNode
 
 
-@dataclass(frozen=True)
-class GraphEdge:
+class GraphEdge(StructBaseStrict, frozen=True):
     """Graph edge payload."""
 
     kind: EdgeKind
@@ -158,8 +155,7 @@ class GraphEdge:
     plan_fingerprint: str | None = None
 
 
-@dataclass(frozen=True)
-class TaskEdgeRequirements:
+class TaskEdgeRequirements(StructBaseStrict, frozen=True):
     """Required edge metadata for task graph construction."""
 
     columns: Mapping[str, Mapping[str, tuple[str, ...]]]
@@ -177,8 +173,7 @@ class TaskGraph:
     output_policy: OutputPolicy
 
 
-@dataclass(frozen=True)
-class TaskGraphSnapshot:
+class TaskGraphSnapshot(StructBaseStrict, frozen=True):
     """Deterministic snapshot of a task graph."""
 
     version: int
@@ -188,8 +183,7 @@ class TaskGraphSnapshot:
     edges: tuple[dict[str, object], ...]
 
 
-@dataclass(frozen=True)
-class TaskDependencySnapshot:
+class TaskDependencySnapshot(StructBaseStrict, frozen=True):
     """Deterministic snapshot of a task dependency graph."""
 
     version: int
@@ -212,8 +206,7 @@ class TaskDependencyReduction:
     removed_edge_count: int
 
 
-@dataclass(frozen=True)
-class GraphDiagnostics:
+class GraphDiagnostics(StructBaseStrict, frozen=True):
     """Diagnostics for task graphs."""
 
     status: Literal["ok", "cycle"]

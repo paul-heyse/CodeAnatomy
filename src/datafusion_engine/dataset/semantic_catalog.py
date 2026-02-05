@@ -59,6 +59,8 @@ def build_semantic_dataset_catalog(
     >>> catalog.has("cst_refs_norm_v1")
     True
     """
+    from schema_spec.system import DeltaPolicyBundle
+
     catalog = DatasetCatalog()
 
     if semantic_output_root is not None:
@@ -82,11 +84,14 @@ def build_semantic_dataset_catalog(
                     format="delta",
                     dataset_spec=spec,
                     overrides=DatasetLocationOverrides(
-                        delta_cdf_policy=spec.delta_cdf_policy,
-                        delta_maintenance_policy=spec.delta_maintenance_policy,
-                        delta_write_policy=spec.delta_write_policy,
-                        delta_schema_policy=spec.delta_schema_policy,
-                        delta_feature_gate=spec.delta_feature_gate,
+                        delta=DeltaPolicyBundle(
+                            cdf_policy=spec.delta_cdf_policy,
+                            maintenance_policy=spec.delta_maintenance_policy,
+                            write_policy=spec.delta_write_policy,
+                            schema_policy=spec.delta_schema_policy,
+                            feature_gate=spec.delta_feature_gate,
+                            constraints=spec.delta_constraints,
+                        ),
                     ),
                 ),
             )
@@ -129,6 +134,7 @@ def semantic_dataset_location(
     KeyError
         Raised when the dataset name is not found in the semantic catalog.
     """
+    from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_rows import dataset_row
 
     row = dataset_row(name, strict=False)
@@ -143,11 +149,14 @@ def semantic_dataset_location(
         format="delta",
         dataset_spec=spec,
         overrides=DatasetLocationOverrides(
-            delta_cdf_policy=spec.delta_cdf_policy,
-            delta_maintenance_policy=spec.delta_maintenance_policy,
-            delta_write_policy=spec.delta_write_policy,
-            delta_schema_policy=spec.delta_schema_policy,
-            delta_feature_gate=spec.delta_feature_gate,
+            delta=DeltaPolicyBundle(
+                cdf_policy=spec.delta_cdf_policy,
+                maintenance_policy=spec.delta_maintenance_policy,
+                write_policy=spec.delta_write_policy,
+                schema_policy=spec.delta_schema_policy,
+                feature_gate=spec.delta_feature_gate,
+                constraints=spec.delta_constraints,
+            ),
         ),
     )
 

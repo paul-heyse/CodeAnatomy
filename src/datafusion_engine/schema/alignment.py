@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+import msgspec
 import pyarrow as pa
 
 from datafusion_engine.arrow.coercion import to_arrow_table
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
+from serde_msgspec import StructBaseStrict
 from utils.validation import find_missing
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
@@ -183,12 +185,11 @@ class SchemaTransform:
         return aligned, info
 
 
-@dataclass(frozen=True)
-class SchemaEvolutionSpec:
+class SchemaEvolutionSpec(StructBaseStrict, frozen=True):
     """Unify/cast/concat policy for evolving schemas."""
 
     promote_options: str = "permissive"
-    rename_map: Mapping[str, str] = field(default_factory=dict)
+    rename_map: Mapping[str, str] = msgspec.field(default_factory=dict)
     allow_missing: bool = False
     allow_extra: bool = True
     allow_casts: bool = True
@@ -285,3 +286,4 @@ __all__ = [
     "align_to_schema",
     "unify_schemas_core",
 ]
+from serde_msgspec import StructBaseStrict

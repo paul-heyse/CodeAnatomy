@@ -223,13 +223,51 @@ def validate_extract_output(
         runtime_profile=request.runtime_profile,
         normalize=normalize,
     )
-    return finalize_ctx.run(
+    result = finalize_ctx.run(
         processed,
         request=FinalizeRunRequest(
             runtime_profile=request.runtime_profile,
             determinism_tier=request.determinism_tier,
         ),
     )
+    _validate_extract_result(
+        name,
+        result,
+        runtime_profile=request.runtime_profile,
+    )
+    return result
+
+
+def _validate_extract_result(
+    name: str,
+    result: FinalizeResult,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> None:
+    spec = dataset_spec(name)
+    policy = spec.policies.dataframe_validation
+    if policy is None or not policy.enabled:
+        return
+    from schema_spec.pandera_bridge import validate_dataframe
+
+    try:
+        validate_dataframe(
+            result.good,
+            schema_spec=spec.table_spec,
+            policy=policy,
+        )
+    except Exception as exc:
+        sink = runtime_profile.diagnostics.diagnostics_sink
+        if sink is not None:
+            from obs.diagnostics import record_dataframe_validation_error
+
+            record_dataframe_validation_error(
+                sink,
+                name=name,
+                error=exc,
+                policy=policy,
+            )
+        raise
 
 
 __all__ = [

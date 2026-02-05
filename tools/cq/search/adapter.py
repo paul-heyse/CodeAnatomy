@@ -263,7 +263,16 @@ def search_content(
     limits = limits or DEFAULT
     file_globs = file_globs or ["*.py", "*.pyi"]
 
-    # Build rpygrep command
+    searcher = _build_content_searcher(root, pattern, file_globs, limits)
+    return _collect_content_matches(root, searcher, limits)
+
+
+def _build_content_searcher(
+    root: Path,
+    pattern: str,
+    file_globs: list[str],
+    limits: SearchLimits,
+) -> RipGrepSearch:
     searcher = (
         RipGrepSearch()
         .set_working_directory(root)
@@ -275,15 +284,16 @@ def search_content(
         .add_safe_defaults()
         .as_json()
     )
-
-    # Add file globs
     for glob in file_globs:
         searcher = searcher.include_glob(glob)
+    return searcher
 
-    matches: list[tuple[Path, int, str]] = []
-    file_match_counts: dict[Path, int] = {}
-    seen_files: set[Path] = set()
 
+def _collect_content_matches(
+    root: Path,
+    searcher: RipGrepSearch,
+    limits: SearchLimits,
+) -> list[tuple[Path, int, str]]:
     try:
         results = search_sync_with_timeout(
             lambda: list(searcher.run()),
@@ -291,31 +301,47 @@ def search_content(
         )
     except TimeoutError:
         return []
+    return _collect_content_results(root, results, limits)
+
+
+def _collect_content_results(
+    root: Path,
+    results: list[object],
+    limits: SearchLimits,
+) -> list[tuple[Path, int, str]]:
+    matches: list[tuple[Path, int, str]] = []
+    file_match_counts: dict[Path, int] = {}
+    seen_files: set[Path] = set()
     for result in results:
-        # rpygrep returns paths relative to working_directory
         file_path = (root / result.path).resolve()
-        if file_path not in seen_files:
-            if len(seen_files) >= limits.max_files:
-                break
-            seen_files.add(file_path)
-
+        if not _should_include_file(file_path, seen_files, limits):
+            break
         for match in result.matches:
-            # Enforce per-file limit
-            current_count = file_match_counts.get(file_path, 0)
-            if current_count >= limits.max_matches_per_file:
-                continue
-
-            # Enforce total limit
-            if len(matches) >= limits.max_total_matches:
+            if _should_stop_content_matches(matches, file_match_counts, file_path, limits):
                 break
-
-            # Extract line content from match data
             line_content = match.data.lines.text or ""
-
             matches.append((file_path, match.data.line_number, line_content))
-            file_match_counts[file_path] = current_count + 1
-
+            file_match_counts[file_path] = file_match_counts.get(file_path, 0) + 1
         if len(matches) >= limits.max_total_matches:
             break
-
     return matches
+
+
+def _should_include_file(file_path: Path, seen_files: set[Path], limits: SearchLimits) -> bool:
+    if file_path in seen_files:
+        return True
+    if len(seen_files) >= limits.max_files:
+        return False
+    seen_files.add(file_path)
+    return True
+
+
+def _should_stop_content_matches(
+    matches: list[tuple[Path, int, str]],
+    file_match_counts: dict[Path, int],
+    file_path: Path,
+    limits: SearchLimits,
+) -> bool:
+    if len(matches) >= limits.max_total_matches:
+        return True
+    return file_match_counts.get(file_path, 0) >= limits.max_matches_per_file

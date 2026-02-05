@@ -13,6 +13,24 @@
 
 ---
 
+## Implementation Status (as of 2026-02-05)
+
+- **Scope 0**: Complete
+- **Scope 1**: Complete
+- **Scope 2**: Complete
+- **Scope 3**: Complete
+- **Scope 4**: Complete
+- **Scope 5**: Complete
+- **Scope 6**: Partial (Pandera validation not yet wired at CPG materialization boundaries)
+- **Scope 7**: Complete
+- **Scope 8**: Complete
+- **Scope 9**: Complete
+- **Scope 10**: Complete
+- **Scope 11**: Complete
+- **Scope 12**: Complete (goldens updated; verification pending via cq pytest/quality gate)
+
+---
+
 ## Scope 0 — Schema + Query Contracts as msgspec (P0)
 
 **Goal**: Make schema and query specifications first-class msgspec contracts with JSON Schema export. This unlocks schema registry coverage and deterministic serialization for dataset contracts.
@@ -565,4 +583,3 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
 - Treat Pydantic runtime models as the strict boundary for derived configs.
 - Use Pandera at runtime boundaries with configurable sampling and lazy error reporting.
 - All breaking changes should update call sites rather than add compatibility shims.
-

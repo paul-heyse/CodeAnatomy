@@ -216,7 +216,5 @@ class TestTimeoutEdgeCases:
             await asyncio.sleep(0.01)
             return timeout_seconds
 
-        result = await search_async_with_timeout(
-            quick_coroutine(), timeout_seconds=timeout_seconds
-        )
+        result = await search_async_with_timeout(quick_coroutine(), timeout_seconds=timeout_seconds)
         assert result == timeout_seconds

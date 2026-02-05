@@ -9,6 +9,8 @@ from typing import Annotated, Literal, cast, get_args
 
 import msgspec
 
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+
 # Entity types that can be queried
 EntityType = Literal["function", "class", "method", "module", "callsite", "import", "decorator"]
 
@@ -595,6 +597,8 @@ class Query(msgspec.Struct, frozen=True):
         Composite rule (all/any/not) for combining patterns
     nth_child
         Positional matching specification
+    lang
+        Query language. Defaults to ``python``.
     """
 
     entity: EntityType | None = None
@@ -612,6 +616,7 @@ class Query(msgspec.Struct, frozen=True):
     metavar_filters: tuple[MetaVarFilter, ...] = ()
     composite: CompositeRule | None = None
     nth_child: NthChildSpec | None = None
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
 
     def __post_init__(self) -> None:
         """Validate query configuration.
@@ -659,6 +664,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
+            lang=self.lang,
         )
 
     def with_expand(self, *expanders: Expander) -> Query:
@@ -687,6 +693,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
+            lang=self.lang,
         )
 
     def with_fields(self, *fields: FieldType) -> Query:
@@ -715,6 +722,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
+            lang=self.lang,
         )
 
     def with_relational(self, *constraints: RelationalConstraint) -> Query:
@@ -743,6 +751,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
+            lang=self.lang,
         )
 
     def get_all_relational_constraints(self) -> list[RelationalConstraint]:

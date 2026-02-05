@@ -37,7 +37,7 @@ feature_csv="$(IFS=,; echo "${datafusion_python_features[*]}")"
 datafusion_feature_flags=(--features "${feature_csv}")
 
 uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
-uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile}
+uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
 
 wheel_dir="dist/wheels"
 mkdir -p "${wheel_dir}"
@@ -60,7 +60,7 @@ if [ "$(uname -s)" = "Linux" ] && [ "${compatibility}" = "pypi" ]; then
 fi
 uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 (

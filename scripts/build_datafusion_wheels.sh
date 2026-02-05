@@ -95,7 +95,7 @@ fi
 
 uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 datafusion_wheel="$(ls -1 "${wheel_dir}"/datafusion-*.whl | sort | tail -n 1)"
@@ -137,6 +137,9 @@ with tempfile.TemporaryDirectory() as tmpdir:
     if not callable(to_substrait):
         raise SystemExit("Substrait Producer API missing from built wheel.")
     ext = importlib.import_module("datafusion_ext")
+    ctx_builder = getattr(ext, "delta_session_context", None)
+    if not callable(ctx_builder):
+        raise SystemExit("delta_session_context() missing from datafusion_ext wheel.")
     capabilities = getattr(ext, "capabilities_snapshot", None)
     if callable(capabilities):
         capabilities()
@@ -146,10 +149,14 @@ with tempfile.TemporaryDirectory() as tmpdir:
             raise SystemExit(
                 "Neither capabilities_snapshot() nor registry_snapshot() is available in datafusion_ext."
             )
-        ctx_builder = getattr(ext, "delta_session_context", None)
-        if not callable(ctx_builder):
-            raise SystemExit("delta_session_context() missing from datafusion_ext wheel.")
         snapshot(ctx_builder())
+    register_udfs = getattr(ext, "register_codeanatomy_udfs", None)
+    if not callable(register_udfs):
+        raise SystemExit("register_codeanatomy_udfs() missing from datafusion_ext wheel.")
+    try:
+        register_udfs(ctx_builder(), True, 1000, 64)
+    except Exception as exc:
+        raise SystemExit(f"Async UDF feature validation failed: {exc}") from exc
 PY
 
 uv run python - <<PY

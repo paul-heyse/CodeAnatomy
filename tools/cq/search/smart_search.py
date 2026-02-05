@@ -25,9 +25,19 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
+    mk_result,
     ms,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    RUST_QUERY_ENABLE_ENV,
+    QueryLanguage,
+    disabled_language_message,
+    file_globs_for_language,
+    is_query_language_enabled,
+    ripgrep_type_for_language,
+)
 from tools.cq.search.classifier import (
     HeuristicResult,
     MatchCategory,
@@ -131,6 +141,7 @@ class RawMatch(CqStruct, frozen=True):
 
 
 class CandidateSearchKwargs(TypedDict, total=False):
+    lang: QueryLanguage
     include_globs: list[str] | None
     exclude_globs: list[str] | None
 
@@ -296,6 +307,7 @@ def build_candidate_searcher(
         root=root,
         query=query,
         mode=mode,
+        lang=kwargs.get("lang", DEFAULT_QUERY_LANGUAGE),
         limits=limits,
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
@@ -310,11 +322,12 @@ def build_candidate_searcher(
 def _build_candidate_searcher(config: SearchConfig) -> tuple[RipGrepSearch, str]:
     from rpygrep import RipGrepSearch
 
+    search_type = ripgrep_type_for_language(config.lang)
     searcher = (
         RipGrepSearch()
         .set_working_directory(config.root)
         .add_safe_defaults()
-        .include_type("py")
+        .include_type(search_type)
         .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .before_context(1)
         .after_context(1)
@@ -432,6 +445,7 @@ def classify_match(
     raw: RawMatch,
     root: Path,
     *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
     enable_symtable: bool = True,
 ) -> EnrichedMatch:
     """Run three-stage classification pipeline on a raw match.
@@ -442,6 +456,8 @@ def classify_match(
         Raw match from rpygrep.
     root
         Repository root for file resolution.
+    lang
+        Query language used by parsing/classification stages.
     enable_symtable
         Whether to run symtable enrichment.
 
@@ -459,15 +475,15 @@ def classify_match(
         return _build_heuristic_enriched(raw, heuristic, match_text)
 
     file_path = root / raw.file
-    classification = _resolve_match_classification(raw, file_path, heuristic, root)
+    classification = _resolve_match_classification(raw, file_path, heuristic, root, lang=lang)
     symtable_enrichment = _maybe_symtable_enrichment(
         file_path,
         raw,
-        match_text,
         classification,
+        lang=lang,
         enable_symtable=enable_symtable,
     )
-    context_window, context_snippet = _build_context_enrichment(file_path, raw)
+    context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
         symtable=symtable_enrichment,
         context_window=context_window,
@@ -502,14 +518,17 @@ def _resolve_match_classification(
     file_path: Path,
     heuristic: HeuristicResult,
     root: Path,
+    *,
+    lang: QueryLanguage,
 ) -> ClassificationResult:
-    if file_path.suffix != ".py":
+    lang_suffixes = {".py", ".pyi"} if lang == "python" else {".rs"}
+    if file_path.suffix not in lang_suffixes:
         return _classification_from_heuristic(
             heuristic, default_confidence=0.4, evidence_kind="rg_only"
         )
 
-    record_result = classify_from_records(file_path, root, raw.line, raw.col)
-    ast_result = record_result or _classify_from_node(file_path, raw)
+    record_result = classify_from_records(file_path, root, raw.line, raw.col, lang=lang)
+    ast_result = record_result or _classify_from_node(file_path, raw, lang=lang)
     if ast_result is not None:
         return _classification_from_node(ast_result)
     if heuristic.category is not None:
@@ -517,11 +536,16 @@ def _resolve_match_classification(
     return _default_classification()
 
 
-def _classify_from_node(file_path: Path, raw: RawMatch) -> NodeClassification | None:
-    sg_root = get_sg_root(file_path)
+def _classify_from_node(
+    file_path: Path,
+    raw: RawMatch,
+    *,
+    lang: QueryLanguage,
+) -> NodeClassification | None:
+    sg_root = get_sg_root(file_path, lang=lang)
     if sg_root is None:
         return None
-    return classify_from_node(sg_root, raw.line, raw.col)
+    return classify_from_node(sg_root, raw.line, raw.col, lang=lang)
 
 
 def _classification_from_node(result: NodeClassification) -> ClassificationResult:
@@ -564,11 +588,13 @@ def _default_classification() -> ClassificationResult:
 def _maybe_symtable_enrichment(
     file_path: Path,
     raw: RawMatch,
-    match_text: str,
     classification: ClassificationResult,
     *,
+    lang: QueryLanguage,
     enable_symtable: bool,
 ) -> SymtableEnrichment | None:
+    if lang != "python":
+        return None
     if not enable_symtable:
         return None
     if classification.category not in {"definition", "callsite", "reference", "assignment"}:
@@ -579,18 +605,20 @@ def _maybe_symtable_enrichment(
     table = get_symtable_table(file_path, source)
     if table is None:
         return None
-    return enrich_with_symtable_from_table(table, match_text, raw.line)
+    return enrich_with_symtable_from_table(table, raw.match_text, raw.line)
 
 
 def _build_context_enrichment(
     file_path: Path,
     raw: RawMatch,
+    *,
+    lang: QueryLanguage,
 ) -> tuple[dict[str, int] | None, str | None]:
     source = get_cached_source(file_path)
     if source is None:
         return None, None
     source_lines = source.splitlines()
-    def_lines = get_def_lines_cached(file_path)
+    def_lines = get_def_lines_cached(file_path, lang=lang)
     if not def_lines:
         return None, None
     compute_context_window, extract_context_snippet = _get_context_helpers()
@@ -931,6 +959,7 @@ def _coerce_summary_inputs(
         root=Path(),
         query=cast("str", query),
         mode=cast("QueryMode", mode),
+        lang=cast("QueryLanguage", kwargs.get("lang", DEFAULT_QUERY_LANGUAGE)),
         limits=cast("SearchLimits", limits),
         include_globs=cast("list[str] | None", kwargs.get("include")),
         exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
@@ -954,7 +983,8 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     return {
         "query": config.query,
         "mode": config.mode.value,
-        "file_globs": inputs.file_globs or ["*.py", "*.pyi"],
+        "lang": config.lang,
+        "file_globs": inputs.file_globs or file_globs_for_language(config.lang),
         "include": config.include_globs or [],
         "exclude": config.exclude_globs or [],
         "context_lines": {"before": 1, "after": 1},
@@ -1188,6 +1218,7 @@ def _build_search_context(
         root=root,
         query=query,
         mode=actual_mode,
+        lang=kwargs.get("lang", DEFAULT_QUERY_LANGUAGE),
         limits=limits,
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
@@ -1209,7 +1240,7 @@ def _run_candidate_phase(
 def _run_classification_phase(
     ctx: SmartSearchContext, raw_matches: list[RawMatch]
 ) -> list[EnrichedMatch]:
-    return [classify_match(raw, ctx.root) for raw in raw_matches]
+    return [classify_match(raw, ctx.root, lang=ctx.lang) for raw in raw_matches]
 
 
 def _assemble_smart_search_result(
@@ -1222,7 +1253,7 @@ def _assemble_smart_search_result(
         config=ctx,
         stats=stats,
         matches=enriched_matches,
-        file_globs=["*.py", "*.pyi"],
+        file_globs=file_globs_for_language(ctx.lang),
         limit=ctx.limits.max_total_matches,
         pattern=pattern,
     )
@@ -1252,6 +1283,20 @@ def _assemble_smart_search_result(
     )
 
 
+def _disabled_language_result(ctx: SmartSearchContext) -> CqResult:
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=ctx.started_ms,
+    )
+    result = mk_result(run_ctx.to_runmeta("search"))
+    result.summary["error"] = disabled_language_message(ctx.lang)
+    result.summary["lang"] = ctx.lang
+    result.summary["feature_flag"] = RUST_QUERY_ENABLE_ENV
+    return result
+
+
 def smart_search(
     root: Path,
     query: str,
@@ -1275,6 +1320,8 @@ def smart_search(
         Complete search results.
     """
     ctx = _build_search_context(root, query, kwargs)
+    if not is_query_language_enabled(ctx.lang):
+        return _disabled_language_result(ctx)
     raw_matches, stats, pattern = _run_candidate_phase(ctx)
     enriched_matches = _run_classification_phase(ctx, raw_matches)
     return _assemble_smart_search_result(ctx, stats, enriched_matches, pattern)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import TYPE_CHECKING, Literal
 
 from datafusion import SessionContext
@@ -24,6 +25,7 @@ from datafusion_engine.delta.control_plane import (
     delta_provider_with_files,
 )
 from datafusion_engine.delta.protocol import validate_delta_gate
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.tables.metadata import TableProviderCapsule
@@ -39,6 +41,7 @@ if TYPE_CHECKING:
     from schema_spec.system import DeltaScanOptions
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -140,14 +143,77 @@ def _delta_provider_bundle(
     request: DeltaProviderRequest,
     scan_files: Sequence[str] | None,
 ) -> DeltaProviderBundle:
+    try:
+        if scan_files:
+            return delta_provider_with_files(ctx, files=scan_files, request=request)
+        return delta_provider_from_session(ctx, request=request)
+    except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Delta provider control-plane failed; falling back to Python dataset provider: %s",
+            exc,
+        )
+        return _fallback_delta_provider_bundle(
+            request=request,
+            scan_files=scan_files,
+            error=exc,
+        )
+
+
+def _fallback_delta_provider_bundle(
+    *,
+    request: DeltaProviderRequest,
+    scan_files: Sequence[str] | None,
+    error: Exception,
+) -> DeltaProviderBundle:
+    from deltalake import DeltaTable
+
+    from datafusion_engine.delta.control_plane import DeltaProviderBundle
+
+    storage_options = dict(request.storage_options) if request.storage_options else None
+    try:
+        table = DeltaTable(
+            request.table_uri,
+            version=request.version,
+            storage_options=storage_options,
+        )
+        if request.timestamp is not None:
+            table.load_as_version(request.timestamp)
+        provider = table.to_pyarrow_dataset()
+    except Exception as exc:
+        msg = "Delta provider fallback failed after control-plane failure."
+        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
+    snapshot: dict[str, object] = {
+        "table_uri": request.table_uri,
+        "version": table.version(),
+        "provider_mode": "pyarrow_dataset_fallback",
+        "fallback_error": str(error),
+    }
     if scan_files:
-        return delta_provider_with_files(ctx, files=scan_files, request=request)
-    return delta_provider_from_session(ctx, request=request)
+        snapshot["scan_files_requested"] = list(scan_files)
+        snapshot["scan_files_applied"] = False
+    return DeltaProviderBundle(
+        provider=provider,
+        snapshot=snapshot,
+        scan_config={},
+        scan_effective={
+            "fallback": True,
+            "scan_files_requested": bool(scan_files),
+        },
+        add_actions=None,
+        predicate_error=None,
+    )
 
 
 def _resolve_delta_cdf(*, location: DatasetLocation, name: str | None) -> DatasetResolution:
     contract = build_delta_cdf_contract(location)
-    bundle = delta_cdf_provider(request=contract.to_request())
+    try:
+        bundle = delta_cdf_provider(request=contract.to_request())
+    except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Delta CDF control-plane failed; falling back to Python CDF reader: %s",
+            exc,
+        )
+        bundle = _fallback_delta_cdf_bundle(contract=contract, error=exc)
     return DatasetResolution(
         name=name,
         location=location,
@@ -160,6 +226,60 @@ def _resolve_delta_cdf(*, location: DatasetLocation, name: str | None) -> Datase
         delta_scan_identity_hash=None,
         delta_scan_options=None,
         cdf_options=bundle.cdf_options,
+    )
+
+
+def _fallback_delta_cdf_bundle(
+    *,
+    contract: DeltaCdfContract,
+    error: Exception,
+) -> DeltaCdfProviderBundle:
+    from deltalake import DeltaTable
+
+    from datafusion_engine.delta.control_plane import DeltaCdfProviderBundle
+
+    storage_options = dict(contract.storage_options) if contract.storage_options else None
+    try:
+        table = DeltaTable(
+            contract.table_uri,
+            version=contract.version,
+            storage_options=storage_options,
+        )
+        if contract.timestamp is not None:
+            table.load_as_version(contract.timestamp)
+        reader = table.load_cdf(
+            starting_version=contract.options.starting_version
+            if contract.options is not None and contract.options.starting_version is not None
+            else 0,
+            ending_version=contract.options.ending_version if contract.options is not None else None,
+            starting_timestamp=contract.options.starting_timestamp
+            if contract.options is not None
+            else None,
+            ending_timestamp=contract.options.ending_timestamp
+            if contract.options is not None
+            else None,
+            columns=list(contract.options.columns)
+            if contract.options is not None and contract.options.columns is not None
+            else None,
+            predicate=contract.options.predicate if contract.options is not None else None,
+            allow_out_of_range=contract.options.allow_out_of_range
+            if contract.options is not None
+            else False,
+        )
+        provider = reader.read_all()
+    except Exception as exc:
+        msg = "Delta CDF fallback failed after control-plane failure."
+        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
+    snapshot: dict[str, object] = {
+        "table_uri": contract.table_uri,
+        "version": table.version(),
+        "provider_mode": "pyarrow_cdf_fallback",
+        "fallback_error": str(error),
+    }
+    return DeltaCdfProviderBundle(
+        provider=provider,
+        snapshot=snapshot,
+        cdf_options=contract.options,
     )
 
 

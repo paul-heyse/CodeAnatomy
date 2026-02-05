@@ -45,6 +45,7 @@ def search(
     RuntimeError
         Raised when CLI context is unavailable.
     """
+    from tools.cq.query.language import parse_query_language
     from tools.cq.search.classifier import QueryMode
     from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
@@ -72,6 +73,7 @@ def search(
         ctx.root,
         query,
         mode=mode,
+        lang=parse_query_language(options.lang),
         include_globs=include_globs if include_globs else None,
         exclude_globs=list(options.exclude) if options.exclude else None,
         include_strings=options.include_strings,

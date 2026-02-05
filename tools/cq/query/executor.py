@@ -38,6 +38,14 @@ from tools.cq.query.execution_requests import (
     EntityQueryRequest,
     PatternQueryRequest,
 )
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    RUST_QUERY_ENABLE_ENV,
+    QueryLanguage,
+    disabled_language_message,
+    file_extensions_for_language,
+    is_query_language_enabled,
+)
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
@@ -103,6 +111,7 @@ class AstGrepExecutionContext:
     paths: list[Path]
     root: Path
     query: Query | None = None
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
 
 
 @dataclass
@@ -147,6 +156,33 @@ class AstGrepMatchSpan:
         return self.span.end_line if self.span.end_line is not None else self.span.start_line
 
 
+_COMMON_METAVAR_NAMES: tuple[str, ...] = (
+    "FUNC",
+    "F",
+    "CLASS",
+    "METHOD",
+    "M",
+    "X",
+    "Y",
+    "Z",
+    "A",
+    "B",
+    "OBJ",
+    "ATTR",
+    "VAL",
+    "E",
+    "NAME",
+    "MODULE",
+    "ARGS",
+    "KWARGS",
+    "COND",
+    "VAR",
+    "P",
+    "L",
+    "DECORATOR",
+)
+
+
 def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -160,6 +196,14 @@ def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     result.summary["error"] = message
+    return result
+
+
+def _language_disabled_result(ctx: QueryExecutionContext) -> CqResult:
+    result = mk_result(_build_runmeta(ctx))
+    result.summary["error"] = disabled_language_message(ctx.query.lang)
+    result.summary["lang"] = ctx.query.lang
+    result.summary["feature_flag"] = RUST_QUERY_ENABLE_ENV
     return result
 
 
@@ -183,6 +227,7 @@ def _scan_entity_records(
         record_types=ctx.plan.sg_record_types,
         root=ctx.root,
         globs=scope_globs,
+        lang=ctx.plan.lang,
     )
 
 
@@ -274,6 +319,7 @@ def _tabulate_scope_files(
     paths: list[Path],
     scope_globs: list[str] | None,
     *,
+    lang: QueryLanguage,
     explain: bool,
 ) -> FileTabulationResult:
     repo_context = resolve_repo_context(root)
@@ -282,7 +328,7 @@ def _tabulate_scope_files(
         repo_index,
         paths,
         scope_globs,
-        extensions=(".py",),
+        extensions=file_extensions_for_language(lang),
         explain=explain,
     )
 
@@ -300,6 +346,7 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
         ctx.root,
         paths,
         scope_globs,
+        lang=ctx.plan.lang,
         explain=ctx.plan.explain,
     )
     if not file_result.files:
@@ -353,11 +400,13 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
         "need_symtable": plan.need_symtable,
         "need_bytecode": plan.need_bytecode,
         "is_pattern_query": plan.is_pattern_query,
+        "lang": plan.lang,
     }
     file_result = _tabulate_scope_files(
         state.ctx.root,
         state.paths,
         state.scope_globs,
+        lang=state.ctx.plan.lang,
         explain=True,
     )
     result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
@@ -370,6 +419,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
         return
     result.summary["plan"] = {
         "is_pattern_query": True,
+        "lang": plan.lang,
         "pattern": query.pattern_spec.pattern if query.pattern_spec else None,
         "strictness": query.pattern_spec.strictness if query.pattern_spec else None,
         "context": query.pattern_spec.context if query.pattern_spec else None,
@@ -416,6 +466,9 @@ def execute_plan(
         started_ms=ms(),
     )
 
+    if not is_query_language_enabled(ctx.query.lang):
+        return _language_disabled_result(ctx)
+
     if plan.is_pattern_query:
         return _execute_pattern_query(ctx)
     return _execute_entity_query(ctx)
@@ -456,6 +509,8 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
     )
+    if not is_query_language_enabled(ctx.query.lang):
+        return _language_disabled_result(ctx)
     scan_ctx = _build_scan_context(request.records)
     candidates = _build_entity_candidates(scan_ctx, request.records)
     candidates = _apply_rule_spans(
@@ -537,6 +592,8 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
     )
+    if not is_query_language_enabled(ctx.query.lang):
+        return _language_disabled_result(ctx)
 
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
@@ -608,7 +665,13 @@ def _execute_ast_grep_rules(
     """
     if not rules:
         return [], [], []
-    ctx = AstGrepExecutionContext(rules=rules, paths=paths, root=root, query=query)
+    ctx = AstGrepExecutionContext(
+        rules=rules,
+        paths=paths,
+        root=root,
+        query=query,
+        lang=query.lang if query is not None else DEFAULT_QUERY_LANGUAGE,
+    )
     state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
     _run_ast_grep(ctx, state)
     return state.findings, state.records, state.raw_matches
@@ -629,7 +692,7 @@ def _process_ast_grep_file(
     except OSError:
         return
 
-    sg_root = SgRoot(src, "python")
+    sg_root = SgRoot(src, ctx.lang)
     node = sg_root.root()
     rel_path = _normalize_match_file(str(file_path), ctx.root)
 
@@ -721,35 +784,14 @@ def _extract_match_metavars(match: SgNode) -> dict[str, str]:
         Dictionary of metavariable name to captured text.
     """
     metavars: dict[str, str] = {}
-    common_names = [
-        "$FUNC",
-        "$F",
-        "$CLASS",
-        "$METHOD",
-        "$M",
-        "$X",
-        "$Y",
-        "$Z",
-        "$A",
-        "$B",
-        "$OBJ",
-        "$ATTR",
-        "$VAL",
-        "$E",
-        "$NAME",
-        "$MODULE",
-        "$ARGS",
-        "$KWARGS",
-        "$COND",
-        "$VAR",
-        "$P",
-        "$L",
-        "$DECORATOR",
-    ]
-    for name in common_names:
-        captured = match.get_match(name)
-        if captured is not None:
-            metavars[name] = captured.text()
+    for bare_name in _COMMON_METAVAR_NAMES:
+        captured = match.get_match(bare_name)
+        if captured is None:
+            continue
+        text = captured.text()
+        # Keep both bare and `$`-prefixed keys for output compatibility.
+        metavars[bare_name] = text
+        metavars[f"${bare_name}"] = text
     return metavars
 
 
@@ -769,35 +811,11 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, MetaVarCapture]:
     from tools.cq.query.ir import MetaVarCapture
 
     result: dict[str, MetaVarCapture] = {}
-    common_names = [
-        "$FUNC",
-        "$F",
-        "$CLASS",
-        "$METHOD",
-        "$M",
-        "$X",
-        "$Y",
-        "$Z",
-        "$A",
-        "$B",
-        "$OBJ",
-        "$ATTR",
-        "$VAL",
-        "$E",
-        "$NAME",
-        "$MODULE",
-        "$ARGS",
-        "$KWARGS",
-        "$COND",
-        "$VAR",
-        "$P",
-        "$L",
-        "$DECORATOR",
-    ]
-    for name in common_names:
-        captured = match.get_match(name)
-        if captured is not None:
-            result[name] = MetaVarCapture(name=name, kind="single", text=captured.text())
+    for bare_name in _COMMON_METAVAR_NAMES:
+        captured = match.get_match(bare_name)
+        if captured is None:
+            continue
+        result[bare_name] = MetaVarCapture(name=bare_name, kind="single", text=captured.text())
     return result
 
 
@@ -882,9 +900,9 @@ def _collect_match_spans(
         repo_index,
         paths,
         globs,
-        extensions=(".py",),
+        extensions=file_extensions_for_language(query.lang),
     )
-    matches = _collect_ast_grep_match_spans(file_result.files, rules, root)
+    matches = _collect_ast_grep_match_spans(file_result.files, rules, root, query.lang)
     if not matches:
         return {}
     if not query.metavar_filters:
@@ -896,6 +914,7 @@ def _collect_ast_grep_match_spans(
     files: list[Path],
     rules: tuple[AstGrepRule, ...],
     root: Path,
+    lang: QueryLanguage,
 ) -> list[AstGrepMatchSpan]:
     matches: list[AstGrepMatchSpan] = []
     for file_path in files:
@@ -903,7 +922,7 @@ def _collect_ast_grep_match_spans(
             src = file_path.read_text(encoding="utf-8")
         except OSError:
             continue
-        sg_root = SgRoot(src, "python")
+        sg_root = SgRoot(src, lang)
         node = sg_root.root()
         rel_path = _normalize_match_file(str(file_path), root)
         for rule in rules:
@@ -1453,12 +1472,19 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
     bool
         True if the record matches the entity type.
     """
-    function_kinds = {"function", "async_function", "function_typeparams"}
+    function_kinds = {
+        "function",
+        "async_function",
+        "function_typeparams",
+    }
     class_kinds = {
         "class",
         "class_bases",
         "class_typeparams",
         "class_typeparams_bases",
+        "struct",
+        "enum",
+        "trait",
     }
     import_kinds = {
         "import",
@@ -1467,6 +1493,7 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
         "from_import_as",
         "from_import_multi",
         "from_import_paren",
+        "use_declaration",
     }
     decorator_kinds = function_kinds | class_kinds
     if entity is None:
@@ -1532,11 +1559,16 @@ def _extract_def_name(record: SgRecord) -> str | None:
     """
     text = record.text.lstrip()
 
-    # Match def name(...) or class name
     if record.record == "def":
-        match = re.search(r"(?:async\s+)?(?:def|class)\s+(\w+)", text)
-        if match:
-            return match.group(1)
+        patterns = (
+            r"(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"fn\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
 
     return None
 
@@ -1555,18 +1587,19 @@ def _extract_import_name(record: SgRecord) -> str | None:
     text = record.text.strip()
     kind = record.kind
 
-    # Dispatch to specific extractors
-    if kind == "import":
-        return _extract_simple_import(text)
-    if kind == "import_as":
-        return _extract_import_alias(text)
-    if kind == "from_import":
-        return _extract_from_import(text)
-    if kind == "from_import_as":
-        return _extract_from_import_alias(text)
-    if kind in {"from_import_multi", "from_import_paren"}:
-        return _extract_from_module(text)
-    return None
+    extractor_by_kind: dict[str, Callable[[str], str | None]] = {
+        "import": _extract_simple_import,
+        "import_as": _extract_import_alias,
+        "from_import": _extract_from_import,
+        "from_import_as": _extract_from_import_alias,
+        "from_import_multi": _extract_from_module,
+        "from_import_paren": _extract_from_module,
+        "use_declaration": _extract_rust_use_name,
+    }
+    extractor = extractor_by_kind.get(kind)
+    if extractor is None:
+        return None
+    return extractor(text)
 
 
 def _extract_simple_import(text: str) -> str | None:
@@ -1638,6 +1671,24 @@ def _extract_from_module(text: str) -> str | None:
     text = text.split("#", maxsplit=1)[0].strip()
     match = re.match(r"from\s+([\w.]+)", text)
     return match.group(1) if match else None
+
+
+def _extract_rust_use_name(text: str) -> str | None:
+    """Extract import target from Rust use declarations.
+
+    Returns
+    -------
+    str | None
+        Imported Rust symbol name or alias when extractable.
+    """
+    text = text.split("//", maxsplit=1)[0].strip()
+    match = re.match(r"use\s+([^;]+);?", text)
+    if not match:
+        return None
+    use_target = match.group(1).strip()
+    if " as " in use_target:
+        return use_target.rsplit(" as ", maxsplit=1)[1].strip()
+    return use_target.rsplit("::", maxsplit=1)[-1].strip("{} ").strip()
 
 
 def _def_to_finding(
@@ -2172,6 +2223,9 @@ def _find_enclosing_class(
         "class_bases",
         "class_typeparams",
         "class_typeparams_bases",
+        "struct",
+        "enum",
+        "trait",
     }
     file_index = index.by_file.get(record.file)
     if file_index is None:

@@ -1,7 +1,4 @@
-"""ast-grep parser using ast-grep-py native bindings.
-
-Parses Python source code into typed records using ast-grep-py.
-"""
+"""ast-grep parser using ast-grep-py native bindings."""
 
 from __future__ import annotations
 
@@ -9,7 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
 
-from tools.cq.astgrep.rules_py import get_rules_for_types
+from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import (
     RecordType,
     SgRecord,
@@ -19,6 +16,11 @@ from tools.cq.astgrep.sgpy_scanner import (
 )
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    QueryLanguage,
+    file_extensions_for_language,
+)
 from tools.cq.query.parser import QueryParseError
 
 # Record types from ast-grep rules
@@ -42,6 +44,7 @@ def sg_scan(
     record_types: Iterable[str] | Iterable[RecordType] | None = None,
     root: Path | None = None,
     globs: list[str] | None = None,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> list[SgRecord]:
     """Run ast-grep-py scan and return parsed records.
 
@@ -56,6 +59,8 @@ def sg_scan(
         Root directory for relative paths.
     globs
         Glob filters for file selection (supports ! excludes).
+    lang
+        Query language for scanner parsing and rule dispatch.
 
     Returns
     -------
@@ -65,16 +70,16 @@ def sg_scan(
     if root is None:
         root = Path.cwd()
 
-    files = _tabulate_scan_files(paths, root, globs)
+    files = _tabulate_scan_files(paths, root, globs, lang=lang)
     if not files:
         return []
 
     normalized_record_types = normalize_record_types(record_types)
-    rules = get_rules_for_types(normalized_record_types)
+    rules = get_rules_for_types(normalized_record_types, lang=lang)
     if not rules:
         return []
 
-    records = scan_files(files, rules, root)
+    records = scan_files(files, rules, root, lang=lang)
     return filter_records_by_type(records, normalized_record_types)
 
 
@@ -82,6 +87,7 @@ def list_scan_files(
     paths: list[Path],
     root: Path | None = None,
     globs: list[str] | None = None,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> list[Path]:
     """Return the list of files that would be scanned.
 
@@ -93,6 +99,8 @@ def list_scan_files(
         Root directory for relative paths
     globs
         Glob filters for file selection (supports ! excludes)
+    lang
+        Query language for file extension selection.
 
     Returns
     -------
@@ -101,7 +109,7 @@ def list_scan_files(
     """
     if root is None:
         root = Path.cwd()
-    return _tabulate_scan_files(paths, root, globs)
+    return _tabulate_scan_files(paths, root, globs, lang=lang)
 
     # No caching: scan all files directly.
 
@@ -110,6 +118,8 @@ def _tabulate_scan_files(
     paths: list[Path],
     root: Path,
     globs: list[str] | None,
+    *,
+    lang: QueryLanguage,
 ) -> list[Path]:
     """Tabulate files to scan using the file index.
 
@@ -126,7 +136,7 @@ def _tabulate_scan_files(
         repo_index,
         paths,
         globs,
-        extensions=(".py",),
+        extensions=file_extensions_for_language(lang),
     )
     return result.files
 

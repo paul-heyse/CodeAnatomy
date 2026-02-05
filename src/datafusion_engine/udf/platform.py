@@ -32,7 +32,7 @@ from __future__ import annotations
 import importlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 from weakref import WeakSet
 
@@ -121,6 +121,7 @@ def _install_function_factory(
     available = True
     installed = False
     error: str | None = None
+    payload_policy = policy
     try:
         if hook is None:
             install_function_factory(ctx, policy=policy)
@@ -132,10 +133,26 @@ def _install_function_factory(
         available = False
         error = str(exc)
     except (RuntimeError, TypeError, ValueError) as exc:
-        error = str(exc)
+        message = str(exc)
+        # Some wheel combinations expose async UDF registration but do not
+        # support async-aware FunctionFactory policies yet.
+        if policy is not None and policy.allow_async and "async-udf feature" in message.lower():
+            fallback_policy = replace(policy, allow_async=False)
+            try:
+                if hook is None:
+                    install_function_factory(ctx, policy=fallback_policy)
+                else:
+                    hook(ctx)
+                installed = True
+                payload_policy = fallback_policy
+                _FUNCTION_FACTORY_CTXS.add(ctx)
+            except (ImportError, RuntimeError, TypeError, ValueError) as retry_exc:
+                error = str(retry_exc)
+        else:
+            error = message
     return ExtensionInstallStatus(
         available=available, installed=installed, error=error
-    ), function_factory_payloads(policy)
+    ), function_factory_payloads(payload_policy)
 
 
 def _install_expr_planners(

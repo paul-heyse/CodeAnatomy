@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import msgspec
 
 from datafusion_engine.delta.control_plane import DeltaCdfRequest, DeltaProviderRequest
 from datafusion_engine.delta.payload import settings_bool
@@ -190,7 +192,7 @@ def _resolve_delta_scan(
         "datafusion.execution.parquet.pushdown_filters",
     )
     if pushdown_setting is not None:
-        delta_scan = replace(delta_scan, enable_parquet_pushdown=pushdown_setting)
+        delta_scan = msgspec.structs.replace(delta_scan, enable_parquet_pushdown=pushdown_setting)
     if delta_scan.schema_force_view_types is not None:
         return delta_scan
     schema_force_setting = settings_bool(
@@ -199,7 +201,7 @@ def _resolve_delta_scan(
     )
     if schema_force_setting is None:
         schema_force_setting = _schema_hardening_view_types(runtime_profile)
-    return replace(delta_scan, schema_force_view_types=schema_force_setting)
+    return msgspec.structs.replace(delta_scan, schema_force_view_types=schema_force_setting)
 
 
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile | None) -> bool:

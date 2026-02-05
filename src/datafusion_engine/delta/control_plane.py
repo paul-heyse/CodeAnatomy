@@ -502,7 +502,7 @@ def _raise_engine_error(
     raise error from exc
 
 
-def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
+def _internal_ctx(ctx: SessionContext, allow_fallback: bool = True) -> InternalSessionContext:
     """Return the internal session context required by Rust entrypoints.
 
     Returns
@@ -523,18 +523,22 @@ def _internal_ctx(ctx: SessionContext) -> InternalSessionContext:
             return cast("InternalSessionContext", ctx)
         if compatibility.ctx_kind == "internal":
             return cast("InternalSessionContext", internal_ctx)
-        if compatibility.ctx_kind == "fallback":
+        if allow_fallback and compatibility.ctx_kind == "fallback":
             alt_ctx = _fallback_delta_internal_ctx()
             if alt_ctx is not None:
                 return alt_ctx
-    if not compatibility.compatible:
+    if not compatibility.compatible and allow_fallback:
         alt_ctx = _fallback_delta_internal_ctx()
         if alt_ctx is not None:
             return alt_ctx
-        details = f" {compatibility.error}" if compatibility.error else ""
-        msg = f"Delta control-plane extension is incompatible.{details}"
-        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
-    return cast("InternalSessionContext", internal_ctx)
+    details = f" {compatibility.error}" if compatibility.error else ""
+    ctx_kind = (
+        f" ctx_kind={compatibility.ctx_kind}."
+        if compatibility.ctx_kind is not None
+        else ""
+    )
+    msg = f"Delta control-plane extension is incompatible for this SessionContext.{ctx_kind}{details}"
+    _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
 
 
 def _fallback_delta_internal_ctx() -> InternalSessionContext | None:
@@ -669,7 +673,7 @@ def delta_provider_from_session(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
-        _internal_ctx(ctx),
+        _internal_ctx(ctx, allow_fallback=False),
         request.table_uri,
         storage_payload,
         request.version,
@@ -735,7 +739,7 @@ def delta_provider_with_files(
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
     gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
-        _internal_ctx(ctx),
+        _internal_ctx(ctx, allow_fallback=False),
         request.table_uri,
         storage_payload,
         request.version,

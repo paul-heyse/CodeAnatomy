@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import pyarrow as pa
-from deltalake import CommitProperties, Transaction
+from deltalake import CommitProperties, DeltaTable, Transaction
 
 from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow.coercion import to_arrow_table
@@ -257,6 +257,73 @@ def _execute_delta_merge(
             time.sleep(delay)
         else:
             return report, attempts
+
+
+def _should_fallback_delta_merge(exc: Exception) -> bool:
+    message = str(exc)
+    if not message:
+        return False
+    lowered = message.lower()
+    return any(
+        token in lowered
+        for token in (
+            "ffi future panicked",
+            "there is no reactor running",
+            "invalid json in file stats",
+            "sessioncontext",
+            "cannot be converted",
+            "delta control-plane extension is incompatible",
+        )
+    )
+
+
+def _execute_delta_merge_fallback(
+    *,
+    source: TableLike | RecordBatchReaderLike,
+    request: DeltaMergeArrowRequest,
+    storage_options: StorageOptions | None,
+    source_alias: str,
+    target_alias: str,
+    matched_updates: Mapping[str, str],
+    not_matched_inserts: Mapping[str, str],
+) -> Mapping[str, object]:
+    commit_properties = request.commit_properties
+    if commit_properties is None and request.commit_metadata is not None:
+        commit_properties = build_commit_properties(commit_metadata=request.commit_metadata)
+    storage = dict(storage_options) if storage_options is not None else None
+    table = DeltaTable(request.path, storage_options=storage)
+    merger = table.merge(
+        source,
+        request.predicate,
+        source_alias=source_alias,
+        target_alias=target_alias,
+        commit_properties=commit_properties,
+    )
+    if request.update_all:
+        merger = merger.when_matched_update_all(predicate=request.matched_predicate)
+    elif matched_updates:
+        merger = merger.when_matched_update(
+            updates=dict(matched_updates),
+            predicate=request.matched_predicate,
+        )
+    if request.insert_all:
+        merger = merger.when_not_matched_insert_all(predicate=request.not_matched_predicate)
+    elif not_matched_inserts:
+        merger = merger.when_not_matched_insert(
+            updates=dict(not_matched_inserts),
+            predicate=request.not_matched_predicate,
+        )
+    if request.delete_not_matched_by_source:
+        merger = merger.when_not_matched_by_source_delete(
+            predicate=request.not_matched_by_source_predicate
+        )
+    metrics_raw = merger.execute()
+    metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {"value": metrics_raw}
+    return {
+        "version": table.version(),
+        "metrics": metrics,
+        "merge_mode": "python_deltalake_fallback",
+    }
 
 
 def _storage_span_attributes(
@@ -570,6 +637,42 @@ class DeltaMergeArrowRequest:
     dataset_name: str | None = None
 
 
+def _open_delta_table(
+    *,
+    path: str,
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+    version: int | None = None,
+    timestamp: str | None = None,
+) -> DeltaTable | None:
+    if version is not None and timestamp is not None:
+        msg = "Delta metadata lookup must set either version or timestamp, not both."
+        raise ValueError(msg)
+    storage = merged_storage_options(storage_options, log_storage_options)
+    try:
+        table = DeltaTable(
+            path,
+            version=version,
+            storage_options=dict(storage) if storage else None,
+        )
+        if timestamp is not None:
+            table.load_as_version(timestamp)
+    except Exception:  # pragma: no cover - exact exception types vary by deltalake build
+        return None
+    return table
+
+
+def _coerce_delta_version(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
 def delta_table_version(
     path: str,
     *,
@@ -583,6 +686,11 @@ def delta_table_version(
     -------
     int | None
         Latest Delta table version, or None if not a Delta table.
+
+    Raises
+    ------
+    DataFusionEngineError
+        Re-raised when metadata lookup fails for non-plugin reasons.
     """
     attrs = _storage_span_attributes(
         operation="metadata",
@@ -595,28 +703,39 @@ def delta_table_version(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
-        snapshot = _snapshot_info(
-            DeltaSnapshotLookup(
-                path=path,
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-                gate=gate,
+        snapshot: Mapping[str, object] | None = None
+        try:
+            snapshot = _snapshot_info(
+                DeltaSnapshotLookup(
+                    path=path,
+                    storage_options=storage_options,
+                    log_storage_options=log_storage_options,
+                    gate=gate,
+                )
             )
+        except DataFusionEngineError as exc:
+            if exc.kind != ErrorKind.PLUGIN:
+                raise
+        if snapshot is not None:
+            version = _coerce_delta_version(snapshot.get("version"))
+            if version is not None:
+                span.set_attribute("codeanatomy.version", version)
+                return version
+        table = _open_delta_table(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
         )
-        if snapshot is None:
+        if table is None:
             return None
-        version_value = snapshot.get("version")
-        if isinstance(version_value, int):
-            span.set_attribute("codeanatomy.version", version_value)
-            return version_value
-        if isinstance(version_value, str) and version_value.strip():
-            try:
-                version = int(version_value)
-            except ValueError:
-                return None
-            span.set_attribute("codeanatomy.version", version)
-            return version
-        return None
+        try:
+            version = table.version()
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        resolved = _coerce_delta_version(version)
+        if resolved is not None:
+            span.set_attribute("codeanatomy.version", resolved)
+        return resolved
 
 
 def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
@@ -643,51 +762,36 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
-        storage = merged_storage_options(request.storage_options, request.log_storage_options)
-        profile = _runtime_profile_for_delta(None)
-        ctx = profile.session_context()
-        from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
-        from datafusion_engine.dataset.resolution import (
-            DatasetResolutionRequest,
-            resolve_dataset_provider,
+        table = _open_delta_table(
+            path=request.path,
+            storage_options=request.storage_options,
+            log_storage_options=request.log_storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
         )
-
-        try:
-            overrides = None
-            if request.gate is not None:
-                from schema_spec.system import DeltaPolicyBundle
-
-                overrides = DatasetLocationOverrides(
-                    delta=DeltaPolicyBundle(feature_gate=request.gate)
-                )
-            location = DatasetLocation(
-                path=request.path,
-                format="delta",
-                storage_options=dict(storage or {}),
-                delta_log_storage_options=dict(request.log_storage_options or {}),
-                delta_version=request.version,
-                delta_timestamp=request.timestamp,
-                overrides=overrides,
-            )
-            resolution = resolve_dataset_provider(
-                DatasetResolutionRequest(
-                    ctx=ctx,
-                    location=location,
-                    runtime_profile=profile,
-                )
-            )
-        except (RuntimeError, TypeError, ValueError):
+        if table is None:
             return None
-        from datafusion_engine.tables.metadata import TableProviderCapsule
-
-        df = ctx.read_table(TableProviderCapsule(resolution.provider))
-        schema = df.schema()
+        schema = table.schema()
         resolved_schema: pa.Schema | None = None
         if isinstance(schema, pa.Schema):
             resolved_schema = schema
         else:
+            try:
+                candidate = pa.schema(schema)
+            except (TypeError, ValueError):
+                candidate = None
+            if isinstance(candidate, pa.Schema):
+                resolved_schema = candidate
+            to_arrow = getattr(schema, "to_arrow", None)
+            if resolved_schema is None and callable(to_arrow):
+                try:
+                    candidate = pa.schema(to_arrow())
+                except (TypeError, ValueError):
+                    candidate = None
+                if isinstance(candidate, pa.Schema):
+                    resolved_schema = candidate
             to_pyarrow = getattr(schema, "to_pyarrow", None)
-            if callable(to_pyarrow):
+            if resolved_schema is None and callable(to_pyarrow):
                 candidate = to_pyarrow()
                 if isinstance(candidate, pa.Schema):
                     resolved_schema = candidate
@@ -2251,8 +2355,25 @@ def vacuum_delta(
                 ),
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Delta vacuum failed via Rust control plane: {exc}"
-            raise RuntimeError(msg) from exc
+            table = DeltaTable(path, storage_options=dict(storage) if storage else None)
+            commit_properties = build_commit_properties(
+                commit_metadata=options.commit_metadata or None
+            )
+            files = table.vacuum(
+                retention_hours=options.retention_hours,
+                dry_run=options.dry_run,
+                enforce_retention_duration=options.enforce_retention_duration,
+                commit_properties=commit_properties,
+                full=options.full,
+                keep_versions=list(options.keep_versions)
+                if options.keep_versions is not None
+                else None,
+            )
+            span.set_attribute("codeanatomy.vacuum_fallback", True)
+            span.set_attribute("codeanatomy.vacuum_fallback_error", str(exc))
+            if isinstance(files, Sequence) and not isinstance(files, (str, bytes, bytearray)):
+                return [str(item) for item in files]
+            return []
         metrics = report.get("metrics")
         if isinstance(metrics, Mapping):
             for key in ("files", "removed_files", "deleted_files"):
@@ -2313,8 +2434,24 @@ def create_delta_checkpoint(
                 ),
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Delta checkpoint failed via Rust control plane: {exc}"
-            raise RuntimeError(msg) from exc
+            table = DeltaTable(path, storage_options=dict(storage) if storage else None)
+            table.create_checkpoint()
+            report = {"checkpoint": True, "version": table.version(), "fallback_error": str(exc)}
+            _record_delta_maintenance(
+                _DeltaMaintenanceRecord(
+                    runtime_profile=runtime_profile,
+                    report=report,
+                    operation="create_checkpoint",
+                    path=path,
+                    storage_options=storage_options,
+                    log_storage_options=log_storage_options,
+                    dataset_name=dataset_name,
+                    commit_metadata=None,
+                    retention_hours=None,
+                    dry_run=None,
+                )
+            )
+            return report
         _record_delta_maintenance(
             _DeltaMaintenanceRecord(
                 runtime_profile=runtime_profile,
@@ -2774,12 +2911,28 @@ def delta_merge_arrow(  # noqa: PLR0914
                 extra_constraints=request.extra_constraints,
                 commit_options=commit_options,
             )
-            report, attempts = _execute_delta_merge(
-                ctx,
-                request=merge_request,
-                retry_policy=retry_policy,
-                span=span,
-            )
+            try:
+                report, attempts = _execute_delta_merge(
+                    ctx,
+                    request=merge_request,
+                    retry_policy=retry_policy,
+                    span=span,
+                )
+            except Exception as exc:
+                if not _should_fallback_delta_merge(exc):
+                    raise
+                span.set_attribute("codeanatomy.merge_fallback", True)
+                span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
+                report = _execute_delta_merge_fallback(
+                    source=delta_input.data,
+                    request=request,
+                    storage_options=storage,
+                    source_alias=resolved_source_alias,
+                    target_alias=resolved_target_alias,
+                    matched_updates=resolved_updates,
+                    not_matched_inserts=resolved_inserts,
+                )
+                attempts = 0
             metrics: Mapping[str, object] | None = None
             if isinstance(report, Mapping):
                 candidate = report.get("metrics")

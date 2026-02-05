@@ -89,6 +89,23 @@ class SeverityLevel(StrEnum):
         return self.value
 
 
+class QueryLanguageToken(StrEnum):
+    """Supported query language tokens."""
+
+    python = "python"
+    rust = "rust"
+
+    def __str__(self) -> str:
+        """Return the CLI token.
+
+        Returns
+        -------
+        str
+            String value used by the CLI.
+        """
+        return self.value
+
+
 class ReportPreset(StrEnum):
     """Report preset options."""
 

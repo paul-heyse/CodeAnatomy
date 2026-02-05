@@ -6,14 +6,14 @@
       "anchor": {
         "col": 0,
         "end_col": 37,
-        "end_line": 421,
+        "end_line": 474,
         "file": "tools/cq/query/executor.py",
-        "line": 383
+        "line": 433
       },
       "category": "definition",
       "details": {
         "data": {
-          "calls_within": 4,
+          "calls_within": 6,
           "kind": "function",
           "name": "execute_plan"
         },
@@ -22,7 +22,7 @@
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.0455
+          "impact_score": 0.0545
         }
       },
       "message": "function: execute_plan",
@@ -44,7 +44,7 @@
   "summary": {
     "files_scanned": 1,
     "matches": 1,
-    "total_calls": 464,
-    "total_defs": 86
+    "total_calls": 482,
+    "total_defs": 88
   }
 }

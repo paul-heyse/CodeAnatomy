@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +24,13 @@ from tools.cq.query.executor import (
     execute_pattern_query_with_files,
 )
 from tools.cq.query.ir import Query, Scope
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    QueryLanguage,
+    disabled_language_message,
+    file_extensions_for_language,
+    is_query_language_enabled,
+)
 from tools.cq.query.parser import QueryParseError, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
 from tools.cq.run.spec import (
@@ -110,28 +117,80 @@ def _execute_q_steps(
     if not steps:
         return results
 
-    parsed: list[ParsedQStep] = []
-    pattern_steps: list[ParsedQStep] = []
+    parsed_by_lang, pattern_by_lang = _partition_q_steps(
+        steps=steps,
+        plan=plan,
+        ctx=ctx,
+        stop_on_error=stop_on_error,
+        immediate_results=results,
+    )
+    if stop_on_error and _results_have_error(results):
+        return results
+
+    batch_specs: tuple[
+        tuple[
+            dict[QueryLanguage, list[ParsedQStep]],
+            Callable[..., list[tuple[str, CqResult]]],
+        ],
+        ...,
+    ] = (
+        (parsed_by_lang, _execute_entity_q_steps),
+        (pattern_by_lang, _execute_pattern_q_steps),
+    )
+    for grouped_steps, runner in batch_specs:
+        should_stop = _run_grouped_q_batches(
+            grouped_steps=grouped_steps,
+            runner=runner,
+            ctx=ctx,
+            stop_on_error=stop_on_error,
+            results=results,
+        )
+        if should_stop:
+            return results
+    return results
+
+
+def _partition_q_steps(
+    *,
+    steps: list[QStep],
+    plan: RunPlan,
+    ctx: CliContext,
+    stop_on_error: bool,
+    immediate_results: list[tuple[str, CqResult]],
+) -> tuple[dict[QueryLanguage, list[ParsedQStep]], dict[QueryLanguage, list[ParsedQStep]]]:
+    parsed_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
+    pattern_by_lang: dict[QueryLanguage, list[ParsedQStep]] = {}
 
     for step in steps:
         step_id, outcome, is_error = _prepare_q_step(step, plan, ctx)
         if isinstance(outcome, CqResult):
-            results.append((step_id, outcome))
+            immediate_results.append((step_id, outcome))
             if stop_on_error and is_error:
-                return results
+                break
             continue
-        if outcome.plan.is_pattern_query:
-            pattern_steps.append(outcome)
-        else:
-            parsed.append(outcome)
+        target = pattern_by_lang if outcome.plan.is_pattern_query else parsed_by_lang
+        target.setdefault(outcome.plan.lang, []).append(outcome)
+    return parsed_by_lang, pattern_by_lang
 
-    if parsed:
-        results.extend(_execute_entity_q_steps(parsed, ctx, stop_on_error=stop_on_error))
 
-    if pattern_steps:
-        results.extend(_execute_pattern_q_steps(pattern_steps, ctx, stop_on_error=stop_on_error))
+def _run_grouped_q_batches(
+    *,
+    grouped_steps: dict[QueryLanguage, list[ParsedQStep]],
+    runner: Callable[..., list[tuple[str, CqResult]]],
+    ctx: CliContext,
+    stop_on_error: bool,
+    results: list[tuple[str, CqResult]],
+) -> bool:
+    for parsed_steps in grouped_steps.values():
+        batch_results = runner(parsed_steps, ctx, stop_on_error=stop_on_error)
+        results.extend(batch_results)
+        if stop_on_error and _results_have_error(batch_results):
+            return True
+    return False
 
-    return results
+
+def _results_have_error(results: list[tuple[str, CqResult]]) -> bool:
+    return any("error" in result.summary for _, result in results)
 
 
 def _prepare_q_step(
@@ -146,6 +205,9 @@ def _prepare_q_step(
         return _handle_query_parse_error(step, step_id, plan, ctx, exc)
 
     query = _apply_run_scope(query, plan)
+    if not is_query_language_enabled(query.lang):
+        msg = disabled_language_message(query.lang)
+        return step_id, _error_result(step_id, "q", RuntimeError(msg), ctx), True
     tool_plan = compile_query(query)
     scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
     if not scope_paths:
@@ -192,11 +254,13 @@ def _execute_entity_q_steps(
 
     union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
     record_types = _union_record_types(steps)
+    lang = steps[0].plan.lang if steps else DEFAULT_QUERY_LANGUAGE
     session = build_batch_session(
         root=ctx.root,
         tc=ctx.toolchain,
         paths=union_paths,
         record_types=record_types,
+        lang=lang,
     )
 
     allowed_files = [
@@ -253,7 +317,8 @@ def _execute_pattern_q_steps(
             for step in steps
         ]
     union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
-    pattern_files = _tabulate_files(ctx.root, union_paths)
+    lang = steps[0].plan.lang if steps else DEFAULT_QUERY_LANGUAGE
+    pattern_files = _tabulate_files(ctx.root, union_paths, lang=lang)
     files_by_rel: dict[str, Path] = {}
     for path in pattern_files:
         try:
@@ -330,6 +395,10 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
     include_globs = _build_search_includes(plan.in_dir, step.in_dir)
     exclude_globs = list(plan.exclude) if plan.exclude else None
 
+    if not is_query_language_enabled(step.lang):
+        msg = disabled_language_message(step.lang)
+        raise RuntimeError(msg)
+
     return smart_search(
         ctx.root,
         step.query,
@@ -337,6 +406,7 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
         include_globs=include_globs,
         exclude_globs=exclude_globs,
         include_strings=step.include_strings,
+        lang=step.lang,
         limits=SMART_SEARCH_LIMITS,
         tc=ctx.toolchain,
         argv=ctx.argv,
@@ -353,6 +423,7 @@ def _execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqRe
         include_globs=include_globs,
         exclude_globs=exclude_globs,
         include_strings=False,
+        lang=DEFAULT_QUERY_LANGUAGE,
         limits=SMART_SEARCH_LIMITS,
         tc=ctx.toolchain,
         argv=ctx.argv,
@@ -570,7 +641,12 @@ def _unique_paths(paths: Iterable[Path]) -> list[Path]:
     return unique
 
 
-def _tabulate_files(root: Path, paths: list[Path]) -> list[Path]:
+def _tabulate_files(
+    root: Path,
+    paths: list[Path],
+    *,
+    lang: QueryLanguage,
+) -> list[Path]:
     from tools.cq.index.files import build_repo_file_index, tabulate_files
     from tools.cq.index.repo import resolve_repo_context
 
@@ -580,7 +656,7 @@ def _tabulate_files(root: Path, paths: list[Path]) -> list[Path]:
         repo_index,
         paths,
         None,
-        extensions=(".py",),
+        extensions=file_extensions_for_language(lang),
     )
     return result.files
 

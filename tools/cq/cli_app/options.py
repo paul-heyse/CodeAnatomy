@@ -53,6 +53,7 @@ class SearchOptions(CommonFilters, frozen=True):
     literal: bool = False
     include_strings: bool = False
     in_dir: str | None = None
+    lang: str = "python"
 
 
 class ReportOptions(CommonFilters, frozen=True):

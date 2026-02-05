@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pyarrow as pa
@@ -33,17 +32,6 @@ from tests.test_helpers.optional_deps import (
 require_datafusion_udfs()
 require_deltalake()
 require_delta_extension()
-try:
-    _internal = importlib.import_module("datafusion._internal")
-except ImportError:
-    _HAS_CODEANATOMY_UDFS = False
-else:
-    _HAS_CODEANATOMY_UDFS = hasattr(_internal, "register_codeanatomy_udfs")
-
-pytestmark = pytest.mark.skipif(
-    not _HAS_CODEANATOMY_UDFS,
-    reason="datafusion._internal.register_codeanatomy_udfs is unavailable.",
-)
 
 
 @pytest.mark.integration

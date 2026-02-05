@@ -15,6 +15,7 @@ from typing import Any, Literal, cast
 from ast_grep_py import Config, Rule, SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
@@ -172,6 +173,7 @@ def scan_files(
     files: list[Path],
     rules: tuple[RuleSpec, ...],
     root: Path,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> list[SgRecord]:
     """Scan files using ast-grep-py native bindings.
 
@@ -183,6 +185,8 @@ def scan_files(
         Tuple of rule specifications to apply.
     root
         Repository root for relative path normalization.
+    lang
+        Language used by ast-grep for parsing source files.
 
     Returns
     -------
@@ -197,7 +201,7 @@ def scan_files(
         except OSError:
             continue
 
-        sg_root = SgRoot(src, "python")
+        sg_root = SgRoot(src, lang)
         node = sg_root.root()
 
         for rule in rules:
@@ -233,6 +237,7 @@ def scan_with_pattern(
     pattern: str,
     root: Path,
     rule_id: str = "pattern_query",
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> list[dict[str, Any]]:
     """Scan files with a pattern.
 
@@ -246,6 +251,8 @@ def scan_with_pattern(
         Repository root for relative path normalization.
     rule_id
         Rule ID to use in results.
+    lang
+        Language used by ast-grep for parsing source files.
 
     Returns
     -------
@@ -260,7 +267,7 @@ def scan_with_pattern(
         except OSError:
             continue
 
-        sg_root = SgRoot(src, "python")
+        sg_root = SgRoot(src, lang)
         node = sg_root.root()
 
         for match in node.find_all(pattern=pattern):
@@ -386,43 +393,45 @@ def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
 
     # Common metavariable names to try
     common_names = [
-        "$FUNC",
-        "$F",
-        "$CLASS",
-        "$METHOD",
-        "$M",
-        "$X",
-        "$Y",
-        "$Z",
-        "$A",
-        "$B",
-        "$OBJ",
-        "$ATTR",
-        "$VAL",
-        "$ARGS",
-        "$KWARGS",
-        "$E",
-        "$NAME",
-        "$MODULE",
-        "$EXCEPT",
-        "$COND",
-        "$VAR",
-        "$P",
-        "$L",
-        "$DECORATOR",
-        "$SQL",
-        "$CURSOR",
+        "FUNC",
+        "F",
+        "CLASS",
+        "METHOD",
+        "M",
+        "X",
+        "Y",
+        "Z",
+        "A",
+        "B",
+        "OBJ",
+        "ATTR",
+        "VAL",
+        "ARGS",
+        "KWARGS",
+        "E",
+        "NAME",
+        "MODULE",
+        "EXCEPT",
+        "COND",
+        "VAR",
+        "P",
+        "L",
+        "DECORATOR",
+        "SQL",
+        "CURSOR",
     ]
 
     for name in common_names:
         captured = match.get_match(name)
         if captured is not None:
             range_obj = captured.range()
-            metavars[name] = {
+            payload = {
                 "text": captured.text(),
                 "start": {"line": range_obj.start.line, "column": range_obj.start.column},
                 "end": {"line": range_obj.end.line, "column": range_obj.end.column},
             }
+            metavars[name] = payload
+            metavars[f"${name}"] = payload
 
     return metavars
 

@@ -19,6 +19,7 @@ from tools.cq.query.ir import (
     RelationalConstraint,
     Scope,
 )
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import StrictnessMode
@@ -205,6 +206,8 @@ class ToolPlan(msgspec.Struct, frozen=True):
         Custom ast-grep rules for pattern queries
     is_pattern_query
         Whether this is a pattern-based query
+    lang
+        Query language for parsing and scan routing.
     """
 
     scope: Scope = msgspec.field(default_factory=Scope)
@@ -215,6 +218,7 @@ class ToolPlan(msgspec.Struct, frozen=True):
     explain: bool = False
     sg_rules: tuple[AstGrepRule, ...] = ()
     is_pattern_query: bool = False
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
 
 
 _ENTITY_RECORDS: dict[str, set[str]] = {
@@ -296,6 +300,7 @@ def _compile_entity_query(query: Query) -> ToolPlan:
         explain=query.explain,
         sg_rules=sg_rules,
         is_pattern_query=False,
+        lang=query.lang,
     )
 
 
@@ -331,6 +336,7 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
         explain=query.explain,
         sg_rules=(rule,),
         is_pattern_query=True,
+        lang=query.lang,
     )
 
 
@@ -346,7 +352,10 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     """
     assert query.entity is not None
 
-    # Map entity types to ast-grep patterns/kinds
+    if query.lang == "rust":
+        return _rust_entity_to_ast_grep_rules(query)
+
+    # Python defaults
     entity_patterns = {
         "function": "$FUNC",
         "class": "$CLASS",
@@ -360,30 +369,55 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
         "class": "class_definition",
         "method": "function_definition",
     }
-
     base_pattern = entity_patterns.get(query.entity)
     if not base_pattern:
         return ()
-
     kind = entity_kinds.get(query.entity)
+    if query.name and kind is None and not query.name.startswith("~"):
+        base_pattern = base_pattern.replace("$FUNC", query.name)
+        base_pattern = base_pattern.replace("$CLASS", query.name)
+        base_pattern = base_pattern.replace("$METHOD", query.name)
+        base_pattern = base_pattern.replace("$DECORATOR", query.name)
+        base_pattern = base_pattern.replace("$MODULE", query.name)
 
-    # Apply name filter if present (only when kind-based matching isn't used)
-    if query.name and kind is None:
-        if query.name.startswith("~"):
-            _ = query.name[1:]  # regex for later metavar filtering
-        else:
-            base_pattern = base_pattern.replace("$FUNC", query.name)
-            base_pattern = base_pattern.replace("$CLASS", query.name)
-            base_pattern = base_pattern.replace("$METHOD", query.name)
-            base_pattern = base_pattern.replace("$DECORATOR", query.name)
-            base_pattern = base_pattern.replace("$MODULE", query.name)
+    return (
+        _apply_relational_constraints(
+            AstGrepRule(pattern=base_pattern, kind=kind), query.relational
+        ),
+    )
 
-    rule = AstGrepRule(pattern=base_pattern, kind=kind)
 
-    # Apply relational constraints
-    rule = _apply_relational_constraints(rule, query.relational)
+def _rust_entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
+    """Build ast-grep rules for Rust entity constraints.
 
-    return (rule,)
+    Returns
+    -------
+    tuple[AstGrepRule, ...]
+        One or more ast-grep rules representing the Rust entity query.
+    """
+    assert query.entity is not None
+    entity = query.entity
+    if entity == "decorator":
+        return ()
+
+    if entity == "class":
+        type_kinds = ("struct_item", "enum_item", "trait_item")
+        return tuple(
+            _apply_relational_constraints(AstGrepRule(pattern="$TYPE", kind=kind), query.relational)
+            for kind in type_kinds
+        )
+
+    base_rules: dict[str, AstGrepRule] = {
+        "function": AstGrepRule(pattern="$FUNC", kind="function_item"),
+        # Rust methods are function_item nodes inside impl blocks.
+        "method": AstGrepRule(pattern="$METHOD", kind="function_item"),
+        "callsite": AstGrepRule(pattern="$CALL", kind="call_expression"),
+        "import": AstGrepRule(pattern="$USE", kind="use_declaration"),
+    }
+    base_rule = base_rules.get(entity)
+    if base_rule is None:
+        return ()
+    return (_apply_relational_constraints(base_rule, query.relational),)
 
 
 @dataclass

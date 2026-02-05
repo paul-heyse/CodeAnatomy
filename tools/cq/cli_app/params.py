@@ -16,6 +16,7 @@ from tools.cq.cli_app.step_types import RunStepCli
 from tools.cq.cli_app.types import (
     ConfidenceBucket,
     ImpactBucket,
+    QueryLanguageToken,
     SeverityLevel,
     comma_separated_enum,
     comma_separated_list,
@@ -126,6 +127,10 @@ class SearchParams(FilterParams):
         ),
     ] = False
     in_dir: Annotated[str | None, Parameter(name="--in", help="Restrict to directory")] = None
+    lang: Annotated[
+        QueryLanguageToken,
+        Parameter(name="--lang", help="Search language (python or rust)"),
+    ] = QueryLanguageToken.python
 
 
 @dataclass(kw_only=True)

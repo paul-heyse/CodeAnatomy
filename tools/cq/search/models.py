@@ -9,6 +9,7 @@ import msgspec
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.toolchain import Toolchain
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.profiles import SearchLimits
 
@@ -17,6 +18,7 @@ class SearchKwargs(TypedDict, total=False):
     """Keyword options for smart search entrypoints."""
 
     mode: QueryMode | None
+    lang: QueryLanguage
     include_globs: list[str] | None
     exclude_globs: list[str] | None
     include_strings: bool
@@ -33,6 +35,7 @@ class SearchConfig(CqStruct, frozen=True):
     query: str
     mode: QueryMode
     limits: SearchLimits
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
     include_strings: bool = False

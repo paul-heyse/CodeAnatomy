@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import msgspec
+from deltalake import DeltaTable
 from cyclopts import Parameter
 
 from cli.groups import restore_target_group
@@ -18,6 +19,7 @@ from datafusion_engine.delta.control_plane import (
     delta_provider_from_session,
     delta_restore,
 )
+from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -430,28 +432,38 @@ def clone_delta_snapshot(
         raise ValueError(msg)
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    bundle = delta_provider_from_session(
-        ctx,
-        request=DeltaProviderRequest(
-            table_uri=path,
-            storage_options=resolved.storage_options or None,
-            version=resolved.version,
-            timestamp=resolved.timestamp,
-            delta_scan=None,
-            gate=None,
-        ),
-    )
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    table_name = f"__delta_snapshot_{uuid7_hex()}"
-    adapter.register_delta_table_provider(
-        table_name,
-        TableProviderCapsule(bundle.provider),
-        overwrite=True,
-    )
     try:
-        arrow_table = ctx.table(table_name).to_arrow_table()
-    finally:
-        adapter.deregister_table(table_name)
+        bundle = delta_provider_from_session(
+            ctx,
+            request=DeltaProviderRequest(
+                table_uri=path,
+                storage_options=resolved.storage_options or None,
+                version=resolved.version,
+                timestamp=resolved.timestamp,
+                delta_scan=None,
+                gate=None,
+            ),
+        )
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+        table_name = f"__delta_snapshot_{uuid7_hex()}"
+        adapter.register_delta_table_provider(
+            table_name,
+            TableProviderCapsule(bundle.provider),
+            overwrite=True,
+        )
+        try:
+            arrow_table = ctx.table(table_name).to_arrow_table()
+        finally:
+            adapter.deregister_table(table_name)
+    except (DataFusionEngineError, RuntimeError, TypeError, ValueError):
+        table = DeltaTable(
+            path,
+            version=resolved.version,
+            storage_options=resolved.storage_options or None,
+        )
+        if resolved.timestamp is not None:
+            table.load_as_version(resolved.timestamp)
+        arrow_table = table.to_pyarrow_table()
     target_path = Path(target)
     if target_path.parent:
         target_path.parent.mkdir(parents=True, exist_ok=True)

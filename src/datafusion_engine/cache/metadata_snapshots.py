@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
+
 from datafusion_engine.dataset.registration import (
     DatasetRegistrationOptions,
     register_dataset_df,
@@ -26,6 +28,11 @@ _CACHE_SNAPSHOT_QUERIES: Mapping[str, str] = {
     "df_metadata_cache": "metadata_cache",
     "df_statistics_cache": "statistics_cache",
     "df_list_files_cache": "list_files_cache",
+}
+_CACHE_NAME_BY_TABLE: Mapping[str, str] = {
+    "metadata_cache": "metadata",
+    "statistics_cache": "statistics",
+    "list_files_cache": "list_files",
 }
 
 
@@ -97,7 +104,12 @@ def snapshot_datafusion_caches(
                     "cache_table": table_name,
                 },
             ) as (_span, set_result):
-                df = ctx.sql(sql)
+                try:
+                    source: object = ctx.sql(sql)
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    if "not found" not in str(exc).lower():
+                        raise
+                    source = _fallback_cache_snapshot_source(ctx, table_name=table_name)
                 path = cache_root / snapshot_name
                 commit_metadata = cache_commit_metadata(
                     CacheCommitMetadataRequest(
@@ -110,7 +122,7 @@ def snapshot_datafusion_caches(
                 )
                 result = pipeline.write(
                     WriteRequest(
-                        source=df,
+                        source=source,
                         destination=str(path),
                         format=WriteFormat.DELTA,
                         mode=WriteMode.OVERWRITE,
@@ -170,6 +182,30 @@ def snapshot_datafusion_caches(
             ).to_row()
         )
     return events
+
+
+def _fallback_cache_snapshot_source(ctx: SessionContext, *, table_name: str) -> pa.Table:
+    from datafusion_engine.catalog.introspection import capture_cache_diagnostics
+
+    cache_name = _CACHE_NAME_BY_TABLE.get(table_name, table_name)
+    diagnostics = capture_cache_diagnostics(ctx)
+    snapshots = diagnostics.get("cache_snapshots")
+    if isinstance(snapshots, list):
+        for row in snapshots:
+            if isinstance(row, Mapping) and str(row.get("cache_name")) == cache_name:
+                return pa.table({key: [value] for key, value in row.items()})
+    return pa.table(
+        {
+            "cache_name": [cache_name],
+            "event_time_unix_ms": [int(time.time() * 1000)],
+            "entry_count": [None],
+            "hit_count": [None],
+            "miss_count": [None],
+            "eviction_count": [None],
+            "config_ttl": [None],
+            "config_limit": [None],
+        }
+    )
 
 
 __all__ = ["CacheSnapshotEvent", "snapshot_datafusion_caches"]

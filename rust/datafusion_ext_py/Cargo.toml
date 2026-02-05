@@ -7,6 +7,12 @@ edition = "2021"
 name = "datafusion_ext_py"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["substrait", "async-udf"]
+async-udf = ["datafusion-python/async-udf"]
+substrait = ["datafusion-python/substrait"]
+protoc = ["datafusion-python/protoc"]
+
 [dependencies]
 pyo3 = { version = "0.26", features = ["extension-module"] }
 datafusion-python = { path = "../datafusion_python" }

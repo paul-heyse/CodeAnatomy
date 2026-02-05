@@ -9,6 +9,7 @@ consistency within a compilation unit and enable schema-driven optimization.
 from __future__ import annotations
 
 import importlib
+import logging
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.sql.options import sql_options_for_profile
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -698,6 +701,27 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
             raise ImportError(msg)
         msg = "Cache table registration hook is unavailable in the DataFusion extension module."
         raise TypeError(msg)
+    candidates: list[object] = [ctx]
+    internal_ctx = getattr(ctx, "ctx", None)
+    if internal_ctx is not None and all(existing is not internal_ctx for existing in candidates):
+        candidates.append(internal_ctx)
+    type_mismatch_errors: list[str] = []
+    for candidate in candidates:
+        try:
+            register(candidate, payload)
+            return
+        except TypeError as exc:
+            message = str(exc)
+            if "cannot be converted" in message:
+                type_mismatch_errors.append(message)
+                continue
+            raise
+    if type_mismatch_errors:
+        _LOGGER.warning(
+            "Skipping cache introspection table registration due to SessionContext ABI mismatch: %s",
+            "; ".join(type_mismatch_errors),
+        )
+        return
     register(ctx, payload)
 
 

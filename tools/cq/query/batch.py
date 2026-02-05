@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.astgrep.rules_py import get_rules_for_types
+from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
@@ -17,6 +17,11 @@ from tools.cq.query.executor import (
     ScanContext,
     _build_entity_candidates,
     _build_scan_context,
+)
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    QueryLanguage,
+    file_extensions_for_language,
 )
 from tools.cq.query.planner import scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import normalize_record_types
@@ -46,6 +51,7 @@ def build_batch_session(
     tc: Toolchain,
     paths: list[Path],
     record_types: Iterable[str] | Iterable[RecordType],
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> BatchEntityQuerySession:
     """Build a shared scan session for multiple entity queries.
 
@@ -60,17 +66,20 @@ def build_batch_session(
         repo_index,
         paths,
         None,
-        extensions=(".py",),
+        extensions=file_extensions_for_language(lang),
     )
     files = file_result.files
     files_by_rel = _index_files_by_rel(root, files)
 
     normalized_record_types = normalize_record_types(record_types)
-    rules = get_rules_for_types(normalized_record_types)
+    rules = get_rules_for_types(normalized_record_types, lang=lang)
     if not files or not rules:
         records: list[SgRecord] = []
     else:
-        records = scan_files(files, rules, root)
+        if lang == DEFAULT_QUERY_LANGUAGE:
+            records = scan_files(files, rules, root)
+        else:
+            records = scan_files(files, rules, root, lang=lang)
         records = filter_records_by_type(records, normalized_record_types)
 
     scan_ctx = _build_scan_context(records)

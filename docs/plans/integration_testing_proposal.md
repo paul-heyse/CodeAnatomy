@@ -44,7 +44,7 @@ This proposal outlines a systematic approach to integration testing for CodeAnat
 | Original Proposal | Actual Code | Fix Applied |
 |-------------------|-------------|-------------|
 | `DataFusionRuntimeProfile.default()` | No `.default()` classmethod; all fields have `default_factory` | Use `DataFusionRuntimeProfile()` |
-| `EvidencePlan.apply_query_and_project()` | Method doesn't exist; actual API: `requires_dataset()`, `required_columns_for()` | Fixed test descriptions and assertions |
+| `EvidencePlan.apply_query_and_project()` | Not a method on EvidencePlan; `apply_query_and_project()` is a standalone function in `extract.coordination.materialization` (line 293) that orchestrates gating via `plan_requires_row()`, `requires_dataset()`, `required_columns_for()` | Fixed test descriptions; use EvidencePlan API for unit checks, `apply_query_and_project()` for integration |
 | `plan_requires_row(plan, "cst_refs")` takes string | `plan_requires_row(plan: EvidencePlan, row: ExtractMetadata)` takes an `ExtractMetadata` object | Use `plan.requires_dataset("cst_refs")` directly |
 | `relationship_spec_with_invalid_expr: RelationshipSpec` | `compile_relationship_with_quality()` takes `QualityRelationshipSpec` (from `semantics.quality`) | Fixed fixture type |
 | `_validate_bundle_udfs()` called directly | Actual function: `validate_required_udfs()` from `datafusion_engine.udf.runtime` | Fixed function name |
@@ -70,6 +70,25 @@ This proposal outlines a systematic approach to integration testing for CodeAnat
 | Missing scope: plan/artifact determinism | Added: Phase 3 scope expansion |
 | Missing scope: diagnostics contract assertions | Added: error handling tests |
 | Missing Phase 0: stabilize existing failures | Added: Phase 0 with 5 known failing tests |
+
+### Corrections from Second External Review Integration (v5)
+
+| Review Item | Action Taken |
+|-------------|-------------|
+| Internal path/name inconsistencies (4 conflicts) | Fixed: canonical names aligned across dir tree, suite sections, and phase references |
+| Hard-coded test counts and failure baselines | Replaced with reproducible command blocks and `captured-on` notes |
+| Schedule topology pseudocode uses `hasattr(node, "name")` | Fixed: uses `GraphNode(kind, payload)` wrapper model — branch on `graph_node.kind`, read `graph_node.payload.name` |
+| `apply_query_and_project()` not referenced as orchestration function | Added: standalone function in `extract.coordination.materialization` (line 293) referenced as integration entry point |
+| Method-level checks in integration scope (cursor, filter policy, file context) | Annotated for relocation to unit tests; integration keeps only boundary-crossing variants |
+| EvidencePlan scope duplicated across suites | Consolidated into two clean suites: gating mechanics (Suite 10) and materialization effects (Expansion 3) |
+| Cost/slack tests own algorithm internals | Annotated: unit tests own formula correctness; integration validates scheduler output with cost context |
+| Missing diagnostics taxonomy assertion helper | Added shared `assert_diagnostic_event_taxonomy()` helper in fixture section |
+| Fixture governance insufficiently explicit | Added fixture governance rules: capability checks, unique tmp paths, no raw `SessionContext()` |
+| Missing scope: cache introspection registration | Added Expansion 6 with capability negotiation tests |
+| Missing scope: Delta provider panic containment | Added Expansion 7 with FFI failure containment tests |
+| Missing scope: object store registration idempotency | Added Expansion 8 with URI normalization tests |
+| Missing scope: plan-level projection assertions | Added Expansion 9 integrated into Expansion 3 |
+| Missing scope: session-context reuse determinism | Added Expansion 10 integrated into Expansion 4 |
 
 ### Existing Unit Coverage (Do Not Duplicate)
 
@@ -117,13 +136,21 @@ The following integration tests already exist and should be built upon:
 
 ### Existing Test Distribution
 
-| Category | Count | Coverage Focus | Gap |
-|----------|-------|----------------|-----|
-| Unit tests | 185 files | Single module behavior | No cross-module interaction |
-| Integration | 23 files | Basic multi-subsystem | Limited boundary coverage |
-| E2E | 16 files | Full pipeline (CQ focus) | Too coarse for debugging |
-| Incremental | 1 file | Delta/CDF lifecycle | Minimal stateful coverage |
-| Golden/Contract | ~25 files | Output stability | No behavioral testing |
+**Regenerate with:**
+```bash
+for d in unit integration e2e incremental msgspec_contract cli_golden plan_golden; do
+  echo "$d: $(find tests/$d -name 'test_*.py' 2>/dev/null | wc -l) files"
+done
+uv run pytest tests/integration -q  # integration gate baseline
+```
+
+| Category | Coverage Focus | Gap |
+|----------|----------------|-----|
+| `tests/unit/` | Single module behavior | No cross-module interaction |
+| `tests/integration/` | Basic multi-subsystem | Limited boundary coverage |
+| `tests/e2e/` | Full pipeline (CQ focus) | Too coarse for debugging |
+| `tests/incremental/` | Delta/CDF lifecycle | Minimal stateful coverage |
+| `tests/msgspec_contract/`, `tests/*_golden/` | Output stability | No behavioral testing |
 
 ### Identified Gaps (Refined)
 
@@ -176,9 +203,10 @@ tests/
 │   ├── boundaries/                    # NEW: Subsystem boundary tests
 │   │   ├── test_extraction_to_normalization.py
 │   │   ├── test_normalization_to_relationship.py
-│   │   ├── test_relationship_to_cpg_output.py
+│   │   ├── test_cpg_to_materialization.py
 │   │   ├── test_view_dag_to_scheduling.py
-│   │   └── test_evidence_plan_gating.py
+│   │   ├── test_evidence_plan_to_extractor.py  # Expansion 3 (v4)
+│   │   └── test_plan_determinism.py            # Expansion 4 (v4)
 │   │
 │   ├── adapters/                      # NEW: Adapter round-trip tests (small set)
 │   │   └── test_semantic_runtime_bridge_integration.py
@@ -189,17 +217,20 @@ tests/
 │   │   └── test_immutability_contracts.py  # Smoke only; keep unit-level
 │   │
 │   ├── scheduling/                    # NEW: Graph and schedule tests
-│   │   ├── test_schedule_tasks_boundaries.py
+│   │   ├── test_schedule_generation.py
 │   │   ├── test_bipartite_graph_structure.py
 │   │   └── test_column_level_deps.py
 │   │
 │   ├── error_handling/                # NEW: Error paths and recovery
 │   │   ├── test_extract_postprocess_resilience.py
-│   │   ├── test_graceful_degradation.py
-│   │   └── test_capability_negotiation.py     # NEW
+│   │   ├── test_evidence_plan_gating.py
+│   │   └── test_graceful_degradation.py
 │   │
 │   ├── runtime/                       # NEW: Runtime capability contracts
-│   │   └── test_capability_negotiation.py
+│   │   ├── test_capability_negotiation.py
+│   │   ├── test_cache_introspection_capabilities.py  # NEW (v5)
+│   │   ├── test_delta_provider_panic_containment.py  # NEW (v5)
+│   │   └── test_object_store_registration_contracts.py  # NEW (v5)
 │   │
 │   ├── multi_source/                  # DEFER: Start with one focused contract
 │   │   └── test_cst_ast_alignment.py
@@ -268,28 +299,38 @@ class TestExtractionToNormalization:
         # Then: Byte spans are identical or contained
 
     # ─────────────────────────────────────────────────────────────
-    # Test 1.2: Evidence plan gating (NEW)
+    # Test 1.2: Evidence plan gating (CONSOLIDATED — see note)
+    # SCOPE NOTE (v5): EvidencePlan scope now consolidated into two
+    # clean suites to avoid duplication across Boundary/Error Handling:
+    #   1. Suite 10 (error_handling/test_evidence_plan_gating.py):
+    #      plan gating mechanics (requires_dataset, required_columns_for,
+    #      plan_feature_flags, enabled_when integration path)
+    #   2. Expansion 3 (boundaries/test_evidence_plan_to_extractor.py):
+    #      extractor materialization effects (empty-plan behavior,
+    #      projected scans, diagnostics on gating outcomes)
+    # The tests below test extraction → normalization boundary
+    # effects of gating, not the gating mechanics themselves.
     # ─────────────────────────────────────────────────────────────
-    def test_evidence_plan_gating_excludes_unrequired_datasets(
+    def test_evidence_plan_gating_produces_empty_extraction(
         self,
         evidence_plan_without_dataset: EvidencePlan,
+        df_ctx: SessionContext,
     ) -> None:
-        """Verify gated datasets are excluded via requires_dataset()."""
-        # Given: Evidence plan that doesn't require ast_files
-        # When: evidence_plan.requires_dataset("ast_files") called
-        # Then: Returns False (dataset excluded from plan)
+        """Verify gated datasets produce empty extraction output.
 
-    def test_evidence_plan_required_columns_for_dataset(
-        self,
-        evidence_plan_with_columns: EvidencePlan,
-    ) -> None:
-        """Verify required_columns_for() returns only constrained columns."""
-        # Given: Evidence plan requiring only file_id, bstart, bend for cst_nodes
-        # When: evidence_plan.required_columns_for("cst_nodes") called
-        # Then: Returns ("file_id", "bstart", "bend")
+        Integration scope: test that gating flows through to extraction
+        producing correct-schema empty output (not exceptions).
+        """
+        # Given: Evidence plan that doesn't require ast_files
+        # When: apply_query_and_project() processes gated dataset
+        # Then: Empty but schema-correct output produced
 
     # ─────────────────────────────────────────────────────────────
-    # Test 1.3: FileContext fallback chain (NEW)
+    # Test 1.3: FileContext fallback chain (RELOCATE TO UNIT)
+    # SCOPE NOTE (v5): bytes_from_file_ctx() is pure utility behavior.
+    # Keep at integration level only where it affects extractor
+    # orchestration end-to-end. Individual fallback tests below should
+    # be relocated to unit tests during implementation.
     # ─────────────────────────────────────────────────────────────
     def test_file_context_prefers_explicit_data(
         self,
@@ -452,9 +493,14 @@ class TestViewDagToScheduling:
         self,
         task_graph: TaskGraph,
     ) -> None:
-        """Verify graph contains both EvidenceNode and TaskNode types."""
+        """Verify graph contains both EvidenceNode and TaskNode types.
+
+        Note: Nodes are GraphNode(kind, payload) wrappers. Check
+        graph_node.kind (NodeKind.EVIDENCE / NodeKind.TASK) and access
+        names via graph_node.payload.name.
+        """
         # Given: Built TaskGraph
-        # Then: Graph contains nodes with kind="evidence" and kind="task"
+        # Then: Graph contains nodes with kind=NodeKind.EVIDENCE and kind=NodeKind.TASK
 
     def test_requires_edges_connect_evidence_to_task(
         self,
@@ -481,7 +527,12 @@ class TestViewDagToScheduling:
         # Then: Edges have required_columns, required_types metadata
 
     # ─────────────────────────────────────────────────────────────
-    # Test 3.3: Cost modeling (NEW)
+    # Test 3.3: Cost modeling (TIGHTEN SCOPE)
+    # SCOPE NOTE (v5): bottom_level_costs() and task_slack_by_task()
+    # are pure algorithmic functions in relspec.execution_plan. Unit
+    # tests should own formula correctness. Integration tests should
+    # validate that scheduler output changes appropriately when cost
+    # context is injected via ScheduleOptions.cost_context.
     # ─────────────────────────────────────────────────────────────
     def test_bottom_level_costs_computed(
         self,
@@ -939,7 +990,14 @@ class TestCdfMergeStrategies:
 
 @pytest.mark.integration
 class TestCdfFilterPolicies:
-    """Tests for CDF filter policy behavior."""
+    """Tests for CDF filter policy behavior.
+
+    SCOPE NOTE (v5): Constructor/factory defaults and to_sql_predicate()
+    shape are method-level checks better suited for unit tests. Integration
+    scope should cover only filter policy effects across the CDF read path
+    + downstream merge semantics boundary. The tests below are kept as
+    reference but should be relocated to unit tests during implementation.
+    """
 
     def test_default_policy_includes_all_change_types(
         self,
@@ -1114,10 +1172,22 @@ class TestImpactClosureStrategies:
 
 **Purpose:** Validate graceful gating behavior instead of errors.
 
+**Key API references:**
+- `apply_query_and_project()` in `extract.coordination.materialization` (line 293) — orchestration entry point for evidence-plan gating
+- `plan_requires_row()` — called inside `apply_query_and_project()` to check row-level inclusion
+- `EvidencePlan.requires_dataset()` / `.required_columns_for()` — plan-level API
+- `plan_feature_flags()` in `extract.coordination.spec_helpers` (line 73) — feature-flag derivation
+- `rule_execution_options()` in `extract.coordination.spec_helpers` (line 159) — execution-option derivation
+
 ```python
 @pytest.mark.integration
 class TestEvidencePlanGating:
-    """Tests for evidence plan gating behavior."""
+    """Tests for evidence plan gating behavior.
+
+    Integration scope: test the full gating path from apply_query_and_project()
+    through plan_requires_row() to EvidencePlan API. Unit tests should own
+    individual method behavior (requires_dataset, required_columns_for).
+    """
 
     def test_gated_dataset_excluded_from_plan(
         self,
@@ -1125,9 +1195,9 @@ class TestEvidencePlanGating:
     ) -> None:
         """Verify gated datasets are excluded via requires_dataset().
 
-        Note: EvidencePlan has no apply_query_and_project() method.
-        Use requires_dataset(name) to check inclusion and
-        required_columns_for(name) for column projection.
+        Note: apply_query_and_project() is a standalone function in
+        extract.coordination.materialization (not a method on EvidencePlan).
+        It orchestrates gating via plan_requires_row() internally.
         """
         # Given: Evidence plan not requiring "optional_dataset"
         # When: evidence_plan.requires_dataset("optional_dataset")
@@ -1203,8 +1273,11 @@ class TestScheduleGeneration:
         Approach: For each task node, find predecessor task nodes in the
         bipartite graph (task → evidence → task path) and verify they
         appear earlier in the schedule.
+        Note on node model: Graph nodes are GraphNode(kind, payload) wrappers
+        (src/relspec/rustworkx_graph.py:139). Branch on graph_node.kind
+        ("evidence" or "task") and read graph_node.payload.name.
         """
-        import rustworkx as rx
+        from relspec.rustworkx_graph import NodeKind
 
         schedule = schedule_tasks(task_graph, evidence=evidence_catalog)
         task_positions = {name: i for i, name in enumerate(schedule.ordered_tasks)}
@@ -1217,16 +1290,19 @@ class TestScheduleGeneration:
             # Walk predecessor chain: task ← evidence ← predecessor_task
             # In bipartite graph: evidence nodes connect tasks
             for evidence_idx in task_graph.graph.predecessor_indices(task_idx):
-                evidence_node = task_graph.graph[evidence_idx]
-                # Skip if not an evidence node
-                if not hasattr(evidence_node, "name"):
+                graph_node = task_graph.graph[evidence_idx]
+                # Skip if not an evidence node (use kind, not hasattr)
+                if graph_node.kind != NodeKind.EVIDENCE:
                     continue
                 # Find tasks that produce this evidence
                 for pred_task_idx in task_graph.graph.predecessor_indices(evidence_idx):
-                    pred_node = task_graph.graph[pred_task_idx]
-                    if hasattr(pred_node, "name") and pred_node.name in task_positions:
-                        assert task_positions[pred_node.name] < task_positions[task_name], (
-                            f"{task_name} scheduled before predecessor {pred_node.name}"
+                    pred_graph_node = task_graph.graph[pred_task_idx]
+                    if (
+                        pred_graph_node.kind == NodeKind.TASK
+                        and pred_graph_node.payload.name in task_positions
+                    ):
+                        assert task_positions[pred_graph_node.payload.name] < task_positions[task_name], (
+                            f"{task_name} scheduled before predecessor {pred_graph_node.payload.name}"
                         )
 
     def test_generations_allow_parallel_execution(
@@ -1491,6 +1567,186 @@ def test_view_artifact_failed_event_has_stable_taxonomy(
 
 **Rationale:** Asserting stable status taxonomy keeps tests resilient (won't break on wording changes) and operationally useful (dashboards/alerting can rely on canonical names).
 
+### Expansion 6: Cache Introspection Registration Compatibility (v5 — High Priority)
+
+**File:** `tests/integration/runtime/test_cache_introspection_capabilities.py`
+
+**Motivation:** Cache table registration crosses Python `SessionContext` and extension entrypoints. Integration behavior depends on extension hook compatibility at runtime.
+
+**Relevant code boundary:**
+- `register_cache_introspection_functions()` in `datafusion_engine.catalog.introspection` (line 665)
+- `_install_cache_tables()` in `datafusion_engine.session.runtime` (line 5983)
+
+```python
+@pytest.mark.integration
+class TestCacheIntrospectionCapabilities:
+    """Verify cache introspection registration boundary."""
+
+    def test_compatible_hook_registers_successfully(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify cache introspection functions register on compatible context."""
+        # Given: SessionContext with extension hooks available
+        # When: register_cache_introspection_functions(ctx) called
+        # Then: No error; functions queryable
+
+    def test_missing_hook_yields_deterministic_error(
+        self,
+        df_ctx_without_extensions: SessionContext,
+    ) -> None:
+        """Verify missing extension hook produces actionable ImportError."""
+        # Given: SessionContext without datafusion._internal
+        # When: register_cache_introspection_functions(ctx) called
+        # Then: ImportError with actionable message (not opaque failure)
+
+    def test_incompatible_context_yields_structured_failure(
+        self,
+        incompatible_ctx: SessionContext,
+    ) -> None:
+        """Verify incompatible context type produces deterministic failure."""
+        # Given: Context type that doesn't support cache table hooks
+        # When: _install_cache_tables() called
+        # Then: RuntimeError with diagnostic context (no opaque panic)
+```
+
+### Expansion 7: Delta Provider Panic-Containment Contract (v5)
+
+**File:** `tests/integration/runtime/test_delta_provider_panic_containment.py`
+
+**Motivation:** Delta provider construction crosses FFI/runtime boundaries (via `delta_provider_from_session()` and `delta_provider_with_files()` in `datafusion_engine.delta.control_plane`) and can surface as panics if unguarded.
+
+```python
+@pytest.mark.integration
+class TestDeltaProviderPanicContainment:
+    """Verify Delta provider construction contains FFI failures."""
+
+    def test_bad_provider_construction_yields_structured_error(
+        self,
+        df_ctx: SessionContext,
+        invalid_delta_uri: str,
+    ) -> None:
+        """Verify provider failure surfaces as RuntimeError, not panic."""
+        # Given: Invalid Delta table URI or corrupt metadata
+        # When: delta_provider_from_session(ctx, request=bad_request)
+        # Then: Structured RuntimeError with actionable diagnostics
+        # And: No uncaught panic/FFI exception leaks to test boundary
+
+    def test_missing_object_store_yields_structured_error(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify missing object store registration produces clear error."""
+        # Given: URI requiring object store that isn't registered
+        # When: delta_provider_from_session(ctx, request=s3_request)
+        # Then: Structured error indicating missing store registration
+```
+
+### Expansion 8: Object Store Registration Idempotency and URI Normalization (v5)
+
+**File:** `tests/integration/runtime/test_object_store_registration_contracts.py`
+
+**Motivation:** Provider registration depends on URI/scheme normalization (`_resolve_store_spec()` in `datafusion_engine.delta.object_store`) and registration order. Frequent source of environment-specific breakage.
+
+```python
+@pytest.mark.integration
+class TestObjectStoreRegistrationContracts:
+    """Verify object store registration idempotency and URI normalization."""
+
+    def test_repeated_registration_is_idempotent(
+        self,
+        df_ctx: SessionContext,
+        tmp_path: Path,
+    ) -> None:
+        """Verify registering same Delta location repeatedly is safe."""
+        # Given: Delta table at tmp_path
+        # When: register_delta_object_store() called twice for same URI
+        # Then: No error, second call is no-op
+
+    def test_equivalent_uri_forms_resolve_consistently(
+        self,
+        df_ctx: SessionContext,
+        tmp_path: Path,
+    ) -> None:
+        """Verify path, file://, and dataset-spec URI forms resolve equally."""
+        # Given: Same physical location referred to by different URI forms
+        # When: Registered and queried via each form
+        # Then: Same data returned for all forms
+
+    def test_re_registration_after_schema_evolution_preserves_queryability(
+        self,
+        df_ctx: SessionContext,
+        tmp_path: Path,
+    ) -> None:
+        """Verify re-registration works after schema evolution."""
+        # Given: Delta table registered, then schema evolved (merge mode)
+        # When: Re-register provider for same location
+        # Then: New schema visible and queryable
+```
+
+### Expansion 9: Evidence Plan to DataFusion Plan-Level Projection (v5)
+
+**File:** Integrated into `tests/integration/boundaries/test_evidence_plan_to_extractor.py` (Expansion 3)
+
+**Motivation:** Expansion 3 references this concept, but add explicit plan-level assertions. Verify that projected columns appear in the actual DataFusion logical plan, not just in helper return values.
+
+```python
+# Add to TestEvidencePlanToExtractorPipeline (Expansion 3):
+
+    def test_projected_columns_appear_in_logical_plan(
+        self,
+        evidence_plan: EvidencePlan,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify required_columns_for() projection reaches DataFusion plan.
+
+        Primary boundary code: apply_query_and_project() in
+        extract.coordination.materialization (line 293).
+        """
+        # Given: Evidence plan requiring only (file_id, bstart, bend)
+        # When: apply_query_and_project() builds DataFusionPlanBundle
+        # Then: Logical plan projection references only projected columns
+        # And: Required join keys and derived fields are retained
+
+    def test_gated_dataset_produces_limit_zero_plan(
+        self,
+        evidence_plan: EvidencePlan,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify gated dataset produces LIMIT(0) plan, not error."""
+        # Given: Evidence plan not requiring "optional_dataset"
+        # When: apply_query_and_project() processes that dataset
+        # Then: Plan contains LIMIT(0) node (empty but schema-correct)
+```
+
+### Expansion 10: Session-Context Reuse Determinism (v5)
+
+**File:** Integrated into `tests/integration/boundaries/test_plan_determinism.py` (Expansion 4)
+
+**Motivation:** Same runtime profile + reused session context across runs should yield stable plan signatures/fingerprints unless semantic config changed. This catches hidden mutable-state coupling in runtime/session caches.
+
+```python
+# Add to TestPlanDeterminism (Expansion 4):
+
+    def test_fingerprint_stable_across_session_reuse(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify plan fingerprint stable when session context is reused."""
+        # Given: Same runtime profile
+        # When: Compile plan, reuse same SessionContext, compile again
+        # Then: Fingerprints are identical (no hidden mutable state)
+
+    def test_fingerprint_changes_when_semantic_config_changed_on_reused_session(
+        self,
+        df_ctx: SessionContext,
+    ) -> None:
+        """Verify fingerprint changes when semantic config changes on reused session."""
+        # Given: Plan compiled with semantic_config_a on session
+        # When: Apply semantic_config_b to same session and recompile
+        # Then: Fingerprint differs (semantic change detected)
+```
+
 ---
 
 ## Fixture Library (Updated)
@@ -1616,15 +1872,65 @@ def evidence_catalog() -> EvidenceCatalog:
 - `CdfCursorStore(cursors_path=...)` — is `StructBaseStrict` (msgspec), not a dataclass
 - `EvidenceCatalog()` — mutable `@dataclass` with `clone()` for staged updates
 
+### Shared Diagnostics Taxonomy Assertion Helper (v5)
+
+Canonical postprocess statuses are emitted in both `extract.helpers` and `extract.coordination.materialization`. Add a shared test-side helper to reduce string drift:
+
+```python
+# tests/test_helpers/diagnostics.py (extend existing)
+
+# Canonical postprocess status taxonomy
+POSTPROCESS_STATUSES = frozenset({
+    "register_view_failed",
+    "view_artifact_failed",
+    "schema_contract_failed",
+})
+
+# Canonical stage names
+POSTPROCESS_STAGES = frozenset({
+    "postprocess",
+})
+
+
+def assert_diagnostic_event_taxonomy(
+    event: object,
+    *,
+    expected_status: str,
+    expected_stage: str = "postprocess",
+) -> None:
+    """Assert a diagnostic event uses canonical status and stage values.
+
+    Centralizes taxonomy assertions to reduce string drift across tests.
+    """
+    assert expected_status in POSTPROCESS_STATUSES, f"Unknown status: {expected_status}"
+    assert expected_stage in POSTPROCESS_STAGES, f"Unknown stage: {expected_stage}"
+    assert getattr(event, "status", None) == expected_status
+    assert getattr(event, "stage", None) == expected_stage
+```
+
+### Fixture Governance Rules (v5)
+
+1. **Prefer root fixtures** from `tests/conftest.py` and helpers from `tests/test_helpers/`.
+2. **Capability checks at module setup** — require `require_datafusion()`, `require_delta_extension()` etc. at module level for capability-sensitive suites.
+3. **Unique tmp paths** — use `tmp_path` fixture (function-scoped) for Delta/CDF suites. Avoid cross-test state reuse.
+4. **No `SessionContext()` in conftest** — use `df_ctx()` from `tests/test_helpers/datafusion_runtime.py` which handles extension hook verification.
+
 ---
 
-## Implementation Priorities (Revised per Review)
+## Implementation Priorities (Revised per Reviews v4+v5)
+
+### Phase A: Proposal Hygiene (Before Implementation)
+
+1. Resolve remaining file/path/name inconsistencies across sections *(v5: done in this revision)*.
+2. Replace any remaining hard-coded inventory/failure counts with generated snapshot instructions *(v5: done)*.
+3. Mark unit-level duplicates for relocation/removal from integration scope *(v5: annotated)*.
+4. Relocate method-level tests (cursor defaults, filter policy shape, file context fallback) to unit test backlog.
 
 ### Phase 0: Stabilize Existing Integration Failures (Immediate)
 
-Before adding new tests, resolve and lock down the 5 currently failing integration tests. Add regression assertions around the fixed behavior.
+Before adding new tests, resolve and lock down currently failing integration tests. Add regression assertions around the fixed behavior.
 
-**Known failures** (from `uv run pytest tests/integration -q`: 41 passed, 5 failed, 4 skipped):
+**Known failures** (regenerate with `uv run pytest tests/integration -q`):
 
 1. `tests/integration/test_delta_protocol_and_schema_mode.py::test_schema_mode_merge_allows_new_columns`
 2. `tests/integration/test_incremental_partitioned_updates.py::test_upsert_partitioned_dataset_alignment_and_deletes`
@@ -1638,44 +1944,54 @@ Before adding new tests, resolve and lock down the 5 currently failing integrati
 
 Focus on areas with highest ROI that are currently under-tested:
 
-1. **Evidence plan gating and projection behavior** (Suites 1, 10, Expansion 3)
-   - `tests/integration/boundaries/test_evidence_plan_gating.py`
-   - `tests/integration/boundaries/test_evidence_plan_to_extractor.py`
-   - Covers `requires_dataset()` + `required_columns_for()` + `plan_feature_flags()` interaction
+1. **Evidence plan gating and materialization effects** (Suites 1, 10, Expansions 3, 9)
+   - `tests/integration/error_handling/test_evidence_plan_gating.py` — gating mechanics
+   - `tests/integration/boundaries/test_evidence_plan_to_extractor.py` — materialization effects, plan-level projection
+   - Covers `apply_query_and_project()` → `plan_requires_row()` → `requires_dataset()` / `required_columns_for()` / `plan_feature_flags()` path
 2. **Scheduling behavior contracts** (Suite 11)
-   - `tests/integration/scheduling/test_schedule_tasks_boundaries.py`
-   - Direct tests for `schedule_tasks()` behavior under missing evidence, reduced graph, and cost context
+   - `tests/integration/scheduling/test_schedule_generation.py`
+   - Direct tests for `schedule_tasks()` behavior under missing evidence, reduced graph, and cost context wiring (not algorithm internals)
 3. **Extract postprocess resilience** (Suite 4, Expansion 5)
    - `tests/integration/error_handling/test_extract_postprocess_resilience.py`
    - `register_view_failed` / `view_artifact_failed` / `schema_contract_failed` event recording
+   - Use `assert_diagnostic_event_taxonomy()` helper for canonical assertions
 4. **Incremental impact closure** (Suite 9)
    - `tests/incremental/test_impact_closure_strategies.py`
    - `merge_impacted_files()` and `impacted_importers_from_changed_exports()` have no direct tests
 
-### Phase 2: Delta and Runtime Capability Contracts
+### Phase 2: Runtime/Storage Hardening
 
-1. **Delta read-after-write contracts** (Expansion 1)
+1. **Cache introspection capability negotiation** (Expansion 6)
+   - `tests/integration/runtime/test_cache_introspection_capabilities.py`
+   - Compatible hook, missing hook, incompatible context paths
+2. **Delta provider panic containment** (Expansion 7)
+   - `tests/integration/runtime/test_delta_provider_panic_containment.py`
+   - FFI failure surfaces as structured `RuntimeError`, not panic
+3. **Object store registration idempotency** (Expansion 8)
+   - `tests/integration/runtime/test_object_store_registration_contracts.py`
+   - URI normalization, repeated registration, post-evolution re-registration
+4. **Delta read-after-write contracts** (Expansion 1)
    - `tests/incremental/test_delta_read_after_write_contracts.py`
    - Schema resolution and provider registration after writes
-2. **Capability negotiation boundaries** (Expansion 2)
+5. **Capability negotiation boundaries** (Expansion 2)
    - `tests/integration/runtime/test_capability_negotiation.py`
    - Deterministic failure payloads for Substrait decode, async UDF
-3. **Adapter integration** (Suite 5 — small set only)
-   - `tests/integration/adapters/test_semantic_runtime_bridge_integration.py`
-   - Profile → semantic config → profile behavior inside session construction
 
 ### Phase 3: Selective Expansion
 
-1. **Plan and artifact determinism** (Expansion 4)
+1. **Plan and artifact determinism** (Expansions 4, 10)
    - `tests/integration/boundaries/test_plan_determinism.py`
-   - Fingerprint stability / expected change boundaries
-2. **Bipartite graph structure and cost modeling** (Suites 3.2, 3.3)
-   - Graph structure validation, bottom-level costs, slack computation
-3. **Immutability smoke assertions** (Suite 6 — smoke only)
+   - Fingerprint stability, session-context reuse, expected change boundaries
+2. **Adapter integration** (Suite 5 — small set only)
+   - `tests/integration/adapters/test_semantic_runtime_bridge_integration.py`
+   - Profile → semantic config → profile behavior inside session construction
+3. **Bipartite graph structure** (Suite 3.2 — unit tests own cost formula)
+   - Graph structure validation; cost modeling wiring through `ScheduleOptions.cost_context`
+4. **Immutability smoke assertions** (Suite 6 — smoke only)
    - Keep mostly unit-level; integration has only smoke where immutability affects subsystem behavior
-4. **One multi-source alignment contract** (deferred from full cross-product)
+5. **One multi-source alignment contract** (deferred from full cross-product)
    - Start with CST/AST alignment only, not full 5-source matrix
-5. **Non-gating performance baseline tests** (separate CI job)
+6. **Non-gating performance baseline tests** (separate CI job)
    - Add after boundary contracts are stable
 
 ---
@@ -1684,14 +2000,16 @@ Focus on areas with highest ROI that are currently under-tested:
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
-| Phase 0 gate | All 5 existing failures fixed | `uv run pytest tests/integration -q` → 0 failures |
-| Evidence plan gating | Gating + projection tested | `requires_dataset()` + `required_columns_for()` |
-| Scheduling behavior | Topology + partial + cost tested | `schedule_tasks()` under multiple scenarios |
-| Postprocess resilience | Event taxonomy verified | Canonical status names asserted |
+| Phase 0 gate | Existing failures fixed | `uv run pytest tests/integration -q` → 0 failures |
+| Evidence plan gating | Full gating path tested | `apply_query_and_project()` → plan-level projection verified |
+| Scheduling behavior | Topology + partial + cost wiring | `schedule_tasks()` under multiple scenarios |
+| Postprocess resilience | Event taxonomy verified | `assert_diagnostic_event_taxonomy()` on all status paths |
 | Impact closure | All 3 closure types tested | hybrid, symbol_closure, import_closure |
+| Cache introspection | Capability negotiation tested | Compatible, missing, incompatible paths all deterministic |
+| Delta provider safety | No panics at FFI boundary | Structured `RuntimeError` for known bad-provider scenarios |
+| Object store registration | Idempotent + URI-normalized | Repeated registration safe, equivalent URIs resolve same |
 | Delta read-after-write | Schema visible after write | Provider registration post-write verified |
-| Adapter coverage | Round-trip in session context | profile → config → profile in session construction |
-| Plan determinism | Fingerprint stability verified | Unchanged inputs → same fingerprint |
+| Plan determinism | Fingerprint stability verified | Stable across session reuse; changes with semantic config |
 | Test execution time | < 90s for integration gate | CI timing (excludes performance/incremental jobs) |
 
 ---
@@ -1740,20 +2058,27 @@ markers =
 - ✅ Final deep code review completed (v2) — All test expectations verified against production code
 - ✅ Deep code review completed (v3) — Fixed non-existent API references, import paths, function signatures
 - ✅ External review integrated (v4) — Scope calibration, phasing, fixture reuse, marker config, directory structure
+- ✅ Second external review integrated (v5) — Internal consistency, boundary-pure scope, runtime/storage hardening, GraphNode model, diagnostics helper
 
 **Ready for Implementation:**
-1. **Phase 0: Fix existing failures** — Resolve 5 known integration test failures before adding new tests
-2. **Phase 1: Core boundary contracts** — Evidence plan gating, scheduler behavior, postprocess resilience, impact closure
-3. **Phase 2: Delta/runtime contracts** — Read-after-write, capability negotiation, adapter integration (small set)
-4. **Phase 3: Selective expansion** — Plan determinism, graph structure, multi-source (one contract), performance (non-gating)
+1. **Phase A: Proposal hygiene** — Relocate annotated method-level tests to unit backlog *(v5: annotations done, relocation pending)*
+2. **Phase 0: Fix existing failures** — Resolve known integration test failures before adding new tests
+3. **Phase 1: Core boundary contracts** — Evidence plan gating (full `apply_query_and_project()` path), scheduler behavior, postprocess resilience with taxonomy helper, impact closure
+4. **Phase 2: Runtime/storage hardening** — Cache introspection, Delta provider panic containment, object store registration, read-after-write, capability negotiation
+5. **Phase 3: Selective expansion** — Plan determinism (+ session reuse), adapter integration (small set), graph structure, multi-source (one contract), performance (non-gating)
 
-**Scope Calibration (from review):**
+**Scope Calibration (from reviews):**
 - Keep boundary-crossing tests; do not duplicate unit-level algorithmic coverage
 - Stateful CDF/Delta tests go in `tests/incremental/`, not `tests/integration/incremental/`
 - Adapter tests: small integration set only, unit tests cover basics
 - Immutability tests: smoke assertions only at integration level
 - Performance tests: non-gating, separate CI job
 - Multi-source alignment: start with one focused contract, not full cross-product
+- Cost/slack formula correctness: unit tests; integration tests cost-context wiring
+- CdfFilterPolicy defaults, `bytes_from_file_ctx()` fallback: relocate to unit tests
+- EvidencePlan scope: consolidated into gating mechanics + materialization effects (no duplication)
+- Diagnostics assertions: use shared `assert_diagnostic_event_taxonomy()` helper
+- Runtime compatibility (cache tables, Delta provider FFI, object store): high-risk seams now covered
 
 **Code Review Confidence:**
 - All function signatures verified against source code with line numbers
@@ -1761,10 +2086,12 @@ markers =
 - All exception types verified (FrozenInstanceError vs AttributeError)
 - All default values verified (constructor vs config defaults)
 - Adapter module path verified (`datafusion_engine/semantics_runtime.py`)
-- EvidencePlan API verified (`requires_dataset()`, not `apply_query_and_project()`)
-- InferredDepsInputs wrapper verified for `infer_deps_from_plan_bundle()`
-- Cost functions verified in `relspec.execution_plan` (not `rustworkx_schedule`)
-- DataFusionRuntimeProfile construction verified (no `.default()` classmethod)
-- Scheduling test topology check uses graph predecessors, not `TaskNode.inputs` (evidence names)
-- Pytest markers confirmed in `pytest.ini`, not `pyproject.toml`
-- Shared test fixtures confirmed in `tests/test_helpers/` (datafusion_runtime, optional_deps, delta_seed)
+- EvidencePlan gating: `apply_query_and_project()` in `extract.coordination.materialization` (line 293) confirmed as orchestration entry point
+- `plan_feature_flags()` at `extract.coordination.spec_helpers:73`, `rule_execution_options()` at line 159 confirmed
+- Graph nodes use `GraphNode(kind, payload)` wrapper (line 139); branch on `kind`, read `payload.name`
+- `register_cache_introspection_functions()` at `datafusion_engine.catalog.introspection:665` confirmed
+- Delta provider FFI calls at `datafusion_engine.delta.control_plane:671,737` confirmed unguarded
+- Object store URI normalization at `datafusion_engine.delta.object_store:155` confirmed
+- `schedule_tasks()` at `relspec.rustworkx_schedule:60`, `TaskSchedule` at line 28 confirmed
+- `bottom_level_costs()` at `relspec.execution_plan:923`, `task_slack_by_task()` at line 955 confirmed as pure algorithmic
+- Canonical postprocess statuses confirmed in both `extract.helpers:543,564,584` and `extract.coordination.materialization:521,542,562`

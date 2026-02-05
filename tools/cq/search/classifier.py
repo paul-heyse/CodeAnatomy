@@ -18,8 +18,9 @@ from typing import Literal
 import msgspec
 from ast_grep_py import SgNode, SgRoot
 
-from tools.cq.astgrep.rules_py import get_rules_for_types
+from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import SgRecord, scan_files
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
 from tools.cq.utils.interval_index import IntervalIndex
 
 
@@ -180,13 +181,17 @@ NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
     "decorated_definition": ("definition", 0.95),
     # Calls
     "call": ("callsite", 0.95),
+    "call_expression": ("callsite", 0.95),
+    "macro_invocation": ("callsite", 0.90),
     # Imports
     "import_statement": ("import", 0.95),
     "import_from_statement": ("from_import", 0.95),
+    "use_declaration": ("import", 0.95),
     # Assignments
     "assignment": ("assignment", 0.85),
     "augmented_assignment": ("assignment", 0.85),
     "named_expression": ("assignment", 0.85),
+    "let_declaration": ("assignment", 0.85),
     # Annotations
     "type": ("annotation", 0.90),
     # Strings (may be docstrings)
@@ -197,6 +202,13 @@ NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
     # Generic references
     "identifier": ("reference", 0.60),
     "attribute": ("reference", 0.70),
+    "scoped_identifier": ("reference", 0.70),
+    # Rust definitions
+    "function_item": ("definition", 0.95),
+    "struct_item": ("definition", 0.95),
+    "enum_item": ("definition", 0.95),
+    "trait_item": ("definition", 0.95),
+    "impl_item": ("definition", 0.85),
 }
 
 
@@ -254,19 +266,29 @@ def _extract_def_name_from_record(record: SgRecord) -> str | None:
     """
     if record.record != "def":
         return None
-    match = re.match(r"(?:async\s+)?(?:def|class)\s+(\w+)", record.text)
-    if match:
-        return match.group(1)
+    patterns = (
+        r"(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"fn\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, record.text)
+        if match:
+            return match.group(1)
     return None
 
 
 # Per-file caches to avoid re-parsing
-_sg_cache: dict[str, SgRoot] = {}
+_sg_cache: dict[tuple[str, QueryLanguage], SgRoot] = {}
 _source_cache: dict[str, str] = {}
-_def_lines_cache: dict[str, list[tuple[int, int]]] = {}
+_def_lines_cache: dict[tuple[str, QueryLanguage], list[tuple[int, int]]] = {}
 _symtable_cache: dict[str, symtable.SymbolTable] = {}
-_record_context_cache: dict[str, RecordContext] = {}
-_node_index_cache: dict[str, NodeIntervalIndex] = {}
+_record_context_cache: dict[tuple[str, QueryLanguage], RecordContext] = {}
+_node_index_cache: dict[tuple[str, QueryLanguage], NodeIntervalIndex] = {}
+
+
+def _lang_cache_key(file_path: Path, lang: QueryLanguage) -> tuple[str, QueryLanguage]:
+    return str(file_path), lang
 
 
 def detect_query_mode(query: str, *, force_mode: QueryMode | None = None) -> QueryMode:
@@ -390,7 +412,12 @@ def classify_heuristic(line: str, col: int, match_text: str) -> HeuristicResult:
     return result
 
 
-def get_record_context(file_path: Path, root: Path) -> RecordContext:
+def get_record_context(
+    file_path: Path,
+    root: Path,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+) -> RecordContext:
     """Get or build ast-grep record context for a file.
 
     Used by classification to cache parsed ast-grep records per file.
@@ -400,12 +427,12 @@ def get_record_context(file_path: Path, root: Path) -> RecordContext:
     RecordContext
         Cached record context for the file.
     """
-    key = str(file_path)
+    key = _lang_cache_key(file_path, lang)
     if key in _record_context_cache:
         return _record_context_cache[key]
 
-    rules = get_rules_for_types(None)
-    records = scan_files([file_path], rules, root)
+    rules = get_rules_for_types(None, lang=lang)
+    records = scan_files([file_path], rules, root, lang=lang)
     record_index = IntervalIndex.from_records(records)
     def_records = [record for record in records if record.record == "def"]
     def_index: IntervalIndex[SgRecord] = (
@@ -448,7 +475,12 @@ def _build_node_interval_index(spans: list[NodeSpan]) -> IntervalIndex[NodeSpan]
     return IntervalIndex.from_intervals(intervals)
 
 
-def get_node_index(file_path: Path, sg_root: SgRoot) -> NodeIntervalIndex:
+def get_node_index(
+    file_path: Path,
+    sg_root: SgRoot,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+) -> NodeIntervalIndex:
     """Get or build cached node interval index for a file.
 
     Used by node-based classification to avoid repeated AST walks.
@@ -458,7 +490,7 @@ def get_node_index(file_path: Path, sg_root: SgRoot) -> NodeIntervalIndex:
     NodeIntervalIndex
         Cached node interval index for the file.
     """
-    key = str(file_path)
+    key = _lang_cache_key(file_path, lang)
     if key in _node_index_cache:
         return _node_index_cache[key]
     spans = _build_node_spans(sg_root.root())
@@ -477,7 +509,7 @@ def _resolve_sg_root_path(sg_root: SgRoot) -> Path | None:
     Path | None
         Cached path if available.
     """
-    for path_str, cached_root in _sg_cache.items():
+    for (path_str, _lang), cached_root in _sg_cache.items():
         if cached_root is sg_root:
             return Path(path_str)
     return None
@@ -501,6 +533,7 @@ def _find_node_at_position(
     col: int,
     *,
     file_path: Path | None = None,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> SgNode | None:
     """Find the most specific node containing position.
 
@@ -513,7 +546,7 @@ def _find_node_at_position(
     """
     resolved_path = file_path or _resolve_sg_root_path(sg_root)
     if resolved_path is not None:
-        index = get_node_index(resolved_path, sg_root)
+        index = get_node_index(resolved_path, sg_root, lang=lang)
         return index.find_containing(line, col)
 
     spans = _build_node_spans(sg_root.root())
@@ -537,11 +570,23 @@ def _find_containing_scope(node: SgNode) -> str | None:
     current = node.parent()
     while current:
         kind = current.kind()
-        if kind in {"function_definition", "class_definition"}:
+        if kind in {
+            "function_definition",
+            "class_definition",
+            "function_item",
+            "struct_item",
+            "enum_item",
+            "trait_item",
+            "impl_item",
+        }:
             # Extract name from the definition
             name_node = current.field("name")
             if name_node:
                 return name_node.text()
+            if kind == "impl_item":
+                type_node = current.field("type")
+                if type_node:
+                    return type_node.text()
         current = current.parent()
     return None
 
@@ -581,6 +626,8 @@ def classify_from_node(
     sg_root: SgRoot,
     line: int,
     col: int,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> NodeClassification | None:
     """Classify using ast-grep node lookup.
 
@@ -592,6 +639,8 @@ def classify_from_node(
         1-indexed line number.
     col
         0-indexed column offset.
+    lang
+        Query language used for parser/node-kind semantics.
 
     Returns
     -------
@@ -599,7 +648,7 @@ def classify_from_node(
         Classification result, or None if no classifiable node found.
     """
     result: NodeClassification | None = None
-    node = _find_node_at_position(sg_root, line, col)
+    node = _find_node_at_position(sg_root, line, col, lang=lang)
 
     if node is not None:
         kind = node.kind()
@@ -641,6 +690,8 @@ def classify_from_records(
     root: Path,
     line: int,
     col: int,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
 ) -> NodeClassification | None:
     """Classify using cached ast-grep records.
 
@@ -654,13 +705,15 @@ def classify_from_records(
         1-indexed line number.
     col
         0-indexed column offset.
+    lang
+        Query language used for record extraction semantics.
 
     Returns
     -------
     NodeClassification | None
         Classification result, or None if no record matches.
     """
-    context = get_record_context(file_path, root)
+    context = get_record_context(file_path, root, lang=lang)
     if not context.records:
         return None
 
@@ -810,20 +863,26 @@ def get_symtable_table(file_path: Path, source: str) -> symtable.SymbolTable | N
     return table
 
 
-def get_def_lines_cached(file_path: Path) -> list[tuple[int, int]]:
+def get_def_lines_cached(
+    file_path: Path,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+) -> list[tuple[int, int]]:
     """Get or compute def/async def lines with indentation.
 
     Parameters
     ----------
     file_path
         Path to the file.
+    lang
+        Query language used to select definition prefixes.
 
     Returns
     -------
     list[tuple[int, int]]
         (line_number, indent) tuples for def/async def lines.
     """
-    key = str(file_path)
+    key = _lang_cache_key(file_path, lang)
     if key in _def_lines_cache:
         return _def_lines_cache[key]
 
@@ -835,34 +894,45 @@ def get_def_lines_cached(file_path: Path) -> list[tuple[int, int]]:
     results: list[tuple[int, int]] = []
     for i, line in enumerate(source.splitlines(), 1):
         stripped = line.lstrip()
-        if stripped.startswith(("def ", "async def ")):
+        if lang == "rust":
+            prefixes = ("fn ", "pub fn ", "struct ", "enum ", "trait ", "impl ")
+        else:
+            prefixes = ("def ", "async def ", "class ")
+        if stripped.startswith(prefixes):
             indent = len(line) - len(stripped)
             results.append((i, indent))
     _def_lines_cache[key] = results
     return results
 
 
-def get_sg_root(file_path: Path) -> SgRoot | None:
+def get_sg_root(
+    file_path: Path,
+    *,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+) -> SgRoot | None:
     """Get or create cached SgRoot for a file.
 
     Parameters
     ----------
     file_path
         Path to the Python file.
+    lang
+        Query language used by ast-grep parsing.
 
     Returns
     -------
     SgRoot | None
         Parsed AST root, or None on error.
     """
-    key = str(file_path)
+    key = _lang_cache_key(file_path, lang)
     if key not in _sg_cache:
         try:
-            source = _source_cache.get(key)
+            source_key = str(file_path)
+            source = _source_cache.get(source_key)
             if source is None:
                 source = file_path.read_text(encoding="utf-8")
-                _source_cache[key] = source
-            _sg_cache[key] = SgRoot(source, "python")
+                _source_cache[source_key] = source
+            _sg_cache[key] = SgRoot(source, lang)
         except (OSError, UnicodeDecodeError):
             return None
     return _sg_cache[key]

@@ -24,6 +24,8 @@ Smart Search provides semantically-enriched, grouped results using:
 │    --include-strings --no-include-strings  Include matches in strings/comments/docstrings [env var:                  │
 │                                            CQ_SEARCH_INCLUDE_STRINGS] [default: False]                               │
 │    --in                                    Restrict to directory [env var: CQ_SEARCH_IN]                             │
+│    --lang                                  Search language (python or rust) [choices: python, rust] [env var:        │
+│                                            CQ_SEARCH_LANG] [default: python]                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --root                                    Repository root [env var: CQ_SEARCH_ROOT]                                  │

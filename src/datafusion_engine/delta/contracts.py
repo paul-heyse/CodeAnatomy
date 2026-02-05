@@ -90,12 +90,28 @@ class DeltaCdfContract:
         DeltaCdfRequest
             Provider request populated from the contract.
         """
+        from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
+
+        options = self.options
+        if options is None:
+            resolved = None
+        else:
+            columns = tuple(options.columns) if options.columns is not None else None
+            resolved = DeltaCdfOptionsSpec(
+                starting_version=options.starting_version,
+                ending_version=options.ending_version,
+                starting_timestamp=options.starting_timestamp,
+                ending_timestamp=options.ending_timestamp,
+                columns=columns,
+                predicate=options.predicate,
+                allow_out_of_range=options.allow_out_of_range,
+            )
         return DeltaCdfRequest(
             table_uri=self.table_uri,
             storage_options=self.storage_options,
             version=self.version,
             timestamp=self.timestamp,
-            options=self.options,
+            options=resolved,
             gate=self.gate,
         )
 

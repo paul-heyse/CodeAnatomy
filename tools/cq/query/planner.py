@@ -5,6 +5,7 @@ Compiles Query IR into a ToolPlan that specifies which tools to run.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -113,62 +114,74 @@ class AstGrepRule(msgspec.Struct, frozen=True):
         When context is provided, generates pattern object format:
         `{"pattern": {"context": "...", "selector": "..."}}`
         """
-        # Build pattern section - handle context for disambiguation
-        if self.context:
-            pattern_obj: dict[str, object] = {"context": self.context}
-            if self.selector:
-                pattern_obj["selector"] = self.selector
-            if self.strictness != "smart":
-                pattern_obj["strictness"] = self.strictness
-            rule: dict[str, object] = {"pattern": pattern_obj}
-        else:
-            rule = {"pattern": self.pattern}
-            if self.strictness != "smart":
-                rule["strictness"] = self.strictness
-
-        if self.kind:
-            rule["kind"] = self.kind
-        if self.selector and not self.context:
-            # Selector without context is node kind filter
-            rule["selector"] = self.selector
-
-        # Add relational constraints
-        if self.inside:
-            inside_rule: dict[str, object] = {"pattern": self.inside}
-            if self.inside_stop_by:
-                inside_rule["stopBy"] = self.inside_stop_by
-            if self.inside_field:
-                inside_rule["field"] = self.inside_field
-            rule["inside"] = inside_rule
-
-        if self.has:
-            has_rule: dict[str, object] = {"pattern": self.has}
-            if self.has_stop_by:
-                has_rule["stopBy"] = self.has_stop_by
-            if self.has_field:
-                has_rule["field"] = self.has_field
-            rule["has"] = has_rule
-
-        if self.precedes:
-            rule["precedes"] = {"pattern": self.precedes}
-
-        if self.follows:
-            rule["follows"] = {"pattern": self.follows}
-
-        # Add composite rule if present
+        rule = _build_pattern_rule(self)
+        _apply_kind_and_selector(rule, self)
+        _apply_relational_rule(rule, "inside", self.inside, self.inside_stop_by, self.inside_field)
+        _apply_relational_rule(rule, "has", self.has, self.has_stop_by, self.has_field)
+        _apply_simple_pattern_rule(rule, "precedes", self.precedes)
+        _apply_simple_pattern_rule(rule, "follows", self.follows)
         if self.composite:
             rule.update(self.composite.to_ast_grep_dict())
-
-        # Add nthChild if present
-        if self.nth_child:
-            nth = {"position": self.nth_child.position}
-            if self.nth_child.reverse:
-                nth["reverse"] = True
-            if self.nth_child.of_rule:
-                nth["ofRule"] = self.nth_child.of_rule
-            rule["nthChild"] = nth
-
+        _apply_nth_child(rule, self.nth_child)
         return rule
+
+
+def _build_pattern_rule(rule: AstGrepRule) -> dict[str, object]:
+    if rule.context:
+        pattern_obj: dict[str, object] = {"context": rule.context}
+        if rule.selector:
+            pattern_obj["selector"] = rule.selector
+        if rule.strictness != "smart":
+            pattern_obj["strictness"] = rule.strictness
+        return {"pattern": pattern_obj}
+    base: dict[str, object] = {"pattern": rule.pattern}
+    if rule.strictness != "smart":
+        base["strictness"] = rule.strictness
+    return base
+
+
+def _apply_kind_and_selector(rule_dict: dict[str, object], rule: AstGrepRule) -> None:
+    if rule.kind:
+        rule_dict["kind"] = rule.kind
+    if rule.selector and not rule.context:
+        rule_dict["selector"] = rule.selector
+
+
+def _apply_relational_rule(
+    rule_dict: dict[str, object],
+    key: str,
+    pattern: str | None,
+    stop_by: str | None,
+    field_name: str | None,
+) -> None:
+    if not pattern:
+        return
+    nested: dict[str, object] = {"pattern": pattern}
+    if stop_by:
+        nested["stopBy"] = stop_by
+    if field_name:
+        nested["field"] = field_name
+    rule_dict[key] = nested
+
+
+def _apply_simple_pattern_rule(
+    rule_dict: dict[str, object],
+    key: str,
+    pattern: str | None,
+) -> None:
+    if pattern:
+        rule_dict[key] = {"pattern": pattern}
+
+
+def _apply_nth_child(rule_dict: dict[str, object], spec: NthChildSpec | None) -> None:
+    if spec is None:
+        return
+    nth: dict[str, object] = {"position": spec.position}
+    if spec.reverse:
+        nth["reverse"] = True
+    if spec.of_rule:
+        nth["ofRule"] = spec.of_rule
+    rule_dict["nthChild"] = nth
 
 
 class ToolPlan(msgspec.Struct, frozen=True):
@@ -202,6 +215,34 @@ class ToolPlan(msgspec.Struct, frozen=True):
     explain: bool = False
     sg_rules: tuple[AstGrepRule, ...] = ()
     is_pattern_query: bool = False
+
+
+_ENTITY_RECORDS: dict[str, set[str]] = {
+    "function": {"def"},
+    "class": {"def"},
+    "method": {"def"},
+    "module": {"def"},
+    "callsite": {"call"},
+    "import": {"import"},
+    "decorator": {"def"},
+}
+_ENTITY_EXTRA_RECORDS: dict[str, set[str]] = {
+    "function": {"call"},
+    "class": {"call"},
+    "method": {"call"},
+}
+_EXPANDER_RECORDS: dict[str, set[str]] = {
+    "callers": {"def", "call"},
+    "callees": {"def", "call"},
+    "imports": {"import"},
+    "raises": {"raise", "except"},
+    "scope": {"def"},
+}
+_FIELD_RECORDS: dict[str, set[str]] = {
+    "callers": {"def", "call"},
+    "callees": {"def", "call"},
+    "imports": {"import"},
+}
 
 
 def compile_query(query: Query) -> ToolPlan:
@@ -345,6 +386,18 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     return (rule,)
 
 
+@dataclass
+class _RelationalState:
+    inside: str | None
+    has: str | None
+    precedes: str | None
+    follows: str | None
+    inside_stop_by: str | None
+    has_stop_by: str | None
+    inside_field: str | None
+    has_field: str | None
+
+
 def _apply_relational_constraints(
     rule: AstGrepRule,
     constraints: tuple[RelationalConstraint, ...],
@@ -363,55 +416,77 @@ def _apply_relational_constraints(
     AstGrepRule
         New rule with relational constraints applied.
     """
-    inside: str | None = rule.inside
-    has: str | None = rule.has
-    precedes: str | None = rule.precedes
-    follows: str | None = rule.follows
-    inside_stop_by: str | None = rule.inside_stop_by
-    has_stop_by: str | None = rule.has_stop_by
-    inside_field: str | None = rule.inside_field
-    has_field: str | None = rule.has_field
-
-    def _normalize_stop_by(constraint: RelationalConstraint) -> str | None:
-        if constraint.stop_by != "neighbor":
-            return str(constraint.stop_by)
-        if constraint.operator not in {"inside", "has"}:
-            return None
-        pattern = constraint.pattern.strip()
-        if pattern.startswith(("class ", "def ", "async def ")):
-            return "end"
-        return None
+    state = _RelationalState(
+        inside=rule.inside,
+        has=rule.has,
+        precedes=rule.precedes,
+        follows=rule.follows,
+        inside_stop_by=rule.inside_stop_by,
+        has_stop_by=rule.has_stop_by,
+        inside_field=rule.inside_field,
+        has_field=rule.has_field,
+    )
 
     for constraint in constraints:
-        if constraint.operator == "inside":
-            inside = constraint.pattern
-            inside_stop_by = _normalize_stop_by(constraint)
-            if constraint.field_name:
-                inside_field = constraint.field_name
-        elif constraint.operator == "has":
-            has = constraint.pattern
-            has_stop_by = _normalize_stop_by(constraint)
-            if constraint.field_name:
-                has_field = constraint.field_name
-        elif constraint.operator == "precedes":
-            precedes = constraint.pattern
-        elif constraint.operator == "follows":
-            follows = constraint.pattern
+        _apply_relational_constraint(state, constraint)
 
+    return _merge_relational_state(rule, state)
+
+
+def _apply_relational_constraint(
+    state: _RelationalState,
+    constraint: RelationalConstraint,
+) -> None:
+    if constraint.operator == "inside":
+        _apply_inside_constraint(state, constraint)
+    elif constraint.operator == "has":
+        _apply_has_constraint(state, constraint)
+    elif constraint.operator == "precedes":
+        state.precedes = constraint.pattern
+    elif constraint.operator == "follows":
+        state.follows = constraint.pattern
+
+
+def _apply_inside_constraint(state: _RelationalState, constraint: RelationalConstraint) -> None:
+    state.inside = constraint.pattern
+    state.inside_stop_by = _normalize_stop_by(constraint)
+    if constraint.field_name:
+        state.inside_field = constraint.field_name
+
+
+def _apply_has_constraint(state: _RelationalState, constraint: RelationalConstraint) -> None:
+    state.has = constraint.pattern
+    state.has_stop_by = _normalize_stop_by(constraint)
+    if constraint.field_name:
+        state.has_field = constraint.field_name
+
+
+def _normalize_stop_by(constraint: RelationalConstraint) -> str | None:
+    if constraint.stop_by != "neighbor":
+        return str(constraint.stop_by)
+    if constraint.operator not in {"inside", "has"}:
+        return None
+    pattern = constraint.pattern.strip()
+    if pattern.startswith(("class ", "def ", "async def ")):
+        return "end"
+    return None
+
+
+def _merge_relational_state(rule: AstGrepRule, state: _RelationalState) -> AstGrepRule:
     return AstGrepRule(
         pattern=rule.pattern,
         kind=rule.kind,
         context=rule.context,
         selector=rule.selector,
         strictness=rule.strictness,
-        inside=inside,
-        has=has,
-        precedes=precedes,
-        follows=follows,
-        inside_stop_by=inside_stop_by,
-        has_stop_by=has_stop_by,
-        inside_field=inside_field,
-        has_field=has_field,
+        inside=state.inside,
+        has=state.has,
+        precedes=state.precedes,
+        follows=state.follows,
+        inside_stop_by=state.inside_stop_by,
+        has_stop_by=state.has_stop_by,
+        inside_field=state.inside_field,
+        has_field=state.has_field,
         composite=rule.composite,
         nth_child=rule.nth_child,
     )
@@ -429,40 +504,15 @@ def _determine_record_types(query: Query) -> set[str]:
     """
     record_types: set[str] = set()
 
-    # Base record types based on entity
-    entity_records: dict[str, set[str]] = {
-        "function": {"def"},
-        "class": {"def"},
-        "method": {"def"},
-        "module": {"def"},
-        "callsite": {"call"},
-        "import": {"import"},
-        "decorator": {"def"},  # Decorators are on function/class defs
-    }
     if query.entity is not None:
-        record_types.update(entity_records.get(query.entity, set()))
-        if query.entity in {"function", "class", "method"}:
-            record_types.add("call")
+        record_types.update(_ENTITY_RECORDS.get(query.entity, set()))
+        record_types.update(_ENTITY_EXTRA_RECORDS.get(query.entity, set()))
 
-    # Add record types based on expanders
     for expander in query.expand:
-        if expander.kind in {"callers", "callees"}:
-            record_types.add("def")
-            record_types.add("call")
-        elif expander.kind == "imports":
-            record_types.add("import")
-        elif expander.kind == "raises":
-            record_types.add("raise")
-            record_types.add("except")
-        elif expander.kind == "scope":
-            record_types.add("def")
+        record_types.update(_EXPANDER_RECORDS.get(expander.kind, set()))
 
-    # Add record types based on output fields
-    if "callers" in query.fields or "callees" in query.fields:
-        record_types.add("def")
-        record_types.add("call")
-    if "imports" in query.fields:
-        record_types.add("import")
+    for field in query.fields:
+        record_types.update(_FIELD_RECORDS.get(field, set()))
 
     return record_types
 

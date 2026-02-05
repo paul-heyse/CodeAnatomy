@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from serde_msgspec import StructBaseStrict
 
 _NODE_BUNDLE_COLUMNS: tuple[str, ...] = ("path", "span", "bstart", "bend", "file_id")
 _EDGE_BUNDLE_COLUMNS: tuple[str, ...] = ("path", "span", "bstart", "bend")
@@ -62,8 +62,7 @@ _EDGE_OUTPUT_FIELDS: tuple[str, ...] = tuple(
 )
 
 
-@dataclass(frozen=True)
-class CpgOutputSpec:
+class CpgOutputSpec(StructBaseStrict, frozen=True):
     """Declarative spec for CPG output datasets."""
 
     name: str
@@ -169,8 +168,7 @@ def cpg_output_specs() -> tuple[CpgOutputSpec, ...]:
     )
 
 
-@dataclass(frozen=True)
-class CpgPropOptions:
+class CpgPropOptions(StructBaseStrict, frozen=True):
     """Default property include options for CPG builders."""
 
     include_heavy_json_props: bool = False

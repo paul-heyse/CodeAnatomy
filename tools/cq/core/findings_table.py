@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 
 from tools.cq.core.schema import DetailPayload
+from tools.cq.core.structs import CqStruct
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult, Finding, Section
@@ -94,6 +95,28 @@ class FindingRecord:
         return self._finding_idx
 
 
+@dataclass(frozen=True)
+class FindingRecordContext:
+    """Context metadata for building a FindingRecord."""
+
+    macro: str
+    group: str
+    section_title: str | None
+    section_idx: int | None
+    finding_idx: int
+
+
+class FindingsTableOptions(CqStruct, frozen=True):
+    """Options for filtering findings tables."""
+
+    include: list[str] | None = None
+    exclude: list[str] | None = None
+    impact: list[str] | None = None
+    confidence: list[str] | None = None
+    severity: list[str] | None = None
+    limit: int | None = None
+
+
 def _extract_scoring_from_details(details: DetailPayload) -> tuple[float, str, float, str, str]:
     """Extract scoring fields from finding details.
 
@@ -106,19 +129,16 @@ def _extract_scoring_from_details(details: DetailPayload) -> tuple[float, str, f
     impact = score.impact_score if score and score.impact_score is not None else 0.0
     impact_bucket = score.impact_bucket if score and score.impact_bucket is not None else "low"
     confidence = score.confidence_score if score and score.confidence_score is not None else 0.0
-    confidence_bucket = score.confidence_bucket if score and score.confidence_bucket is not None else "low"
-    evidence_kind = score.evidence_kind if score and score.evidence_kind is not None else "unresolved"
+    confidence_bucket = (
+        score.confidence_bucket if score and score.confidence_bucket is not None else "low"
+    )
+    evidence_kind = (
+        score.evidence_kind if score and score.evidence_kind is not None else "unresolved"
+    )
     return impact, impact_bucket, confidence, confidence_bucket, evidence_kind
 
 
-def _finding_to_record(
-    finding: Finding,
-    macro: str,
-    group: str,
-    section_title: str | None,
-    section_idx: int | None,
-    finding_idx: int,
-) -> FindingRecord:
+def _finding_to_record(finding: Finding, context: FindingRecordContext) -> FindingRecord:
     """Convert a Finding to a FindingRecord.
 
     Returns
@@ -133,8 +153,8 @@ def _finding_to_record(
     imp, imp_bucket, conf, conf_bucket, ev_kind = _extract_scoring_from_details(finding.details)
 
     return FindingRecord(
-        macro=macro,
-        group=group,
+        macro=context.macro,
+        group=context.group,
         category=finding.category,
         message=finding.message,
         file=file_path,
@@ -147,9 +167,9 @@ def _finding_to_record(
         evidence_kind=ev_kind,
         severity=finding.severity,
         details=finding.details.to_legacy_dict(),
-        _section_title=section_title,
-        _section_idx=section_idx,
-        _finding_idx=finding_idx,
+        _section_title=context.section_title,
+        _section_idx=context.section_idx,
+        _finding_idx=context.finding_idx,
     )
 
 
@@ -174,11 +194,13 @@ def flatten_result(result: CqResult) -> list[FindingRecord]:
         records.append(
             _finding_to_record(
                 finding,
-                macro=macro,
-                group="key_findings",
-                section_title=None,
-                section_idx=None,
-                finding_idx=idx,
+                FindingRecordContext(
+                    macro=macro,
+                    group="key_findings",
+                    section_title=None,
+                    section_idx=None,
+                    finding_idx=idx,
+                ),
             )
         )
 
@@ -188,11 +210,13 @@ def flatten_result(result: CqResult) -> list[FindingRecord]:
             records.append(
                 _finding_to_record(
                     finding,
-                    macro=macro,
-                    group=section.title,
-                    section_title=section.title,
-                    section_idx=sec_idx,
-                    finding_idx=find_idx,
+                    FindingRecordContext(
+                        macro=macro,
+                        group=section.title,
+                        section_title=section.title,
+                        section_idx=sec_idx,
+                        finding_idx=find_idx,
+                    ),
                 )
             )
 
@@ -201,11 +225,13 @@ def flatten_result(result: CqResult) -> list[FindingRecord]:
         records.append(
             _finding_to_record(
                 finding,
-                macro=macro,
-                group="evidence",
-                section_title=None,
-                section_idx=None,
-                finding_idx=idx,
+                FindingRecordContext(
+                    macro=macro,
+                    group="evidence",
+                    section_title=None,
+                    section_idx=None,
+                    finding_idx=idx,
+                ),
             )
         )
 
@@ -316,34 +342,15 @@ def _match_pattern(value: str | None, pattern: str) -> bool:
     return fnmatch.fnmatch(value, pattern)
 
 
-def apply_filters(
-    df: pl.DataFrame,
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-    impact: list[str] | None = None,
-    confidence: list[str] | None = None,
-    severity: list[str] | None = None,
-    limit: int | None = None,
-) -> pl.DataFrame:
+def apply_filters(df: pl.DataFrame, opts: FindingsTableOptions | None = None) -> pl.DataFrame:
     """Apply filters to the findings DataFrame.
 
     Parameters
     ----------
     df : pl.DataFrame
         DataFrame to filter.
-    include : list[str] | None
-        Include only files matching these patterns (glob or ~regex).
-    exclude : list[str] | None
-        Exclude files matching these patterns (glob or ~regex).
-    impact : list[str] | None
-        Include only findings with these impact buckets (low, med, high).
-    confidence : list[str] | None
-        Include only findings with these confidence buckets (low, med, high).
-    severity : list[str] | None
-        Include only findings with these severity levels (error, warning, info).
-    limit : int | None
-        Maximum number of results to return.
+    opts : FindingsTableOptions | None
+        Filter configuration (include/exclude/impact/confidence/severity/limit).
 
     Returns
     -------
@@ -351,6 +358,13 @@ def apply_filters(
         Filtered DataFrame.
     """
     result = df
+    options = opts or FindingsTableOptions()
+    include = options.include
+    exclude = options.exclude
+    impact = options.impact
+    confidence = options.confidence
+    severity = options.severity
+    limit = options.limit
 
     # Impact bucket filter
     if impact:

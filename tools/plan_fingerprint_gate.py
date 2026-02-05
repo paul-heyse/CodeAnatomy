@@ -45,6 +45,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Run the plan fingerprint gate and return an exit code.
+
+    Returns
+    -------
+    int
+        Exit code for CI gating (0 when unchanged, 2 when changed).
+    """
     parser = _build_parser()
     args = parser.parse_args()
     before = _load_payload(args.before)

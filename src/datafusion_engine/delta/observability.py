@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,6 +38,7 @@ from datafusion_engine.io.write import (
     WriteRequest,
 )
 from obs.otel.run_context import get_run_id
+from serde_msgspec import StructBaseStrict
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
@@ -59,8 +59,7 @@ except IndexError:
     _DEFAULT_OBSERVABILITY_ROOT = Path.cwd() / ".artifacts"
 
 
-@dataclass(frozen=True)
-class DeltaSnapshotArtifact:
+class DeltaSnapshotArtifact(StructBaseStrict, frozen=True):
     """Snapshot artifact payload for Delta tables."""
 
     table_uri: str
@@ -70,8 +69,7 @@ class DeltaSnapshotArtifact:
     ddl_fingerprint: str | None = None
 
 
-@dataclass(frozen=True)
-class DeltaMutationArtifact:
+class DeltaMutationArtifact(StructBaseStrict, frozen=True):
     """Mutation artifact payload for Delta tables."""
 
     table_uri: str
@@ -87,8 +85,7 @@ class DeltaMutationArtifact:
     constraint_violations: Sequence[str] = ()
 
 
-@dataclass(frozen=True)
-class DeltaScanPlanArtifact:
+class DeltaScanPlanArtifact(StructBaseStrict, frozen=True):
     """Scan planning artifact payload for Delta tables."""
 
     dataset_name: str
@@ -103,8 +100,7 @@ class DeltaScanPlanArtifact:
     delta_protocol: DeltaProtocolSnapshot | None
 
 
-@dataclass(frozen=True)
-class DeltaMaintenanceArtifact:
+class DeltaMaintenanceArtifact(StructBaseStrict, frozen=True):
     """Maintenance artifact payload for Delta tables (optimize/vacuum/checkpoint)."""
 
     table_uri: str
@@ -116,8 +112,7 @@ class DeltaMaintenanceArtifact:
     commit_metadata: Mapping[str, str] | None = None
 
 
-@dataclass(frozen=True)
-class DeltaFeatureStateArtifact:
+class DeltaFeatureStateArtifact(StructBaseStrict, frozen=True):
     """Feature state artifact payload for Delta tables."""
 
     table_uri: str
@@ -130,8 +125,7 @@ class DeltaFeatureStateArtifact:
     commit_run_id: str | None = None
 
 
-@dataclass(frozen=True)
-class _AppendObservabilityRequest:
+class _AppendObservabilityRequest(StructBaseStrict, frozen=True):
     """Inputs required to append a Delta observability row."""
 
     ctx: SessionContext

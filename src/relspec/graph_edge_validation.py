@@ -7,19 +7,18 @@ have their column-level requirements satisfied by the evidence catalog.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import GraphEdge, GraphNode, TaskGraph, TaskNode
+from serde_msgspec import StructBaseStrict
 from utils.validation import find_missing
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.contracts import SchemaContract
 
 
-@dataclass(frozen=True)
-class EdgeValidationResult:
+class EdgeValidationResult(StructBaseStrict, frozen=True):
     """Result of validating a single edge's requirements.
 
     Attributes
@@ -58,8 +57,7 @@ class EdgeValidationResult:
     available_metadata: tuple[tuple[bytes, bytes], ...] = ()
 
 
-@dataclass(frozen=True)
-class TaskValidationResult:
+class TaskValidationResult(StructBaseStrict, frozen=True):
     """Result of validating all edges for a task.
 
     Attributes
@@ -83,8 +81,7 @@ class TaskValidationResult:
     contract_violations: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class GraphValidationSummary:
+class GraphValidationSummary(StructBaseStrict, frozen=True):
     """Summary of validation across all tasks in a graph.
 
     Attributes

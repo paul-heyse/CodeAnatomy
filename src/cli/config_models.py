@@ -8,10 +8,11 @@ import msgspec
 
 from core.config_base import config_fingerprint
 from hamilton_pipeline.types import GraphAdapterConfig
+from obs.otel.config import OtelConfigSpec
 from serde_msgspec import StructBaseStrict
 
 
-class PlanConfig(StructBaseStrict, frozen=True):
+class PlanConfigSpec(StructBaseStrict, frozen=True):
     """Plan-related configuration values."""
 
     allow_partial: bool | None = None
@@ -24,7 +25,7 @@ class PlanConfig(StructBaseStrict, frozen=True):
     enforce_plan_task_submission: bool | None = None
 
 
-class CacheConfig(StructBaseStrict, frozen=True):
+class CacheConfigSpec(StructBaseStrict, frozen=True):
     """Cache-related configuration values."""
 
     policy_profile: str | None = None
@@ -37,7 +38,7 @@ class CacheConfig(StructBaseStrict, frozen=True):
     default_nodes: tuple[str, ...] | None = None
 
 
-class IncrementalConfig(StructBaseStrict, frozen=True):
+class IncrementalConfigSpec(StructBaseStrict, frozen=True):
     """Incremental execution configuration values."""
 
     enabled: bool | None = None
@@ -49,28 +50,28 @@ class IncrementalConfig(StructBaseStrict, frozen=True):
     git_changed_only: bool | None = None
 
 
-class DeltaRestoreConfig(StructBaseStrict, frozen=True):
+class DeltaRestoreConfigSpec(StructBaseStrict, frozen=True):
     """Delta restore configuration values."""
 
     version: int | None = None
     timestamp: str | None = None
 
 
-class DeltaExportConfig(StructBaseStrict, frozen=True):
+class DeltaExportConfigSpec(StructBaseStrict, frozen=True):
     """Delta export configuration values."""
 
     version: int | None = None
     timestamp: str | None = None
 
 
-class DeltaConfig(StructBaseStrict, frozen=True):
+class DeltaConfigSpec(StructBaseStrict, frozen=True):
     """Delta-specific configuration values."""
 
-    restore: DeltaRestoreConfig | None = None
-    export: DeltaExportConfig | None = None
+    restore: DeltaRestoreConfigSpec | None = None
+    export: DeltaExportConfigSpec | None = None
 
 
-class DocstringsPolicyConfig(StructBaseStrict, frozen=True):
+class DocstringsPolicyConfigSpec(StructBaseStrict, frozen=True):
     """Docstring policy configuration values."""
 
     coverage_threshold: float | None = msgspec.field(
@@ -116,35 +117,13 @@ class DocstringsPolicyConfig(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
-class DocstringsConfig(StructBaseStrict, frozen=True):
+class DocstringsConfigSpec(StructBaseStrict, frozen=True):
     """Docstring-related configuration values."""
 
-    policy: DocstringsPolicyConfig | None = None
+    policy: DocstringsPolicyConfigSpec | None = None
 
 
-class OtelConfig(StructBaseStrict, frozen=True):
-    """OpenTelemetry configuration values."""
-
-    enable_node_tracing: bool | None = None
-    enable_plan_tracing: bool | None = None
-    endpoint: str | None = None
-    protocol: str | None = None
-    sampler: str | None = None
-    sampler_arg: float | int | None = None
-    log_correlation: bool | None = None
-    metric_export_interval_ms: int | None = None
-    metric_export_timeout_ms: int | None = None
-    bsp_schedule_delay_ms: int | None = None
-    bsp_export_timeout_ms: int | None = None
-    bsp_max_queue_size: int | None = None
-    bsp_max_export_batch_size: int | None = None
-    blrp_schedule_delay_ms: int | None = None
-    blrp_export_timeout_ms: int | None = None
-    blrp_max_queue_size: int | None = None
-    blrp_max_export_batch_size: int | None = None
-
-
-class HamiltonConfig(StructBaseStrict, frozen=True):
+class HamiltonConfigSpec(StructBaseStrict, frozen=True):
     """Hamilton-related configuration values."""
 
     enable_tracker: bool | None = None
@@ -170,30 +149,30 @@ class HamiltonConfig(StructBaseStrict, frozen=True):
     telemetry_profile: str | None = None
 
 
-class RootConfig(StructBaseStrict, frozen=True):
+class RootConfigSpec(StructBaseStrict, frozen=True):
     """Root configuration payload for CodeAnatomy."""
 
-    plan: PlanConfig | None = None
-    cache: CacheConfig | None = None
+    plan: PlanConfigSpec | None = None
+    cache: CacheConfigSpec | None = None
     graph_adapter: GraphAdapterConfig | None = None
-    incremental: IncrementalConfig | None = None
-    delta: DeltaConfig | None = None
-    docstrings: DocstringsConfig | None = None
-    otel: OtelConfig | None = None
-    hamilton: HamiltonConfig | None = None
+    incremental: IncrementalConfigSpec | None = None
+    delta: DeltaConfigSpec | None = None
+    docstrings: DocstringsConfigSpec | None = None
+    otel: OtelConfigSpec | None = None
+    hamilton: HamiltonConfigSpec | None = None
 
 
 __all__ = [
-    "CacheConfig",
-    "DeltaConfig",
-    "DeltaExportConfig",
-    "DeltaRestoreConfig",
-    "DocstringsConfig",
-    "DocstringsPolicyConfig",
+    "CacheConfigSpec",
+    "DeltaConfigSpec",
+    "DeltaExportConfigSpec",
+    "DeltaRestoreConfigSpec",
+    "DocstringsConfigSpec",
+    "DocstringsPolicyConfigSpec",
     "GraphAdapterConfig",
-    "HamiltonConfig",
-    "IncrementalConfig",
-    "OtelConfig",
-    "PlanConfig",
-    "RootConfig",
+    "HamiltonConfigSpec",
+    "IncrementalConfigSpec",
+    "OtelConfigSpec",
+    "PlanConfigSpec",
+    "RootConfigSpec",
 ]

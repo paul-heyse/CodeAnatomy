@@ -46,6 +46,7 @@ from datafusion_engine.session.runtime import (
     FeatureGatesConfig,
     PolicyBundleConfig,
 )
+from schema_spec.system import DeltaPolicyBundle
 from storage.deltalake.config import DeltaSchemaPolicy
 
 
@@ -58,7 +59,7 @@ def test_schema_mode_merge_allows_new_columns(tmp_path: Path) -> None:
             path=str(delta_path),
             format="delta",
             overrides=DatasetLocationOverrides(
-                delta_schema_policy=DeltaSchemaPolicy(schema_mode="merge")
+                delta=DeltaPolicyBundle(schema_policy=DeltaSchemaPolicy(schema_mode="merge"))
             ),
         )
     }

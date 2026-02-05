@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import msgspec
+from pydantic import ValidationError
 
+from tools.cq.cli_app.config_models import CqConfigModel
 from tools.cq.cli_app.config_types import CqConfig
 
 
@@ -85,39 +87,51 @@ def load_typed_config(
     CqConfig | None
         Parsed configuration, or None if no config is available.
 
-    Raises
-    ------
-    FileNotFoundError
-        If an explicit config file is provided but does not exist.
     """
     if no_config:
         return None
+    path = _resolve_config_path(config_file)
+    if path is None:
+        return None
 
+    raw = _read_toml_dict(path)
+    if raw is None:
+        return None
+
+    data = _extract_cq_section(raw)
+    if data is None:
+        return None
+
+    model = _load_config_model(data, from_strings=False)
+    return _to_config_struct(model)
+
+
+def _resolve_config_path(config_file: str | None) -> Path | None:
     if config_file:
         path = Path(config_file)
         if not path.exists():
             msg = f"Config file not found: {config_file}"
             raise FileNotFoundError(msg)
-    else:
-        path = Path("pyproject.toml")
-        if not path.exists():
-            return None
+        return path
+    path = Path("pyproject.toml")
+    return path if path.exists() else None
 
+
+def _read_toml_dict(path: Path) -> dict[str, object] | None:
     raw = msgspec.toml.decode(path.read_bytes())
-    if not isinstance(raw, dict):
-        return None
+    return raw if isinstance(raw, dict) else None
 
-    data: object = raw
+
+def _extract_cq_section(raw: dict[str, object]) -> dict[str, object] | None:
     tool_section = raw.get("tool")
     if isinstance(tool_section, dict):
         cq_section = tool_section.get("cq")
         if isinstance(cq_section, dict):
-            data = cq_section
-
-    try:
-        return msgspec.convert(data, type=CqConfig)
-    except msgspec.ValidationError:
-        return None
+            return cq_section
+    cq_section = raw.get("cq")
+    if isinstance(cq_section, dict):
+        return cq_section
+    return None
 
 
 def _env_value(name: str) -> str | None:
@@ -128,43 +142,21 @@ def _env_value(name: str) -> str | None:
     return value or None
 
 
-def _parse_bool(value: str) -> bool | None:
-    lowered = value.strip().lower()
-    if lowered in {"1", "true", "yes", "y", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "n", "off"}:
-        return False
-    return None
-
-
-def _parse_int(value: str) -> int | None:
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
 def _collect_env_overrides() -> dict[str, object]:
     data: dict[str, object] = {}
 
     if (value := _env_value("CQ_ROOT")) is not None:
         data["root"] = value
     if (value := _env_value("CQ_VERBOSE")) is not None:
-        parsed = _parse_int(value)
-        if parsed is not None:
-            data["verbose"] = parsed
+        data["verbose"] = value
     if (value := _env_value("CQ_FORMAT")) is not None:
-        data["output_format"] = value
+        data["format"] = value
     if (value := _env_value("CQ_ARTIFACT_DIR")) is not None:
         data["artifact_dir"] = value
     if (value := _env_value("CQ_SAVE_ARTIFACT")) is not None:
-        parsed = _parse_bool(value)
-        if parsed is not None:
-            data["save_artifact"] = parsed
+        data["save_artifact"] = value
     if (value := _env_value("CQ_NO_SAVE_ARTIFACT")) is not None:
-        parsed = _parse_bool(value)
-        if parsed is not None:
-            data["save_artifact"] = not parsed
+        data["no_save_artifact"] = value
 
     return data
 
@@ -181,6 +173,26 @@ def load_typed_env_config() -> CqConfig | None:
     if not data:
         return None
 
+    model = _load_config_model(data, from_strings=True)
+    return _to_config_struct(model)
+
+
+def _load_config_model(data: dict[str, object], *, from_strings: bool) -> CqConfigModel | None:
+    try:
+        if from_strings:
+            return CqConfigModel.model_validate_strings(data)
+        return CqConfigModel.model_validate(data)
+    except ValidationError:
+        return None
+
+
+def _to_config_struct(model: CqConfigModel | None) -> CqConfig | None:
+    if model is None:
+        return None
+    data = model.model_dump(exclude_none=True, by_alias=False)
+    no_save = data.pop("no_save_artifact", None)
+    if no_save is not None and "save_artifact" not in data:
+        data["save_artifact"] = not no_save
     try:
         return msgspec.convert(data, type=CqConfig)
     except msgspec.ValidationError:

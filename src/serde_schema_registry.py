@@ -11,7 +11,109 @@ from typing import cast
 
 import msgspec
 
+from cli.config_models import (
+    CacheConfigSpec,
+    DeltaConfigSpec,
+    DocstringsConfigSpec,
+    DocstringsPolicyConfigSpec,
+    HamiltonConfigSpec,
+    IncrementalConfigSpec,
+    PlanConfigSpec,
+    RootConfigSpec,
+)
+from cpg.emit_specs import CpgOutputSpec, CpgPropOptions
+from cpg.specs import EdgeEmitSpec, NodeEmitSpec, NodePlanSpec, PropFieldSpec
+from datafusion_engine.arrow.metadata import SchemaMetadataSpec
+from datafusion_engine.compile.options import DataFusionCompileOptionsSpec
+from datafusion_engine.delta.control_plane import (
+    DeltaAddConstraintsRequest,
+    DeltaAddFeaturesRequest,
+    DeltaCdfProviderBundle,
+    DeltaCdfRequest,
+    DeltaCheckpointRequest,
+    DeltaDeleteRequest,
+    DeltaDropConstraintsRequest,
+    DeltaFeatureEnableRequest,
+    DeltaMergeRequest,
+    DeltaOptimizeRequest,
+    DeltaProviderBundle,
+    DeltaProviderRequest,
+    DeltaRestoreRequest,
+    DeltaSetPropertiesRequest,
+    DeltaSnapshotRequest,
+    DeltaTableRef,
+    DeltaUpdateRequest,
+    DeltaVacuumRequest,
+    DeltaWriteRequest,
+)
 from datafusion_engine.delta.protocol import DeltaProtocolCompatibility, DeltaProtocolSnapshot
+from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.expr.spec import ExprIR, ExprSpec
+from datafusion_engine.plan.cache import PlanCacheEntry, PlanCacheKey, PlanProtoCacheEntry
+from datafusion_engine.plan.diagnostics import (
+    PlanBundleDiagnostics,
+    PlanExecutionDiagnosticsPayload,
+    PlanPhaseDiagnosticsPayload,
+)
+from datafusion_engine.schema.alignment import SchemaEvolutionSpec
+from datafusion_engine.schema.validation import ArrowValidationOptions
+from datafusion_engine.udf.catalog import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
+from obs.otel.config import OtelConfigSpec
+from relspec.extract_plan import ExtractOutputTask, ExtractTaskSpec
+from relspec.graph_edge_validation import (
+    EdgeValidationResult,
+    GraphValidationSummary,
+    TaskValidationResult,
+)
+from relspec.inferred_deps import InferredDeps
+from relspec.rustworkx_graph import (
+    EvidenceNode,
+    GraphDiagnostics,
+    GraphEdge,
+    TaskDependencySnapshot,
+    TaskEdgeRequirements,
+    TaskGraphSnapshot,
+    TaskNode,
+)
+from relspec.rustworkx_schedule import TaskSchedule
+from relspec.schedule_events import TaskScheduleMetadata
+from schema_spec.arrow_types import (
+    ArrowDecimalSpec,
+    ArrowDictionarySpec,
+    ArrowDurationSpec,
+    ArrowFieldSpec,
+    ArrowFixedSizeBinarySpec,
+    ArrowFixedSizeListSpec,
+    ArrowLargeListSpec,
+    ArrowListSpec,
+    ArrowMapSpec,
+    ArrowOpaqueSpec,
+    ArrowPrimitiveSpec,
+    ArrowStructSpec,
+    ArrowTimestampSpec,
+)
+from schema_spec.field_spec import FieldSpec
+from schema_spec.relationship_specs import RelationshipData
+from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from schema_spec.system import (
+    ContractSpec,
+    DatasetPolicies,
+    DatasetSpec,
+    DedupeSpecSpec,
+    DeltaPolicyBundle,
+    SortKeySpec,
+    ValidationPolicySpec,
+    VirtualFieldSpec,
+)
+from schema_spec.view_specs import ViewSpec
+from semantics.config import SemanticConfigSpec, SemanticTypePatternSpec
+from semantics.specs import (
+    ForeignKeyDerivation,
+    IdDerivation,
+    RelationshipSpec,
+    SemanticTableSpec,
+    SpanBinding,
+)
 from serde_artifacts import (
     DeltaScanConfigSnapshot,
     DeltaStatsDecision,
@@ -37,7 +139,7 @@ from serde_artifacts import (
     ViewCacheArtifactEnvelope,
     WriteArtifactRow,
 )
-from serde_msgspec import dumps_msgpack, json_default
+from serde_msgspec import dumps_msgpack
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy, ParquetWriterPolicy
 from utils.hashing import hash_sha256_hex
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
@@ -71,6 +173,111 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     DeltaWritePolicy,
     DeltaSchemaPolicy,
     ParquetWriterPolicy,
+    # Arrow type IR
+    ArrowFieldSpec,
+    ArrowPrimitiveSpec,
+    ArrowTimestampSpec,
+    ArrowDurationSpec,
+    ArrowDecimalSpec,
+    ArrowFixedSizeBinarySpec,
+    ArrowListSpec,
+    ArrowLargeListSpec,
+    ArrowFixedSizeListSpec,
+    ArrowMapSpec,
+    ArrowStructSpec,
+    ArrowDictionarySpec,
+    ArrowOpaqueSpec,
+    # Schema + query specs
+    FieldSpec,
+    DerivedFieldSpec,
+    FieldBundle,
+    TableSchemaSpec,
+    ViewSpec,
+    RelationshipData,
+    SortKeySpec,
+    DedupeSpecSpec,
+    VirtualFieldSpec,
+    ContractSpec,
+    DatasetPolicies,
+    DeltaPolicyBundle,
+    ValidationPolicySpec,
+    DatasetSpec,
+    QuerySpec,
+    ProjectionSpec,
+    ExprIR,
+    ExprSpec,
+    ArrowValidationOptions,
+    SchemaMetadataSpec,
+    SchemaEvolutionSpec,
+    # Runtime/config specs
+    DataFusionCompileOptionsSpec,
+    SemanticTypePatternSpec,
+    SemanticConfigSpec,
+    OtelConfigSpec,
+    PlanConfigSpec,
+    CacheConfigSpec,
+    IncrementalConfigSpec,
+    DeltaConfigSpec,
+    DocstringsPolicyConfigSpec,
+    DocstringsConfigSpec,
+    HamiltonConfigSpec,
+    RootConfigSpec,
+    # Delta control-plane contracts
+    DeltaTableRef,
+    DeltaProviderBundle,
+    DeltaCdfProviderBundle,
+    DeltaSnapshotRequest,
+    DeltaProviderRequest,
+    DeltaCdfRequest,
+    DeltaWriteRequest,
+    DeltaDeleteRequest,
+    DeltaUpdateRequest,
+    DeltaMergeRequest,
+    DeltaOptimizeRequest,
+    DeltaVacuumRequest,
+    DeltaRestoreRequest,
+    DeltaSetPropertiesRequest,
+    DeltaAddFeaturesRequest,
+    DeltaFeatureEnableRequest,
+    DeltaAddConstraintsRequest,
+    DeltaDropConstraintsRequest,
+    DeltaCheckpointRequest,
+    # Plan/cache/registry contracts
+    PlanProtoCacheEntry,
+    PlanCacheKey,
+    PlanCacheEntry,
+    DataFusionUdfSpecSnapshot,
+    UdfCatalogSnapshot,
+    PlanBundleDiagnostics,
+    PlanExecutionDiagnosticsPayload,
+    PlanPhaseDiagnosticsPayload,
+    # Semantics / CPG / relspec contracts
+    SpanBinding,
+    IdDerivation,
+    ForeignKeyDerivation,
+    SemanticTableSpec,
+    RelationshipSpec,
+    EdgeEmitSpec,
+    NodeEmitSpec,
+    NodePlanSpec,
+    PropFieldSpec,
+    CpgOutputSpec,
+    CpgPropOptions,
+    ExtractTaskSpec,
+    ExtractOutputTask,
+    InferredDeps,
+    EvidenceNode,
+    TaskNode,
+    GraphEdge,
+    TaskEdgeRequirements,
+    TaskGraphSnapshot,
+    TaskDependencySnapshot,
+    GraphDiagnostics,
+    TaskScheduleMetadata,
+    TaskSchedule,
+    EdgeValidationResult,
+    TaskValidationResult,
+    GraphValidationSummary,
 )
 
 _SCHEMA_TAGS: dict[type[msgspec.Struct], dict[str, object]] = {
@@ -257,10 +464,10 @@ def _schema_registry_types() -> tuple[type[msgspec.Struct], ...]:
 def _schema_hook(obj: type[msgspec.Struct]) -> dict[str, object]:
     spec = _SCHEMA_REGISTRY.get(obj.__name__)
     payload = dict(spec.tags) if spec is not None else dict(_SCHEMA_TAGS.get(obj, {}))
+    payload.setdefault("x-codeanatomy-domain", "contract")
     payload.setdefault("title", obj.__name__)
     doc = inspect.getdoc(obj)
-    if doc:
-        payload.setdefault("description", doc)
+    payload.setdefault("description", doc or f"{obj.__name__} schema.")
     return payload
 
 
@@ -353,10 +560,21 @@ def openapi_contract_payload() -> dict[str, object]:
 
 
 def _schema_enc_hook(obj: object) -> object:
-    try:
-        return json_default(obj)
-    except TypeError:
+    if obj is msgspec.NODEFAULT:
+        return "NODEFAULT"
+    if obj.__class__.__module__ == "msgspec.inspect":
+        return {field: _schema_enc_hook(getattr(obj, field)) for field in obj.__struct_fields__}
+    if hasattr(obj, "__struct_fields__"):
+        return {field: _schema_enc_hook(getattr(obj, field)) for field in obj.__struct_fields__}
+    if isinstance(obj, type):
+        return f"{obj.__module__}.{obj.__qualname__}"
+    if isinstance(obj, Path):
         return str(obj)
+    if isinstance(obj, msgspec.Raw):
+        return bytes(obj).hex()
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        return bytes(obj).hex()
+    return str(obj)
 
 
 def schema_contract_index() -> list[dict[str, object]]:
@@ -371,7 +589,7 @@ def schema_contract_index() -> list[dict[str, object]]:
     type_info = msgspec.inspect.multi_type_info(schema_types)
     entries: list[dict[str, object]] = []
     for schema_type, info in zip(schema_types, type_info, strict=False):
-        payload = msgspec.to_builtins(info, str_keys=True, enc_hook=_schema_enc_hook)
+        payload = _schema_enc_hook(info)
         entries.append({"name": schema_type.__name__, "type_info": payload})
     entries.sort(key=lambda item: cast("str", item.get("name", "")))
     return entries

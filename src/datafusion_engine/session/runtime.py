@@ -1218,8 +1218,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
         ]
 
 
-@dataclass(frozen=True)
-class PreparedStatementSpec:
+class PreparedStatementSpec(StructBaseStrict, frozen=True):
     """Prepared statement specification for DataFusion."""
 
     name: str
@@ -7004,7 +7003,9 @@ def read_delta_as_reader(
 
     overrides = None
     if delta_scan is not None:
-        overrides = DatasetLocationOverrides(delta_scan=delta_scan)
+        from schema_spec.system import DeltaPolicyBundle
+
+        overrides = DatasetLocationOverrides(delta=DeltaPolicyBundle(scan=delta_scan))
     location = DatasetLocation(
         path=path,
         format="delta",

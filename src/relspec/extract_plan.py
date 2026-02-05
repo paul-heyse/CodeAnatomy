@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.extract.extractors import ExtractorSpec, extractor_specs
 from datafusion_engine.extract.metadata import ExtractMetadata, extract_metadata_specs
 from relspec.inferred_deps import InferredDeps
+from serde_msgspec import StructBaseStrict
 from utils.hashing import hash_msgpack_canonical
 
 _EXTRACT_PLAN_FINGERPRINT_VERSION = 1
@@ -18,8 +18,7 @@ _EXTRACTOR_EXTRA_INPUTS: Mapping[str, tuple[str, ...]] = {
 }
 
 
-@dataclass(frozen=True)
-class ExtractTaskSpec:
+class ExtractTaskSpec(StructBaseStrict, frozen=True):
     """Specification for an extract task template."""
 
     name: str
@@ -28,8 +27,7 @@ class ExtractTaskSpec:
     supports_plan: bool
 
 
-@dataclass(frozen=True)
-class ExtractOutputTask:
+class ExtractOutputTask(StructBaseStrict, frozen=True):
     """Concrete task for a single extract output."""
 
     name: str

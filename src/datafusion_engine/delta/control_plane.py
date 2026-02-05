@@ -13,9 +13,9 @@ from __future__ import annotations
 import base64
 import importlib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn, Protocol, cast
+from typing import NoReturn, Protocol, cast
 
+import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
 
@@ -27,18 +27,23 @@ from datafusion_engine.delta.payload import (
     schema_ipc_payload,
 )
 from datafusion_engine.delta.protocol import delta_feature_gate_rust_payload
+from datafusion_engine.delta.specs import (
+    DeltaAppTransactionSpec as DeltaAppTransaction,
+)
+from datafusion_engine.delta.specs import (
+    DeltaCdfOptionsSpec as DeltaCdfOptions,
+)
+from datafusion_engine.delta.specs import (
+    DeltaCommitOptionsSpec as DeltaCommitOptions,
+)
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.generated.delta_types import (
-    DeltaAppTransaction,
-    DeltaCommitOptions,
     DeltaFeatureGate,
 )
 from schema_spec.system import DeltaScanOptions
+from serde_msgspec import StructBaseStrict, ensure_raw
 from utils.validation import ensure_mapping
 from utils.value_coercion import coerce_mapping_list
-
-if TYPE_CHECKING:
-    from storage.deltalake.delta import DeltaCdfOptions
 
 _DELTA_INTERNAL_CTX: dict[str, InternalSessionContext | None] = {"value": None}
 
@@ -51,8 +56,16 @@ class _DeltaCdfExtension(Protocol):
     def delta_cdf_table_provider(self, *args: object, **kwargs: object) -> object: ...
 
 
-@dataclass(frozen=True)
-class DeltaProviderBundle:
+class DeltaTableRef(StructBaseStrict, frozen=True):
+    """Reference to a Delta table with versioning context."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+
+
+class DeltaProviderBundle(StructBaseStrict, frozen=True):
     """Provider response with canonical control-plane metadata."""
 
     provider: object
@@ -63,8 +76,7 @@ class DeltaProviderBundle:
     predicate_error: str | None = None
 
 
-@dataclass(frozen=True)
-class DeltaCdfProviderBundle:
+class DeltaCdfProviderBundle(StructBaseStrict, frozen=True):
     """CDF provider response with canonical control-plane metadata."""
 
     provider: object
@@ -72,8 +84,7 @@ class DeltaCdfProviderBundle:
     cdf_options: DeltaCdfOptions | None
 
 
-@dataclass(frozen=True)
-class DeltaSnapshotRequest:
+class DeltaSnapshotRequest(StructBaseStrict, frozen=True):
     """Inputs required to resolve a Delta snapshot."""
 
     table_uri: str
@@ -82,9 +93,18 @@ class DeltaSnapshotRequest:
     timestamp: str | None
     gate: DeltaFeatureGate | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaProviderRequest:
+
+class DeltaProviderRequest(StructBaseStrict, frozen=True):
     """Inputs required to construct a Delta table provider."""
 
     table_uri: str
@@ -95,9 +115,18 @@ class DeltaProviderRequest:
     predicate: str | None = None
     gate: DeltaFeatureGate | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaCdfRequest:
+
+class DeltaCdfRequest(StructBaseStrict, frozen=True):
     """Inputs required to construct a Delta CDF provider."""
 
     table_uri: str
@@ -107,16 +136,25 @@ class DeltaCdfRequest:
     options: DeltaCdfOptions | None
     gate: DeltaFeatureGate | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaWriteRequest:
+
+class DeltaWriteRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native Delta write."""
 
     table_uri: str
     storage_options: Mapping[str, str] | None
     version: int | None
     timestamp: str | None
-    data_ipc: bytes
+    data_ipc: msgspec.Raw
     mode: str
     schema_mode: str | None
     partition_columns: Sequence[str] | None
@@ -125,9 +163,22 @@ class DeltaWriteRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    def __post_init__(self) -> None:
+        """Normalize the IPC payload into msgspec.Raw."""
+        object.__setattr__(self, "data_ipc", ensure_raw(self.data_ipc))
 
-@dataclass(frozen=True)
-class DeltaDeleteRequest:
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
+
+
+class DeltaDeleteRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native Delta delete."""
 
     table_uri: str
@@ -139,9 +190,18 @@ class DeltaDeleteRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaUpdateRequest:
+
+class DeltaUpdateRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native Delta update."""
 
     table_uri: str
@@ -154,9 +214,18 @@ class DeltaUpdateRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaMergeRequest:
+
+class DeltaMergeRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native Delta merge."""
 
     table_uri: str
@@ -177,9 +246,18 @@ class DeltaMergeRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaOptimizeRequest:
+
+class DeltaOptimizeRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native optimize/compact."""
 
     table_uri: str
@@ -191,9 +269,18 @@ class DeltaOptimizeRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaVacuumRequest:
+
+class DeltaVacuumRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native vacuum."""
 
     table_uri: str
@@ -207,9 +294,18 @@ class DeltaVacuumRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaRestoreRequest:
+
+class DeltaRestoreRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native restore."""
 
     table_uri: str
@@ -222,9 +318,18 @@ class DeltaRestoreRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaSetPropertiesRequest:
+
+class DeltaSetPropertiesRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native property update."""
 
     table_uri: str
@@ -235,9 +340,18 @@ class DeltaSetPropertiesRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaAddFeaturesRequest:
+
+class DeltaAddFeaturesRequest(StructBaseStrict, frozen=True):
     """Inputs required to run a Rust-native feature enablement."""
 
     table_uri: str
@@ -249,9 +363,18 @@ class DeltaAddFeaturesRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaFeatureEnableRequest:
+
+class DeltaFeatureEnableRequest(StructBaseStrict, frozen=True):
     """Inputs required to enable a Delta protocol feature set."""
 
     table_uri: str
@@ -261,9 +384,18 @@ class DeltaFeatureEnableRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaAddConstraintsRequest:
+
+class DeltaAddConstraintsRequest(StructBaseStrict, frozen=True):
     """Inputs required to add Delta check constraints."""
 
     table_uri: str
@@ -274,9 +406,18 @@ class DeltaAddConstraintsRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaDropConstraintsRequest:
+
+class DeltaDropConstraintsRequest(StructBaseStrict, frozen=True):
     """Inputs required to drop Delta check constraints."""
 
     table_uri: str
@@ -288,9 +429,18 @@ class DeltaDropConstraintsRequest:
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
-@dataclass(frozen=True)
-class DeltaCheckpointRequest:
+
+class DeltaCheckpointRequest(StructBaseStrict, frozen=True):
     """Inputs required to create a Delta checkpoint or cleanup metadata."""
 
     table_uri: str
@@ -298,6 +448,16 @@ class DeltaCheckpointRequest:
     version: int | None
     timestamp: str | None
     gate: DeltaFeatureGate | None = None
+
+    @property
+    def table_ref(self) -> DeltaTableRef:
+        """Return the request table reference."""
+        return DeltaTableRef(
+            table_uri=self.table_uri,
+            storage_options=self.storage_options,
+            version=self.version,
+            timestamp=self.timestamp,
+        )
 
 
 def _resolve_extension_module(
@@ -738,7 +898,7 @@ def delta_write_ipc(
         storage_payload,
         request.version,
         request.timestamp,
-        request.data_ipc,
+        request.data_ipc.data,
         request.mode,
         request.schema_mode,
         partitions_payload,
@@ -2022,6 +2182,7 @@ __all__ = [
     "DeltaRestoreRequest",
     "DeltaSetPropertiesRequest",
     "DeltaSnapshotRequest",
+    "DeltaTableRef",
     "DeltaUpdateRequest",
     "DeltaVacuumRequest",
     "DeltaWriteRequest",

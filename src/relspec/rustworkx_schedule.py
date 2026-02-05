@@ -18,14 +18,14 @@ from relspec.rustworkx_graph import (
     task_dependency_reduction,
 )
 from relspec.schedule_events import TaskScheduleMetadata
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.contracts import SchemaContract
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
-@dataclass(frozen=True)
-class TaskSchedule:
+class TaskSchedule(StructBaseStrict, frozen=True):
     """Deterministic schedule for task execution."""
 
     ordered_tasks: tuple[str, ...]
@@ -34,8 +34,7 @@ class TaskSchedule:
     validation_summary: graph_edge_validation.GraphValidationSummary | None = None
 
 
-@dataclass(frozen=True)
-class ScheduleCostContext:
+class ScheduleCostContext(StructBaseStrict, frozen=True):
     """Schedule ordering inputs derived from cost modeling."""
 
     task_costs: Mapping[str, float] | None = None

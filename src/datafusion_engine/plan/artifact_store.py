@@ -941,10 +941,13 @@ def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
     resolved_log = resolve_delta_log_storage_options(location)
     overrides = location.overrides
     if resolved_scan is not None:
+        from schema_spec.system import DeltaPolicyBundle
+
+        delta_bundle = DeltaPolicyBundle(scan=resolved_scan)
         if overrides is None:
-            overrides = DatasetLocationOverrides(delta_scan=resolved_scan)
+            overrides = DatasetLocationOverrides(delta=delta_bundle)
         else:
-            overrides = msgspec.structs.replace(overrides, delta_scan=resolved_scan)
+            overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
     return msgspec.structs.replace(
         location,
         overrides=overrides,

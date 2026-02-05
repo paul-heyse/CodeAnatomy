@@ -28,7 +28,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
     """Specification for a single Arrow field."""
 
     name: str
-    dtype: ArrowTypeSpec | pa.DataType
+    dtype: ArrowTypeSpec
     nullable: bool = True
     metadata: dict[str, str] = msgspec.field(default_factory=dict)
     default_value: str | None = None
@@ -53,8 +53,18 @@ class FieldSpec(StructBaseStrict, frozen=True):
         if self.encoding is not None:
             metadata[ENCODING_META] = self.encoding
         encoded = _encode_metadata(metadata)
-        dtype = arrow_type_to_pyarrow(self.dtype) if isinstance(self.dtype, ArrowTypeBase) else self.dtype
+        dtype = (
+            arrow_type_to_pyarrow(self.dtype)
+            if isinstance(self.dtype, ArrowTypeBase)
+            else self.dtype
+        )
         return interop.field(self.name, dtype, nullable=self.nullable, metadata=encoded)
+
+    def to_pandera_dtype(self) -> object:
+        """Return a Pandera-compatible dtype for this field."""
+        from schema_spec.pandera_bridge import field_to_pandera_dtype
+
+        return field_to_pandera_dtype(self)
 
 
 __all__ = ["FieldSpec"]

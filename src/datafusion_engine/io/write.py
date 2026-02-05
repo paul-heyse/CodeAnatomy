@@ -90,6 +90,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
+    from schema_spec.system import DatasetSpec, ValidationPolicySpec
 from datafusion_engine.tables.metadata import table_provider_metadata
 
 
@@ -749,6 +750,52 @@ class WritePipeline:
             return request.source
         return self._execute_sql(request.source)
 
+    @staticmethod
+    def _resolve_dataframe_validation_policy(
+        *,
+        dataset_spec: DatasetSpec | None,
+        overrides: DatasetLocationOverrides | None,
+    ) -> ValidationPolicySpec | None:
+        if overrides is not None and overrides.dataframe_validation is not None:
+            return overrides.dataframe_validation
+        if dataset_spec is None:
+            return None
+        return dataset_spec.policies.dataframe_validation
+
+    def _validate_dataframe(
+        self,
+        df: DataFrame,
+        *,
+        dataset_spec: DatasetSpec | None,
+        overrides: DatasetLocationOverrides | None,
+    ) -> None:
+        if dataset_spec is None:
+            return
+        policy = self._resolve_dataframe_validation_policy(
+            dataset_spec=dataset_spec,
+            overrides=overrides,
+        )
+        if policy is None or not policy.enabled:
+            return
+        from schema_spec.pandera_bridge import validate_dataframe
+
+        try:
+            validate_dataframe(df, schema_spec=dataset_spec.table_spec, policy=policy)
+        except Exception as exc:
+            if (
+                self.runtime_profile is not None
+                and self.runtime_profile.diagnostics.diagnostics_sink is not None
+            ):
+                from obs.diagnostics import record_dataframe_validation_error
+
+                record_dataframe_validation_error(
+                    self.runtime_profile.diagnostics.diagnostics_sink,
+                    name=dataset_spec.name,
+                    error=exc,
+                    policy=policy,
+                )
+            raise
+
     def _dataset_location_for_destination(
         self,
         destination: str,
@@ -864,6 +911,13 @@ class WritePipeline:
         start = time.perf_counter()
         df = self._source_df(request)
         dataset_name, dataset_location = self._dataset_binding(request.destination)
+        dataset_spec = dataset_location.dataset_spec if dataset_location is not None else None
+        overrides = dataset_location.overrides if dataset_location is not None else None
+        self._validate_dataframe(
+            df,
+            dataset_spec=dataset_spec,
+            overrides=overrides,
+        )
         schema_columns = _schema_columns(df)
         lineage_columns = _delta_lineage_columns(df)
         df = _apply_zorder_sort(
@@ -1749,7 +1803,11 @@ class WritePipeline:
         if location is None:
             overrides = None
             if spec.feature_gate is not None:
-                overrides = DatasetLocationOverrides(delta_feature_gate=spec.feature_gate)
+                from schema_spec.system import DeltaPolicyBundle
+
+                overrides = DatasetLocationOverrides(
+                    delta=DeltaPolicyBundle(feature_gate=spec.feature_gate)
+                )
             location = DatasetLocation(
                 path=spec.table_uri,
                 format="delta",

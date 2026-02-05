@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import msgspec
+from tools.cq.core.structs import CqStruct
 
 
-class CqConfig(msgspec.Struct, omit_defaults=True):
+class CqConfig(CqStruct, frozen=True):
     """Typed configuration for cq CLI.
 
     Values correspond to global options. Fields are optional

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+
 def search_sync_with_timeout[T](
     fn: Callable[..., T],
     timeout: float,

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Final
 
-from core.config_base import FingerprintableConfig, config_fingerprint
+from core.config_base import config_fingerprint
+from serde_msgspec import StructBaseStrict
 
 
-@dataclass(frozen=True)
-class CachePolicyConfig(FingerprintableConfig):
+class CachePolicyConfig(StructBaseStrict, frozen=True):
     """Explicit cache policy settings for DataFusion.
 
     Attributes

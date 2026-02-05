@@ -10,10 +10,10 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, TypedDict, Unpack, cast
 
 import msgspec
 
@@ -27,7 +27,9 @@ from tools.cq.core.schema import (
     mk_runmeta,
     ms,
 )
+from tools.cq.core.structs import CqStruct
 from tools.cq.search.classifier import (
+    HeuristicResult,
     MatchCategory,
     NodeClassification,
     QueryMode,
@@ -43,6 +45,8 @@ from tools.cq.search.classifier import (
     get_sg_root,
     get_symtable_table,
 )
+from tools.cq.search.collector import RgCollector
+from tools.cq.search.context import SmartSearchContext
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.timeout import search_sync_with_timeout
 
@@ -84,7 +88,7 @@ def _get_context_helpers() -> tuple[
     return _compute_context_window, _extract_context_snippet
 
 
-class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
+class RawMatch(CqStruct, frozen=True):
     """Raw match from rpygrep candidate generation.
 
     Parameters
@@ -117,7 +121,89 @@ class RawMatch(msgspec.Struct, frozen=True, omit_defaults=True):
     submatch_index: int = 0
 
 
-class SearchStats(msgspec.Struct, omit_defaults=True):
+class SmartSearchKwargs(TypedDict, total=False):
+    mode: QueryMode | None
+    include_globs: list[str] | None
+    exclude_globs: list[str] | None
+    include_strings: bool
+    limits: SearchLimits | None
+    tc: Toolchain | None
+    argv: list[str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class SmartSearchRequest:
+    root: Path
+    query: str
+    mode: QueryMode | None = None
+    include_globs: list[str] | None = None
+    exclude_globs: list[str] | None = None
+    include_strings: bool = False
+    limits: SearchLimits | None = None
+    tc: Toolchain | None = None
+    argv: list[str] | None = None
+
+    @classmethod
+    def from_kwargs(cls, root: Path, query: str, kwargs: SmartSearchKwargs) -> SmartSearchRequest:
+        return cls(
+            root=root,
+            query=query,
+            mode=kwargs.get("mode"),
+            include_globs=kwargs.get("include_globs"),
+            exclude_globs=kwargs.get("exclude_globs"),
+            include_strings=bool(kwargs.get("include_strings", False)),
+            limits=kwargs.get("limits"),
+            tc=kwargs.get("tc"),
+            argv=kwargs.get("argv"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSearchInputs:
+    root: Path
+    query: str
+    mode: QueryMode
+    limits: SearchLimits
+    include_globs: list[str] | None = None
+    exclude_globs: list[str] | None = None
+
+
+class CandidateSearchKwargs(TypedDict, total=False):
+    include_globs: list[str] | None
+    exclude_globs: list[str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchSummaryInputs:
+    query: str
+    mode: QueryMode
+    stats: SearchStats
+    matches: list[EnrichedMatch]
+    limits: SearchLimits
+    include: list[str] | None = None
+    exclude: list[str] | None = None
+    file_globs: list[str] | None = None
+    limit: int | None = None
+    pattern: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClassificationResult:
+    category: MatchCategory
+    confidence: float
+    evidence_kind: str
+    node_kind: str | None
+    containing_scope: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MatchEnrichment:
+    symtable: SymtableEnrichment | None
+    context_window: dict[str, int] | None
+    context_snippet: str | None
+
+
+class SearchStats(CqStruct, frozen=True):
     """Statistics from candidate generation phase.
 
     Parameters
@@ -146,7 +232,7 @@ class SearchStats(msgspec.Struct, omit_defaults=True):
     max_matches_hit: bool = False
 
 
-class EnrichedMatch(msgspec.Struct, frozen=True, omit_defaults=True):
+class EnrichedMatch(CqStruct, frozen=True):
     """Fully enriched match with classification and context.
 
     Parameters
@@ -215,9 +301,7 @@ def build_candidate_searcher(
     query: str,
     mode: QueryMode,
     limits: SearchLimits,
-    *,
-    include_globs: list[str] | None = None,
-    exclude_globs: list[str] | None = None,
+    **kwargs: Unpack[CandidateSearchKwargs],
 ) -> tuple[RipGrepSearch, str]:
     """Build rpygrep searcher for candidate generation.
 
@@ -241,42 +325,54 @@ def build_candidate_searcher(
     tuple[RipGrepSearch, str]
         Configured searcher and effective pattern string.
     """
+    inputs = CandidateSearchInputs(
+        root=root,
+        query=query,
+        mode=mode,
+        limits=limits,
+        include_globs=kwargs.get("include_globs"),
+        exclude_globs=kwargs.get("exclude_globs"),
+    )
+    return _build_candidate_searcher(inputs)
+
+
+def _build_candidate_searcher(inputs: CandidateSearchInputs) -> tuple[RipGrepSearch, str]:
     from rpygrep import RipGrepSearch
 
     searcher = (
         RipGrepSearch()
-        .set_working_directory(root)
+        .set_working_directory(inputs.root)
         .add_safe_defaults()
         .include_type("py")
         .case_sensitive(_CASE_SENSITIVE_DEFAULT)
         .before_context(1)
         .after_context(1)
-        .max_count(limits.max_matches_per_file)
-        .max_depth(limits.max_depth)
-        .max_file_size(limits.max_file_size_bytes)
+        .max_count(inputs.limits.max_matches_per_file)
+        .max_depth(inputs.limits.max_depth)
+        .max_file_size(inputs.limits.max_file_size_bytes)
         .as_json()
     )
 
-    if mode == QueryMode.IDENTIFIER:
+    if inputs.mode == QueryMode.IDENTIFIER:
         # Word boundary match for identifiers
-        pattern = rf"\b{re.escape(query)}\b"
+        pattern = rf"\b{re.escape(inputs.query)}\b"
         searcher = searcher.add_pattern(pattern)
-    elif mode == QueryMode.LITERAL:
+    elif inputs.mode == QueryMode.LITERAL:
         # Exact literal match (non-regex)
-        pattern = query
-        searcher = searcher.patterns_are_not_regex().add_pattern(query)
+        pattern = inputs.query
+        searcher = searcher.patterns_are_not_regex().add_pattern(inputs.query)
     else:
         # User-provided regex (pass through)
-        pattern = query
-        searcher = searcher.add_pattern(query)
+        pattern = inputs.query
+        searcher = searcher.add_pattern(inputs.query)
 
     # Add include globs
-    include_globs = include_globs or []
+    include_globs = inputs.include_globs or []
     for glob in include_globs:
         searcher = searcher.include_glob(glob)
 
     # Add exclude globs
-    exclude_globs = exclude_globs or []
+    exclude_globs = inputs.exclude_globs or []
     for glob in exclude_globs:
         searcher = searcher.exclude_glob(glob)
 
@@ -293,119 +389,50 @@ def _parse_rg_line(line: str) -> dict[str, object] | None:
 def _collect_candidates_raw(
     searcher: RipGrepSearch,
     limits: SearchLimits,
-) -> tuple[list[RawMatch], set[str], dict[str, object] | None, bool, bool, bool]:
-    matches: list[RawMatch] = []
-    seen_files: set[str] = set()
-    truncated = False
-    max_files_hit = False
-    max_matches_hit = False
-    summary_stats: dict[str, object] | None = None
-
-    def _allow_file(file_path: str) -> bool:
-        nonlocal truncated, max_files_hit
-        if max_files_hit:
-            return False
-        if file_path in seen_files:
-            return True
-        if len(seen_files) >= limits.max_files:
-            truncated = True
-            max_files_hit = True
-            return False
-        seen_files.add(file_path)
-        return True
-
+) -> RgCollector:
+    collector = RgCollector(limits=limits, match_factory=RawMatch)
     for line in searcher.run_direct():
         payload = _parse_rg_line(line)
         if not payload:
             continue
         kind = payload.get("type")
         if kind == "summary":
-            data = payload.get("data", {})
-            if isinstance(data, dict):
-                stats = data.get("stats")
-                if isinstance(stats, dict):
-                    summary_stats = stats
+            collector.handle_summary(payload)
             continue
         if kind != "match":
             continue
-        if max_matches_hit or max_files_hit:
-            continue
-        data = payload.get("data", {})
-        if not isinstance(data, dict):
-            continue
-        path_data = data.get("path", {})
-        file_path = None
-        if isinstance(path_data, dict):
-            file_path = path_data.get("text") or path_data.get("bytes")
-        if not isinstance(file_path, str):
-            continue
-        if not _allow_file(file_path):
-            continue
+        collector.handle_match(payload)
+    return collector
 
-        line_number = data.get("line_number")
-        if not isinstance(line_number, int):
-            continue
-        lines_data = data.get("lines", {})
-        line_text = ""
-        if isinstance(lines_data, dict):
-            text_value = lines_data.get("text")
-            if isinstance(text_value, str):
-                line_text = text_value
 
-        submatches_raw = data.get("submatches")
-        submatches: list[object] = submatches_raw if isinstance(submatches_raw, list) else []
+def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchStats:
+    scanned_files = len(collector.seen_files)
+    matched_files = len(collector.seen_files)
+    total_matches = len(collector.matches)
+    scanned_files_is_estimate = True
+    summary_stats = collector.summary_stats
+    if isinstance(summary_stats, dict):
+        searches = summary_stats.get("searches")
+        searches_with_match = summary_stats.get("searches_with_match")
+        matches_reported = summary_stats.get("matches")
+        if isinstance(searches, int):
+            scanned_files = searches
+            scanned_files_is_estimate = False
+        if isinstance(searches_with_match, int):
+            matched_files = searches_with_match
+        if isinstance(matches_reported, int):
+            total_matches = matches_reported
 
-        if submatches:
-            for i, submatch in enumerate(submatches):
-                if len(matches) >= limits.max_total_matches:
-                    truncated = True
-                    max_matches_hit = True
-                    break
-                if not isinstance(submatch, dict):
-                    continue
-                start = submatch.get("start")
-                end = submatch.get("end")
-                if not isinstance(start, int) or not isinstance(end, int):
-                    continue
-                match_text = ""
-                match_data = submatch.get("match", {})
-                if isinstance(match_data, dict):
-                    text_value = match_data.get("text")
-                    if isinstance(text_value, str):
-                        match_text = text_value
-                if not match_text and line_text:
-                    match_text = line_text[start:end]
-                matches.append(
-                    RawMatch(
-                        file=file_path,
-                        line=line_number,
-                        col=start,
-                        text=line_text,
-                        match_text=match_text,
-                        match_start=start,
-                        match_end=end,
-                        submatch_index=i,
-                    )
-                )
-        else:
-            if len(matches) >= limits.max_total_matches:
-                truncated = True
-                max_matches_hit = True
-                continue
-            matches.append(
-                RawMatch(
-                    file=file_path,
-                    line=line_number,
-                    col=0,
-                    text=line_text,
-                    match_text=line_text,
-                    match_start=0,
-                    match_end=len(line_text),
-                    submatch_index=0,
-                )
-            )
-
-    return matches, seen_files, summary_stats, truncated, max_files_hit, max_matches_hit
+    return SearchStats(
+        scanned_files=scanned_files,
+        matched_files=matched_files,
+        total_matches=total_matches,
+        truncated=collector.truncated,
+        timed_out=timed_out,
+        max_files_hit=collector.max_files_hit,
+        max_matches_hit=collector.max_matches_hit,
+        scanned_files_is_estimate=scanned_files_is_estimate,
+    )
 
 
 def collect_candidates(
@@ -427,56 +454,18 @@ def collect_candidates(
         Raw matches and collection statistics.
     """
     try:
-        (
-            matches,
-            seen_files,
-            summary_stats,
-            truncated,
-            max_files_hit,
-            max_matches_hit,
-        ) = search_sync_with_timeout(
+        collector = search_sync_with_timeout(
             lambda: _collect_candidates_raw(searcher, limits),
             limits.timeout_seconds,
         )
     except TimeoutError:
-        matches: list[RawMatch] = []
-        seen_files = set()
-        summary_stats = None
-        truncated = False
-        max_files_hit = False
-        max_matches_hit = False
+        collector = RgCollector(limits=limits, match_factory=RawMatch)
         timed_out = True
     else:
         timed_out = False
 
-    scanned_files = len(seen_files)
-    matched_files = len(seen_files)
-    total_matches = len(matches)
-    scanned_files_is_estimate = True
-    if isinstance(summary_stats, dict):
-        searches = summary_stats.get("searches")
-        searches_with_match = summary_stats.get("searches_with_match")
-        matches_reported = summary_stats.get("matches")
-        if isinstance(searches, int):
-            scanned_files = searches
-            scanned_files_is_estimate = False
-        if isinstance(searches_with_match, int):
-            matched_files = searches_with_match
-        if isinstance(matches_reported, int):
-            total_matches = matches_reported
-
-    stats = SearchStats(
-        scanned_files=scanned_files,
-        matched_files=matched_files,
-        total_matches=total_matches,
-        truncated=truncated,
-        timed_out=timed_out,
-        max_files_hit=max_files_hit,
-        max_matches_hit=max_matches_hit,
-        scanned_files_is_estimate=scanned_files_is_estimate,
-    )
-
-    return matches, stats
+    stats = _build_search_stats(collector, timed_out=timed_out)
+    return collector.matches, stats
 
 
 def classify_match(
@@ -507,103 +496,172 @@ def classify_match(
     heuristic = classify_heuristic(raw.text, raw.col, match_text)
 
     if heuristic.skip_deeper and heuristic.category is not None:
-        return EnrichedMatch(
-            file=raw.file,
-            line=raw.line,
-            col=raw.col,
-            text=raw.text,
-            match_text=match_text,
-            category=heuristic.category,
-            confidence=heuristic.confidence,
-            evidence_kind="heuristic",
-        )
+        return _build_heuristic_enriched(raw, heuristic, match_text)
 
-    # Stage 2: AST node classification
     file_path = root / raw.file
-    if file_path.suffix != ".py":
-        return EnrichedMatch(
-            file=raw.file,
-            line=raw.line,
-            col=raw.col,
-            text=raw.text,
-            match_text=match_text,
-            category=heuristic.category or "text_match",
-            confidence=heuristic.confidence or 0.4,
-            evidence_kind="rg_only",
-        )
+    classification = _resolve_match_classification(raw, file_path, heuristic, root)
+    symtable_enrichment = _maybe_symtable_enrichment(
+        file_path,
+        raw,
+        match_text,
+        classification,
+        enable_symtable=enable_symtable,
+    )
+    context_window, context_snippet = _build_context_enrichment(file_path, raw)
+    enrichment = MatchEnrichment(
+        symtable=symtable_enrichment,
+        context_window=context_window,
+        context_snippet=context_snippet,
+    )
+    return _build_enriched_match(
+        raw,
+        match_text,
+        classification,
+        enrichment,
+    )
 
-    ast_result: NodeClassification | None = None
-    record_result = classify_from_records(file_path, root, raw.line, raw.col)
-    if record_result is not None:
-        ast_result = record_result
-    else:
-        sg_root = get_sg_root(file_path)
-        if sg_root is not None:
-            ast_result = classify_from_node(sg_root, raw.line, raw.col)
 
-    # Determine best classification
-    if ast_result is not None:
-        category = ast_result.category
-        confidence = ast_result.confidence
-        evidence_kind = ast_result.evidence_kind
-        node_kind = ast_result.node_kind
-        containing_scope = ast_result.containing_scope
-    elif heuristic.category is not None:
-        category = heuristic.category
-        confidence = heuristic.confidence
-        evidence_kind = "heuristic"
-        node_kind = None
-        containing_scope = None
-    else:
-        category = "text_match"
-        confidence = 0.50
-        evidence_kind = "rg_only"
-        node_kind = None
-        containing_scope = None
-
-    # Stage 3: Symtable enrichment (only for high-value categories)
-    symtable_enrichment: SymtableEnrichment | None = None
-    if enable_symtable and category in {"definition", "callsite", "reference", "assignment"}:
-        source = get_cached_source(file_path)
-        if source is not None:
-            table = get_symtable_table(file_path, source)
-            if table is not None:
-                symtable_enrichment = enrich_with_symtable_from_table(
-                    table,
-                    match_text,
-                    raw.line,
-                )
-
-    # Compute context window and snippet
-    context_window: dict[str, int] | None = None
-    context_snippet: str | None = None
-    source = get_cached_source(file_path)
-    if source is not None:
-        source_lines = source.splitlines()
-        def_lines = get_def_lines_cached(file_path)
-        if def_lines:
-            compute_context_window, extract_context_snippet = _get_context_helpers()
-            context_window = compute_context_window(raw.line, def_lines, len(source_lines))
-            context_snippet = extract_context_snippet(
-                source_lines,
-                context_window["start_line"],
-                context_window["end_line"],
-            )
-
+def _build_heuristic_enriched(
+    raw: RawMatch,
+    heuristic: HeuristicResult,
+    match_text: str,
+) -> EnrichedMatch:
     return EnrichedMatch(
         file=raw.file,
         line=raw.line,
         col=raw.col,
         text=raw.text,
         match_text=match_text,
+        category=heuristic.category,
+        confidence=heuristic.confidence,
+        evidence_kind="heuristic",
+    )
+
+
+def _resolve_match_classification(
+    raw: RawMatch,
+    file_path: Path,
+    heuristic: HeuristicResult,
+    root: Path,
+) -> ClassificationResult:
+    if file_path.suffix != ".py":
+        return _classification_from_heuristic(heuristic, default_confidence=0.4, evidence_kind="rg_only")
+
+    record_result = classify_from_records(file_path, root, raw.line, raw.col)
+    ast_result = record_result or _classify_from_node(file_path, raw)
+    if ast_result is not None:
+        return _classification_from_node(ast_result)
+    if heuristic.category is not None:
+        return _classification_from_heuristic(heuristic, default_confidence=heuristic.confidence)
+    return _default_classification()
+
+
+def _classify_from_node(file_path: Path, raw: RawMatch) -> NodeClassification | None:
+    sg_root = get_sg_root(file_path)
+    if sg_root is None:
+        return None
+    return classify_from_node(sg_root, raw.line, raw.col)
+
+
+def _classification_from_node(result: NodeClassification) -> ClassificationResult:
+    return ClassificationResult(
+        category=result.category,
+        confidence=result.confidence,
+        evidence_kind=result.evidence_kind,
+        node_kind=result.node_kind,
+        containing_scope=result.containing_scope,
+    )
+
+
+def _classification_from_heuristic(
+    heuristic: HeuristicResult,
+    *,
+    default_confidence: float,
+    evidence_kind: str = "heuristic",
+) -> ClassificationResult:
+    category = heuristic.category or "text_match"
+    confidence = heuristic.confidence if heuristic.category is not None else default_confidence
+    return ClassificationResult(
         category=category,
         confidence=confidence,
         evidence_kind=evidence_kind,
-        node_kind=node_kind,
-        containing_scope=containing_scope,
-        context_window=context_window,
-        context_snippet=context_snippet,
-        symtable=symtable_enrichment,
+        node_kind=None,
+        containing_scope=None,
+    )
+
+
+def _default_classification() -> ClassificationResult:
+    return ClassificationResult(
+        category="text_match",
+        confidence=0.50,
+        evidence_kind="rg_only",
+        node_kind=None,
+        containing_scope=None,
+    )
+
+
+def _maybe_symtable_enrichment(
+    file_path: Path,
+    raw: RawMatch,
+    match_text: str,
+    classification: ClassificationResult,
+    *,
+    enable_symtable: bool,
+) -> SymtableEnrichment | None:
+    if not enable_symtable:
+        return None
+    if classification.category not in {"definition", "callsite", "reference", "assignment"}:
+        return None
+    source = get_cached_source(file_path)
+    if source is None:
+        return None
+    table = get_symtable_table(file_path, source)
+    if table is None:
+        return None
+    return enrich_with_symtable_from_table(table, match_text, raw.line)
+
+
+def _build_context_enrichment(
+    file_path: Path,
+    raw: RawMatch,
+) -> tuple[dict[str, int] | None, str | None]:
+    source = get_cached_source(file_path)
+    if source is None:
+        return None, None
+    source_lines = source.splitlines()
+    def_lines = get_def_lines_cached(file_path)
+    if not def_lines:
+        return None, None
+    compute_context_window, extract_context_snippet = _get_context_helpers()
+    context_window = compute_context_window(raw.line, def_lines, len(source_lines))
+    context_snippet = extract_context_snippet(
+        source_lines,
+        context_window["start_line"],
+        context_window["end_line"],
+    )
+    return context_window, context_snippet
+
+
+def _build_enriched_match(
+    raw: RawMatch,
+    match_text: str,
+    classification: ClassificationResult,
+    enrichment: MatchEnrichment,
+) -> EnrichedMatch:
+    return EnrichedMatch(
+        file=raw.file,
+        line=raw.line,
+        col=raw.col,
+        text=raw.text,
+        match_text=match_text,
+        category=classification.category,
+        confidence=classification.confidence,
+        evidence_kind=classification.evidence_kind,
+        node_kind=classification.node_kind,
+        containing_scope=classification.containing_scope,
+        context_window=enrichment.context_window,
+        context_snippet=enrichment.context_snippet,
+        symtable=enrichment.symtable,
     )
 
 
@@ -743,12 +801,27 @@ def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     Finding
         Finding object.
     """
-    score = ScoreDetails(
+    score = _build_score_details(match)
+    data = _build_match_data(match)
+    details = DetailPayload(kind=match.category, score=score, data=data)
+    return Finding(
+        category=match.category,
+        message=_category_message(match.category, match),
+        anchor=Anchor(file=match.file, line=match.line, col=match.col),
+        severity="info",
+        details=details,
+    )
+
+
+def _build_score_details(match: EnrichedMatch) -> ScoreDetails:
+    return ScoreDetails(
         confidence_score=match.confidence,
         confidence_bucket=_evidence_to_bucket(match.evidence_kind),
         evidence_kind=match.evidence_kind,
     )
 
+
+def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
     data: dict[str, object] = {
         "match_text": match.match_text,
         "line_text": match.text,
@@ -762,37 +835,25 @@ def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     if match.node_kind:
         data["node_kind"] = match.node_kind
     if match.symtable:
-        symtable_flags: list[str] = []
-        if match.symtable.is_imported:
-            symtable_flags.append("imported")
-        if match.symtable.is_assigned:
-            symtable_flags.append("assigned")
-        if match.symtable.is_parameter:
-            symtable_flags.append("parameter")
-        if match.symtable.is_free:
-            symtable_flags.append("closure_var")
-        if match.symtable.is_global:
-            symtable_flags.append("global")
-        if symtable_flags:
-            data["binding_flags"] = symtable_flags
+        flags = _symtable_flags(match.symtable)
+        if flags:
+            data["binding_flags"] = flags
+    return data
 
-    details = DetailPayload(
-        kind=match.category,
-        score=score,
-        data=data,
-    )
 
-    return Finding(
-        category=match.category,
-        message=_category_message(match.category, match),
-        anchor=Anchor(
-            file=match.file,
-            line=match.line,
-            col=match.col,
-        ),
-        severity="info",
-        details=details,
-    )
+def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
+    flags: list[str] = []
+    if symtable.is_imported:
+        flags.append("imported")
+    if symtable.is_assigned:
+        flags.append("assigned")
+    if symtable.is_parameter:
+        flags.append("parameter")
+    if symtable.is_free:
+        flags.append("closure_var")
+    if symtable.is_global:
+        flags.append("global")
+    return flags
 
 
 def build_followups(
@@ -874,76 +935,81 @@ def build_followups(
     return findings
 
 
-def build_summary(
-    query: str,
-    mode: QueryMode,
-    stats: SearchStats,
-    matches: list[EnrichedMatch],
-    limits: SearchLimits,
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-    file_globs: list[str] | None = None,
-    limit: int | None = None,
-    pattern: str | None = None,
-) -> dict[str, object]:
+_SUMMARY_ARGS_COUNT = 5
+_SUMMARY_KWARGS_ERROR = "build_summary does not accept kwargs when using SearchSummaryInputs."
+_SUMMARY_ARITY_ERROR = "build_summary expects (query, mode, stats, matches, limits)."
+
+
+def build_summary(*args: object, **kwargs: object) -> dict[str, object]:
     """Build summary dict for CqResult.
 
-    Parameters
-    ----------
-    query
-        Original query string.
-    mode
-        Query mode.
-    stats
-        Search statistics.
-    matches
-        List of enriched matches.
-    limits
-        Search limits.
-    include
-        Include patterns.
-    exclude
-        Exclude patterns.
-    file_globs
-        File glob patterns.
-    limit
-        Result limit.
-    pattern
-        Effective regex pattern.
+    Accepts either a ``SearchSummaryInputs`` instance or the legacy positional
+    arguments (query, mode, stats, matches, limits) with keyword overrides.
 
     Returns
     -------
     dict[str, object]
         Summary dictionary.
     """
+    inputs = _coerce_summary_inputs(args, kwargs)
+    return _build_summary(inputs)
+
+
+def _coerce_summary_inputs(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> SearchSummaryInputs:
+    if len(args) == 1 and isinstance(args[0], SearchSummaryInputs):
+        if kwargs:
+            msg = _SUMMARY_KWARGS_ERROR
+            raise TypeError(msg)
+        return args[0]
+    if len(args) != _SUMMARY_ARGS_COUNT:
+        msg = _SUMMARY_ARITY_ERROR
+        raise TypeError(msg)
+    query, mode, stats, matches, limits = args
+    return SearchSummaryInputs(
+        query=cast("str", query),
+        mode=cast("QueryMode", mode),
+        stats=cast("SearchStats", stats),
+        matches=cast("list[EnrichedMatch]", matches),
+        limits=cast("SearchLimits", limits),
+        include=cast("list[str] | None", kwargs.get("include")),
+        exclude=cast("list[str] | None", kwargs.get("exclude")),
+        file_globs=cast("list[str] | None", kwargs.get("file_globs")),
+        limit=cast("int | None", kwargs.get("limit")),
+        pattern=cast("str | None", kwargs.get("pattern")),
+    )
+
+
+def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     return {
-        "query": query,
-        "mode": mode.value,
-        "file_globs": file_globs or ["*.py", "*.pyi"],
-        "include": include or [],
-        "exclude": exclude or [],
+        "query": inputs.query,
+        "mode": inputs.mode.value,
+        "file_globs": inputs.file_globs or ["*.py", "*.pyi"],
+        "include": inputs.include or [],
+        "exclude": inputs.exclude or [],
         "context_lines": {"before": 1, "after": 1},
-        "limit": limit if limit is not None else limits.max_total_matches,
-        "scanned_files": stats.scanned_files,
-        "scanned_files_is_estimate": stats.scanned_files_is_estimate,
-        "matched_files": stats.matched_files,
-        "total_matches": stats.total_matches,
-        "returned_matches": len(matches),
+        "limit": inputs.limit if inputs.limit is not None else inputs.limits.max_total_matches,
+        "scanned_files": inputs.stats.scanned_files,
+        "scanned_files_is_estimate": inputs.stats.scanned_files_is_estimate,
+        "matched_files": inputs.stats.matched_files,
+        "total_matches": inputs.stats.total_matches,
+        "returned_matches": len(inputs.matches),
         "scan_method": "hybrid",
-        "pattern": pattern,
+        "pattern": inputs.pattern,
         "case_sensitive": True,
         "caps_hit": (
             "timeout"
-            if stats.timed_out
+            if inputs.stats.timed_out
             else (
                 "max_files"
-                if stats.max_files_hit
-                else ("max_total_matches" if stats.max_matches_hit else "none")
+                if inputs.stats.max_files_hit
+                else ("max_total_matches" if inputs.stats.max_matches_hit else "none")
             )
         ),
-        "truncated": stats.truncated,
-        "timed_out": stats.timed_out,
+        "truncated": inputs.stats.truncated,
+        "timed_out": inputs.stats.timed_out,
     }
 
 
@@ -975,26 +1041,59 @@ def build_sections(
     list[Section]
         Organized sections.
     """
-    sections: list[Section] = []
-
     non_code_categories = {"docstring_match", "comment_match", "string_match"}
-
-    # Sort by relevance
     sorted_matches = sorted(matches, key=compute_relevance_score, reverse=True)
-
-    visible_matches = (
-        sorted_matches
-        if include_strings
-        else [m for m in sorted_matches if m.category not in non_code_categories]
+    visible_matches = _filter_visible_matches(
+        sorted_matches,
+        include_strings=include_strings,
+        non_code_categories=non_code_categories,
     )
 
-    # Group by containing function/method (fallback to file)
+    sections: list[Section] = [
+        _build_top_contexts_section(visible_matches, root),
+    ]
+    sections.extend(_build_identifier_sections(visible_matches, root, mode))
+    sections.append(_build_kind_counts_section(matches))
+
+    non_code_section = _build_non_code_section(sorted_matches, root, non_code_categories)
+    if non_code_section is not None:
+        sections.append(non_code_section)
+
+    sections.append(_build_hot_files_section(matches))
+
+    followups_section = _build_followups_section(matches, query, mode)
+    if followups_section is not None:
+        sections.append(followups_section)
+
+    return sections
+
+
+def _filter_visible_matches(
+    sorted_matches: list[EnrichedMatch],
+    *,
+    include_strings: bool,
+    non_code_categories: set[MatchCategory],
+) -> list[EnrichedMatch]:
+    if include_strings:
+        return sorted_matches
+    return [m for m in sorted_matches if m.category not in non_code_categories]
+
+
+def _group_matches_by_context(
+    matches: list[EnrichedMatch],
+) -> dict[str, list[EnrichedMatch]]:
     grouped: dict[str, list[EnrichedMatch]] = {}
-    for match in visible_matches:
+    for match in matches:
         key = f"{match.containing_scope} ({match.file})" if match.containing_scope else match.file
         grouped.setdefault(key, []).append(match)
+    return grouped
 
-    # Section 1: Top Contexts (representative match per group)
+
+def _build_top_contexts_section(
+    matches: list[EnrichedMatch],
+    root: Path,
+) -> Section:
+    grouped = _group_matches_by_context(matches)
     group_scores = [
         (key, max(compute_relevance_score(m) for m in group), group)
         for key, group in grouped.items()
@@ -1006,38 +1105,42 @@ def build_sections(
         finding = build_finding(rep, root)
         finding.message = f"{key}"
         top_contexts.append(finding)
-    sections.append(Section(title="Top Contexts", findings=top_contexts))
+    return Section(title="Top Contexts", findings=top_contexts)
 
-    # Section 2: Identifier panels (definitions, imports, calls)
-    if mode == QueryMode.IDENTIFIER:
-        defs = [m for m in visible_matches if m.category == "definition"]
-        imps = [m for m in visible_matches if m.category in {"import", "from_import"}]
-        calls = [m for m in visible_matches if m.category == "callsite"]
-        if defs:
-            sections.append(
-                Section(
-                    title="Definitions",
-                    findings=[build_finding(m, root) for m in defs[:5]],
-                )
-            )
-        if imps:
-            sections.append(
-                Section(
-                    title="Imports",
-                    findings=[build_finding(m, root) for m in imps[:10]],
-                    collapsed=True,
-                )
-            )
-        if calls:
-            sections.append(
-                Section(
-                    title="Callsites",
-                    findings=[build_finding(m, root) for m in calls[:10]],
-                    collapsed=True,
-                )
-            )
 
-    # Section 3: Uses by Kind
+def _build_identifier_sections(
+    matches: list[EnrichedMatch],
+    root: Path,
+    mode: QueryMode,
+) -> list[Section]:
+    if mode != QueryMode.IDENTIFIER:
+        return []
+    sections: list[Section] = []
+    defs = [m for m in matches if m.category == "definition"]
+    imps = [m for m in matches if m.category in {"import", "from_import"}]
+    calls = [m for m in matches if m.category == "callsite"]
+    if defs:
+        sections.append(Section(title="Definitions", findings=[build_finding(m, root) for m in defs[:5]]))
+    if imps:
+        sections.append(
+            Section(
+                title="Imports",
+                findings=[build_finding(m, root) for m in imps[:10]],
+                collapsed=True,
+            )
+        )
+    if calls:
+        sections.append(
+            Section(
+                title="Callsites",
+                findings=[build_finding(m, root) for m in calls[:10]],
+                collapsed=True,
+            )
+        )
+    return sections
+
+
+def _build_kind_counts_section(matches: list[EnrichedMatch]) -> Section:
     category_counts = Counter(m.category for m in matches)
     kind_findings = [
         Finding(
@@ -1048,26 +1151,25 @@ def build_sections(
         )
         for cat, count in category_counts.most_common()
     ]
-    sections.append(
-        Section(
-            title="Uses by Kind",
-            findings=kind_findings,
-            collapsed=True,
-        )
+    return Section(title="Uses by Kind", findings=kind_findings, collapsed=True)
+
+
+def _build_non_code_section(
+    matches: list[EnrichedMatch],
+    root: Path,
+    non_code_categories: set[MatchCategory],
+) -> Section | None:
+    non_code = [m for m in matches if m.category in non_code_categories]
+    if not non_code:
+        return None
+    return Section(
+        title="Non-Code Matches (Strings / Comments / Docstrings)",
+        findings=[build_finding(m, root) for m in non_code[:20]],
+        collapsed=True,
     )
 
-    # Section 4: Non-code matches (collapsed by default)
-    non_code = [m for m in sorted_matches if m.category in non_code_categories]
-    if non_code:
-        sections.append(
-            Section(
-                title="Non-Code Matches (Strings / Comments / Docstrings)",
-                findings=[build_finding(m, root) for m in non_code[:20]],
-                collapsed=True,
-            )
-        )
 
-    # Section 5: Hot Files
+def _build_hot_files_section(matches: list[EnrichedMatch]) -> Section:
     file_counts = Counter(m.file for m in matches)
     hot_file_findings = [
         Finding(
@@ -1079,38 +1181,113 @@ def build_sections(
         )
         for file, count in file_counts.most_common(10)
     ]
-    sections.append(
-        Section(
-            title="Hot Files",
-            findings=hot_file_findings,
-            collapsed=True,
-        )
+    return Section(title="Hot Files", findings=hot_file_findings, collapsed=True)
+
+
+def _build_followups_section(
+    matches: list[EnrichedMatch],
+    query: str,
+    mode: QueryMode,
+) -> Section | None:
+    followup_findings = build_followups(matches, query, mode)
+    if not followup_findings:
+        return None
+    return Section(title="Suggested Follow-ups", findings=followup_findings)
+
+
+def _build_search_context(request: SmartSearchRequest) -> SmartSearchContext:
+    started = ms()
+    limits = request.limits or SMART_SEARCH_LIMITS
+    argv = request.argv or ["search", request.query]
+
+    # Clear caches from previous runs
+    clear_caches()
+
+    actual_mode = detect_query_mode(request.query, force_mode=request.mode)
+    return SmartSearchContext(
+        root=request.root,
+        query=request.query,
+        mode=actual_mode,
+        limits=limits,
+        include_globs=request.include_globs,
+        exclude_globs=request.exclude_globs,
+        include_strings=request.include_strings,
+        argv=argv,
+        tc=request.tc,
+        started_ms=started,
     )
 
-    # Section 6: Suggested Follow-ups
-    followup_findings = build_followups(matches, query, mode)
-    if followup_findings:
-        sections.append(
-            Section(
-                title="Suggested Follow-ups",
-                findings=followup_findings,
-            )
-        )
 
-    return sections
+def _run_candidate_phase(
+    ctx: SmartSearchContext,
+) -> tuple[list[RawMatch], SearchStats, str]:
+    inputs = CandidateSearchInputs(
+        root=ctx.root,
+        query=ctx.query,
+        mode=ctx.mode,
+        limits=ctx.limits,
+        include_globs=ctx.include_globs,
+        exclude_globs=ctx.exclude_globs,
+    )
+    searcher, pattern = _build_candidate_searcher(inputs)
+    raw_matches, stats = collect_candidates(searcher, ctx.limits)
+    return raw_matches, stats, pattern
+
+
+def _run_classification_phase(
+    ctx: SmartSearchContext, raw_matches: list[RawMatch]
+) -> list[EnrichedMatch]:
+    return [classify_match(raw, ctx.root) for raw in raw_matches]
+
+
+def _assemble_smart_search_result(
+    ctx: SmartSearchContext,
+    stats: SearchStats,
+    enriched_matches: list[EnrichedMatch],
+    pattern: str,
+) -> CqResult:
+    summary_inputs = SearchSummaryInputs(
+        query=ctx.query,
+        mode=ctx.mode,
+        stats=stats,
+        matches=enriched_matches,
+        limits=ctx.limits,
+        include=ctx.include_globs,
+        exclude=ctx.exclude_globs,
+        file_globs=["*.py", "*.pyi"],
+        limit=ctx.limits.max_total_matches,
+        pattern=pattern,
+    )
+    summary = build_summary(summary_inputs)
+    sections = build_sections(
+        enriched_matches,
+        ctx.root,
+        ctx.query,
+        ctx.mode,
+        include_strings=ctx.include_strings,
+    )
+
+    run = mk_runmeta(
+        macro="search",
+        argv=ctx.argv,
+        root=str(ctx.root),
+        started_ms=ctx.started_ms,
+        toolchain=ctx.tc.to_dict() if ctx.tc else {},
+    )
+
+    return CqResult(
+        run=run,
+        summary=summary,
+        sections=sections,
+        key_findings=sections[0].findings[:5] if sections else [],
+        evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
+    )
 
 
 def smart_search(
     root: Path,
     query: str,
-    *,
-    mode: QueryMode | None = None,
-    include_globs: list[str] | None = None,
-    exclude_globs: list[str] | None = None,
-    include_strings: bool = False,
-    limits: SearchLimits | None = None,
-    tc: Toolchain | None = None,
-    argv: list[str] | None = None,
+    **kwargs: Unpack[SmartSearchKwargs],
 ) -> CqResult:
     """Execute Smart Search pipeline.
 
@@ -1120,83 +1297,20 @@ def smart_search(
         Repository root path.
     query
         Search query string.
-    mode
-        Query mode override (auto-detected if None).
-    include_globs
-        File patterns to include.
-    exclude_globs
-        File patterns to exclude.
-    include_strings
-        Include strings/comments/docstrings in primary ranking.
-    limits
-        Search safety limits.
-    tc
-        Toolchain info from CliContext.
-    argv
-        Original command arguments.
+    kwargs
+        Optional overrides: mode, include_globs, exclude_globs, include_strings,
+        limits, tc, argv.
 
     Returns
     -------
     CqResult
         Complete search results.
     """
-    started = ms()
-    limits = limits or SMART_SEARCH_LIMITS
-    argv = argv or ["search", query]
-
-    # Clear caches from previous runs
-    clear_caches()
-
-    # Detect query mode
-    actual_mode = detect_query_mode(query, force_mode=mode)
-
-    # Phase 1: Candidate generation
-    searcher, pattern = build_candidate_searcher(
-        root,
-        query,
-        actual_mode,
-        limits,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-    )
-    raw_matches, stats = collect_candidates(searcher, limits)
-
-    # Phase 2: Classification
-    enriched_matches = [classify_match(raw, root) for raw in raw_matches]
-
-    # Phase 3: Assembly
-    summary = build_summary(
-        query,
-        actual_mode,
-        stats,
-        enriched_matches,
-        limits,
-        include=include_globs,
-        exclude=exclude_globs,
-        file_globs=["*.py", "*.pyi"],
-        limit=limits.max_total_matches,
-        pattern=pattern,
-    )
-    sections = build_sections(
-        enriched_matches, root, query, actual_mode, include_strings=include_strings
-    )
-
-    # Build CqResult
-    run = mk_runmeta(
-        macro="search",
-        argv=argv,
-        root=str(root),
-        started_ms=started,
-        toolchain=tc.to_dict() if tc else {},
-    )
-
-    return CqResult(
-        run=run,
-        summary=summary,
-        sections=sections,
-        key_findings=sections[0].findings[:5] if sections else [],
-        evidence=[build_finding(m, root) for m in enriched_matches[:MAX_EVIDENCE]],
-    )
+    request = SmartSearchRequest.from_kwargs(root, query, kwargs)
+    ctx = _build_search_context(request)
+    raw_matches, stats, pattern = _run_candidate_phase(ctx)
+    enriched_matches = _run_classification_phase(ctx, raw_matches)
+    return _assemble_smart_search_result(ctx, stats, enriched_matches, pattern)
 
 
 __all__ = [
@@ -1205,6 +1319,7 @@ __all__ = [
     "EnrichedMatch",
     "RawMatch",
     "SearchStats",
+    "SmartSearchContext",
     "build_candidate_searcher",
     "build_finding",
     "build_followups",

@@ -8,6 +8,9 @@ Verifies:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
 import pytest
 from tools.cq.query.ir import PatternSpec, Query
 from tools.cq.query.parser import parse_query
@@ -158,9 +161,10 @@ class TestAstGrepRule:
             pattern="def $F($$$)",
             inside="class $C",
         )
-        yaml_dict = rule.to_yaml_dict()
+        yaml_dict = cast("Mapping[str, object]", rule.to_yaml_dict())
         assert "inside" in yaml_dict
-        assert yaml_dict["inside"]["pattern"] == "class $C"
+        inside = cast("Mapping[str, object]", yaml_dict["inside"])
+        assert inside["pattern"] == "class $C"
 
     def test_rule_with_stop_by(self) -> None:
         """Rule with stop-by mode."""
@@ -169,8 +173,9 @@ class TestAstGrepRule:
             inside="class $C",
             inside_stop_by="end",
         )
-        yaml_dict = rule.to_yaml_dict()
-        assert yaml_dict["inside"]["stopBy"] == "end"
+        yaml_dict = cast("Mapping[str, object]", rule.to_yaml_dict())
+        inside = cast("Mapping[str, object]", yaml_dict["inside"])
+        assert inside["stopBy"] == "end"
 
     def test_rule_with_strictness(self) -> None:
         """Rule with custom strictness."""
@@ -187,6 +192,7 @@ class TestAstGrepRule:
             pattern="class $C($$$)",
             has="def __init__($$$)",
         )
-        yaml_dict = rule.to_yaml_dict()
+        yaml_dict = cast("Mapping[str, object]", rule.to_yaml_dict())
         assert "has" in yaml_dict
-        assert yaml_dict["has"]["pattern"] == "def __init__($$$)"
+        has = cast("Mapping[str, object]", yaml_dict["has"])
+        assert has["pattern"] == "def __init__($$$)"

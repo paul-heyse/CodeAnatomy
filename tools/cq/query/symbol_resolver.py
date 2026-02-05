@@ -260,78 +260,82 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
     list[ImportBinding]
         Import bindings extracted from the record.
     """
-    bindings: list[ImportBinding] = []
     text = record.text
+    handlers = {
+        "import ": _parse_import_stmt,
+        "from ": _parse_from_import_stmt,
+    }
+    for prefix, handler in handlers.items():
+        if text.startswith(prefix):
+            return handler(text)
+    return []
 
-    # Handle "import x" or "import x as y"
-    if text.startswith("import "):
-        # Remove "import " prefix
-        remainder = text[7:].strip()
 
-        # Check for "as" alias
-        if " as " in remainder:
-            parts = remainder.split(" as ", 1)
-            source = parts[0].strip()
-            alias = parts[1].strip()
+def _parse_import_stmt(text: str) -> list[ImportBinding]:
+    bindings: list[ImportBinding] = []
+    remainder = text[7:].strip()
+    if " as " in remainder:
+        parts = remainder.split(" as ", 1)
+        source = parts[0].strip()
+        alias = parts[1].strip()
+        bindings.append(
+            ImportBinding(
+                local_name=alias,
+                source_module=source,
+                source_name=source.split(".")[-1],
+                is_from_import=False,
+            )
+        )
+        return bindings
+
+    for module_name in remainder.split(","):
+        cleaned_module = module_name.strip()
+        if cleaned_module:
             bindings.append(
                 ImportBinding(
-                    local_name=alias,
-                    source_module=source,
-                    source_name=source.split(".")[-1],
+                    local_name=cleaned_module.split(".")[-1],
+                    source_module=cleaned_module,
+                    source_name=None,
                     is_from_import=False,
                 )
             )
+    return bindings
+
+
+def _parse_from_import_stmt(text: str) -> list[ImportBinding]:
+    bindings: list[ImportBinding] = []
+    match = re.match(r"from\s+([\w.]+)\s+import\s+(.+)", text)
+    if not match:
+        return bindings
+    source_module = match.group(1)
+    names_part = match.group(2).strip()
+
+    if names_part.startswith("("):
+        names_part = names_part[1:]
+    if names_part.endswith(")"):
+        names_part = names_part[:-1]
+
+    for name_spec in names_part.split(","):
+        cleaned_spec = name_spec.strip()
+        if not cleaned_spec:
+            continue
+
+        if " as " in cleaned_spec:
+            parts = cleaned_spec.split(" as ", 1)
+            source_name = parts[0].strip()
+            local_name = parts[1].strip()
         else:
-            # Plain import
-            for module_name in remainder.split(","):
-                cleaned_module = module_name.strip()
-                if cleaned_module:
-                    bindings.append(
-                        ImportBinding(
-                            local_name=cleaned_module.split(".")[-1],
-                            source_module=cleaned_module,
-                            source_name=None,
-                            is_from_import=False,
-                        )
-                    )
+            source_name = cleaned_spec
+            local_name = cleaned_spec
 
-    # Handle "from x import y" or "from x import y as z"
-    elif text.startswith("from "):
-        # Parse "from module import names"
-        match = re.match(r"from\s+([\w.]+)\s+import\s+(.+)", text)
-        if match:
-            source_module = match.group(1)
-            names_part = match.group(2).strip()
-
-            # Remove parentheses if present
-            if names_part.startswith("("):
-                names_part = names_part[1:]
-            if names_part.endswith(")"):
-                names_part = names_part[:-1]
-
-            # Parse each imported name
-            for name_spec in names_part.split(","):
-                cleaned_spec = name_spec.strip()
-                if not cleaned_spec:
-                    continue
-
-                if " as " in cleaned_spec:
-                    parts = cleaned_spec.split(" as ", 1)
-                    source_name = parts[0].strip()
-                    local_name = parts[1].strip()
-                else:
-                    source_name = cleaned_spec
-                    local_name = cleaned_spec
-
-                bindings.append(
-                    ImportBinding(
-                        local_name=local_name,
-                        source_module=source_module,
-                        source_name=source_name if source_name != local_name else None,
-                        is_from_import=True,
-                    )
-                )
-
+        bindings.append(
+            ImportBinding(
+                local_name=local_name,
+                source_module=source_module,
+                source_name=source_name if source_name != local_name else None,
+                is_from_import=True,
+            )
+        )
     return bindings
 
 

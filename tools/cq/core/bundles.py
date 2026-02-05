@@ -1,5 +1,7 @@
 """Bundle runner for cq report presets."""
 
+# Bundle outputs rely on CqResult schema stability; follow schema evolution rules in core/schema.py.
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -302,15 +304,15 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.param:
             results.append(
                 BundleStepResult(
-                        result=cmd_impact(
-                            ImpactRequest(
-                                tc=ctx.tc,
-                                root=ctx.root,
-                                argv=ctx.argv,
-                                function_name=target.value,
-                                param_name=ctx.param,
-                            )
-                        ),
+                    result=cmd_impact(
+                        ImpactRequest(
+                            tc=ctx.tc,
+                            root=ctx.root,
+                            argv=ctx.argv,
+                            function_name=target.value,
+                            param_name=ctx.param,
+                        )
+                    ),
                     apply_scope=False,
                 )
             )
@@ -319,15 +321,15 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.signature:
             results.append(
                 BundleStepResult(
-                        result=cmd_sig_impact(
-                            SigImpactRequest(
-                                tc=ctx.tc,
-                                root=ctx.root,
-                                argv=ctx.argv,
-                                symbol=target.value,
-                                to=ctx.signature,
-                            )
-                        ),
+                    result=cmd_sig_impact(
+                        SigImpactRequest(
+                            tc=ctx.tc,
+                            root=ctx.root,
+                            argv=ctx.argv,
+                            symbol=target.value,
+                            to=ctx.signature,
+                        )
+                    ),
                     apply_scope=False,
                 )
             )
@@ -395,15 +397,15 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.param:
             results.append(
                 BundleStepResult(
-                        result=cmd_impact(
-                            ImpactRequest(
-                                tc=ctx.tc,
-                                root=ctx.root,
-                                argv=ctx.argv,
-                                function_name=target.value,
-                                param_name=ctx.param,
-                            )
-                        ),
+                    result=cmd_impact(
+                        ImpactRequest(
+                            tc=ctx.tc,
+                            root=ctx.root,
+                            argv=ctx.argv,
+                            function_name=target.value,
+                            param_name=ctx.param,
+                        )
+                    ),
                     apply_scope=False,
                 )
             )

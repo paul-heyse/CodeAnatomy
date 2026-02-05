@@ -277,7 +277,7 @@ def get_otel_config_snapshot() -> Mapping[str, object]:
     Mapping[str, object]
         Immutable snapshot of resolved OpenTelemetry configuration.
     """
-    config = resolve_otel_config()
+    config = resolve_otel_config(None)
     return dict(config.fingerprint_payload())
 
 

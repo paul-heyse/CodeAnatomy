@@ -35,6 +35,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.delta.protocol import DeltaFeatureGate
 from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.kernels import DedupeSpec, SortKey
 from datafusion_engine.schema.alignment import CastErrorPolicy, SchemaEvolutionSpec
 from datafusion_engine.schema.finalize import Contract, FinalizeContext
@@ -51,6 +52,7 @@ from schema_spec.arrow_types import (
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from schema_spec.view_specs import ViewSpec
 from serde_msgspec import StructBaseStrict
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
@@ -64,9 +66,7 @@ from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
-    from datafusion_engine.expr.spec import ExprSpec
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.view_specs import ViewSpec
 
 
 def validate_arrow_table(
@@ -183,9 +183,7 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
         normalized = tuple(
             (
                 name,
-                arrow_type_from_pyarrow(dtype)
-                if isinstance(dtype, pa.DataType)
-                else dtype,
+                arrow_type_from_pyarrow(dtype) if isinstance(dtype, pa.DataType) else dtype,
             )
             for name, dtype in self.partition_cols
         )
@@ -205,9 +203,7 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
         fields = [
             pa.field(
                 name,
-                arrow_type_to_pyarrow(dtype)
-                if isinstance(dtype, ArrowTypeBase)
-                else dtype,
+                arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype,
                 nullable=False,
             )
             for name, dtype in self.partition_cols
@@ -215,13 +211,17 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
         return pa.schema(fields)
 
     def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
-        """Return partition columns as pyarrow data types."""
+        """Return partition columns as pyarrow data types.
+
+        Returns
+        -------
+        tuple[tuple[str, pyarrow.DataType], ...]
+            Partition columns with PyArrow data types.
+        """
         return tuple(
             (
                 name,
-                arrow_type_to_pyarrow(dtype)
-                if isinstance(dtype, ArrowTypeBase)
-                else dtype,
+                arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype,
             )
             for name, dtype in self.partition_cols
         )
@@ -334,9 +334,7 @@ class DataFusionScanOptions(StructBaseStrict, frozen=True):
         normalized = tuple(
             (
                 name,
-                arrow_type_from_pyarrow(dtype)
-                if isinstance(dtype, pa.DataType)
-                else dtype,
+                arrow_type_from_pyarrow(dtype) if isinstance(dtype, pa.DataType) else dtype,
             )
             for name, dtype in self.partition_cols
         )
@@ -344,13 +342,17 @@ class DataFusionScanOptions(StructBaseStrict, frozen=True):
             object.__setattr__(self, "partition_cols", normalized)
 
     def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
-        """Return partition columns as pyarrow data types."""
+        """Return partition columns as pyarrow data types.
+
+        Returns
+        -------
+        tuple[tuple[str, pyarrow.DataType], ...]
+            Partition columns with PyArrow data types.
+        """
         return tuple(
             (
                 name,
-                arrow_type_to_pyarrow(dtype)
-                if isinstance(dtype, ArrowTypeBase)
-                else dtype,
+                arrow_type_to_pyarrow(dtype) if isinstance(dtype, ArrowTypeBase) else dtype,
             )
             for name, dtype in self.partition_cols
         )
@@ -794,12 +796,23 @@ class DeltaPolicyBundle(StructBaseStrict, frozen=True):
     constraints: tuple[str, ...] = ()
 
 
+class ValidationPolicySpec(StructBaseStrict, frozen=True):
+    """Runtime DataFrame validation policy (Pandera)."""
+
+    enabled: bool = True
+    lazy: bool = True
+    sample: int | None = None
+    head: int | None = None
+    tail: int | None = None
+
+
 class DatasetPolicies(StructBaseStrict, frozen=True):
     """Policy bundle for dataset specs."""
 
     datafusion_scan: DataFusionScanOptions | None = None
     delta: DeltaPolicyBundle | None = None
     validation: ArrowValidationOptions | None = None
+    dataframe_validation: ValidationPolicySpec | None = None
 
 
 class DatasetSpec(StructBaseStrict, frozen=True):
@@ -891,6 +904,11 @@ class DatasetSpec(StructBaseStrict, frozen=True):
         """Return validation options from policy bundle."""
         return self.policies.validation
 
+    @property
+    def dataframe_validation(self) -> ValidationPolicySpec | None:
+        """Return DataFrame validation policy from policy bundle."""
+        return self.policies.dataframe_validation
+
     def schema(self) -> SchemaLike:
         """Return the Arrow schema with dataset metadata applied.
 
@@ -907,9 +925,7 @@ class DatasetSpec(StructBaseStrict, frozen=True):
             and delta_policy.write_policy is not None
             and delta_policy.write_policy.zorder_by
         ):
-            keys = tuple(
-                (name, "ascending") for name in delta_policy.write_policy.zorder_by
-            )
+            keys = tuple((name, "ascending") for name in delta_policy.write_policy.zorder_by)
             ordering = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
         merged = merge_metadata_specs(self.metadata_spec, ordering)
         return merged.apply(self.table_spec.to_arrow_schema())
@@ -1201,6 +1217,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None
+    dataframe_validation: ValidationPolicySpec | None
 
 
 def _merge_names(*parts: Iterable[str]) -> tuple[str, ...]:
@@ -1370,6 +1387,7 @@ def make_dataset_spec(
             datafusion_scan=kwargs.get("datafusion_scan"),
             delta=delta_bundle,
             validation=kwargs.get("validation"),
+            dataframe_validation=kwargs.get("dataframe_validation"),
         )
     return DatasetSpec(
         table_spec=table_spec,
@@ -1776,6 +1794,7 @@ __all__ = [
     "SortKeySpec",
     "TableSchemaContract",
     "TableSpecConstraints",
+    "ValidationPolicySpec",
     "VirtualFieldSpec",
     "apply_delta_scan_policy",
     "apply_scan_policy",

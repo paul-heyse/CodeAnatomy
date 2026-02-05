@@ -6,6 +6,7 @@ Executes ToolPlans and returns CqResult objects.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -18,6 +19,7 @@ from tools.cq.core.schema import (
     CqResult,
     DetailPayload,
     Finding,
+    RunMeta,
     Section,
     mk_result,
     mk_runmeta,
@@ -31,6 +33,7 @@ from tools.cq.core.scoring import (
     impact_score,
 )
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
+from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
@@ -41,7 +44,7 @@ if TYPE_CHECKING:
 
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.query.ir import MetaVarCapture
-from tools.cq.index.files import build_repo_file_index, tabulate_files
+from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
 
@@ -56,6 +59,293 @@ class ScanContext:
     file_index: FileIntervalIndex
     calls_by_def: dict[SgRecord, list[SgRecord]]
     all_records: list[SgRecord]
+
+
+@dataclass
+class EntityCandidates:
+    """Candidate record buckets for entity queries."""
+
+    def_records: list[SgRecord]
+    import_records: list[SgRecord]
+    call_records: list[SgRecord]
+
+
+@dataclass
+class EntityExecutionState:
+    """Prepared execution state for entity queries."""
+
+    ctx: QueryExecutionContext
+    paths: list[Path]
+    scope_globs: list[str] | None
+    records: list[SgRecord]
+    scan: ScanContext
+    candidates: EntityCandidates
+
+
+@dataclass
+class PatternExecutionState:
+    """Prepared execution state for pattern queries."""
+
+    ctx: QueryExecutionContext
+    scope_globs: list[str] | None
+    file_result: FileTabulationResult
+
+
+@dataclass(frozen=True)
+class AstGrepExecutionContext:
+    """Inputs for executing inline ast-grep rules."""
+
+    rules: tuple[AstGrepRule, ...]
+    paths: list[Path]
+    root: Path
+    query: Query | None = None
+
+
+@dataclass
+class AstGrepExecutionState:
+    """Mutable state for ast-grep rule execution."""
+
+    findings: list[Finding]
+    records: list[SgRecord]
+    raw_matches: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class AstGrepRuleContext:
+    """Per-rule execution context for ast-grep-py scanning."""
+
+    node: SgNode
+    rule: AstGrepRule
+    rel_path: str
+    rule_id: str
+
+
+@dataclass(frozen=True)
+class AstGrepMatchSpan:
+    """Captured match span for relational filtering."""
+
+    file: str
+    start_line: int
+    end_line: int
+    match: SgNode
+
+
+def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
+    return mk_runmeta(
+        macro="q",
+        argv=ctx.argv,
+        root=str(ctx.root),
+        started_ms=ctx.started_ms,
+        toolchain=ctx.tc.to_dict(),
+    )
+
+
+def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
+    result = mk_result(_build_runmeta(ctx))
+    result.summary["error"] = message
+    return result
+
+
+def _resolve_entity_paths(
+    ctx: QueryExecutionContext,
+) -> tuple[list[Path], list[str] | None, CqResult | None]:
+    plan = ctx.plan
+    paths = scope_to_paths(plan.scope, ctx.root)
+    if not paths:
+        return [], None, _empty_result(ctx, "No files match scope")
+    return paths, scope_to_globs(plan.scope), None
+
+
+def _scan_entity_records(
+    ctx: QueryExecutionContext,
+    paths: list[Path],
+    scope_globs: list[str] | None,
+) -> list[SgRecord]:
+    return sg_scan(
+        paths=paths,
+        record_types=set(ctx.plan.sg_record_types),
+        root=ctx.root,
+        globs=scope_globs,
+    )
+
+
+def _build_scan_context(records: list[SgRecord]) -> ScanContext:
+    def_records = filter_records_by_kind(records, "def")
+    interval_index = IntervalIndex.from_records(def_records)
+    file_index = FileIntervalIndex.from_records(def_records)
+    call_records = filter_records_by_kind(records, "call")
+    calls_by_def = assign_calls_to_defs(interval_index, call_records)
+    return ScanContext(
+        def_records=def_records,
+        call_records=call_records,
+        interval_index=interval_index,
+        file_index=file_index,
+        calls_by_def=calls_by_def,
+        all_records=records,
+    )
+
+
+def _build_entity_candidates(scan: ScanContext, records: list[SgRecord]) -> EntityCandidates:
+    return EntityCandidates(
+        def_records=scan.def_records,
+        import_records=filter_records_by_kind(records, "import"),
+        call_records=scan.call_records,
+    )
+
+
+def _apply_rule_spans(
+    ctx: QueryExecutionContext,
+    paths: list[Path],
+    scope_globs: list[str] | None,
+    candidates: EntityCandidates,
+) -> EntityCandidates:
+    plan = ctx.plan
+    query = ctx.query
+    if not plan.sg_rules:
+        return candidates
+
+    match_spans = _collect_match_spans(plan.sg_rules, paths, ctx.root, query, scope_globs)
+    if not match_spans:
+        return candidates
+
+    def_records = candidates.def_records
+    import_records = candidates.import_records
+    call_records = candidates.call_records
+
+    if query.entity in {"function", "class", "method", "decorator"}:
+        def_records = _filter_records_by_spans(def_records, match_spans)
+    elif query.entity == "import":
+        import_records = _filter_records_by_spans(import_records, match_spans)
+    elif query.entity == "callsite":
+        call_records = _filter_records_by_spans(call_records, match_spans)
+
+    return EntityCandidates(
+        def_records=def_records,
+        import_records=import_records,
+        call_records=call_records,
+    )
+
+
+def _prepare_entity_state(ctx: QueryExecutionContext) -> EntityExecutionState | CqResult:
+    if not ctx.tc.has_sgpy:
+        return _empty_result(ctx, "ast-grep not available")
+
+    paths, scope_globs, error = _resolve_entity_paths(ctx)
+    if error is not None:
+        return error
+
+    records = _scan_entity_records(ctx, paths, scope_globs)
+    scan_ctx = _build_scan_context(records)
+    candidates = _build_entity_candidates(scan_ctx, records)
+    candidates = _apply_rule_spans(ctx, paths, scope_globs, candidates)
+
+    return EntityExecutionState(
+        ctx=ctx,
+        paths=paths,
+        scope_globs=scope_globs,
+        records=records,
+        scan=scan_ctx,
+        candidates=candidates,
+    )
+
+
+def _tabulate_scope_files(
+    root: Path,
+    paths: list[Path],
+    scope_globs: list[str] | None,
+    *,
+    explain: bool,
+) -> FileTabulationResult:
+    repo_context = resolve_repo_context(root)
+    repo_index = build_repo_file_index(repo_context)
+    return tabulate_files(
+        repo_index,
+        paths,
+        scope_globs,
+        extensions=(".py",),
+        explain=explain,
+    )
+
+
+def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState | CqResult:
+    if not ctx.tc.has_sgpy:
+        return _empty_result(ctx, "ast-grep not available")
+
+    paths = scope_to_paths(ctx.plan.scope, ctx.root)
+    if not paths:
+        return _empty_result(ctx, "No files match scope")
+
+    scope_globs = scope_to_globs(ctx.plan.scope)
+    file_result = _tabulate_scope_files(
+        ctx.root,
+        paths,
+        scope_globs,
+        explain=ctx.plan.explain,
+    )
+    if not file_result.files:
+        result = _empty_result(ctx, "No files match scope after filtering")
+        if ctx.plan.explain:
+            result.summary["file_filters"] = [
+                asdict(decision) for decision in file_result.decisions
+            ]
+        return result
+
+    return PatternExecutionState(
+        ctx=ctx,
+        scope_globs=scope_globs,
+        file_result=file_result,
+    )
+
+
+def _apply_entity_handlers(state: EntityExecutionState, result: CqResult) -> None:
+    query = state.ctx.query
+    root = state.ctx.root
+    candidates = state.candidates
+
+    if query.entity == "import":
+        _process_import_query(candidates.import_records, query, result, root)
+    elif query.entity == "decorator":
+        _process_decorator_query(state.scan, query, result, root, candidates.def_records)
+    elif query.entity == "callsite":
+        _process_call_query(state.scan, query, result, root)
+    else:
+        _process_def_query(state.scan, query, result, root, candidates.def_records)
+
+
+def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> None:
+    plan = state.ctx.plan
+    if not plan.explain:
+        return
+    result.summary["plan"] = {
+        "sg_record_types": list(plan.sg_record_types),
+        "need_symtable": plan.need_symtable,
+        "need_bytecode": plan.need_bytecode,
+        "is_pattern_query": plan.is_pattern_query,
+    }
+    file_result = _tabulate_scope_files(
+        state.ctx.root,
+        state.paths,
+        state.scope_globs,
+        explain=True,
+    )
+    result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
+
+
+def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -> None:
+    plan = state.ctx.plan
+    query = state.ctx.query
+    if not plan.explain:
+        return
+    result.summary["plan"] = {
+        "is_pattern_query": True,
+        "pattern": query.pattern_spec.pattern if query.pattern_spec else None,
+        "strictness": query.pattern_spec.strictness if query.pattern_spec else None,
+        "context": query.pattern_spec.context if query.pattern_spec else None,
+        "selector": query.pattern_spec.selector if query.pattern_spec else None,
+        "rules_count": len(plan.sg_rules),
+        "metavar_filters": len(query.metavar_filters),
+    }
+    result.summary["file_filters"] = [asdict(decision) for decision in state.file_result.decisions]
 
 
 def execute_plan(
@@ -85,39 +375,21 @@ def execute_plan(
     CqResult
         Query results
     """
-    started_ms = ms()
+    ctx = QueryExecutionContext(
+        plan=plan,
+        query=query,
+        tc=tc,
+        root=root,
+        argv=argv or [],
+        started_ms=ms(),
+    )
 
-    # Dispatch to pattern query executor if this is a pattern query
     if plan.is_pattern_query:
-        result = _execute_pattern_query(
-            plan,
-            query,
-            tc,
-            root,
-            argv,
-            started_ms,
-        )
-    else:
-        result = _execute_entity_query(
-            plan,
-            query,
-            tc,
-            root,
-            argv,
-            started_ms,
-        )
-
-    return result
+        return _execute_pattern_query(ctx)
+    return _execute_entity_query(ctx)
 
 
-def _execute_entity_query(
-    plan: ToolPlan,
-    query: Query,
-    tc: Toolchain,
-    root: Path,
-    argv: list[str] | None,
-    started_ms: float,
-) -> CqResult:
+def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute an entity-based query.
 
     Returns
@@ -125,123 +397,18 @@ def _execute_entity_query(
     CqResult
         Query result with findings and summary metadata.
     """
-    # Get paths to scan
-    paths = scope_to_paths(plan.scope, root)
-    if not paths:
-        run = mk_runmeta(
-            macro="q",
-            argv=argv or [],
-            root=str(root),
-            started_ms=started_ms,
-            toolchain=tc.to_dict(),
-        )
-        result = mk_result(run)
-        result.summary["error"] = "No files match scope"
-        return result
+    state = _prepare_entity_state(ctx)
+    if isinstance(state, CqResult):
+        return state
 
-    scope_globs = scope_to_globs(plan.scope)
-
-    # ast-grep scan
-    if not tc.has_sgpy:
-        run = mk_runmeta(
-            macro="q",
-            argv=argv or [],
-            root=str(root),
-            started_ms=started_ms,
-            toolchain=tc.to_dict(),
-        )
-        result = mk_result(run)
-        result.summary["error"] = "ast-grep not available"
-        return result
-
-    records = sg_scan(
-        paths=paths,
-        record_types=set(plan.sg_record_types),
-        root=root,
-        globs=scope_globs,
-    )
-
-    # Phase 3: Build scan context
-    def_records = filter_records_by_kind(records, "def")
-    interval_index = IntervalIndex.from_records(def_records)
-    file_index = FileIntervalIndex.from_records(def_records)
-    call_records = filter_records_by_kind(records, "call")
-    calls_by_def = assign_calls_to_defs(interval_index, call_records)
-
-    ctx = ScanContext(
-        def_records=def_records,
-        call_records=call_records,
-        interval_index=interval_index,
-        file_index=file_index,
-        calls_by_def=calls_by_def,
-        all_records=records,
-    )
-
-    # Phase 4: Build result
-    run = mk_runmeta(
-        macro="q",
-        argv=argv or [],
-        root=str(root),
-        started_ms=started_ms,
-        toolchain=tc.to_dict(),
-    )
-    result = mk_result(run)
-
-    # Phase 5: Filter and add findings based on entity type
-    def_candidates = def_records
-    import_candidates = filter_records_by_kind(records, "import")
-    call_candidates = call_records
-
-    if plan.sg_rules:
-        match_spans = _collect_match_spans(plan.sg_rules, paths, root, query, scope_globs)
-        if match_spans:
-            if query.entity in {"function", "class", "method", "decorator"}:
-                def_candidates = _filter_records_by_spans(def_candidates, match_spans)
-            elif query.entity == "import":
-                import_candidates = _filter_records_by_spans(import_candidates, match_spans)
-            elif query.entity == "callsite":
-                call_candidates = _filter_records_by_spans(call_candidates, match_spans)
-
-    if query.entity == "import":
-        _process_import_query(import_candidates, query, result, root)
-    elif query.entity == "decorator":
-        _process_decorator_query(ctx, query, result, root, def_candidates)
-    elif query.entity == "callsite":
-        _process_call_query(ctx, query, result, root)
-    else:
-        _process_def_query(ctx, query, result, root, def_candidates)
-
-    result.summary["files_scanned"] = len({r.file for r in records})
-
-    if plan.explain:
-        result.summary["plan"] = {
-            "sg_record_types": list(plan.sg_record_types),
-            "need_symtable": plan.need_symtable,
-            "need_bytecode": plan.need_bytecode,
-            "is_pattern_query": plan.is_pattern_query,
-        }
-        repo_context = resolve_repo_context(root)
-        repo_index = build_repo_file_index(repo_context)
-        file_result = tabulate_files(
-            repo_index,
-            paths,
-            scope_globs,
-            extensions=(".py",),
-            explain=True,
-        )
-        result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
-
+    result = mk_result(_build_runmeta(ctx))
+    _apply_entity_handlers(state, result)
+    result.summary["files_scanned"] = len({r.file for r in state.records})
+    _maybe_add_entity_explain(state, result)
     return result
 
 
-def _execute_pattern_query(
-    plan: ToolPlan,
-    query: Query,
-    tc: Toolchain,
-    root: Path,
-    argv: list[str] | None,
-    started_ms: float,
-) -> CqResult:
+def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules.
 
     Returns
@@ -249,107 +416,36 @@ def _execute_pattern_query(
     CqResult
         Query result with findings and summary metadata.
     """
-    scope_globs = scope_to_globs(plan.scope)
-    if not tc.has_sgpy:
-        run = mk_runmeta(
-            macro="q",
-            argv=argv or [],
-            root=str(root),
-            started_ms=started_ms,
-            toolchain=tc.to_dict(),
-        )
-        result = mk_result(run)
-        result.summary["error"] = "ast-grep not available"
-        return result
+    state = _prepare_pattern_state(ctx)
+    if isinstance(state, CqResult):
+        return state
 
-    # Get paths to scan
-    paths = scope_to_paths(plan.scope, root)
-    if not paths:
-        run = mk_runmeta(
-            macro="q",
-            argv=argv or [],
-            root=str(root),
-            started_ms=started_ms,
-            toolchain=tc.to_dict(),
-        )
-        result = mk_result(run)
-        result.summary["error"] = "No files match scope"
-        return result
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    file_result = tabulate_files(
-        repo_index,
-        paths,
-        scope_globs,
-        extensions=(".py",),
-        explain=plan.explain,
-    )
-    paths = file_result.files
-    if not paths:
-        run = mk_runmeta(
-            macro="q",
-            argv=argv or [],
-            root=str(root),
-            started_ms=started_ms,
-            toolchain=tc.to_dict(),
-        )
-        result = mk_result(run)
-        result.summary["error"] = "No files match scope after filtering"
-        if plan.explain:
-            result.summary["file_filters"] = [
-                asdict(decision) for decision in file_result.decisions
-            ]
-        return result
-
-    # Execute ast-grep rules
     findings, records, _ = _execute_ast_grep_rules(
-        plan.sg_rules,
-        paths,
-        root,
-        query,
+        state.ctx.plan.sg_rules,
+        state.file_result.files,
+        state.ctx.root,
+        state.ctx.query,
         None,
     )
 
-    # Build result
-    run = mk_runmeta(
-        macro="q",
-        argv=argv or [],
-        root=str(root),
-        started_ms=started_ms,
-        toolchain=tc.to_dict(),
-    )
-    result = mk_result(run)
+    result = mk_result(_build_runmeta(ctx))
     result.key_findings.extend(findings)
 
-    # Apply scope filter if present
-    if query.scope_filter and findings:
-        enricher = SymtableEnricher(root)
+    if state.ctx.query.scope_filter and findings:
+        enricher = SymtableEnricher(state.ctx.root)
         result.key_findings = filter_by_scope(
             result.key_findings,
-            query.scope_filter,
+            state.ctx.query.scope_filter,
             enricher,
             records,
         )
 
-    # Apply limit
-    if query.limit and len(result.key_findings) > query.limit:
-        result.key_findings = result.key_findings[: query.limit]
+    if state.ctx.query.limit and len(result.key_findings) > state.ctx.query.limit:
+        result.key_findings = result.key_findings[: state.ctx.query.limit]
 
     result.summary["matches"] = len(result.key_findings)
     result.summary["files_scanned"] = len({r.file for r in records})
-
-    if plan.explain:
-        result.summary["plan"] = {
-            "is_pattern_query": True,
-            "pattern": query.pattern_spec.pattern if query.pattern_spec else None,
-            "strictness": query.pattern_spec.strictness if query.pattern_spec else None,
-            "context": query.pattern_spec.context if query.pattern_spec else None,
-            "selector": query.pattern_spec.selector if query.pattern_spec else None,
-            "rules_count": len(plan.sg_rules),
-            "metavar_filters": len(query.metavar_filters),
-        }
-        result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
-
+    _maybe_add_pattern_explain(state, result)
     return result
 
 
@@ -380,71 +476,105 @@ def _execute_ast_grep_rules(
     tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
         Findings, underlying records, and raw match data.
     """
-    from tools.cq.query.metavar import apply_metavar_filters
-
     if not rules:
         return [], [], []
+    ctx = AstGrepExecutionContext(rules=rules, paths=paths, root=root, query=query)
+    state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
+    _run_ast_grep(ctx, state)
+    return state.findings, state.records, state.raw_matches
 
-    findings: list[Finding] = []
-    records: list[SgRecord] = []
-    raw_matches: list[dict[str, object]] = []
 
-    # Execute rules using ast-grep-py
-    for file_path in paths:
-        try:
-            src = file_path.read_text(encoding="utf-8")
-        except OSError:
+def _run_ast_grep(ctx: AstGrepExecutionContext, state: AstGrepExecutionState) -> None:
+    for file_path in ctx.paths:
+        _process_ast_grep_file(ctx, state, file_path)
+
+
+def _process_ast_grep_file(
+    ctx: AstGrepExecutionContext,
+    state: AstGrepExecutionState,
+    file_path: Path,
+) -> None:
+    try:
+        src = file_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    sg_root = SgRoot(src, "python")
+    node = sg_root.root()
+    rel_path = _normalize_match_file(str(file_path), ctx.root)
+
+    for idx, rule in enumerate(ctx.rules):
+        rule_ctx = AstGrepRuleContext(
+            node=node,
+            rule=rule,
+            rel_path=rel_path,
+            rule_id=f"pattern_{idx}",
+        )
+        _process_ast_grep_rule(ctx, state, rule_ctx)
+
+
+def _process_ast_grep_rule(
+    ctx: AstGrepExecutionContext,
+    state: AstGrepExecutionState,
+    rule_ctx: AstGrepRuleContext,
+) -> None:
+    for match in _iter_rule_matches(rule_ctx.node, rule_ctx.rule):
+        match_data = _build_match_data(
+            match,
+            rule_id=rule_ctx.rule_id,
+            rel_path=rule_ctx.rel_path,
+        )
+        state.raw_matches.append(match_data)
+        if not _match_passes_filters(ctx, match):
             continue
+        finding, record = _match_to_finding(match_data)
+        if finding:
+            _apply_metavar_details(ctx, match, finding)
+            state.findings.append(finding)
+        if record:
+            state.records.append(record)
 
-        sg_root = SgRoot(src, "python")
-        node = sg_root.root()
-        rel_path = _normalize_match_file(str(file_path), root)
 
-        for idx, rule in enumerate(rules):
-            rule_id = f"pattern_{idx}"
-            pattern = rule.pattern
+def _iter_rule_matches(node: SgNode, rule: AstGrepRule) -> list[SgNode]:
+    pattern = rule.pattern
+    if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
+        if rule.kind:
+            return list(node.find_all(kind=rule.kind))
+        return []
+    return list(node.find_all(pattern=pattern))
 
-            # Skip if no pattern (kind-only rules handled differently)
-            if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
-                # For kind-only rules, use kind matching
-                if rule.kind:
-                    matches = node.find_all(kind=rule.kind)
-                else:
-                    continue
-            else:
-                matches = node.find_all(pattern=pattern)
 
-            for match in matches:
-                # Build match dict for compatibility
-                range_obj = match.range()
-                match_data: dict[str, object] = {
-                    "ruleId": rule_id,
-                    "file": rel_path,
-                    "text": match.text(),
-                    "range": {
-                        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-                        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-                    },
-                    "metaVariables": _extract_match_metavars(match),
-                }
-                raw_matches.append(match_data)
+def _build_match_data(match: SgNode, *, rule_id: str, rel_path: str) -> dict[str, object]:
+    range_obj = match.range()
+    return {
+        "ruleId": rule_id,
+        "file": rel_path,
+        "text": match.text(),
+        "range": {
+            "start": {"line": range_obj.start.line, "column": range_obj.start.column},
+            "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+        },
+        "metaVariables": _extract_match_metavars(match),
+    }
 
-                # Apply metavar filters if present
-                if query and query.metavar_filters:
-                    captures = _parse_sgpy_metavariables(match)
-                    if not apply_metavar_filters(captures, query.metavar_filters):
-                        continue
 
-                finding, record = _match_to_finding(match_data)
-                if finding:
-                    if query and query.metavar_filters:
-                        captures = _extract_match_metavars(match)
-                        finding.details["metavar_captures"] = captures
-                    findings.append(finding)
-                if record:
-                    records.append(record)
+def _match_passes_filters(ctx: AstGrepExecutionContext, match: SgNode) -> bool:
+    from tools.cq.query.metavar import apply_metavar_filters
 
-    return findings, records, raw_matches
+    if ctx.query and ctx.query.metavar_filters:
+        captures = _parse_sgpy_metavariables(match)
+        return apply_metavar_filters(captures, ctx.query.metavar_filters)
+    return True
+
+
+def _apply_metavar_details(
+    ctx: AstGrepExecutionContext,
+    match: SgNode,
+    finding: Finding,
+) -> None:
+    if ctx.query and ctx.query.metavar_filters:
+        captures = _extract_match_metavars(match)
+        finding.details["metavar_captures"] = captures
 
 
 def _extract_match_metavars(match: SgNode) -> dict[str, str]:
@@ -616,8 +746,6 @@ def _collect_match_spans(
     dict[str, list[tuple[int, int]]]
         Mapping from file to matched (start_line, end_line) spans.
     """
-    from tools.cq.query.metavar import apply_metavar_filters
-
     repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     file_result = tabulate_files(
@@ -626,83 +754,70 @@ def _collect_match_spans(
         globs,
         extensions=(".py",),
     )
+    matches = _collect_ast_grep_match_spans(file_result.files, rules, root)
+    if not matches:
+        return {}
+    if not query.metavar_filters:
+        return _group_match_spans(matches)
+    return _filter_match_spans_by_metavars(matches, query.metavar_filters)
 
-    spans: dict[str, list[tuple[int, int]]] = {}
-    all_matches: list[tuple[dict[str, object], SgNode]] = []
 
-    # Execute rules using ast-grep-py
-    for file_path in file_result.files:
+def _collect_ast_grep_match_spans(
+    files: list[Path],
+    rules: tuple[AstGrepRule, ...],
+    root: Path,
+) -> list[AstGrepMatchSpan]:
+    matches: list[AstGrepMatchSpan] = []
+    for file_path in files:
         try:
             src = file_path.read_text(encoding="utf-8")
         except OSError:
             continue
-
         sg_root = SgRoot(src, "python")
         node = sg_root.root()
         rel_path = _normalize_match_file(str(file_path), root)
-
         for rule in rules:
-            rule_dict = rule.to_yaml_dict()
-            if rule.requires_inline_rule():
-                rule_config: Config = {"rule": cast("Rule", rule_dict)}
-                matches = node.find_all(rule_config)
-            elif "pattern" in rule_dict and rule_dict.get("pattern") in {
-                "$FUNC",
-                "$METHOD",
-                "$CLASS",
-            }:
-                kind = rule_dict.get("kind")
-                if kind:
-                    matches = node.find_all(kind=cast("str", kind))
-                else:
-                    matches = node.find_all(pattern=cast("str", rule_dict["pattern"]))
-            elif "pattern" in rule_dict:
-                matches = node.find_all(pattern=cast("str", rule_dict["pattern"]))
-            elif "kind" in rule_dict:
-                matches = node.find_all(kind=cast("str", rule_dict["kind"]))
-            else:
-                continue
-
-            for match in matches:
+            for match in _iter_rule_matches_for_spans(node, rule):
                 range_obj = match.range()
-                start_line = range_obj.start.line + 1
-                end_line = range_obj.end.line + 1
-                spans.setdefault(rel_path, []).append((start_line, end_line))
+                matches.append(
+                    AstGrepMatchSpan(
+                        file=rel_path,
+                        start_line=range_obj.start.line + 1,
+                        end_line=range_obj.end.line + 1,
+                        match=match,
+                    )
+                )
+    return matches
 
-                # Store match for filtering
-                match_data: dict[str, object] = {
-                    "file": rel_path,
-                    "range": {
-                        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-                        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-                    },
-                }
-                all_matches.append((match_data, match))
 
-    if not spans:
-        return spans
+def _iter_rule_matches_for_spans(node: SgNode, rule: AstGrepRule) -> list[SgNode]:
+    if rule.requires_inline_rule():
+        rule_config: Config = {"rule": cast("Rule", rule.to_yaml_dict())}
+        return list(node.find_all(rule_config))
+    return _iter_rule_matches(node, rule)
 
-    if not query.metavar_filters:
-        return spans
 
-    # Apply metavar filters
+def _group_match_spans(
+    matches: list[AstGrepMatchSpan],
+) -> dict[str, list[tuple[int, int]]]:
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for match in matches:
+        spans.setdefault(match.file, []).append((match.start_line, match.end_line))
+    return spans
+
+
+def _filter_match_spans_by_metavars(
+    matches: list[AstGrepMatchSpan],
+    metavar_filters: tuple[MetaVarCapture, ...],
+) -> dict[str, list[tuple[int, int]]]:
+    from tools.cq.query.metavar import apply_metavar_filters
+
     filtered: dict[str, list[tuple[int, int]]] = {}
-    for match_data, sg_match in all_matches:
-        captures = _parse_sgpy_metavariables(sg_match)
-        if not apply_metavar_filters(captures, query.metavar_filters):
+    for match in matches:
+        captures = _parse_sgpy_metavariables(match.match)
+        if not apply_metavar_filters(captures, metavar_filters):
             continue
-        range_data = match_data.get("range")
-        if not isinstance(range_data, dict):
-            continue
-        start = cast("dict[str, object]", range_data.get("start", {}))
-        end = cast("dict[str, object]", range_data.get("end", {}))
-        file_path = match_data.get("file")
-        if not isinstance(file_path, str):
-            continue
-        start_line = _coerce_int(start.get("line", 0)) + 1
-        end_line = _coerce_int(end.get("line", 0)) + 1
-        filtered.setdefault(file_path, []).append((start_line, end_line))
-
+        filtered.setdefault(match.file, []).append((match.start_line, match.end_line))
     return filtered
 
 
@@ -955,12 +1070,13 @@ def _process_decorator_query(
         )
 
         decorators_value = decorator_info.get("decorators", [])
-        decorators = decorators_value if isinstance(decorators_value, list) else []
+        decorators: list[str] = (
+            [str(item) for item in decorators_value] if isinstance(decorators_value, list) else []
+        )
         count = len(decorators)
 
         # Apply decorator filter if present
         if query.decorator_filter:
-
             # Filter by decorated_by
             if (
                 query.decorator_filter.decorated_by
@@ -1037,51 +1153,40 @@ def _append_expander_sections(
 
     expand_kinds = {expander.kind for expander in query.expand}
     field_kinds = set(query.fields)
-    if "callers" in expand_kinds and "callers" not in field_kinds:
-        callers_section = _build_callers_section(
-            target_defs,
-            ctx.call_records,
-            ctx.file_index,
-            root,
-        )
-        if callers_section.findings:
-            result.sections.append(callers_section)
+    expander_specs: list[tuple[str, bool, Callable[[], Section]]] = [
+        (
+            "callers",
+            True,
+            lambda: _build_callers_section(
+                target_defs,
+                ctx.call_records,
+                ctx.file_index,
+                root,
+            ),
+        ),
+        ("callees", True, lambda: _build_callees_section(target_defs, ctx.calls_by_def, root)),
+        ("imports", True, lambda: _build_imports_section(target_defs, ctx.all_records)),
+        (
+            "raises",
+            False,
+            lambda: _build_raises_section(
+                target_defs,
+                ctx.all_records,
+                ctx.file_index,
+            ),
+        ),
+        ("scope", False, lambda: _build_scope_section(target_defs, root, ctx.calls_by_def)),
+        ("bytecode_surface", False, lambda: _build_bytecode_surface_section(target_defs, root)),
+    ]
 
-    if "callees" in expand_kinds and "callees" not in field_kinds:
-        callees_section = _build_callees_section(
-            target_defs,
-            ctx.calls_by_def,
-            root,
-        )
-        if callees_section.findings:
-            result.sections.append(callees_section)
-
-    if "imports" in expand_kinds and "imports" not in field_kinds:
-        imports_section = _build_imports_section(
-            target_defs,
-            ctx.all_records,
-        )
-        if imports_section.findings:
-            result.sections.append(imports_section)
-
-    if "raises" in expand_kinds:
-        raises_section = _build_raises_section(
-            target_defs,
-            ctx.all_records,
-            ctx.file_index,
-        )
-        if raises_section.findings:
-            result.sections.append(raises_section)
-
-    if "scope" in expand_kinds:
-        scope_section = _build_scope_section(target_defs, root, ctx.calls_by_def)
-        if scope_section.findings:
-            result.sections.append(scope_section)
-
-    if "bytecode_surface" in expand_kinds:
-        bytecode_section = _build_bytecode_surface_section(target_defs, root)
-        if bytecode_section.findings:
-            result.sections.append(bytecode_section)
+    for kind, skip_field, builder in expander_specs:
+        if kind not in expand_kinds:
+            continue
+        if skip_field and kind in field_kinds:
+            continue
+        section = builder()
+        if section.findings:
+            result.sections.append(section)
 
 
 def rg_files_with_matches(
@@ -1209,9 +1314,6 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
     bool
         True if the record matches the entity type.
     """
-    if entity is None:
-        return False
-
     function_kinds = {"function", "async_function", "function_typeparams"}
     class_kinds = {
         "class",
@@ -1228,24 +1330,29 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
         "from_import_paren",
     }
     decorator_kinds = function_kinds | class_kinds
+    if entity is None:
+        return False
 
     if entity == "function":
-        return record.kind in function_kinds
-    if entity == "class":
-        return record.kind in class_kinds
-    if entity == "method":
+        is_match = record.kind in function_kinds
+    elif entity == "class":
+        is_match = record.kind in class_kinds
+    elif entity == "method":
         # Methods are functions inside classes - would need context analysis
-        return record.kind in {"function", "async_function"}
-    if entity == "module":
-        return False  # Module-level would need different handling
-    if entity == "callsite":
-        return record.record == "call"
-    if entity == "import":
-        return record.kind in import_kinds
-    if entity == "decorator":
+        is_match = record.kind in {"function", "async_function"}
+    elif entity == "module":
+        is_match = False  # Module-level would need different handling
+    elif entity == "callsite":
+        is_match = record.record == "call"
+    elif entity == "import":
+        is_match = record.kind in import_kinds
+    elif entity == "decorator":
         # Decorators are applied to functions/classes - check for decorated definitions
-        return record.kind in decorator_kinds
-    return False
+        is_match = record.kind in decorator_kinds
+    else:
+        is_match = False
+
+    return is_match
 
 
 def _matches_name(record: SgRecord, name: str) -> bool:
@@ -1484,6 +1591,16 @@ def _import_to_finding(import_record: SgRecord) -> Finding:
     )
 
 
+@dataclass(frozen=True)
+class CallTargetContext:
+    """Resolved target names for caller expansion."""
+
+    target_names: set[str]
+    function_targets: set[str]
+    method_targets: set[str]
+    class_methods: dict[str, set[str]]
+
+
 def _build_callers_section(
     target_defs: list[SgRecord],
     all_calls: list[SgRecord],
@@ -1497,9 +1614,20 @@ def _build_callers_section(
     Section
         Callers section for the report.
     """
-    findings: list[Finding] = []
+    target_ctx = _build_call_target_context(target_defs, index)
+    call_contexts = _collect_call_contexts(all_calls, index, target_ctx)
+    evidence_map = _build_def_evidence_map(
+        [containing for _, _, containing in call_contexts if containing is not None],
+        root,
+    )
+    findings = _build_caller_findings(call_contexts, evidence_map)
+    return Section(title="Callers", findings=findings)
 
-    # Get names of target definitions
+
+def _build_call_target_context(
+    target_defs: list[SgRecord],
+    index: FileIntervalIndex,
+) -> CallTargetContext:
     target_names: set[str] = set()
     method_targets: set[str] = set()
     function_targets: set[str] = set()
@@ -1515,54 +1643,70 @@ def _build_callers_section(
             continue
         method_targets.add(def_name)
         class_name = _extract_def_name(enclosing_class)
-        if not class_name:
-            continue
-        class_methods.setdefault(class_name, set()).add(def_name)
+        if class_name:
+            class_methods.setdefault(class_name, set()).add(def_name)
+    return CallTargetContext(
+        target_names=target_names,
+        function_targets=function_targets,
+        method_targets=method_targets,
+        class_methods=class_methods,
+    )
 
-    # Find calls to target names
+
+def _collect_call_contexts(
+    all_calls: list[SgRecord],
+    index: FileIntervalIndex,
+    target_ctx: CallTargetContext,
+) -> list[tuple[SgRecord, str, SgRecord | None]]:
     call_contexts: list[tuple[SgRecord, str, SgRecord | None]] = []
     for call in all_calls:
         call_target = _extract_call_target(call)
-        if call_target not in target_names:
+        if call_target not in target_ctx.target_names:
             continue
         receiver = _extract_call_receiver(call)
         containing = index.find_containing(call)
-        if receiver in {"self", "cls"} and containing is not None:
-            caller_class = _find_enclosing_class(containing, index)
-            if caller_class is not None:
-                caller_class_name = _extract_def_name(caller_class)
-                if caller_class_name:
-                    methods = class_methods.get(caller_class_name, set())
-                    if call_target not in methods:
-                        continue
-        if (
-            receiver is None
-            and call_target in method_targets
-            and call_target not in function_targets
-        ):
+        if not _call_matches_target(call_target, receiver, containing, index, target_ctx):
             continue
         call_contexts.append((call, call_target, containing))
+    return call_contexts
 
-    containing_defs = [containing for _, _, containing in call_contexts if containing is not None]
-    evidence_map = _build_def_evidence_map(containing_defs, root)
 
+def _call_matches_target(
+    call_target: str | None,
+    receiver: str | None,
+    containing: SgRecord | None,
+    index: FileIntervalIndex,
+    target_ctx: CallTargetContext,
+) -> bool:
+    if call_target is None:
+        return False
+    if receiver in {"self", "cls"} and containing is not None:
+        caller_class = _find_enclosing_class(containing, index)
+        if caller_class is not None:
+            caller_class_name = _extract_def_name(caller_class)
+            if caller_class_name:
+                methods = target_ctx.class_methods.get(caller_class_name, set())
+                if call_target not in methods:
+                    return False
+    return not (
+        receiver is None
+        and call_target in target_ctx.method_targets
+        and call_target not in target_ctx.function_targets
+    )
+
+
+def _build_caller_findings(
+    call_contexts: list[tuple[SgRecord, str, SgRecord | None]],
+    evidence_map: dict[tuple[str, int, int], dict[str, object]],
+) -> list[Finding]:
+    findings: list[Finding] = []
     for call, call_target, containing in call_contexts:
         caller_name = _extract_def_name(containing) if containing else "<module>"
-
-        anchor = Anchor(
-            file=call.file,
-            line=call.start_line,
-            col=call.start_col,
-        )
-
-        details: dict[str, object] = {
-            "caller": caller_name,
-            "callee": call_target,
-        }
+        anchor = Anchor(file=call.file, line=call.start_line, col=call.start_col)
+        details: dict[str, object] = {"caller": caller_name, "callee": call_target}
         if containing is not None:
             evidence = evidence_map.get(_record_key(containing))
             _apply_call_evidence(details, evidence, call_target)
-
         findings.append(
             Finding(
                 category="caller",
@@ -1572,11 +1716,7 @@ def _build_callers_section(
                 details=DetailPayload.from_legacy(details),
             )
         )
-
-    return Section(
-        title="Callers",
-        findings=findings,
-    )
+    return findings
 
 
 def _build_callees_section(
@@ -1724,12 +1864,10 @@ def _build_scope_section(
         if not scope_info:
             continue
         def_name = _extract_def_name(def_record) or "<unknown>"
-        free_vars = scope_info.get("free_vars", [])
-        if not isinstance(free_vars, list):
-            free_vars = []
-        cell_vars = scope_info.get("cell_vars", [])
-        if not isinstance(cell_vars, list):
-            cell_vars = []
+        free_vars_value = scope_info.get("free_vars", [])
+        free_vars: list[str] = free_vars_value if isinstance(free_vars_value, list) else []
+        cell_vars_value = scope_info.get("cell_vars", [])
+        cell_vars: list[str] = cell_vars_value if isinstance(cell_vars_value, list) else []
         label = "closure" if scope_info.get("is_closure") else "toplevel"
         message = (
             f"scope: {def_name} ({label}) free_vars={len(free_vars)} cell_vars={len(cell_vars)}"
@@ -1761,7 +1899,7 @@ def _build_bytecode_surface_section(
     Section
         Bytecode surface section for the report.
     """
-    from tools.cq.query.enrichment import enrich_records
+    from tools.cq.query.enrichment import BytecodeInfo, enrich_records
 
     findings: list[Finding] = []
     enrichment = enrich_records(target_defs, root)
@@ -1770,13 +1908,16 @@ def _build_bytecode_surface_section(
         location = f"{record.file}:{record.start_line}:{record.start_col}"
         info = enrichment.get(location, {})
         bytecode_info = info.get("bytecode_info")
-        if bytecode_info is None:
+        if not isinstance(bytecode_info, BytecodeInfo):
             continue
         def_name = _extract_def_name(record) or "<unknown>"
-        details = {
-            "globals": list(bytecode_info.load_globals),
-            "attrs": list(bytecode_info.load_attrs),
-            "calls": list(bytecode_info.call_functions),
+        globals_list = [str(item) for item in bytecode_info.load_globals]
+        attrs_list = [str(item) for item in bytecode_info.load_attrs]
+        calls_list = [str(item) for item in bytecode_info.call_functions]
+        details: dict[str, object] = {
+            "globals": globals_list,
+            "attrs": attrs_list,
+            "calls": calls_list,
         }
         anchor = Anchor(
             file=record.file,
@@ -1784,8 +1925,8 @@ def _build_bytecode_surface_section(
             col=record.start_col,
         )
         message = (
-            f"bytecode: {def_name} globals={len(details['globals'])} "
-            f"attrs={len(details['attrs'])} calls={len(details['calls'])}"
+            f"bytecode: {def_name} globals={len(globals_list)} "
+            f"attrs={len(attrs_list)} calls={len(calls_list)}"
         )
         findings.append(
             Finding(

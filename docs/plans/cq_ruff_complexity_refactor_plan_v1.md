@@ -6,26 +6,28 @@ The plan now integrates a **msgspec‑first internal model layer** and **pydanti
 
 ---
 
-## Status Summary (2026-02-04)
+## Status Summary (2026-02-05)
 
-- Scope 1: Planned
-- Scope 2: Planned
-- Scope 3: Planned
-- Scope 4: Planned
-- Scope 5: Planned
-- Scope 6: Planned
-- Scope 7: Planned
-- Scope 8: Planned
-- Scope 9: Planned
-- Scope 10: Planned
-- Scope 11: Planned
-- Scope 12: Planned
-- Scope 13: Planned
-- Scope 14: Planned
+- Scope 1: Complete
+- Scope 2: Complete
+- Scope 3: Complete
+- Scope 4: Partial
+- Scope 5: Complete
+- Scope 6: Complete
+- Scope 7: Complete
+- Scope 8: Complete
+- Scope 9: Complete
+- Scope 10: Complete
+- Scope 11: Complete
+- Scope 12: Complete
+- Scope 13: Complete
+- Scope 14: Complete
 
 ---
 
 ## Scope 1: Shared msgspec Base (`CqStruct`) + Constraints
+
+**Status**: Complete
 
 **Goal**  
 Standardize CQ internal models on msgspec for performance and immutable semantics, with constrained fields where helpful.
@@ -68,6 +70,8 @@ Col = Annotated[int, msgspec.Meta(ge=0)]
 
 ## Scope 2: Boundary Validation via msgspec + Pydantic
 
+**Status**: Complete
+
 **Goal**  
 Use msgspec for internal validation and pydantic only for stringy external inputs (env/CLI/config).
 
@@ -105,6 +109,8 @@ opts = msgspec.convert(raw_opts, type=QueryOptions, strict=True)
 ---
 
 ## Scope 3: CLI Options Dataclasses + Command Helpers
+
+**Status**: Complete
 
 **Goal**  
 Replace wide command signatures with structured option objects (msgspec structs) and helper functions.
@@ -157,6 +163,8 @@ def q(query_string: str, *, opts: QueryOptions, ctx: CliContext | None = None) -
 
 ## Scope 4: Smart Search Context + Collector Refactor
 
+**Status**: Partial
+
 **Goal**  
 Split candidate collection and enrichment into smaller, testable stages.
 
@@ -204,9 +212,16 @@ class RgCollector:
 3. Replace `_collect_candidates_raw` with collector usage. 
 4. Update tests to exercise collector directly.
 
+**Remaining**
+- Add `RgCollector.finalize()` (or explicitly document why a finalize hook is unnecessary). 
+- Remove or clearly deprecate `_collect_candidates_raw` now that collector usage is primary. 
+- Add unit coverage that calls `RgCollector` directly (match + summary handling).
+
 ---
 
 ## Scope 5: Query Execution Context + Staged Executor
+
+**Status**: Complete
 
 **Goal**  
 Break `_execute_entity_query` and `_execute_ast_grep_rules` into staged steps.
@@ -250,6 +265,8 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
 
 ## Scope 6: Macro Pipelines With Context Objects
 
+**Status**: Complete
+
 **Goal**  
 Reduce local-variable counts in macros by moving data into context objects.
 
@@ -288,6 +305,8 @@ def build_calls_result(ctx: CallsContext) -> CqResult:
 
 ## Scope 7: Renderer Builders (Dot + Mermaid)
 
+**Status**: Complete
+
 **Goal**  
 Split rendering into data-collection and formatting steps.
 
@@ -322,6 +341,8 @@ class DotRenderBuilder:
 ---
 
 ## Scope 8: Parser/Planner Dispatch Tables
+
+**Status**: Complete
 
 **Goal**  
 Reduce branching in parser/planner by using token handler maps.
@@ -359,6 +380,8 @@ for key, value in tokens.items():
 
 ## Scope 9: Classifier Return Fan‑Out Cleanup
 
+**Status**: Complete
+
 **Goal**  
 Reduce return count and simplify flow in `classify_from_node`.
 
@@ -386,6 +409,8 @@ return result
 ---
 
 ## Scope 10: Findings Table Constructor Simplification
+
+**Status**: Complete
 
 **Goal**  
 Reduce parameter counts in findings table helpers.
@@ -419,6 +444,8 @@ def build_findings_table(findings: list[Finding], opts: FindingsTableOptions) ->
 ---
 
 ## Scope 11: CLI Launcher Refactor
+
+**Status**: Complete
 
 **Goal**  
 Reduce complexity in `cli_app/app.py` `launcher`.
@@ -454,6 +481,8 @@ def launcher(argv: list[str]) -> int:
 
 ## Scope 12: JSON Codec Reuse + Deterministic Output
 
+**Status**: Complete
+
 **Goal**  
 Use shared msgspec encoders/decoders for performance and stable output.
 
@@ -481,6 +510,8 @@ JSON_DECODER = msgspec.json.Decoder(type=CqResult, strict=True)
 ---
 
 ## Scope 13: Schema Evolution Guidelines For CQ Artifacts
+
+**Status**: Complete
 
 **Goal**  
 Align CQ artifact evolution with msgspec schema evolution rules.
@@ -510,6 +541,8 @@ Align CQ artifact evolution with msgspec schema evolution rules.
 ---
 
 ## Scope 14: CLI/Env String Coercion Policy
+
+**Status**: Complete
 
 **Goal**  
 Make string‑based coercion explicit and isolated to boundary parsing.

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from functools import cache
 from typing import Literal
 
+import msgspec
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import SchemaLike
@@ -20,6 +20,8 @@ from schema_spec.system import (
     DatasetSpec,
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,
+    DeltaPolicyBundle,
+    ValidationPolicySpec,
     dataset_spec_from_schema,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -48,6 +50,7 @@ _EXTRACT_WRITE_POLICY = DeltaWritePolicy(
     stats_policy="auto",
     enable_features=_EXTRACT_DELTA_FEATURES,
 )
+_EXTRACT_VALIDATION_POLICY = ValidationPolicySpec(enabled=True, lazy=True, sample=1000)
 _EXTRACT_OPTIMIZE_TARGET_BYTES = 256 * 1024 * 1024
 _EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
     "file_id",
@@ -140,14 +143,23 @@ def dataset_spec(name: str) -> DatasetSpec:
     """
     schema = dataset_schema(name)
     spec = dataset_spec_from_schema(name, schema)
-    return replace(
-        spec,
-        delta_cdf_policy=_EXTRACT_CDF_POLICY,
-        delta_maintenance_policy=_extract_maintenance_policy(schema),
-        delta_write_policy=_EXTRACT_WRITE_POLICY,
-        delta_schema_policy=_EXTRACT_SCHEMA_POLICY,
-        delta_feature_gate=_EXTRACT_FEATURE_GATE,
+    delta_bundle = spec.policies.delta
+    if delta_bundle is None:
+        delta_bundle = DeltaPolicyBundle()
+    delta_bundle = msgspec.structs.replace(
+        delta_bundle,
+        cdf_policy=_EXTRACT_CDF_POLICY,
+        maintenance_policy=_extract_maintenance_policy(schema),
+        write_policy=_EXTRACT_WRITE_POLICY,
+        schema_policy=_EXTRACT_SCHEMA_POLICY,
+        feature_gate=_EXTRACT_FEATURE_GATE,
     )
+    policies = msgspec.structs.replace(
+        spec.policies,
+        delta=delta_bundle,
+        dataframe_validation=_EXTRACT_VALIDATION_POLICY,
+    )
+    return msgspec.structs.replace(spec, policies=policies)
 
 
 def _extract_maintenance_policy(schema: SchemaLike) -> DeltaMaintenancePolicy:

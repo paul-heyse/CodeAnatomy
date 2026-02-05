@@ -8,9 +8,10 @@ from typing import cast
 
 import msgspec
 
-from cli.config_models import RootConfig
+from cli.config_models import RootConfigSpec
 from cli.config_source import ConfigSource, ConfigValue, ConfigWithSources
 from core_types import JsonValue
+from runtime_models.root import ROOT_CONFIG_ADAPTER
 from serde_msgspec import validation_error_payload
 
 
@@ -35,7 +36,7 @@ def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
         root = _decode_root_config(raw, location=location)
         return normalize_config_contents(_config_to_mapping(root))
 
-    config: RootConfig | None = None
+    config: RootConfigSpec | None = None
     codeanatomy_path = _find_in_parents("codeanatomy.toml")
     if codeanatomy_path is not None:
         raw = _read_toml(codeanatomy_path)
@@ -48,7 +49,7 @@ def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
         if nested is not None:
             config = _decode_root_config(nested, location=f"{pyproject_path}:tool.codeanatomy")
 
-    resolved = config or RootConfig()
+    resolved = config or RootConfigSpec()
     return normalize_config_contents(_config_to_mapping(resolved))
 
 
@@ -154,7 +155,7 @@ def _read_toml(path: Path) -> dict[str, JsonValue]:
 
 def _apply_config_values(
     values: dict[str, ConfigValue],
-    raw: RootConfig,
+    raw: RootConfigSpec,
     *,
     location: str,
     skip_existing: bool,
@@ -171,18 +172,19 @@ def _apply_config_values(
         )
 
 
-def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootConfig:
+def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootConfigSpec:
     try:
-        config = msgspec.convert(raw, type=RootConfig, strict=True)
+        config = msgspec.convert(raw, type=RootConfigSpec, strict=True)
     except msgspec.ValidationError as exc:
         details = validation_error_payload(exc)
         msg = f"Config validation failed for {location}: {details}"
         raise ValueError(msg) from exc
+    _validate_root_runtime(config, location=location)
     _validate_json_payloads(config, location=location)
     return config
 
 
-def _validate_json_payloads(config: RootConfig, *, location: str) -> None:
+def _validate_json_payloads(config: RootConfigSpec, *, location: str) -> None:
     payloads: list[tuple[str, Mapping[str, object]]] = []
     if config.graph_adapter is not None and config.graph_adapter.options is not None:
         payloads.append(("graph_adapter.options", config.graph_adapter.options))
@@ -222,9 +224,18 @@ def _validate_json_value(value: object, *, path: str, location: str) -> None:
     raise ValueError(msg)
 
 
-def _config_to_mapping(config: RootConfig) -> dict[str, JsonValue]:
+def _config_to_mapping(config: RootConfigSpec) -> dict[str, JsonValue]:
     payload = msgspec.to_builtins(config, str_keys=True)
     return cast("dict[str, JsonValue]", payload)
+
+
+def _validate_root_runtime(config: RootConfigSpec, *, location: str) -> None:
+    payload = msgspec.to_builtins(config, str_keys=True)
+    try:
+        ROOT_CONFIG_ADAPTER.validate_python(payload)
+    except Exception as exc:
+        msg = f"Config validation failed for {location}: {exc}"
+        raise ValueError(msg) from exc
 
 
 def _resolve_explicit_payload(path: Path) -> tuple[Mapping[str, JsonValue], str]:

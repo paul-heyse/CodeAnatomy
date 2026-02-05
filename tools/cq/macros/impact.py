@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -98,6 +99,26 @@ class ImpactRequest(msgspec.Struct, frozen=True):
     function_name: str
     param_name: str
     max_depth: int = _DEFAULT_MAX_DEPTH
+
+
+@dataclass(frozen=True)
+class ImpactContext:
+    """Execution context for impact analysis."""
+
+    request: ImpactRequest
+    index: DefIndex
+    functions: list[FnDecl]
+
+
+@dataclass(frozen=True)
+class ImpactDepthSummary:
+    """Summary payload for depth findings."""
+
+    request: ImpactRequest
+    depth_counts: dict[int, int]
+    files_affected: set[str]
+    site_count: int
+    scoring_details: dict[str, object]
 
 
 class TaintVisitor(ast.NodeVisitor):
@@ -572,29 +593,23 @@ def _collect_depth_stats(all_sites: list[TaintedSite]) -> tuple[dict[int, int], 
     return depth_counts, files_affected
 
 
-def _append_depth_findings(
-    result: CqResult,
-    *,
-    request: ImpactRequest,
-    depth_counts: dict[int, int],
-    files_affected: set[str],
-    site_count: int,
-    scoring_details: dict[str, object],
-) -> None:
-    if not site_count:
+def _append_depth_findings(result: CqResult, summary: ImpactDepthSummary) -> None:
+    if not summary.site_count:
         return
+    request = summary.request
+    scoring_details = summary.scoring_details
     result.key_findings.append(
         Finding(
             category="summary",
             message=(
                 f"Taint from {request.function_name}.{request.param_name} "
-                f"reaches {site_count} sites in {len(files_affected)} files"
+                f"reaches {summary.site_count} sites in {len(summary.files_affected)} files"
             ),
             severity="info",
             details=DetailPayload.from_legacy(dict(scoring_details)),
         )
     )
-    for depth, count in sorted(depth_counts.items()):
+    for depth, count in sorted(summary.depth_counts.items()):
         result.key_findings.append(
             Finding(
                 category="depth",
@@ -676,6 +691,153 @@ def _append_evidence(
         )
 
 
+def _resolve_functions(index: DefIndex, function_name: str) -> list[FnDecl]:
+    functions = index.find_function_by_name(function_name)
+    if not functions:
+        functions = index.find_function_by_qualified_name(function_name)
+    return functions
+
+
+def _build_not_found_result(request: ImpactRequest, *, started_ms: float) -> CqResult:
+    run = mk_runmeta("impact", request.argv, str(request.root), started_ms, request.tc.to_dict())
+    result = mk_result(run)
+    result.summary = {
+        "status": "not_found",
+        "function": request.function_name,
+    }
+    result.key_findings.append(
+        Finding(
+            category="error",
+            message=f"Function '{request.function_name}' not found in index",
+            severity="error",
+        )
+    )
+    return result
+
+
+def _analyze_functions(ctx: ImpactContext) -> list[TaintedSite]:
+    all_sites: list[TaintedSite] = []
+    request = ctx.request
+    for fn in ctx.functions:
+        param_names = [p.name for p in fn.params]
+        if request.param_name not in param_names:
+            continue
+
+        state = TaintState()
+        analyze_context = _AnalyzeContext(
+            index=ctx.index,
+            root=request.root,
+            state=state,
+            max_depth=request.max_depth,
+        )
+        _analyze_function(fn, {request.param_name}, analyze_context)
+        all_sites.extend(state.tainted_sites)
+    return all_sites
+
+
+def _append_missing_param_warnings(
+    result: CqResult,
+    functions: list[FnDecl],
+    *,
+    request: ImpactRequest,
+) -> None:
+    for fn in functions:
+        param_names = [p.name for p in fn.params]
+        if request.param_name not in param_names:
+            result.key_findings.append(
+                Finding(
+                    category="warning",
+                    message=f"Parameter '{request.param_name}' not found in {fn.qualified_name}",
+                    anchor=Anchor(file=fn.file, line=fn.line),
+                    severity="warning",
+                )
+            )
+
+
+def _build_impact_scoring(
+    all_sites: list[TaintedSite],
+) -> tuple[dict[str, object], dict[int, int], set[str]]:
+    depth_counts, files_affected = _collect_depth_stats(all_sites)
+    max_depth = max(depth_counts.keys()) if depth_counts else 0
+    imp_signals = ImpactSignals(
+        sites=len(all_sites),
+        files=len(files_affected),
+        depth=max_depth,
+        breakages=0,
+        ambiguities=0,
+    )
+    evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"
+    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
+    imp = impact_score(imp_signals)
+    conf = confidence_score(conf_signals)
+    scoring_details: dict[str, object] = {
+        "impact_score": imp,
+        "impact_bucket": bucket(imp),
+        "confidence_score": conf,
+        "confidence_bucket": bucket(conf),
+        "evidence_kind": conf_signals.evidence_kind,
+    }
+    return scoring_details, depth_counts, files_affected
+
+
+def _build_impact_summary(
+    request: ImpactRequest,
+    *,
+    functions: list[FnDecl],
+    all_sites: list[TaintedSite],
+    caller_sites: list[tuple[str, int]],
+) -> dict[str, object]:
+    return {
+        "function": request.function_name,
+        "parameter": request.param_name,
+        "taint_sites": len(all_sites),
+        "max_depth": request.max_depth,
+        "functions_analyzed": len(functions),
+        "callers_found": len(caller_sites),
+    }
+
+
+def _build_impact_result(
+    ctx: ImpactContext,
+    *,
+    started_ms: float,
+) -> CqResult:
+    request = ctx.request
+    if not ctx.functions:
+        return _build_not_found_result(request, started_ms=started_ms)
+
+    run = mk_runmeta("impact", request.argv, str(request.root), started_ms, request.tc.to_dict())
+    result = mk_result(run)
+
+    _append_missing_param_warnings(result, ctx.functions, request=request)
+    all_sites = _analyze_functions(ctx)
+    caller_sites = _find_callers_via_search(request.function_name, request.root)
+
+    result.summary = _build_impact_summary(
+        request,
+        functions=ctx.functions,
+        all_sites=all_sites,
+        caller_sites=caller_sites,
+    )
+
+    scoring_details, depth_counts, files_affected = _build_impact_scoring(all_sites)
+    _append_depth_findings(
+        result,
+        ImpactDepthSummary(
+            request=request,
+            depth_counts=depth_counts,
+            files_affected=files_affected,
+            site_count=len(all_sites),
+            scoring_details=scoring_details,
+        ),
+    )
+    by_kind = _group_sites_by_kind(all_sites)
+    _append_kind_sections(result, by_kind, scoring_details)
+    _append_callers_section(result, caller_sites, scoring_details)
+    _append_evidence(result, all_sites, scoring_details)
+    return result
+
+
 def cmd_impact(request: ImpactRequest) -> CqResult:
     """Analyze impact/taint flow from a function parameter.
 
@@ -690,112 +852,7 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
         Analysis result.
     """
     started = ms()
-
-    # Build definition index
     index = DefIndex.build(request.root)
-
-    # Find the source function
-    functions = index.find_function_by_name(request.function_name)
-    if not functions:
-        # Try qualified name
-        functions = index.find_function_by_qualified_name(request.function_name)
-
-    run = mk_runmeta("impact", request.argv, str(request.root), started, request.tc.to_dict())
-    result = mk_result(run)
-
-    if not functions:
-        result.summary = {
-            "status": "not_found",
-            "function": request.function_name,
-        }
-        result.key_findings.append(
-            Finding(
-                category="error",
-                message=f"Function '{request.function_name}' not found in index",
-                severity="error",
-            )
-        )
-        return result
-
-    # Analyze each matching function
-    all_sites: list[TaintedSite] = []
-
-    for fn in functions:
-        # Verify param exists
-        param_names = [p.name for p in fn.params]
-        if request.param_name not in param_names:
-            result.key_findings.append(
-                Finding(
-                    category="warning",
-                    message=f"Parameter '{request.param_name}' not found in {fn.qualified_name}",
-                    anchor=Anchor(file=fn.file, line=fn.line),
-                    severity="warning",
-                )
-            )
-            continue
-
-        state = TaintState()
-        analyze_context = _AnalyzeContext(
-            index=index,
-            root=request.root,
-            state=state,
-            max_depth=request.max_depth,
-        )
-        _analyze_function(
-            fn,
-            {request.param_name},
-            analyze_context,
-        )
-        all_sites.extend(state.tainted_sites)
-
-    # Also find callers via search adapter for broader impact
-    caller_sites = _find_callers_via_search(request.function_name, request.root)
-
-    # Build result
-    result.summary = {
-        "function": request.function_name,
-        "parameter": request.param_name,
-        "taint_sites": len(all_sites),
-        "max_depth": request.max_depth,
-        "functions_analyzed": len(functions),
-        "callers_found": len(caller_sites),
-    }
-
-    depth_counts, files_affected = _collect_depth_stats(all_sites)
-
-    # Compute scoring signals
-    max_depth = max(depth_counts.keys()) if depth_counts else 0
-    imp_signals = ImpactSignals(
-        sites=len(all_sites),
-        files=len(files_affected),
-        depth=max_depth,
-        breakages=0,
-        ambiguities=0,
-    )
-    # Lower confidence for cross-file taint (depth > 0)
-    evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"
-    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
-
-    _append_depth_findings(
-        result,
-        request=request,
-        depth_counts=depth_counts,
-        files_affected=files_affected,
-        site_count=len(all_sites),
-        scoring_details=scoring_details,
-    )
-    by_kind = _group_sites_by_kind(all_sites)
-    _append_kind_sections(result, by_kind, scoring_details)
-    _append_callers_section(result, caller_sites, scoring_details)
-    _append_evidence(result, all_sites, scoring_details)
-
-    return result
+    functions = _resolve_functions(index, request.function_name)
+    ctx = ImpactContext(request=request, index=index, functions=functions)
+    return _build_impact_result(ctx, started_ms=started)

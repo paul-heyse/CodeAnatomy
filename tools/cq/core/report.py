@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
+from tools.cq.core.codec import dumps_json_value
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 
@@ -120,7 +119,7 @@ def _render_summary(summary: dict[str, object]) -> list[str]:
     for key, value in summary.items():
         rendered_value = to_builtins(value)
         if isinstance(rendered_value, (dict, list)):
-            rendered = json.dumps(rendered_value, sort_keys=True)
+            rendered = dumps_json_value(rendered_value, indent=None)
         else:
             rendered = str(rendered_value)
         formatted.append(f"- **{key}**: {rendered}")

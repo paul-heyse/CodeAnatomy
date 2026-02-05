@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.artifacts import save_artifact_json
 from tools.cq.core.findings_table import (
+    FindingsTableOptions,
     apply_filters,
     build_frame,
     flatten_result,
@@ -50,8 +51,7 @@ def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
         return result
 
     df = build_frame(records)
-    filtered_df = apply_filters(
-        df,
+    options = FindingsTableOptions(
         include=filters.include if filters.include else None,
         exclude=filters.exclude if filters.exclude else None,
         impact=[str(b) for b in filters.impact] if filters.impact else None,
@@ -59,6 +59,7 @@ def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
         severity=[str(s) for s in filters.severity] if filters.severity else None,
         limit=filters.limit,
     )
+    filtered_df = apply_filters(df, options)
     return rehydrate_result(result, filtered_df)
 
 

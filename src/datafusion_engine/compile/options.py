@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
-from core.config_base import FingerprintableConfig, config_fingerprint
+from core.config_base import config_fingerprint
+from serde_msgspec import StructBaseStrict, to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.plan.cache import PlanCache
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from runtime_models.compile import DataFusionCompileOptionsRuntime
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
@@ -26,8 +28,7 @@ SchemaMapping = (
 )
 
 
-@dataclass(frozen=True)
-class DataFusionSqlPolicy(FingerprintableConfig):
+class DataFusionSqlPolicy(StructBaseStrict, frozen=True):
     """Policy for SQL execution in DataFusion sessions."""
 
     allow_ddl: bool = True
@@ -72,6 +73,31 @@ class DataFusionSqlPolicy(FingerprintableConfig):
             .with_allow_dml(self.allow_dml)
             .with_allow_statements(self.allow_statements)
         )
+
+
+class DataFusionCompileOptionsSpec(StructBaseStrict, frozen=True):
+    """Serializable compile-time options for DataFusion execution."""
+
+    cache: bool | None = None
+    cache_max_columns: int | None = 64
+    param_identifier_allowlist: tuple[str, ...] | None = None
+    prepared_statements: bool = True
+    prepared_param_types: Mapping[str, str] | None = None
+    sql_policy_name: str | None = None
+    enforce_sql_policy: bool = True
+    enforce_preflight: bool = True
+    dialect: str = "datafusion"
+    enable_rewrites: bool = True
+    capture_explain: bool = False
+    explain_analyze: bool = False
+    capture_plan_artifacts: bool = False
+    substrait_validation: bool = False
+    diagnostics_allow_sql: bool = False
+    capture_semantic_diff: bool = False
+    prefer_substrait: bool = False
+    prefer_ast_execution: bool = True
+    record_substrait_gaps: bool = False
+    dynamic_projection: bool = True
 
 
 SQL_POLICY_PRESETS: Mapping[str, DataFusionSqlPolicy] = {
@@ -215,3 +241,64 @@ class DataFusionCompileOptions:
     prefer_ast_execution: bool = True
     record_substrait_gaps: bool = False
     dynamic_projection: bool = True
+
+
+def compile_options_runtime(
+    spec: DataFusionCompileOptionsSpec,
+) -> DataFusionCompileOptionsRuntime:
+    """Validate compile options spec via runtime models.
+
+    Parameters
+    ----------
+    spec
+        Serializable compile options spec.
+
+    Returns
+    -------
+    DataFusionCompileOptionsRuntime
+        Validated runtime compile options.
+    """
+    from runtime_models.compile import COMPILE_OPTIONS_ADAPTER
+
+    payload = to_builtins(spec, str_keys=True)
+    return COMPILE_OPTIONS_ADAPTER.validate_python(payload)
+
+
+def compile_options_from_spec(
+    spec: DataFusionCompileOptionsSpec,
+) -> DataFusionCompileOptions:
+    """Return runtime compile options derived from a spec.
+
+    Parameters
+    ----------
+    spec
+        Serializable compile options spec.
+
+    Returns
+    -------
+    DataFusionCompileOptions
+        Runtime compile options for execution.
+    """
+    resolved = compile_options_runtime(spec)
+    return DataFusionCompileOptions(
+        cache=resolved.cache,
+        cache_max_columns=resolved.cache_max_columns,
+        param_identifier_allowlist=resolved.param_identifier_allowlist,
+        prepared_statements=resolved.prepared_statements,
+        prepared_param_types=resolved.prepared_param_types,
+        sql_policy_name=resolved.sql_policy_name,
+        enforce_sql_policy=resolved.enforce_sql_policy,
+        enforce_preflight=resolved.enforce_preflight,
+        dialect=resolved.dialect,
+        enable_rewrites=resolved.enable_rewrites,
+        capture_explain=resolved.capture_explain,
+        explain_analyze=resolved.explain_analyze,
+        capture_plan_artifacts=resolved.capture_plan_artifacts,
+        substrait_validation=resolved.substrait_validation,
+        diagnostics_allow_sql=resolved.diagnostics_allow_sql,
+        capture_semantic_diff=resolved.capture_semantic_diff,
+        prefer_substrait=resolved.prefer_substrait,
+        prefer_ast_execution=resolved.prefer_ast_execution,
+        record_substrait_gaps=resolved.record_substrait_gaps,
+        dynamic_projection=resolved.dynamic_projection,
+    )

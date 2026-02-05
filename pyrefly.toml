@@ -1,4 +1,4 @@
-project-includes = ["src", "tests", "tools", "rust"]
+project-includes = ["src", "tests", "tools"]
 project-excludes = [
     "**/.venv/**",
     "**/__pycache__/**",

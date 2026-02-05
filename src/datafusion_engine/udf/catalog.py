@@ -23,6 +23,8 @@ from datafusion_engine.udf.signature import (
     signature_inputs,
     signature_returns,
 )
+from schema_spec.arrow_types import ArrowTypeSpec, arrow_type_from_pyarrow, arrow_type_to_pyarrow
+from serde_msgspec import StructBaseCompat
 from utils.registry_protocol import Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
@@ -41,6 +43,32 @@ BuiltinCategory = Literal[
     "datetime",
 ]
 UdfKind = Literal["scalar", "aggregate", "window", "table"]
+
+
+class DataFusionUdfSpecSnapshot(StructBaseCompat, frozen=True):
+    """Serializable snapshot for UDF specs."""
+
+    func_id: str
+    engine_name: str
+    kind: Literal["scalar", "aggregate", "window", "table"]
+    input_types: tuple[ArrowTypeSpec, ...]
+    return_type: ArrowTypeSpec
+    state_type: ArrowTypeSpec | None = None
+    volatility: str = "stable"
+    arg_names: tuple[str, ...] | None = None
+    description: str | None = None
+    catalog: str | None = None
+    database: str | None = None
+    capsule_id: str | None = None
+    udf_tier: UdfTier = "builtin"
+    rewrite_tags: tuple[str, ...] = ()
+
+
+class UdfCatalogSnapshot(StructBaseCompat, frozen=True):
+    """Snapshot payload for UDF catalog state."""
+
+    specs: Mapping[str, DataFusionUdfSpecSnapshot]
+    function_factory_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +101,68 @@ class DataFusionUdfSpec:
         if self.udf_tier != "builtin":
             msg = f"Only Rust builtin UDFs are supported. Received tier {self.udf_tier!r}."
             raise ValueError(msg)
+
+    def to_snapshot(self) -> DataFusionUdfSpecSnapshot:
+        """Return a serializable snapshot of this UDF spec.
+
+        Returns
+        -------
+        DataFusionUdfSpecSnapshot
+            Snapshot payload suitable for registry persistence.
+        """
+        return DataFusionUdfSpecSnapshot(
+            func_id=self.func_id,
+            engine_name=self.engine_name,
+            kind=self.kind,
+            input_types=tuple(arrow_type_from_pyarrow(dtype) for dtype in self.input_types),
+            return_type=arrow_type_from_pyarrow(self.return_type),
+            state_type=(
+                arrow_type_from_pyarrow(self.state_type) if self.state_type is not None else None
+            ),
+            volatility=self.volatility,
+            arg_names=self.arg_names,
+            description=self.description,
+            catalog=self.catalog,
+            database=self.database,
+            capsule_id=self.capsule_id,
+            udf_tier=self.udf_tier,
+            rewrite_tags=self.rewrite_tags,
+        )
+
+    @staticmethod
+    def from_snapshot(snapshot: DataFusionUdfSpecSnapshot) -> DataFusionUdfSpec:
+        """Build a UDF spec from a serialized snapshot.
+
+        Parameters
+        ----------
+        snapshot
+            Serialized UDF spec snapshot.
+
+        Returns
+        -------
+        DataFusionUdfSpec
+            Restored UDF spec with pyarrow data types.
+        """
+        return DataFusionUdfSpec(
+            func_id=snapshot.func_id,
+            engine_name=snapshot.engine_name,
+            kind=snapshot.kind,
+            input_types=tuple(arrow_type_to_pyarrow(dtype) for dtype in snapshot.input_types),
+            return_type=arrow_type_to_pyarrow(snapshot.return_type),
+            state_type=(
+                arrow_type_to_pyarrow(snapshot.state_type)
+                if snapshot.state_type is not None
+                else None
+            ),
+            volatility=snapshot.volatility,
+            arg_names=snapshot.arg_names,
+            description=snapshot.description,
+            catalog=snapshot.catalog,
+            database=snapshot.database,
+            capsule_id=snapshot.capsule_id,
+            udf_tier=snapshot.udf_tier,
+            rewrite_tags=snapshot.rewrite_tags,
+        )
 
 
 @dataclass(frozen=True)
@@ -725,46 +815,59 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
         """
         return len(self.catalog.custom_specs())
 
-    def snapshot(self) -> Mapping[str, object]:
+    def snapshot(self) -> UdfCatalogSnapshot:
         """Return a snapshot of custom UDF specs plus policy hash.
 
         Returns
         -------
-        Mapping[str, object]
-            Snapshot payload containing specs and policy hash.
+        UdfCatalogSnapshot
+            Snapshot payload for the current custom UDF registry state.
         """
-        return {
-            "specs": dict(self.catalog.custom_specs()),
-            "function_factory_hash": self.function_factory_hash,
-        }
+        specs = {name: spec.to_snapshot() for name, spec in self.catalog.custom_specs().items()}
+        return UdfCatalogSnapshot(
+            specs=specs,
+            function_factory_hash=self.function_factory_hash,
+        )
 
-    def restore(self, snapshot: Mapping[str, object]) -> None:
+    def restore(self, snapshot: Mapping[str, object] | UdfCatalogSnapshot) -> None:
         """Restore custom UDF specs from a snapshot.
 
         Raises
         ------
         ValueError
-            Raised when the snapshot is malformed or the policy hash mismatches.
+            Raised when the snapshot payload is invalid or mismatched.
         """
-        if "specs" in snapshot:
+        if isinstance(snapshot, UdfCatalogSnapshot):
+            specs = snapshot.specs
+            snapshot_hash = snapshot.function_factory_hash
+        else:
             specs = snapshot.get("specs")
             if not isinstance(specs, Mapping):
                 msg = "UdfCatalogAdapter snapshot missing specs mapping."
                 raise ValueError(msg)
             snapshot_hash = snapshot.get("function_factory_hash")
-            if (
-                snapshot_hash is not None
-                and self.function_factory_hash is not None
-                and snapshot_hash != self.function_factory_hash
-            ):
-                msg = (
-                    "UdfCatalogAdapter snapshot FunctionFactory hash mismatch: "
-                    f"snapshot={snapshot_hash!r} current={self.function_factory_hash!r}."
-                )
-                raise ValueError(msg)
-            self.catalog.replace_custom_specs(cast("Mapping[str, DataFusionUdfSpec]", specs))
+        if (
+            snapshot_hash is not None
+            and self.function_factory_hash is not None
+            and snapshot_hash != self.function_factory_hash
+        ):
+            msg = (
+                "UdfCatalogAdapter snapshot FunctionFactory hash mismatch: "
+                f"snapshot={snapshot_hash!r} current={self.function_factory_hash!r}."
+            )
+            raise ValueError(msg)
+        if not specs:
             return
-        self.catalog.replace_custom_specs(cast("Mapping[str, DataFusionUdfSpec]", snapshot))
+        resolved_specs: dict[str, DataFusionUdfSpec] = {}
+        for key, value in specs.items():
+            if isinstance(value, DataFusionUdfSpec):
+                resolved_specs[str(key)] = value
+            elif isinstance(value, DataFusionUdfSpecSnapshot):
+                resolved_specs[str(key)] = DataFusionUdfSpec.from_snapshot(value)
+            else:
+                msg = f"UdfCatalogAdapter snapshot has unsupported spec type: {type(value)}."
+                raise ValueError(msg)
+        self.catalog.replace_custom_specs(resolved_specs)
 
 
 def create_default_catalog(
@@ -1084,11 +1187,13 @@ __all__ = [
     "BuiltinCategory",
     "BuiltinFunctionSpec",
     "DataFusionUdfSpec",
+    "DataFusionUdfSpecSnapshot",
     "FunctionCatalog",
     "FunctionSignature",
     "ResolvedFunction",
     "UdfCatalog",
     "UdfCatalogAdapter",
+    "UdfCatalogSnapshot",
     "UdfTier",
     "create_default_catalog",
     "create_strict_catalog",

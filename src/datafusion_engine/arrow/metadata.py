@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 import pyarrow as pa
 import pyarrow.types as patypes
 
@@ -55,7 +56,7 @@ from datafusion_engine.arrow.types import (
     StructTypeProtocol,
 )
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
-from serde_msgspec import loads_msgpack
+from serde_msgspec import StructBaseStrict, loads_msgpack
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
@@ -99,12 +100,11 @@ _INDEX_TYPES: Mapping[str, pa.DataType] = {
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
 
 
-@dataclass(frozen=True)
-class SchemaMetadataSpec:
+class SchemaMetadataSpec(StructBaseStrict, frozen=True):
     """Schema metadata mutation policy."""
 
-    schema_metadata: dict[bytes, bytes] = field(default_factory=dict)
-    field_metadata: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
+    schema_metadata: dict[bytes, bytes] = msgspec.field(default_factory=dict)
+    field_metadata: dict[str, dict[bytes, bytes]] = msgspec.field(default_factory=dict)
 
     @staticmethod
     def _split_metadata(
@@ -784,6 +784,8 @@ def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpe
 
 
 def _normalize_option_value(value: object) -> object:
+    if isinstance(value, msgspec.Struct):
+        return _normalize_option_value(msgspec.structs.asdict(value))
     if is_dataclass(value) and not isinstance(value, type):
         return _normalize_option_value(asdict(value))
     if isinstance(value, Path):

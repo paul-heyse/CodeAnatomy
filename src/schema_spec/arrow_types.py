@@ -47,6 +47,7 @@ class ArrowPrimitiveSpec(ArrowTypeBase, tag="primitive", frozen=True):
 
     name: ArrowPrimitiveName
 
+
 class ArrowTimestampSpec(ArrowTypeBase, tag="timestamp", frozen=True):
     """Timestamp Arrow type specification."""
 
@@ -84,7 +85,13 @@ class ArrowFieldSpec(StructBaseStrict, frozen=True):
 
     @classmethod
     def from_pyarrow(cls, field: pa.Field) -> ArrowFieldSpec:
-        """Return an ArrowFieldSpec from a pyarrow.Field."""
+        """Return an ArrowFieldSpec from a pyarrow.Field.
+
+        Returns
+        -------
+        ArrowFieldSpec
+            Serializable field specification.
+        """
         return cls(
             name=field.name,
             dtype=arrow_type_from_pyarrow(field.type),
@@ -93,7 +100,13 @@ class ArrowFieldSpec(StructBaseStrict, frozen=True):
         )
 
     def to_pyarrow(self) -> pa.Field:
-        """Return a pyarrow.Field for the spec."""
+        """Return a pyarrow.Field for the spec.
+
+        Returns
+        -------
+        pyarrow.Field
+            PyArrow field definition.
+        """
         return pa.field(
             self.name,
             arrow_type_to_pyarrow(self.dtype),
@@ -206,7 +219,13 @@ def _encode_metadata(metadata: Mapping[str, str]) -> dict[bytes, bytes]:
 
 
 def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
-    """Return a serializable ArrowTypeSpec from a pyarrow dtype."""
+    """Return a serializable ArrowTypeSpec from a pyarrow dtype.
+
+    Returns
+    -------
+    ArrowTypeSpec
+        Serializable Arrow type specification.
+    """
     if pa.types.is_null(dtype):
         return ArrowPrimitiveSpec(name="null")
     if pa.types.is_boolean(dtype):
@@ -274,9 +293,7 @@ def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
             keys_sorted=dtype.keys_sorted,
         )
     if pa.types.is_struct(dtype):
-        return ArrowStructSpec(
-            fields=tuple(ArrowFieldSpec.from_pyarrow(field) for field in dtype)
-        )
+        return ArrowStructSpec(fields=tuple(ArrowFieldSpec.from_pyarrow(field) for field in dtype))
     if pa.types.is_dictionary(dtype):
         return ArrowDictionarySpec(
             index_type=arrow_type_from_pyarrow(dtype.index_type),
@@ -287,7 +304,18 @@ def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
 
 
 def arrow_type_to_pyarrow(spec: ArrowTypeSpec) -> pa.DataType:
-    """Return pyarrow dtype for an ArrowTypeSpec."""
+    """Return pyarrow dtype for an ArrowTypeSpec.
+
+    Returns
+    -------
+    pyarrow.DataType
+        PyArrow data type for the spec.
+
+    Raises
+    ------
+    TypeError
+        Raised when the spec is unsupported.
+    """
     if isinstance(spec, ArrowPrimitiveSpec):
         return _PRIMITIVE_BUILDERS[spec.name]
     if isinstance(spec, ArrowTimestampSpec):

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from serde_msgspec import StructBaseStrict
 
 
-@dataclass(frozen=True)
-class TaskScheduleMetadata:
+class TaskScheduleMetadata(StructBaseStrict, frozen=True):
     """Schedule metadata for a task execution event."""
 
     schedule_index: int

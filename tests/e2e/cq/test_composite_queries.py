@@ -6,6 +6,9 @@ and rule registry integration.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
 from tools.cq.query import parse_query
 from tools.cq.query.ir import CompositeRule
 
@@ -61,9 +64,10 @@ class TestCompositeRuleToAstGrep:
             operator="all",
             patterns=("$X", "await $Y"),
         )
-        result = rule.to_ast_grep_dict()
+        result = cast("Mapping[str, object]", rule.to_ast_grep_dict())
         assert "all" in result
-        assert len(result["all"]) == 2
+        all_rules = cast("list[object]", result["all"])
+        assert len(all_rules) == 2
 
     def test_any_rule_to_yaml(self) -> None:
         """Convert 'any' rule to ast-grep dict."""
@@ -71,9 +75,10 @@ class TestCompositeRuleToAstGrep:
             operator="any",
             patterns=("logger.$M($$$)", "print($$$)"),
         )
-        result = rule.to_ast_grep_dict()
+        result = cast("Mapping[str, object]", rule.to_ast_grep_dict())
         assert "any" in result
-        assert len(result["any"]) == 2
+        any_rules = cast("list[object]", result["any"])
+        assert len(any_rules) == 2
 
     def test_not_rule_to_yaml(self) -> None:
         """Convert 'not' rule to ast-grep dict."""
@@ -126,9 +131,11 @@ class TestAllCompositeRule:
         )
         yaml_dict = rule.to_ast_grep_dict()
         # ast-grep 'all' requires all sub-patterns to match
-        assert "all" in yaml_dict
-        assert yaml_dict["all"][0] == {"pattern": "def $F"}
-        assert yaml_dict["all"][1] == {"pattern": "return $X"}
+        yaml_map = cast("Mapping[str, object]", yaml_dict)
+        assert "all" in yaml_map
+        all_rules = cast("list[object]", yaml_map["all"])
+        assert all_rules[0] == {"pattern": "def $F"}
+        assert all_rules[1] == {"pattern": "return $X"}
 
 
 class TestAnyCompositeRule:
@@ -141,8 +148,10 @@ class TestAnyCompositeRule:
             patterns=("logger.info", "logger.debug", "logger.error"),
         )
         yaml_dict = rule.to_ast_grep_dict()
-        assert "any" in yaml_dict
-        assert len(yaml_dict["any"]) == 3
+        yaml_map = cast("Mapping[str, object]", yaml_dict)
+        assert "any" in yaml_map
+        any_rules = cast("list[object]", yaml_map["any"])
+        assert len(any_rules) == 3
 
 
 class TestNotCompositeRule:

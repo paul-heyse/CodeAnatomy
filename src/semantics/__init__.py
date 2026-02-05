@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from semantics.column_types import ColumnType, TableType, infer_column_type, infer_table_type
 from semantics.compiler import SemanticCompiler, TableInfo
-from semantics.config import SemanticConfig
+from semantics.config import SemanticConfig, SemanticConfigSpec, semantic_config_from_spec
 from semantics.join_helpers import (
     join_by_path,
     join_by_span_contains,
@@ -44,6 +44,7 @@ __all__ = [
     "JoinStrategyType",
     "SemanticCompiler",
     "SemanticConfig",
+    "SemanticConfigSpec",
     "SemanticSchema",
     "TableInfo",
     "TableType",
@@ -54,4 +55,5 @@ __all__ = [
     "join_by_span_contains",
     "join_by_span_overlap",
     "scip_to_byte_offsets",
+    "semantic_config_from_spec",
 ]

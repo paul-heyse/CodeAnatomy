@@ -32,6 +32,7 @@ from schema_spec.system import (
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,
     TableSpecConstraints,
+    ValidationPolicySpec,
     make_contract_spec,
     make_table_spec,
 )
@@ -381,6 +382,9 @@ def _build_table_spec(row: SemanticDatasetRow) -> TableSchemaSpec:
     )
 
 
+_SEMANTIC_VALIDATION_POLICY = ValidationPolicySpec(enabled=True, lazy=True, sample=1000)
+
+
 def build_input_schema(row: SemanticDatasetRow) -> SchemaLike:
     """Build the input schema for a semantic dataset row.
 
@@ -418,6 +422,7 @@ def build_dataset_spec(row: SemanticDatasetRow) -> DatasetSpec:
         else None,
         delta_feature_gate=None,
         metadata_spec=_build_metadata_spec(row),
+        dataframe_validation=_SEMANTIC_VALIDATION_POLICY,
     )
     return register_dataset(table_spec=table_spec, registration=registration)
 

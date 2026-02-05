@@ -6,8 +6,13 @@ import contextlib
 import importlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
+
+import msgspec
+
+from datafusion_engine.lineage.datafusion import ScanLineage
+from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -22,8 +27,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class InferredDeps:
+class InferredDeps(StructBaseStrict, frozen=True):
     """Dependencies inferred from DataFusion plan bundles.
 
     Captures table and column-level dependencies by analyzing the actual
@@ -56,9 +60,11 @@ class InferredDeps:
     task_name: str
     output: str
     inputs: tuple[str, ...]
-    required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    required_types: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
-    required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
+    required_columns: Mapping[str, tuple[str, ...]] = msgspec.field(default_factory=dict)
+    required_types: Mapping[str, tuple[tuple[str, str], ...]] = msgspec.field(default_factory=dict)
+    required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = msgspec.field(
+        default_factory=dict
+    )
     plan_fingerprint: str = ""
     required_udfs: tuple[str, ...] = ()
     required_rewrite_tags: tuple[str, ...] = ()

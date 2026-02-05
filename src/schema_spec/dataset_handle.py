@@ -114,26 +114,17 @@ class DatasetHandle:
         *,
         validate: bool = True,
     ) -> None:
-        """Register associated view specs into DataFusion.
+        """Register associated view specs into DataFusion (removed).
 
-        Parameters
-        ----------
-        session_runtime:
-            DataFusion SessionRuntime used for registration.
-        validate:
-            Whether to validate the view schemas after registration.
+        Raises
+        ------
+        RuntimeError
+            Raised because view registration is now handled elsewhere.
         """
-        views = self.spec.resolved_view_specs()
-        if not views:
-            from datafusion_engine.schema.registry import (
-                is_extract_nested_dataset,
-                nested_view_spec,
-            )
-
-            if is_extract_nested_dataset(self.spec.name):
-                views = (nested_view_spec(session_runtime.ctx, self.spec.name),)
-        for view in views:
-            view.register(session_runtime, validate=validate)
+        _ = session_runtime
+        _ = validate
+        msg = "DatasetHandle.register_views is removed; use ensure_view_graph."
+        raise RuntimeError(msg)
 
     def view_specs(self) -> tuple[ViewSpec, ...]:
         """Return the view specs associated with the dataset.

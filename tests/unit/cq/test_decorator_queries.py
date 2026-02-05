@@ -8,6 +8,8 @@ Verifies:
 
 from __future__ import annotations
 
+from typing import cast
+
 from tools.cq.query.ir import DecoratorFilter, Query
 from tools.cq.query.parser import parse_query
 
@@ -172,7 +174,8 @@ def foo(self):
 
         enrichment = enrich_with_decorators(finding, source)
         assert "decorators" in enrichment
-        assert "property" in enrichment["decorators"]
+        decorators = cast("list[str]", enrichment["decorators"])
+        assert "property" in decorators
         assert enrichment["decorator_count"] == 1
 
     def test_enrich_undecorated(self) -> None:

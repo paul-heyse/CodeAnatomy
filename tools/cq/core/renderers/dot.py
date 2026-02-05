@@ -6,10 +6,60 @@ Renders CqResult to Graphviz DOT format for visualization.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
+
+
+@dataclass
+class DotRenderBuilder:
+    """Builder for DOT output with deduped nodes/edges."""
+
+    graph_name: str
+    lines: list[str] = field(default_factory=list)
+    nodes: set[str] = field(default_factory=set)
+    edges: set[tuple[str, str]] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        """Initialize the DOT header and graph defaults."""
+        escaped_name = _escape_dot_string(self.graph_name)
+        self.lines.extend(
+            [
+                f'digraph "{escaped_name}" {{',
+                "    rankdir=LR;",
+                "    node [shape=box, style=rounded];",
+            ]
+        )
+
+    def add_node(self, node_id: str, *, label: str, shape: str | None = None) -> None:
+        """Add a node definition when it does not already exist."""
+        if node_id in self.nodes:
+            return
+        self.nodes.add(node_id)
+        if shape:
+            self.lines.append(f'    {node_id} [label="{label}", shape={shape}];')
+        else:
+            self.lines.append(f'    {node_id} [label="{label}"];')
+
+    def add_edge(self, source: str, target: str) -> None:
+        """Add a directed edge between two nodes."""
+        edge = (source, target)
+        if edge in self.edges:
+            return
+        self.edges.add(edge)
+        self.lines.append(f"    {source} -> {target};")
+
+    def render(self) -> str:
+        """Render the accumulated DOT graph.
+
+        Returns
+        -------
+        str
+            Complete DOT graph payload.
+        """
+        return "\n".join([*self.lines, "}"])
 
 
 def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
@@ -27,15 +77,7 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
     str
         DOT format string.
     """
-    lines: list[str] = [
-        f'digraph "{_escape_dot_string(graph_name)}" {{',
-        "    rankdir=LR;",
-        "    node [shape=box, style=rounded];",
-    ]
-
-    # Track nodes and edges
-    nodes: set[str] = set()
-    edges: list[tuple[str, str, dict[str, object]]] = []
+    builder = DotRenderBuilder(graph_name)
 
     # Process key findings for definitions
     for finding in result.key_findings:
@@ -46,11 +88,9 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
             raw_kind = finding.details.get("kind", "")
             kind = str(raw_kind) if raw_kind is not None else ""
 
-            if node_id not in nodes:
-                nodes.add(node_id)
-                shape = _kind_to_shape(kind)
-                label = _escape_dot_string(name)
-                lines.append(f'    {node_id} [label="{label}", shape={shape}];')
+            shape = _kind_to_shape(kind)
+            label = _escape_dot_string(name)
+            builder.add_node(node_id, label=label, shape=shape)
 
     # Process caller sections
     for section in result.sections:
@@ -65,23 +105,11 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
                     callee_id = _sanitize_dot_id(callee)
 
                     # Add nodes if not present
-                    if caller_id not in nodes:
-                        nodes.add(caller_id)
-                        label = _escape_dot_string(caller)
-                        lines.append(f'    {caller_id} [label="{label}"];')
-                    if callee_id not in nodes:
-                        nodes.add(callee_id)
-                        label = _escape_dot_string(callee)
-                        lines.append(f'    {callee_id} [label="{label}"];')
+                    builder.add_node(caller_id, label=_escape_dot_string(caller))
+                    builder.add_node(callee_id, label=_escape_dot_string(callee))
+                    builder.add_edge(caller_id, callee_id)
 
-                    edge = (caller_id, callee_id, {})
-                    if (caller_id, callee_id, {}) not in edges:
-                        edges.append(edge)
-                        lines.append(f"    {caller_id} -> {callee_id};")
-
-    lines.append("}")
-
-    return "\n".join(lines)
+    return builder.render()
 
 
 def _sanitize_dot_id(name: str) -> str:

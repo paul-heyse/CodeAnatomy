@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import polars as pl
 
 from tools.cq.core.findings_table import (
+    FindingsTableOptions,
     apply_filters,
     build_frame,
     flatten_result,
@@ -30,25 +29,27 @@ _TEST_SINGLE_FINDING = 1
 _TEST_SECTION_COUNT = 2
 
 
-def _make_finding(
-    category: str = "test",
-    message: str = "test message",
-    file: str | None = "src/foo.py",
-    line: int | None = 10,
-    severity: Literal["info", "warning", "error"] = "info",
-    impact_score: float = 0.5,
-    impact_bucket: str = "med",
-    confidence_score: float = 0.8,
-    confidence_bucket: str = "high",
-    evidence_kind: str = "resolved_ast",
-) -> Finding:
+def _make_finding(**overrides: object) -> Finding:
     """Create a test finding with scoring details.
 
     Returns
     -------
     Finding
-        Finding populated with scoring details.
+        Constructed finding instance.
     """
+    category = str(overrides.get("category", "test"))
+    message = str(overrides.get("message", "test message"))
+    file_value = overrides.get("file", "src/foo.py")
+    file = None if file_value is None else str(file_value)
+    line_value = overrides.get("line", 10)
+    line = None if line_value is None else int(line_value)
+    severity = str(overrides.get("severity", "info"))
+    impact_score = float(overrides.get("impact_score", 0.5))
+    impact_bucket = str(overrides.get("impact_bucket", "med"))
+    confidence_score = float(overrides.get("confidence_score", 0.8))
+    confidence_bucket = str(overrides.get("confidence_bucket", "high"))
+    evidence_kind = str(overrides.get("evidence_kind", "resolved_ast"))
+
     anchor = Anchor(file=file, line=line or 1) if file else None
     return Finding(
         category=category,
@@ -239,7 +240,7 @@ class TestApplyFilters:
     def test_impact_filter_high() -> None:
         """Filter rows by high impact bucket."""
         df = _make_test_df()
-        filtered = apply_filters(df, impact=["high"])
+        filtered = apply_filters(df, FindingsTableOptions(impact=["high"]))
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_HIGH
         assert all(b == "high" for b in filtered["impact_bucket"].to_list())
 
@@ -247,14 +248,14 @@ class TestApplyFilters:
     def test_impact_filter_multiple() -> None:
         """Filter rows by multiple impact buckets."""
         df = _make_test_df()
-        filtered = apply_filters(df, impact=["high", "med"])
+        filtered = apply_filters(df, FindingsTableOptions(impact=["high", "med"]))
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_HIGH_MED
 
     @staticmethod
     def test_confidence_filter() -> None:
         """Filter rows by confidence bucket."""
         df = _make_test_df()
-        filtered = apply_filters(df, confidence=["high"])
+        filtered = apply_filters(df, FindingsTableOptions(confidence=["high"]))
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_CONF_HIGH
         assert filtered["confidence_bucket"][0] == "high"
 
@@ -262,7 +263,7 @@ class TestApplyFilters:
     def test_include_glob_pattern() -> None:
         """Include rows matching glob patterns."""
         df = _make_test_df()
-        filtered = apply_filters(df, include=["src/core/*"])
+        filtered = apply_filters(df, FindingsTableOptions(include=["src/core/*"]))
         # Should include src/core/foo.py, src/core/bar.py, and finding with no file
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_INCLUDE_CORE
 
@@ -270,7 +271,7 @@ class TestApplyFilters:
     def test_include_double_star_glob() -> None:
         """Include rows matching recursive glob patterns."""
         df = _make_test_df()
-        filtered = apply_filters(df, include=["src/**/*.py"])
+        filtered = apply_filters(df, FindingsTableOptions(include=["src/**/*.py"]))
         # Should include all src files + no-file finding
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_INCLUDE_SRC
 
@@ -278,7 +279,7 @@ class TestApplyFilters:
     def test_exclude_glob_pattern() -> None:
         """Exclude rows matching glob patterns."""
         df = _make_test_df()
-        filtered = apply_filters(df, exclude=["tests/*"])
+        filtered = apply_filters(df, FindingsTableOptions(exclude=["tests/*"]))
         # Should exclude tests/test_foo.py
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_EXCLUDE_TESTS
         assert "tests/test_foo.py" not in filtered["file"].to_list()
@@ -287,7 +288,7 @@ class TestApplyFilters:
     def test_exclude_preserves_null_files() -> None:
         """Preserve findings without file when excluding."""
         df = _make_test_df()
-        filtered = apply_filters(df, exclude=["*.py"])
+        filtered = apply_filters(df, FindingsTableOptions(exclude=["*.py"]))
         # Exclude all files but keep null
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_EXCLUDE_ALL_FILES
         assert filtered["file"][0] is None
@@ -297,7 +298,7 @@ class TestApplyFilters:
         """Include rows matching regex patterns."""
         df = _make_test_df()
         # Regex pattern starts with ~
-        filtered = apply_filters(df, include=["~core.*\\.py$"])
+        filtered = apply_filters(df, FindingsTableOptions(include=["~core.*\\.py$"]))
         # Should match src/core/foo.py, src/core/bar.py, + null file
         assert filtered.shape[0] == _TEST_FILTERED_COUNT_INCLUDE_CORE
 
@@ -305,7 +306,7 @@ class TestApplyFilters:
     def test_limit() -> None:
         """Limit number of rows returned."""
         df = _make_test_df()
-        filtered = apply_filters(df, limit=_TEST_LIMIT_COUNT)
+        filtered = apply_filters(df, FindingsTableOptions(limit=_TEST_LIMIT_COUNT))
         assert filtered.shape[0] == _TEST_LIMIT_COUNT
 
     @staticmethod
@@ -315,10 +316,12 @@ class TestApplyFilters:
         # High impact, in src/, not tests, limit 1
         filtered = apply_filters(
             df,
-            impact=["high"],
-            include=["src/**/*"],
-            exclude=["tests/*"],
-            limit=_TEST_SINGLE_FINDING,
+            FindingsTableOptions(
+                impact=["high"],
+                include=["src/**/*"],
+                exclude=["tests/*"],
+                limit=_TEST_SINGLE_FINDING,
+            ),
         )
         assert filtered.shape[0] == _TEST_SINGLE_FINDING
         assert filtered["impact_bucket"][0] == "high"
@@ -398,7 +401,7 @@ class TestRehydrateResult:
 
         records = flatten_result(original)
         df = build_frame(records)
-        filtered_df = apply_filters(df, impact=["high"])
+        filtered_df = apply_filters(df, FindingsTableOptions(impact=["high"]))
         rehydrated = rehydrate_result(original, filtered_df)
 
         assert len(rehydrated.key_findings) == 1

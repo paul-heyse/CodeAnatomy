@@ -12,7 +12,9 @@ import msgspec
 from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
-from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
+from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.options import QueryOptions, options_from_params
+from tools.cq.cli_app.params import QueryParams
 
 
 def _has_query_tokens(query_string: str) -> bool:
@@ -30,16 +32,8 @@ def _has_query_tokens(query_string: str) -> bool:
 def q(
     query_string: Annotated[str, Parameter(help='Query string (e.g., "entity=function name=foo")')],
     *,
-    explain_files: Annotated[
-        bool, Parameter(name="--explain-files", help="Include file filtering diagnostics")
-    ] = False,
+    opts: Annotated[QueryParams, Parameter(name="*")] | None = None,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
-    include: Annotated[list[str] | None, Parameter(help="Include patterns")] = None,
-    exclude: Annotated[list[str] | None, Parameter(help="Exclude patterns")] = None,
-    impact_filter: Annotated[str | None, Parameter(name="--impact", help="Impact filter")] = None,
-    confidence: Annotated[str | None, Parameter(help="Confidence filter")] = None,
-    severity: Annotated[str | None, Parameter(help="Severity filter")] = None,
-    limit: Annotated[int | None, Parameter(help="Max findings")] = None,
 ) -> CliResult:
     """Run a declarative code query using ast-grep.
 
@@ -88,6 +82,9 @@ def q(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
+    if opts is None:
+        opts = QueryParams()
+    options = options_from_params(opts, type_=QueryOptions)
     has_tokens = _has_query_tokens(query_string)
 
     # Parse the query string first; fallback only for plain searches.
@@ -98,21 +95,20 @@ def q(
             from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
             # Build include globs from include patterns
-            include_globs = list(include) if include else None
+            include_globs = options.include if options.include else None
 
             result = smart_search(
                 ctx.root,
                 query_string,
                 mode=None,  # Auto-detect
                 include_globs=include_globs,
-                exclude_globs=list(exclude) if exclude else None,
+                exclude_globs=options.exclude if options.exclude else None,
                 include_strings=False,
                 limits=SMART_SEARCH_LIMITS,
                 tc=ctx.toolchain,
                 argv=ctx.argv,
             )
-            filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-            return CliResult(result=result, context=ctx, filters=filters)
+            return CliResult(result=result, context=ctx, filters=options)
         started_ms = ms()
         run = mk_runmeta(
             macro="q",
@@ -123,10 +119,9 @@ def q(
         )
         result = mk_result(run)
         result.summary["error"] = str(e)
-        filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-        return CliResult(result=result, context=ctx, filters=filters)
+        return CliResult(result=result, context=ctx, filters=options)
 
-    if explain_files and not parsed_query.explain:
+    if options.explain_files and not parsed_query.explain:
         parsed_query = msgspec.structs.replace(parsed_query, explain=True)
 
     # Compile and execute
@@ -139,68 +134,4 @@ def q(
         argv=ctx.argv,
     )
 
-    filters = _build_filters(include, exclude, impact_filter, confidence, severity, limit)
-    return CliResult(result=result, context=ctx, filters=filters)
-
-
-def _build_filters(
-    include: list[str] | None,
-    exclude: list[str] | None,
-    impact: str | None,
-    confidence: str | None,
-    severity: str | None,
-    limit: int | None,
-) -> FilterConfig:
-    """Build a FilterConfig from CLI arguments.
-
-    Parameters
-    ----------
-    include
-        Include patterns.
-    exclude
-        Exclude patterns.
-    impact
-        Comma-separated impact buckets.
-    confidence
-        Comma-separated confidence buckets.
-    severity
-        Comma-separated severity levels.
-    limit
-        Maximum findings.
-
-    Returns
-    -------
-    FilterConfig
-        Filter configuration.
-    """
-    from tools.cq.cli_app.context import FilterConfig
-
-    impact_list: list[str] = []
-    if impact:
-        for part in impact.split(","):
-            segment = part.strip()
-            if segment:
-                impact_list.append(segment)
-
-    confidence_list: list[str] = []
-    if confidence:
-        for part in confidence.split(","):
-            segment = part.strip()
-            if segment:
-                confidence_list.append(segment)
-
-    severity_list: list[str] = []
-    if severity:
-        for part in severity.split(","):
-            segment = part.strip()
-            if segment:
-                severity_list.append(segment)
-
-    return FilterConfig(
-        include=list(include) if include else [],
-        exclude=list(exclude) if exclude else [],
-        impact=impact_list,
-        confidence=confidence_list,
-        severity=severity_list,
-        limit=limit,
-    )
+    return CliResult(result=result, context=ctx, filters=options)

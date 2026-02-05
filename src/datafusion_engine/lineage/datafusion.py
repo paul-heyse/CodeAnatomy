@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+
+import msgspec
 
 from datafusion_engine.plan.walk import walk_logical_complete
 from datafusion_engine.udf.catalog import rewrite_tag_index
@@ -11,6 +12,7 @@ from datafusion_engine.udf.runtime import (
     udf_names_from_snapshot,
     validate_rust_udf_snapshot,
 )
+from serde_msgspec import StructBaseStrict
 
 _PAIR_LEN = 2
 _SINGLE_DATASET_COUNT = 1
@@ -48,8 +50,7 @@ _EXPR_CHILD_ATTRS: tuple[str, ...] = (
 )
 
 
-@dataclass(frozen=True)
-class ScanLineage:
+class ScanLineage(StructBaseStrict, frozen=True):
     """Lineage information for a single table scan."""
 
     dataset_name: str
@@ -57,8 +58,7 @@ class ScanLineage:
     pushed_filters: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class JoinLineage:
+class JoinLineage(StructBaseStrict, frozen=True):
     """Lineage information for a join operation."""
 
     join_type: str
@@ -66,8 +66,7 @@ class JoinLineage:
     right_keys: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class ExprInfo:
+class ExprInfo(StructBaseStrict, frozen=True):
     """Structured expression lineage extracted from a plan."""
 
     kind: str
@@ -76,8 +75,7 @@ class ExprInfo:
     text: str | None = None
 
 
-@dataclass(frozen=True)
-class LineageReport:
+class LineageReport(StructBaseStrict, frozen=True):
     """Complete lineage report extracted from a DataFusion logical plan."""
 
     scans: tuple[ScanLineage, ...] = ()
@@ -85,7 +83,7 @@ class LineageReport:
     exprs: tuple[ExprInfo, ...] = ()
     required_udfs: tuple[str, ...] = ()
     required_rewrite_tags: tuple[str, ...] = ()
-    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = msgspec.field(default_factory=dict)
     filters: tuple[str, ...] = ()
     aggregations: tuple[str, ...] = ()
     window_functions: tuple[str, ...] = ()

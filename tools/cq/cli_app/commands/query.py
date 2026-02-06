@@ -109,6 +109,7 @@ def q(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
+        query_text=query_string,
     )
 
     return CliResult(result=result, context=ctx, filters=options)

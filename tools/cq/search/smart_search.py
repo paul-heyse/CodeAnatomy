@@ -5,10 +5,8 @@ from __future__ import annotations
 import multiprocessing
 import re
 from collections import Counter
-from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -43,9 +41,11 @@ from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
     QueryLanguageScope,
+    constrain_include_globs_for_language,
     expand_language_scope,
     file_globs_for_scope,
     is_path_in_lang_scope,
+    language_extension_exclude_globs,
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
@@ -70,6 +70,10 @@ from tools.cq.search.classifier import (
 )
 from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
+from tools.cq.search.context_window import (
+    compute_search_context_window,
+    extract_search_context_snippet,
+)
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.models import (
     CandidateSearchRequest,
@@ -118,23 +122,6 @@ _CASE_SENSITIVE_DEFAULT = True
 MAX_EVIDENCE = 100
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 MAX_SEARCH_CLASSIFY_WORKERS = 4
-
-
-@lru_cache(maxsize=1)
-def _get_context_helpers() -> tuple[
-    Callable[[int, list[tuple[int, int]], int], dict[str, int]],
-    Callable[..., str | None],
-]:
-    """Lazily import context helpers to avoid circular imports.
-
-    Returns:
-    -------
-    tuple[Callable[[int, list[tuple[int, int]], int], dict[str, int]], Callable[..., str | None]]
-        Context window and snippet helpers.
-    """
-    from tools.cq.macros.calls import _compute_context_window, _extract_context_snippet
-
-    return _compute_context_window, _extract_context_snippet
 
 
 class RawMatch(CqStruct, frozen=True):
@@ -546,7 +533,16 @@ def classify_match(
     heuristic = classify_heuristic(raw.text, raw.col, match_text)
 
     if heuristic.skip_deeper and heuristic.category is not None and not force_semantic_enrichment:
-        return _build_heuristic_enriched(raw, heuristic, match_text, lang=lang)
+        file_path = root / raw.file
+        context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
+        return _build_heuristic_enriched(
+            raw,
+            heuristic,
+            match_text,
+            lang=lang,
+            context_window=context_window,
+            context_snippet=context_snippet,
+        )
 
     file_path = root / raw.file
     resolved_python = _resolve_python_node_context(file_path, raw) if lang == "python" else None
@@ -599,6 +595,8 @@ def _build_heuristic_enriched(
     match_text: str,
     *,
     lang: QueryLanguage,
+    context_window: dict[str, int] | None = None,
+    context_snippet: str | None = None,
 ) -> EnrichedMatch:
     category = heuristic.category or "text_match"
     return EnrichedMatch(
@@ -608,6 +606,8 @@ def _build_heuristic_enriched(
         category=category,
         confidence=heuristic.confidence,
         evidence_kind="heuristic",
+        context_window=context_window,
+        context_snippet=context_snippet,
         language=lang,
     )
 
@@ -727,14 +727,14 @@ def _build_context_enrichment(
         return None, None
     source_lines = source.splitlines()
     def_lines = get_def_lines_cached(file_path, lang=lang)
-    if not def_lines:
-        return None, None
-    compute_context_window, extract_context_snippet = _get_context_helpers()
-    context_window = compute_context_window(raw.line, def_lines, len(source_lines))
-    context_snippet = extract_context_snippet(
+    context_window = compute_search_context_window(
         source_lines,
-        context_window["start_line"],
-        context_window["end_line"],
+        match_line=raw.line,
+        def_lines=def_lines,
+    )
+    context_snippet = extract_search_context_snippet(
+        source_lines,
+        context_window=context_window,
         match_line=raw.line,
     )
     return context_window, context_snippet
@@ -1624,6 +1624,9 @@ def _run_candidate_phase(
     lang: QueryLanguage,
 ) -> tuple[list[RawMatch], SearchStats, str]:
     pattern = rf"\b{re.escape(ctx.query)}\b" if ctx.mode == QueryMode.IDENTIFIER else ctx.query
+    include_globs = constrain_include_globs_for_language(ctx.include_globs, lang)
+    exclude_globs = list(ctx.exclude_globs or [])
+    exclude_globs.extend(language_extension_exclude_globs(lang))
     raw_matches, stats = collect_candidates(
         CandidateCollectionRequest(
             root=ctx.root,
@@ -1631,8 +1634,8 @@ def _run_candidate_phase(
             mode=ctx.mode,
             limits=ctx.limits,
             lang=lang,
-            include_globs=ctx.include_globs,
-            exclude_globs=ctx.exclude_globs,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
         )
     )
     return raw_matches, stats, pattern

@@ -110,7 +110,9 @@ def test_run_top_level_summary_uses_single_q_metadata(tmp_path: Path) -> None:
     )
 
     assert result.summary.get("mode") == "entity"
-    assert result.summary.get("query") == "entity=function name=foo"
+    assert result.summary.get("query") == "entity=function name=foo lang=python"
+    assert result.summary.get("lang_scope") == "python"
+    assert result.summary.get("language_order") == ["python"]
 
 
 def test_run_top_level_summary_synthesizes_for_mixed_steps(tmp_path: Path) -> None:
@@ -129,3 +131,5 @@ def test_run_top_level_summary_synthesizes_for_mixed_steps(tmp_path: Path) -> No
 
     assert result.summary.get("mode") == "run"
     assert result.summary.get("query") == "multi-step plan (2 steps)"
+    assert result.summary.get("lang_scope") == "auto"
+    assert result.summary.get("language_order") == ["python", "rust"]

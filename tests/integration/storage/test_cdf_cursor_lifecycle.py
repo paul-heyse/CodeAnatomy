@@ -201,9 +201,7 @@ def _verify_second_read(
     assert cursor is not None, "Cursor should still exist"
     assert cursor.last_version == 1, "Cursor should track version 1"
     assert cursor.last_timestamp is not None, "Cursor should have new timestamp"
-    assert (
-        cursor.last_timestamp != first_cursor.last_timestamp
-    ), "Timestamp should be updated"
+    assert cursor.last_timestamp != first_cursor.last_timestamp, "Timestamp should be updated"
     return cursor
 
 
@@ -381,18 +379,16 @@ def test_concurrent_cursor_updates(tmp_path: Path) -> None:
     assert len(errors) == 0, f"Concurrent updates should not raise errors: {errors}"
 
     # Verify all threads completed successfully
-    assert len(results) == len(
-        versions
-    ), "All threads should complete their updates"
+    assert len(results) == len(versions), "All threads should complete their updates"
 
     # Load final cursor state
     final_cursor = store.load_cursor(dataset_name)
     assert final_cursor is not None, "Cursor should exist after concurrent updates"
 
     # Verify final cursor has one of the written versions (last write wins)
-    assert (
-        final_cursor.last_version in versions
-    ), f"Final version {final_cursor.last_version} should be one of {versions}"
+    assert final_cursor.last_version in versions, (
+        f"Final version {final_cursor.last_version} should be one of {versions}"
+    )
 
     # Verify cursor file is valid JSON (not corrupted by interleaving)
     # Use direct path construction since we're testing internal state
@@ -410,9 +406,7 @@ def test_concurrent_cursor_updates(tmp_path: Path) -> None:
     # Verify the cursor is still usable for subsequent operations
     next_version = store.get_start_version(dataset_name)
     assert next_version is not None, "get_start_version should work"
-    assert (
-        next_version == final_cursor.last_version + 1
-    ), "next version should be last_version + 1"
+    assert next_version == final_cursor.last_version + 1, "next version should be last_version + 1"
 
 
 __all__ = [

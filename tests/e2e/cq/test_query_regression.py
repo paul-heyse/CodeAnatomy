@@ -281,6 +281,28 @@ def test_q_and_search_share_multilang_summary_contract(
         assert "cross_language_diagnostics" in result.summary
 
 
+def test_q_explicit_lang_summary_preserves_scope_and_query_text(
+    toolchain: Toolchain,
+    repo_root: Path,
+) -> None:
+    """Explicit language q queries should retain full query text and lang scope."""
+    query_text = "entity=function name=execute_plan lang=python in=tools/cq/query/executor.py"
+    query = parse_query(query_text)
+    plan = compile_query(query)
+    result = execute_plan(
+        plan,
+        query,
+        toolchain,
+        repo_root,
+        query_text=query_text,
+    )
+
+    assert result.summary["query"] == query_text
+    assert result.summary["mode"] == "entity"
+    assert result.summary["lang_scope"] == "python"
+    assert result.summary["language_order"] == ["python"]
+
+
 def test_search_lang_scope_filters_file_extensions(tmp_path: Path) -> None:
     """Rust scope should exclude Python findings and Python scope should exclude Rust."""
     (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")

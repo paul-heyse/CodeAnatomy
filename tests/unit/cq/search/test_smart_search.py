@@ -749,6 +749,57 @@ class TestSmartSearch:
         assert all(Path(anchor.file).suffix in {".py", ".pyi"} for anchor in anchors)
         assert all(finding.details.get("language") == "python" for finding in result.evidence)
 
+    def test_top_level_import_context_window_is_compact(self, tmp_path: Path) -> None:
+        """Top-level import matches should not expand context to the full file."""
+        filler = "\n".join(f"    value_{idx} = {idx}" for idx in range(120))
+        (tmp_path / "module.py").write_text(
+            "\n".join(
+                [
+                    "import os",
+                    "import sys",
+                    "",
+                    "CONSTANT = 1",
+                    "",
+                    "def worker():",
+                    filler,
+                    "    return value_0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        clear_caches()
+        result = smart_search(tmp_path, "os", lang_scope="python")
+        assert result.evidence
+        detail_data = result.evidence[0].details.data
+        context_window = detail_data.get("context_window")
+        assert isinstance(context_window, dict)
+        start_line = cast("int", context_window["start_line"])
+        end_line = cast("int", context_window["end_line"])
+        assert start_line == 1
+        assert end_line < 40
+
+    def test_rust_scope_in_python_tree_has_no_scope_drop_anomaly(self, tmp_path: Path) -> None:
+        """Rust searches constrained to Python-only trees should not inflate dropped_by_scope."""
+        search_dir = tmp_path / "tools" / "cq" / "search"
+        search_dir.mkdir(parents=True)
+        (search_dir / "smart_search.py").write_text(
+            "def classify_match():\n    return 1\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "classify_match",
+            lang_scope="rust",
+            include_globs=["tools/cq/search/**"],
+        )
+        dropped_by_scope = result.summary.get("dropped_by_scope")
+        if isinstance(dropped_by_scope, dict):
+            assert dropped_by_scope.get("rust", 0) == 0
+        assert not result.evidence
+
     def test_context_snippet_keeps_header_and_anchor_block(self, tmp_path: Path) -> None:
         """Context snippets should preserve function top and the match anchor block."""
         filler = "\n".join(f"    filler_{i} = {i}" for i in range(40))

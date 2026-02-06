@@ -129,6 +129,7 @@ if TYPE_CHECKING:
 
     from diskcache import Cache, FanoutCache
 
+    from datafusion_engine.bootstrap.zero_row import ZeroRowBootstrapReport, ZeroRowBootstrapRequest
     from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.delta.service import DeltaService
     from datafusion_engine.session.factory import DataFusionContextPool
@@ -277,6 +278,15 @@ _OUTPUT_WRITES_SCHEMA = pa.struct(
         pa.field("datafusion_write_policy", _WRITE_POLICY_SCHEMA),
     ]
 )
+_ZERO_ROW_BOOTSTRAP_SCHEMA = pa.struct(
+    [
+        pa.field("validation_mode", pa.string()),
+        pa.field("include_semantic_outputs", pa.bool_()),
+        pa.field("include_internal_tables", pa.bool_()),
+        pa.field("strict", pa.bool_()),
+        pa.field("allow_semantic_row_probe_fallback", pa.bool_()),
+    ]
+)
 _DELTA_STORE_POLICY_SCHEMA = pa.struct(
     [
         pa.field("storage_options", pa.list_(_MAP_ENTRY_SCHEMA)),
@@ -330,6 +340,7 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("extensions", _EXTENSIONS_SCHEMA),
         pa.field("substrait_validation", pa.bool_()),
         pa.field("output_writes", _OUTPUT_WRITES_SCHEMA),
+        pa.field("zero_row_bootstrap", _ZERO_ROW_BOOTSTRAP_SCHEMA),
     ]
 )
 
@@ -2510,6 +2521,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "objectstore_writer_buffer_size": profile.execution.objectstore_writer_buffer_size,
             "datafusion_write_policy": write_policy_payload,
         },
+        "zero_row_bootstrap": profile.zero_row_bootstrap.fingerprint_payload(),
     }
 
 
@@ -2669,6 +2681,7 @@ class _RuntimeDiagnosticsMixin:
             "telemetry_hash": profile.telemetry_payload_hash(),
             "execution": profile.execution.fingerprint_payload(),
             "catalog": profile.catalog.fingerprint_payload(),
+            "zero_row_bootstrap": profile.zero_row_bootstrap.fingerprint_payload(),
             "features": profile.features.fingerprint_payload(),
             "policies": profile.policies.fingerprint_payload(),
         }
@@ -2867,6 +2880,7 @@ class _RuntimeDiagnosticsMixin:
             "settings_hash": profile.settings_hash(),
             "share_context": execution.share_context,
             "session_context_key": execution.session_context_key,
+            "zero_row_bootstrap": profile.zero_row_bootstrap.fingerprint_payload(),
         }
 
     def telemetry_payload_v1(self) -> dict[str, object]:
@@ -2979,6 +2993,7 @@ class _RuntimeDiagnosticsMixin:
                 "objectstore_writer_buffer_size": execution.objectstore_writer_buffer_size,
                 "datafusion_write_policy": _datafusion_write_policy_payload(policies.write_policy),
             },
+            "zero_row_bootstrap": profile.zero_row_bootstrap.fingerprint_payload(),
         }
 
     def telemetry_payload_msgpack(self) -> bytes:
@@ -3452,6 +3467,32 @@ class DataSourceConfig(StructBaseStrict, frozen=True):
     extract_output: ExtractOutputConfig = msgspec.field(default_factory=ExtractOutputConfig)
     semantic_output: SemanticOutputConfig = msgspec.field(default_factory=SemanticOutputConfig)
     cdf_cursor_store: CdfCursorStore | None = None
+
+
+class ZeroRowBootstrapConfig(StructBaseStrict, frozen=True):
+    """Zero-row bootstrap configuration for runtime validation and setup."""
+
+    validation_mode: Literal["off", "bootstrap"] = "off"
+    include_semantic_outputs: bool = True
+    include_internal_tables: bool = True
+    strict: bool = True
+    allow_semantic_row_probe_fallback: bool = False
+
+    def fingerprint_payload(self) -> Mapping[str, object]:
+        """Return fingerprint payload for zero-row bootstrap settings.
+
+        Returns:
+        -------
+        Mapping[str, object]
+            Payload describing zero-row bootstrap behavior.
+        """
+        return {
+            "validation_mode": self.validation_mode,
+            "include_semantic_outputs": self.include_semantic_outputs,
+            "include_internal_tables": self.include_internal_tables,
+            "strict": self.strict,
+            "allow_semantic_row_probe_fallback": self.allow_semantic_row_probe_fallback,
+        }
 
 
 class FeatureGatesConfig(StructBaseStrict, frozen=True):
@@ -4113,6 +4154,9 @@ class DataFusionRuntimeProfile(
     execution: ExecutionConfig = msgspec.field(default_factory=ExecutionConfig)
     catalog: CatalogConfig = msgspec.field(default_factory=CatalogConfig)
     data_sources: DataSourceConfig = msgspec.field(default_factory=DataSourceConfig)
+    zero_row_bootstrap: ZeroRowBootstrapConfig = msgspec.field(
+        default_factory=ZeroRowBootstrapConfig
+    )
     features: FeatureGatesConfig = msgspec.field(default_factory=FeatureGatesConfig)
     diagnostics: DiagnosticsConfig = msgspec.field(default_factory=DiagnosticsConfig)
     policies: PolicyBundleConfig = msgspec.field(default_factory=PolicyBundleConfig)
@@ -4473,6 +4517,55 @@ class DataFusionRuntimeProfile(
             Planning-ready session runtime.
         """
         return build_session_runtime(self, use_cache=True)
+
+    def run_zero_row_bootstrap_validation(
+        self,
+        request: ZeroRowBootstrapRequest | None = None,
+        *,
+        ctx: SessionContext | None = None,
+    ) -> ZeroRowBootstrapReport:
+        """Run zero-row bootstrap materialization and validation.
+
+        Parameters
+        ----------
+        request
+            Optional explicit bootstrap request. When omitted, runtime
+            configuration from ``zero_row_bootstrap`` is used.
+        ctx
+            Optional context override. When omitted, the profile session
+            context is created and reused for bootstrap operations.
+
+        Returns:
+        -------
+        ZeroRowBootstrapReport
+            Structured report describing bootstrap execution and validation.
+        """
+        from datafusion_engine.bootstrap.zero_row import (
+            ZeroRowBootstrapRequest as BootstrapRequest,
+            run_zero_row_bootstrap_validation as run_bootstrap_validation,
+        )
+
+        resolved_request = request or BootstrapRequest(
+            include_semantic_outputs=self.zero_row_bootstrap.include_semantic_outputs,
+            include_internal_tables=self.zero_row_bootstrap.include_internal_tables,
+            strict=self.zero_row_bootstrap.strict,
+            allow_semantic_row_probe_fallback=(
+                self.zero_row_bootstrap.allow_semantic_row_probe_fallback
+            ),
+        )
+        active_ctx = ctx or self.session_context()
+        report = run_bootstrap_validation(
+            self,
+            request=resolved_request,
+            ctx=active_ctx,
+        )
+        self.record_artifact("zero_row_bootstrap_validation_v1", report.payload())
+        if report.events:
+            self.record_events(
+                "zero_row_bootstrap_events_v1",
+                [event.payload() for event in report.events],
+            )
+        return report
 
     def context_pool(
         self,
@@ -5695,6 +5788,7 @@ class DataFusionRuntimeProfile(
         ctx: SessionContext,
         *,
         ast_view_names: Sequence[str],
+        allow_semantic_row_probe_fallback: bool = True,
     ) -> dict[str, str]:
         _ = ast_view_names
         view_errors: dict[str, str] = {}
@@ -5714,7 +5808,10 @@ class DataFusionRuntimeProfile(
             except (RuntimeError, TypeError, ValueError) as exc:
                 view_errors[f"nested_types:{name}"] = str(exc)
         try:
-            validate_semantic_types(ctx)
+            validate_semantic_types(
+                ctx,
+                allow_row_probe_fallback=allow_semantic_row_probe_fallback,
+            )
         except (RuntimeError, TypeError, ValueError) as exc:
             view_errors["semantic_types"] = str(exc)
         return view_errors
@@ -5733,21 +5830,32 @@ class DataFusionRuntimeProfile(
             _register_schema_table(ctx, name, schema)
 
     @staticmethod
-    def _schema_registry_issues(validation: SchemaRegistryValidationResult) -> dict[str, object]:
+    def _schema_registry_issues(
+        validation: SchemaRegistryValidationResult,
+        *,
+        zero_row_bootstrap: ZeroRowBootstrapConfig,
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
         issues: dict[str, object] = {}
+        advisory: dict[str, object] = {}
         if validation.missing:
             issues["missing"] = list(validation.missing)
         if validation.type_errors:
             issues["type_errors"] = dict(validation.type_errors)
         if validation.view_errors:
-            issues["view_errors"] = dict(validation.view_errors)
+            if (
+                zero_row_bootstrap.validation_mode == "bootstrap"
+                and not zero_row_bootstrap.strict
+            ):
+                advisory["view_errors"] = dict(validation.view_errors)
+            else:
+                issues["view_errors"] = dict(validation.view_errors)
         if validation.constraint_drift:
             issues["constraint_drift"] = list(validation.constraint_drift)
         if validation.relationship_constraint_errors:
             issues["relationship_constraint_errors"] = dict(
                 validation.relationship_constraint_errors
             )
-        return issues
+        return issues, advisory or None
 
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context.
@@ -5800,7 +5908,13 @@ class DataFusionRuntimeProfile(
             ctx,
             ast_view_names=ast_view_names,
         )
-        view_errors = self._validate_schema_views(ctx, ast_view_names=ast_view_names)
+        view_errors = self._validate_schema_views(
+            ctx,
+            ast_view_names=ast_view_names,
+            allow_semantic_row_probe_fallback=(
+                self.zero_row_bootstrap.allow_semantic_row_probe_fallback
+            ),
+        )
         validation = self._record_schema_registry_validation(
             ctx,
             expected_names=(),
@@ -5808,7 +5922,20 @@ class DataFusionRuntimeProfile(
             view_errors=view_errors or None,
             tree_sitter_checks=tree_sitter_checks,
         )
-        issues = self._schema_registry_issues(validation)
+        issues, advisory = self._schema_registry_issues(
+            validation,
+            zero_row_bootstrap=self.zero_row_bootstrap,
+        )
+        if advisory:
+            self.record_artifact(
+                "schema_registry_validation_advisory_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "issues": advisory,
+                    "validation_mode": self.zero_row_bootstrap.validation_mode,
+                    "strict": self.zero_row_bootstrap.strict,
+                },
+            )
         if issues:
             msg = f"Schema registry validation failed: {issues}."
             raise ValueError(msg)

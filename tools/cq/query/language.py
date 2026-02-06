@@ -35,6 +35,17 @@ LANGUAGE_RIPGREP_TYPES: dict[QueryLanguage, RipgrepLanguageType] = {
 }
 
 
+def _dedupe_globs(globs: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for glob in globs:
+        if glob in seen:
+            continue
+        seen.add(glob)
+        unique.append(glob)
+    return unique
+
+
 def parse_query_language(value: str) -> QueryLanguage:
     """Parse a concrete language token.
 
@@ -177,6 +188,44 @@ def ripgrep_types_for_scope(scope: QueryLanguageScope) -> tuple[RipgrepLanguageT
     return tuple(ripgrep_type_for_language(lang) for lang in expand_language_scope(scope))
 
 
+def constrain_include_globs_for_language(
+    include_globs: list[str] | None,
+    lang: QueryLanguage,
+) -> list[str] | None:
+    """Constrain include globs to language-compatible file patterns."""
+    if not include_globs:
+        return include_globs
+    suffixes = LANGUAGE_FILE_EXTENSIONS[lang]
+    constrained: list[str] = []
+    for glob in include_globs:
+        normalized = glob.strip()
+        if not normalized:
+            continue
+        if normalized.startswith("!"):
+            constrained.append(normalized)
+            continue
+        if normalized.endswith("/**"):
+            base = normalized[:-3]
+            constrained.extend(f"{base}**/*{suffix}" for suffix in suffixes)
+            continue
+        if normalized.endswith("**"):
+            base = normalized[:-2]
+            constrained.extend(f"{base}**/*{suffix}" for suffix in suffixes)
+            continue
+        constrained.append(normalized)
+    return _dedupe_globs(constrained) if constrained else None
+
+
+def language_extension_exclude_globs(lang: QueryLanguage) -> tuple[str, ...]:
+    """Return extension-level exclusion globs for non-target CQ languages."""
+    excludes: list[str] = []
+    for candidate, extensions in LANGUAGE_FILE_EXTENSIONS.items():
+        if candidate == lang:
+            continue
+        excludes.extend(f"*{extension}" for extension in extensions)
+    return tuple(excludes)
+
+
 def infer_language_for_path(path: str | Path) -> QueryLanguage | None:
     """Infer concrete language from file extension.
 
@@ -220,6 +269,7 @@ __all__ = [
     "QueryLanguage",
     "QueryLanguageScope",
     "RipgrepLanguageType",
+    "constrain_include_globs_for_language",
     "expand_language_scope",
     "file_extensions_for_language",
     "file_extensions_for_scope",
@@ -227,6 +277,7 @@ __all__ = [
     "file_globs_for_scope",
     "infer_language_for_path",
     "is_path_in_lang_scope",
+    "language_extension_exclude_globs",
     "parse_query_language",
     "parse_query_language_scope",
     "primary_language",

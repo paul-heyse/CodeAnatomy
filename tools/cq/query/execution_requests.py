@@ -29,6 +29,7 @@ class EntityQueryRequest:
     paths: list[Path]
     scope_globs: list[str] | None
     argv: list[str]
+    query_text: str | None = None
     match_spans: dict[str, list[tuple[int, int]]] | None = None
     symtable: SymtableEnricher | None = None
 
@@ -43,6 +44,7 @@ class PatternQueryRequest:
     root: Path
     files: list[Path]
     argv: list[str]
+    query_text: str | None = None
     decisions: list[FileFilterDecision] | None = None
 
 

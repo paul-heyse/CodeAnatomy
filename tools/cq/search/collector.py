@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from tools.cq.core.locations import SourceSpan, byte_col_to_char_col, span_from_rg_match
 from tools.cq.search.profiles import SearchLimits
 from tools.cq.search.rg_events import (
-    RgEvent,
+    RgAnyEvent,
     RgMatchData,
     RgSubmatch,
     RgSummaryData,
@@ -53,7 +53,7 @@ class RgCollector:
     max_files_hit: bool = False
     max_matches_hit: bool = False
 
-    def handle_event(self, event: RgEvent) -> None:
+    def handle_event(self, event: RgAnyEvent) -> None:
         """Dispatch a decoded ripgrep event."""
         if event.type == "summary":
             data = as_summary_data(event)

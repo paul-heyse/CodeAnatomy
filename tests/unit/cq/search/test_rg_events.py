@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import msgspec
 from tools.cq.search.rg_events import (
-    RgEvent,
     RgMatchData,
+    RgMatchEvent,
     RgSummaryData,
+    RgSummaryEvent,
     as_match_data,
     as_summary_data,
     decode_rg_event,
@@ -31,7 +32,7 @@ def test_decode_rg_event_match_line() -> None:
     )
     event = decode_rg_event(payload)
     assert event is not None
-    assert event.type == "match"
+    assert isinstance(event, RgMatchEvent)
     match_data = as_match_data(event)
     assert isinstance(match_data, RgMatchData)
     assert match_path(match_data) == "src/foo.py"
@@ -49,7 +50,7 @@ def test_decode_rg_event_summary_line() -> None:
         }
     )
     event = decode_rg_event(payload)
-    assert isinstance(event, RgEvent)
+    assert isinstance(event, RgSummaryEvent)
     summary = as_summary_data(event)
     assert isinstance(summary, RgSummaryData)
     stats = summary_stats(summary)

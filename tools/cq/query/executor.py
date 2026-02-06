@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -38,6 +38,7 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
+from tools.cq.core.serialization import to_builtins
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
@@ -389,7 +390,7 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
         result = _empty_result(ctx, "No files match scope after filtering")
         if ctx.plan.explain:
             result.summary["file_filters"] = [
-                asdict(decision) for decision in file_result.decisions
+                to_builtins(decision) for decision in file_result.decisions
             ]
         return result
 
@@ -446,7 +447,7 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
         lang=state.ctx.plan.lang,
         explain=True,
     )
-    result.summary["file_filters"] = [asdict(decision) for decision in file_result.decisions]
+    result.summary["file_filters"] = [to_builtins(decision) for decision in file_result.decisions]
 
 
 def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -> None:
@@ -465,7 +466,9 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
         "rules_count": len(plan.sg_rules),
         "metavar_filters": len(query.metavar_filters),
     }
-    result.summary["file_filters"] = [asdict(decision) for decision in state.file_result.decisions]
+    result.summary["file_filters"] = [
+        to_builtins(decision) for decision in state.file_result.decisions
+    ]
 
 
 def execute_plan(
@@ -733,7 +736,9 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if request.plan.explain and request.decisions is not None:
-            result.summary["file_filters"] = [asdict(decision) for decision in request.decisions]
+            result.summary["file_filters"] = [
+                to_builtins(decision) for decision in request.decisions
+            ]
         return result
 
     state = PatternExecutionState(

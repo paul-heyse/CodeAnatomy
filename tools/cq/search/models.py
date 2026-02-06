@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict
 
 import msgspec
 
@@ -12,28 +11,6 @@ from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.profiles import SearchLimits
-
-
-class SearchKwargs(TypedDict, total=False):
-    """Keyword options for smart search entrypoints."""
-
-    mode: QueryMode | None
-    lang_scope: QueryLanguageScope
-    include_globs: list[str] | None
-    exclude_globs: list[str] | None
-    include_strings: bool
-    limits: SearchLimits | None
-    tc: Toolchain | None
-    argv: list[str] | None
-    started_ms: float | None
-
-
-class CandidateSearchKwargs(TypedDict, total=False):
-    """Keyword options for candidate search command generation."""
-
-    lang_scope: QueryLanguageScope
-    include_globs: list[str] | None
-    exclude_globs: list[str] | None
 
 
 class SearchConfig(CqStruct, frozen=True):
@@ -81,9 +58,7 @@ class CandidateSearchRequest(CqStruct, frozen=True):
 
 
 __all__ = [
-    "CandidateSearchKwargs",
     "CandidateSearchRequest",
     "SearchConfig",
-    "SearchKwargs",
     "SearchRequest",
 ]

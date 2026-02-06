@@ -10,11 +10,15 @@ from pathlib import Path
 from typing import Self
 
 import pytest
-from tools.cq.core.report import render_markdown
+from tools.cq.core.report import (
+    RenderEnrichmentResult,
+    RenderEnrichmentTask,
+    render_markdown,
+)
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
 
-_RenderEnrichTask = tuple[str, str, int, int, str, tuple[str, ...]]
-_RenderEnrichResult = tuple[tuple[str, int, int, str], dict[str, object]]
+_RenderEnrichTask = RenderEnrichmentTask
+_RenderEnrichResult = RenderEnrichmentResult
 
 
 def _run_meta() -> RunMeta:
@@ -79,12 +83,14 @@ def _extract_python_enrichment_pids(result: CqResult) -> set[int]:
 def _sleeping_pid_worker(
     task: _RenderEnrichTask,
 ) -> _RenderEnrichResult:
-    _root, file, line, col, lang, _candidates = task
     time.sleep(0.2)
-    return (
-        (file, line, col, lang),
-        {
-            "language": lang,
+    return RenderEnrichmentResult(
+        file=task.file,
+        line=task.line,
+        col=task.col,
+        language=task.language,
+        payload={
+            "language": task.language,
             "python": {"pid": os.getpid()},
         },
     )
@@ -303,11 +309,13 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     def _fake_worker(
         task: _RenderEnrichTask,
     ) -> _RenderEnrichResult:
-        _root, file, line, col, lang, _candidates = task
-        return (
-            (file, line, col, lang),
-            {
-                "language": lang,
+        return RenderEnrichmentResult(
+            file=task.file,
+            line=task.line,
+            col=task.col,
+            language=task.language,
+            payload={
+                "language": task.language,
                 "python": {"pid": 7},
             },
         )

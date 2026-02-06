@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal
+
+from tools.cq.core.structs import CqStruct
 
 NAReason = Literal["not_applicable", "not_resolved", "enrichment_unavailable"]
 
@@ -33,8 +34,7 @@ _IMPORT_LIKE_KINDS: frozenset[str] = frozenset(
 )
 
 
-@dataclass(frozen=True)
-class FactFieldSpec:
+class FactFieldSpec(CqStruct, frozen=True):
     """Specification for a single code-fact row."""
 
     label: str
@@ -44,24 +44,21 @@ class FactFieldSpec:
     fallback_reason: NAReason = "not_resolved"
 
 
-@dataclass(frozen=True)
-class FactClusterSpec:
+class FactClusterSpec(CqStruct, frozen=True):
     """Specification for a code-fact cluster."""
 
     title: str
     fields: tuple[FactFieldSpec, ...]
 
 
-@dataclass(frozen=True)
-class FactContext:
+class FactContext(CqStruct, frozen=True):
     """Language and node-kind context used for fact applicability."""
 
     language: str | None
     node_kind: str | None
 
 
-@dataclass(frozen=True)
-class ResolvedFact:
+class ResolvedFact(CqStruct, frozen=True):
     """Resolved fact row payload for renderer output."""
 
     label: str
@@ -69,8 +66,7 @@ class ResolvedFact:
     reason: NAReason | None = None
 
 
-@dataclass(frozen=True)
-class ResolvedFactCluster:
+class ResolvedFactCluster(CqStruct, frozen=True):
     """Resolved fact cluster payload for renderer output."""
 
     title: str

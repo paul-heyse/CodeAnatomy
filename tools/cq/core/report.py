@@ -16,6 +16,7 @@ from tools.cq.core.enrichment_facts import (
 )
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
+from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 
 # Maximum evidence items to show before truncating
@@ -51,6 +52,27 @@ DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
         "rust_tree_sitter",
     }
 )
+
+
+class RenderEnrichmentTask(CqStruct, frozen=True):
+    """Process-pool task envelope for render-time enrichment."""
+
+    root: str
+    file: str
+    line: int
+    col: int
+    language: QueryLanguage
+    candidates: tuple[str, ...]
+
+
+class RenderEnrichmentResult(CqStruct, frozen=True):
+    """Process-pool result envelope for render-time enrichment."""
+
+    file: str
+    line: int
+    col: int
+    language: QueryLanguage
+    payload: dict[str, object]
 
 
 def _severity_icon(severity: str) -> str:
@@ -523,18 +545,23 @@ def _resolve_render_worker_count(task_count: int) -> int:
 
 
 def _compute_render_enrichment_worker(
-    task: tuple[str, str, int, int, str, tuple[str, ...]],
-) -> tuple[tuple[str, int, int, str], dict[str, object]]:
-    root_str, file, line, col, language, candidates = task
+    task: RenderEnrichmentTask,
+) -> RenderEnrichmentResult:
     payload = _compute_render_enrichment_payload_from_anchor(
-        root=Path(root_str),
-        file=file,
-        line=line,
-        col=col,
-        language=cast("QueryLanguage", language),
-        candidates=list(candidates),
+        root=Path(task.root),
+        file=task.file,
+        line=task.line,
+        col=task.col,
+        language=task.language,
+        candidates=list(task.candidates),
     )
-    return (file, line, col, language), payload
+    return RenderEnrichmentResult(
+        file=task.file,
+        line=task.line,
+        col=task.col,
+        language=task.language,
+        payload=payload,
+    )
 
 
 def _build_render_enrichment_tasks(
@@ -543,8 +570,8 @@ def _build_render_enrichment_tasks(
     root: Path,
     cache: dict[tuple[str, int, int, str], dict[str, object]],
     allowed_files: set[str] | None,
-) -> list[tuple[str, str, int, int, str, tuple[str, ...]]]:
-    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]] = []
+) -> list[RenderEnrichmentTask]:
+    tasks: list[RenderEnrichmentTask] = []
     seen: set[tuple[str, int, int, str]] = set()
     for finding in _iter_result_findings(result):
         task = _build_single_render_enrichment_task(
@@ -566,7 +593,7 @@ def _build_single_render_enrichment_task(
     cache: dict[tuple[str, int, int, str], dict[str, object]],
     seen: set[tuple[str, int, int, str]],
     allowed_files: set[str] | None,
-) -> tuple[str, str, int, int, str, tuple[str, ...]] | None:
+) -> RenderEnrichmentTask | None:
     anchor = finding.anchor
     if anchor is None:
         return None
@@ -582,19 +609,19 @@ def _build_single_render_enrichment_task(
     if not (needs_context or needs_enrichment):
         return None
     seen.add(cache_key)
-    return (
-        str(root),
-        anchor.file,
-        anchor.line,
-        col,
-        language,
-        tuple(_extract_match_text_candidates(finding)),
+    return RenderEnrichmentTask(
+        root=str(root),
+        file=anchor.file,
+        line=anchor.line,
+        col=col,
+        language=language,
+        candidates=tuple(_extract_match_text_candidates(finding)),
     )
 
 
 def _populate_render_enrichment_cache(
     cache: dict[tuple[str, int, int, str], dict[str, object]],
-    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]],
+    tasks: list[RenderEnrichmentTask],
 ) -> None:
     workers = _resolve_render_worker_count(len(tasks))
     if workers <= 1:
@@ -605,18 +632,19 @@ def _populate_render_enrichment_cache(
             max_workers=workers,
             mp_context=multiprocessing.get_context("spawn"),
         ) as pool:
-            cache.update(pool.map(_compute_render_enrichment_worker, tasks))
+            for result in pool.map(_compute_render_enrichment_worker, tasks):
+                cache[result.file, result.line, result.col, result.language] = result.payload
     except Exception:  # noqa: BLE001 - fail-open to sequential mode
         _populate_render_enrichment_cache_sequential(cache, tasks)
 
 
 def _populate_render_enrichment_cache_sequential(
     cache: dict[tuple[str, int, int, str], dict[str, object]],
-    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]],
+    tasks: list[RenderEnrichmentTask],
 ) -> None:
     for task in tasks:
-        key, payload = _compute_render_enrichment_worker(task)
-        cache[key] = payload
+        result = _compute_render_enrichment_worker(task)
+        cache[result.file, result.line, result.col, result.language] = result.payload
 
 
 def _precompute_render_enrichment_cache(

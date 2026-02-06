@@ -4,25 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, Unpack
+from typing import TYPE_CHECKING, Any
 
 from tools.cq.cli_app.options import CommonFilters
+from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.repo import resolve_repo_context
 
 if TYPE_CHECKING:
-    from tools.cq.cli_app.types import OutputFormat
+    from collections.abc import Mapping
+
     from tools.cq.core.toolchain import Toolchain
-
-
-class CliContextKwargs(TypedDict, total=False):
-    """Keyword overrides for CLI context construction."""
-
-    root: Path | None
-    verbose: int
-    output_format: OutputFormat | None
-    artifact_dir: Path | None
-    save_artifact: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +28,7 @@ class CliContextOptions:
     save_artifact: bool = True
 
     @classmethod
-    def from_kwargs(cls, kwargs: CliContextKwargs) -> CliContextOptions:
+    def from_kwargs(cls, kwargs: Mapping[str, object]) -> CliContextOptions:
         """Build options from legacy keyword arguments.
 
         Returns:
@@ -44,11 +36,18 @@ class CliContextOptions:
         CliContextOptions
             Normalized option bundle.
         """
+        root_raw = kwargs.get("root")
+        artifact_raw = kwargs.get("artifact_dir")
+        verbose_raw = kwargs.get("verbose", 0)
+        output_format_raw = kwargs.get("output_format")
+        output_format = output_format_raw if isinstance(output_format_raw, OutputFormat) else None
         return cls(
-            root=kwargs.get("root"),
-            verbose=int(kwargs.get("verbose", 0)),
-            output_format=kwargs.get("output_format"),
-            artifact_dir=kwargs.get("artifact_dir"),
+            root=(root_raw if isinstance(root_raw, Path) or root_raw is None else None),
+            verbose=int(verbose_raw) if isinstance(verbose_raw, int | float) else 0,
+            output_format=output_format,
+            artifact_dir=(
+                artifact_raw if isinstance(artifact_raw, Path) or artifact_raw is None else None
+            ),
             save_artifact=bool(kwargs.get("save_artifact", True)),
         )
 
@@ -87,7 +86,7 @@ class CliContext(CqStruct, frozen=True):
         cls,
         argv: list[str],
         options: CliContextOptions | None = None,
-        **kwargs: Unpack[CliContextKwargs],
+        **kwargs: object,
     ) -> CliContext:
         """Build a CLI context from arguments.
 

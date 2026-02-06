@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-# ruff: noqa: DOC201
 from collections.abc import Mapping
+from typing import Literal
 
 import msgspec
 
@@ -53,6 +53,28 @@ class RgSummaryData(msgspec.Struct, omit_defaults=True):
     stats: RgSummaryStats | None = None
 
 
+class RgMatchEvent(msgspec.Struct, frozen=True, tag_field="type", tag="match"):
+    """Typed ripgrep match event."""
+
+    data: RgMatchData
+
+    @property
+    def type(self) -> Literal["match"]:
+        """Return tagged event type for compatibility with generic event paths."""
+        return "match"
+
+
+class RgSummaryEvent(msgspec.Struct, frozen=True, tag_field="type", tag="summary"):
+    """Typed ripgrep summary event."""
+
+    data: RgSummaryData
+
+    @property
+    def type(self) -> Literal["summary"]:
+        """Return tagged event type for compatibility with generic event paths."""
+        return "summary"
+
+
 class RgEvent(msgspec.Struct, frozen=True):
     """Minimal ripgrep JSON event."""
 
@@ -60,10 +82,14 @@ class RgEvent(msgspec.Struct, frozen=True):
     data: object | None = None
 
 
-_RG_DECODER = msgspec.json.Decoder(type=RgEvent)
+type RgTypedEvent = RgMatchEvent | RgSummaryEvent
+type RgAnyEvent = RgMatchEvent | RgSummaryEvent | RgEvent
+
+_RG_TYPED_DECODER = msgspec.json.Decoder(type=RgTypedEvent)
+_RG_FALLBACK_DECODER = msgspec.json.Decoder(type=RgEvent)
 
 
-def decode_rg_event(line: str | bytes) -> RgEvent | None:
+def decode_rg_event(line: str | bytes) -> RgAnyEvent | None:
     """Decode a ripgrep JSON event line.
 
     Returns:
@@ -74,13 +100,24 @@ def decode_rg_event(line: str | bytes) -> RgEvent | None:
     try:
         if isinstance(line, str):
             line = line.encode("utf-8")
-        return _RG_DECODER.decode(line)
+        return _RG_TYPED_DECODER.decode(line)
     except (msgspec.DecodeError, msgspec.ValidationError):
-        return None
+        try:
+            return _RG_FALLBACK_DECODER.decode(line)
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            return None
 
 
-def as_match_data(event: RgEvent) -> RgMatchData | None:
-    """Coerce an event payload into typed match data."""
+def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
+    """Coerce an event payload into typed match data.
+
+    Returns:
+    -------
+    RgMatchData | None
+        Typed match payload when event is a decodable match record.
+    """
+    if isinstance(event, RgMatchEvent):
+        return event.data
     if event.type != "match":
         return None
     if not isinstance(event.data, Mapping):
@@ -91,8 +128,16 @@ def as_match_data(event: RgEvent) -> RgMatchData | None:
         return None
 
 
-def as_summary_data(event: RgEvent) -> RgSummaryData | None:
-    """Coerce an event payload into typed summary data."""
+def as_summary_data(event: RgAnyEvent) -> RgSummaryData | None:
+    """Coerce an event payload into typed summary data.
+
+    Returns:
+    -------
+    RgSummaryData | None
+        Typed summary payload when event is a decodable summary record.
+    """
+    if isinstance(event, RgSummaryEvent):
+        return event.data
     if event.type != "summary":
         return None
     if not isinstance(event.data, Mapping):
@@ -104,26 +149,50 @@ def as_summary_data(event: RgEvent) -> RgSummaryData | None:
 
 
 def match_path(data: RgMatchData) -> str | None:
-    """Extract path text from typed match data."""
+    """Extract path text from typed match data.
+
+    Returns:
+    -------
+    str | None
+        Match file path text when present.
+    """
     if data.path is None:
         return None
     return data.path.text or data.path.bytes
 
 
 def match_line_text(data: RgMatchData) -> str:
-    """Extract line text from typed match data."""
+    """Extract line text from typed match data.
+
+    Returns:
+    -------
+    str
+        Source line text associated with the match.
+    """
     if data.lines is None:
         return ""
     return data.lines.text or data.lines.bytes or ""
 
 
 def match_line_number(data: RgMatchData) -> int | None:
-    """Extract line number from typed match data."""
+    """Extract line number from typed match data.
+
+    Returns:
+    -------
+    int | None
+        1-based line number when available.
+    """
     return data.line_number
 
 
 def submatch_text(submatch: RgSubmatch, line_text: str) -> str:
-    """Extract a safe submatch text fallback."""
+    """Extract a safe submatch text fallback.
+
+    Returns:
+    -------
+    str
+        Direct submatch text, or the line fallback.
+    """
     if submatch.match is not None:
         direct = submatch.match.text or submatch.match.bytes
         if isinstance(direct, str) and direct:
@@ -132,7 +201,13 @@ def submatch_text(submatch: RgSubmatch, line_text: str) -> str:
 
 
 def summary_stats(data: RgSummaryData) -> dict[str, object] | None:
-    """Convert typed summary stats to dict payload for existing callers."""
+    """Convert typed summary stats to dict payload for existing callers.
+
+    Returns:
+    -------
+    dict[str, object] | None
+        Existing summary stats payload shape, or None when unavailable.
+    """
     if data.stats is None:
         return None
     return {
@@ -145,11 +220,14 @@ def summary_stats(data: RgSummaryData) -> dict[str, object] | None:
 
 
 __all__ = [
+    "RgAnyEvent",
     "RgEvent",
     "RgMatchData",
+    "RgMatchEvent",
     "RgPath",
     "RgSubmatch",
     "RgSummaryData",
+    "RgSummaryEvent",
     "RgSummaryStats",
     "RgText",
     "as_match_data",

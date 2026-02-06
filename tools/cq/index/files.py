@@ -9,12 +9,12 @@ from pathlib import Path
 import pygit2
 from pathspec import GitIgnoreSpec
 
+from tools.cq.core.structs import CqStruct
 from tools.cq.index.gitignore import load_gitignore_spec
 from tools.cq.index.repo import RepoContext, open_repo
 
 
-@dataclass(frozen=True)
-class FileFilterDecision:
+class FileFilterDecision(CqStruct, frozen=True):
     """Decision details for file filtering diagnostics."""
 
     file: str
@@ -24,8 +24,7 @@ class FileFilterDecision:
     scope_excluded: bool
 
 
-@dataclass(frozen=True)
-class FileTabulationResult:
+class FileTabulationResult(CqStruct, frozen=True):
     """Result of file tabulation."""
 
     files: list[Path]

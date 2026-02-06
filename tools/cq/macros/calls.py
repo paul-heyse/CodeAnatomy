@@ -11,7 +11,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -51,7 +51,7 @@ _MAX_CONTEXT_SNIPPET_LINES = 30
 _TRIPLE_QUOTE_RE = re.compile(r"^[rRuUbBfF]*(?P<quote>'''|\"\"\")")
 
 
-class CallAnalysis(TypedDict):
+class CallAnalysis(msgspec.Struct, frozen=True):
     """Structured analysis output for a call expression."""
 
     num_args: int
@@ -252,14 +252,14 @@ def _analyze_call(node: ast.Call) -> CallAnalysis:
     if len(node.keywords) > _KW_PREVIEW_LIMIT:
         parts.append(f"...+{len(node.keywords) - _KW_PREVIEW_LIMIT}kw")
 
-    return {
-        "num_args": num_args,
-        "num_kwargs": num_kwargs,
-        "kwargs": kwargs,
-        "has_star_args": has_star_args,
-        "has_star_kwargs": has_star_kwargs,
-        "arg_preview": ", ".join(parts) if parts else "()",
-    }
+    return CallAnalysis(
+        num_args=num_args,
+        num_kwargs=num_kwargs,
+        kwargs=kwargs,
+        has_star_args=has_star_args,
+        has_star_kwargs=has_star_kwargs,
+        arg_preview=", ".join(parts) if parts else "()",
+    )
 
 
 def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
@@ -381,9 +381,9 @@ def _find_function_signature(
 
 def _detect_hazards(call: ast.Call, info: CallAnalysis) -> list[str]:
     hazards: list[str] = []
-    if info.get("has_star_args"):
+    if info.has_star_args:
         hazards.append("star_args")
-    if info.get("has_star_kwargs"):
+    if info.has_star_kwargs:
         hazards.append("star_kwargs")
     func = call.func
     if isinstance(func, ast.Name):
@@ -741,13 +741,13 @@ class CallFinder(ast.NodeVisitor):
                     file=self.file,
                     line=node.lineno,
                     col=node.col_offset,
-                    num_args=info["num_args"],
-                    num_kwargs=info["num_kwargs"],
-                    kwargs=info["kwargs"],
-                    has_star_args=info["has_star_args"],
-                    has_star_kwargs=info["has_star_kwargs"],
+                    num_args=info.num_args,
+                    num_kwargs=info.num_kwargs,
+                    kwargs=info.kwargs,
+                    has_star_args=info.has_star_args,
+                    has_star_kwargs=info.has_star_kwargs,
                     context=context,
-                    arg_preview=info["arg_preview"],
+                    arg_preview=info.arg_preview,
                     callee=callee,
                     receiver=receiver,
                     resolution_confidence="unresolved",
@@ -940,13 +940,13 @@ def _build_call_site_from_record(
         file=ctx.rel_path,
         line=record.start_line,
         col=record.start_col,
-        num_args=info["num_args"],
-        num_kwargs=info["num_kwargs"],
-        kwargs=info["kwargs"],
-        has_star_args=info["has_star_args"],
-        has_star_kwargs=info["has_star_kwargs"],
+        num_args=info.num_args,
+        num_kwargs=info.num_kwargs,
+        kwargs=info.kwargs,
+        has_star_args=info.has_star_args,
+        has_star_kwargs=info.has_star_kwargs,
         context=context,
-        arg_preview=info["arg_preview"],
+        arg_preview=info.arg_preview,
         callee=callee,
         receiver=receiver,
         resolution_confidence="unresolved",

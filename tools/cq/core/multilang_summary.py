@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from tools.cq.core.contracts import require_mapping, summary_contract_to_mapping
 from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search.contracts import (
@@ -13,7 +14,6 @@ from tools.cq.search.contracts import (
     coerce_diagnostics,
     coerce_language_capabilities,
     coerce_language_partitions,
-    summary_contract_to_dict,
 )
 
 if TYPE_CHECKING:
@@ -62,9 +62,7 @@ def normalize_language_partitions(
         language_order=ordered_languages,
         partitions=languages,
     )
-    from tools.cq.core.serialization import to_builtins
-
-    return {lang: dict(to_builtins(partition)) for lang, partition in normalized.items()}
+    return {lang: require_mapping(partition) for lang, partition in normalized.items()}
 
 
 def build_multilang_summary(request: SummaryBuildRequest) -> dict[str, object]:
@@ -95,7 +93,7 @@ def build_multilang_summary(request: SummaryBuildRequest) -> dict[str, object]:
             else _coerce_enrichment_telemetry(request.enrichment_telemetry)
         ),
     )
-    summary = summary_contract_to_dict(contract, common=request.common)
+    summary = summary_contract_to_mapping(contract, common=request.common)
     assert_multilang_summary(summary)
     return summary
 
@@ -146,9 +144,7 @@ def partition_stats_from_result_summary(
             else None
         ),
     )
-    from tools.cq.core.serialization import to_builtins
-
-    return dict(to_builtins(payload))
+    return require_mapping(payload)
 
 
 def assert_multilang_summary(summary: Mapping[str, object]) -> None:

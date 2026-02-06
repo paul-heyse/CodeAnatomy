@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.profiles import SearchLimits
 from tools.cq.search.requests import RgRunRequest
-from tools.cq.search.rg_events import RgEvent, decode_rg_event
+from tools.cq.search.rg_events import RgAnyEvent, decode_rg_event
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +17,7 @@ class RgProcessResult:
     """Result from executing a native ``rg --json`` process."""
 
     command: list[str]
-    events: list[RgEvent]
+    events: list[RgAnyEvent]
     timed_out: bool
     returncode: int
     stderr: str
@@ -135,7 +135,7 @@ def run_rg_json(request: RgRunRequest) -> RgProcessResult:
         text=False,
     )
 
-    events: list[RgEvent] = []
+    events: list[RgAnyEvent] = []
     timed_out = False
     deadline = time.monotonic() + request.limits.timeout_seconds
 

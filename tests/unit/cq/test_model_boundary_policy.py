@@ -32,7 +32,9 @@ def test_no_pydantic_import_in_hot_paths() -> None:
 def test_contract_modules_use_msgspec() -> None:
     repo = _repo_root()
     contract_files = [
+        repo / "tools/cq/core/contracts.py",
         repo / "tools/cq/search/contracts.py",
+        repo / "tools/cq/search/contracts_runtime_boundary.py",
         repo / "tools/cq/search/enrichment/contracts.py",
     ]
     missing: list[Path] = []
@@ -41,3 +43,14 @@ def test_contract_modules_use_msgspec() -> None:
         if "msgspec" not in text:
             missing.append(file_path)
     assert missing == []
+
+
+def test_no_typeddict_in_cq_runtime_modules() -> None:
+    repo = _repo_root()
+    cq_root = repo / "tools/cq"
+    offenders: list[Path] = []
+    for py_file in _py_files_under(cq_root):
+        text = py_file.read_text(encoding="utf-8")
+        if "TypedDict" in text:
+            offenders.append(py_file)
+    assert offenders == []

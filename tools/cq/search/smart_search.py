@@ -10,7 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Unpack, cast
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
@@ -72,10 +72,8 @@ from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.models import (
-    CandidateSearchKwargs,
     CandidateSearchRequest,
     SearchConfig,
-    SearchKwargs,
     SearchRequest,
 )
 from tools.cq.search.multilang_diagnostics import (
@@ -102,6 +100,8 @@ from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
+
+    from tools.cq.core.toolchain import Toolchain
 
 # Derive smart search limits from INTERACTIVE profile
 SMART_SEARCH_LIMITS = msgspec.structs.replace(
@@ -319,6 +319,21 @@ class EnrichedMatch(CqStruct, frozen=True):
         return self.span.start_col
 
 
+class ClassificationBatchTask(CqStruct, frozen=True):
+    """Typed task envelope for process-pool classification."""
+
+    root: str
+    lang: QueryLanguage
+    batch: list[tuple[int, RawMatch]]
+
+
+class ClassificationBatchResult(CqStruct, frozen=True):
+    """Typed result envelope for process-pool classification."""
+
+    index: int
+    match: EnrichedMatch
+
+
 # Kind weights for relevance scoring
 KIND_WEIGHTS: dict[MatchCategory, float] = {
     "definition": 1.0,
@@ -340,7 +355,9 @@ def build_candidate_searcher(
     query: str,
     mode: QueryMode,
     limits: SearchLimits,
-    **kwargs: Unpack[CandidateSearchKwargs],
+    *,
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
+    globs: tuple[list[str] | None, list[str] | None] | None = None,
 ) -> tuple[list[str], str]:
     """Build native ``rg`` command for candidate generation.
 
@@ -369,9 +386,9 @@ def build_candidate_searcher(
         query=query,
         mode=mode,
         limits=limits,
-        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
-        include_globs=kwargs.get("include_globs"),
-        exclude_globs=kwargs.get("exclude_globs"),
+        lang_scope=lang_scope,
+        include_globs=globs[0] if globs is not None else None,
+        exclude_globs=globs[1] if globs is not None else None,
     )
     config = SearchConfig(
         root=request.root,
@@ -1522,29 +1539,12 @@ def _build_followups_section(
     return Section(title="Suggested Follow-ups", findings=followup_findings)
 
 
-def _build_search_context(
-    root: Path,
-    query: str,
-    kwargs: SearchKwargs,
-) -> SmartSearchContext:
-    request = SearchRequest(
-        root=root,
-        query=query,
-        mode=kwargs.get("mode"),
-        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
-        include_globs=kwargs.get("include_globs"),
-        exclude_globs=kwargs.get("exclude_globs"),
-        include_strings=bool(kwargs.get("include_strings", False)),
-        limits=kwargs.get("limits"),
-        tc=kwargs.get("tc"),
-        argv=kwargs.get("argv"),
-        started_ms=kwargs.get("started_ms"),
-    )
+def _build_search_context(request: SearchRequest) -> SmartSearchContext:
     started = request.started_ms
     if started is None:
         started = ms()
     limits = request.limits or SMART_SEARCH_LIMITS
-    argv = request.argv or ["search", query]
+    argv = request.argv or ["search", request.query]
 
     # Clear caches from previous runs
     clear_caches()
@@ -1563,6 +1563,59 @@ def _build_search_context(
         tc=request.tc,
         started_ms=started,
     )
+
+
+def _coerce_search_request(
+    *,
+    root: Path,
+    query: str,
+    kwargs: dict[str, object],
+) -> SearchRequest:
+    return SearchRequest(
+        root=root,
+        query=query,
+        mode=_coerce_query_mode(kwargs.get("mode")),
+        lang_scope=_coerce_lang_scope(kwargs.get("lang_scope")),
+        include_globs=_coerce_glob_list(kwargs.get("include_globs")),
+        exclude_globs=_coerce_glob_list(kwargs.get("exclude_globs")),
+        include_strings=bool(kwargs.get("include_strings")),
+        limits=_coerce_limits(kwargs.get("limits")),
+        tc=cast("Toolchain | None", kwargs.get("tc")),
+        argv=_coerce_argv(kwargs.get("argv")),
+        started_ms=_coerce_started_ms(kwargs.get("started_ms")),
+    )
+
+
+def _coerce_query_mode(mode_value: object) -> QueryMode | None:
+    return mode_value if isinstance(mode_value, QueryMode) else None
+
+
+def _coerce_lang_scope(lang_scope_value: object) -> QueryLanguageScope:
+    if lang_scope_value in {"auto", "python", "rust"}:
+        return cast("QueryLanguageScope", lang_scope_value)
+    return DEFAULT_QUERY_LANGUAGE_SCOPE
+
+
+def _coerce_glob_list(globs_value: object) -> list[str] | None:
+    if not isinstance(globs_value, list):
+        return None
+    return [item for item in globs_value if isinstance(item, str)]
+
+
+def _coerce_limits(limits_value: object) -> SearchLimits | None:
+    return limits_value if isinstance(limits_value, SearchLimits) else None
+
+
+def _coerce_argv(argv_value: object) -> list[str] | None:
+    if not isinstance(argv_value, list):
+        return None
+    return [str(item) for item in argv_value]
+
+
+def _coerce_started_ms(started_ms_value: object) -> float | None:
+    if isinstance(started_ms_value, bool) or not isinstance(started_ms_value, (int, float)):
+        return None
+    return float(started_ms_value)
 
 
 def _run_candidate_phase(
@@ -1605,7 +1658,9 @@ def _run_classification_phase(
     if workers <= 1 or len(batches) <= 1:
         return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
 
-    tasks = [(str(ctx.root), lang, batch) for batch in batches]
+    tasks = [
+        ClassificationBatchTask(root=str(ctx.root), lang=lang, batch=batch) for batch in batches
+    ]
     try:
         with ProcessPoolExecutor(
             max_workers=workers,
@@ -1613,7 +1668,7 @@ def _run_classification_phase(
         ) as pool:
             indexed_results: list[tuple[int, EnrichedMatch]] = []
             for batch_results in pool.map(_classify_partition_batch, tasks):
-                indexed_results.extend(batch_results)
+                indexed_results.extend((item.index, item.match) for item in batch_results)
     except Exception:  # noqa: BLE001 - fail-open to sequential classification
         return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
 
@@ -1628,11 +1683,16 @@ def _resolve_search_worker_count(partition_count: int) -> int:
 
 
 def _classify_partition_batch(
-    task: tuple[str, QueryLanguage, list[tuple[int, RawMatch]]],
-) -> list[tuple[int, EnrichedMatch]]:
-    root_str, lang, batch = task
-    root = Path(root_str)
-    return [(idx, classify_match(raw, root, lang=lang)) for idx, raw in batch]
+    task: ClassificationBatchTask,
+) -> list[ClassificationBatchResult]:
+    root = Path(task.root)
+    return [
+        ClassificationBatchResult(
+            index=idx,
+            match=classify_match(raw, root, lang=task.lang),
+        )
+        for idx, raw in task.batch
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1910,7 +1970,7 @@ def _assemble_smart_search_result(
 def smart_search(
     root: Path,
     query: str,
-    **kwargs: Unpack[SearchKwargs],
+    **kwargs: object,
 ) -> CqResult:
     """Execute Smart Search pipeline.
 
@@ -1929,7 +1989,8 @@ def smart_search(
     CqResult
         Complete search results.
     """
-    ctx = _build_search_context(root, query, kwargs)
+    request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
+    ctx = _build_search_context(request)
     partition_results = _run_language_partitions(ctx)
     return _assemble_smart_search_result(ctx, partition_results)
 

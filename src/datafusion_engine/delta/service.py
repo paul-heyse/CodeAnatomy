@@ -103,6 +103,18 @@ class DeltaFeatureMutationRequest(StructBaseStrict, frozen=True):
 
 
 @dataclass(frozen=True)
+class _ProviderArtifactRecordRequest:
+    """Provider artifact capture request."""
+
+    ctx: SessionContext
+    resolution: DatasetResolution
+    location: DatasetLocation
+    name: str | None
+    predicate: str | None
+    scan_files: Sequence[str] | None
+
+
+@dataclass(frozen=True)
 class DeltaFeatureOps:
     """Feature mutation helpers bound to a Delta service."""
 
@@ -383,52 +395,60 @@ class DeltaService:
             )
         )
         self._record_provider_artifact(
-            ctx=ctx,
-            resolution=resolution,
-            location=resolved_location,
-            name=name,
-            predicate=predicate,
-            scan_files=scan_files,
+            _ProviderArtifactRecordRequest(
+                ctx=ctx,
+                resolution=resolution,
+                location=resolved_location,
+                name=name,
+                predicate=predicate,
+                scan_files=scan_files,
+            )
         )
         return resolution
 
     def _record_provider_artifact(
         self,
-        *,
-        ctx: SessionContext,
-        resolution: DatasetResolution,
-        location: DatasetLocation,
-        name: str | None,
-        predicate: str | None,
-        scan_files: Sequence[str] | None,
+        request: _ProviderArtifactRecordRequest,
     ) -> None:
         if self.profile.diagnostics.diagnostics_sink is None:
             return
         compatibility = is_delta_extension_compatible(
-            ctx,
+            request.ctx,
             entrypoint="delta_provider_from_session",
             require_non_fallback=self.profile.features.enforce_delta_ffi_provider,
         )
+        payload = self._provider_artifact_payload(
+            request=request,
+            compatibility=compatibility,
+        )
+        record_artifact(self.profile, "delta_service_provider_v1", payload)
+
+    def _provider_artifact_payload(
+        self,
+        *,
+        request: _ProviderArtifactRecordRequest,
+        compatibility: object,
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
             "run_id": get_run_id(),
-            "dataset_name": name,
-            "table_uri": str(location.path),
-            "format": location.format,
-            "provider_kind": resolution.provider_kind,
+            "dataset_name": request.name,
+            "table_uri": str(request.location.path),
+            "format": request.location.format,
+            "provider_kind": request.resolution.provider_kind,
             "strict_native_provider_enabled": self.profile.features.enforce_delta_ffi_provider,
-            "scan_files_requested": bool(scan_files),
-            "scan_files_count": len(scan_files) if scan_files is not None else 0,
-            "predicate": predicate,
-            "module": compatibility.module,
-            "entrypoint": compatibility.entrypoint,
-            "ctx_kind": compatibility.ctx_kind,
-            "probe_result": compatibility.probe_result,
-            "compatible": compatibility.compatible,
-            "available": compatibility.available,
-            "error": compatibility.error,
+            "scan_files_requested": bool(request.scan_files),
+            "scan_files_count": len(request.scan_files) if request.scan_files is not None else 0,
+            "predicate": request.predicate,
+            "module": getattr(compatibility, "module", None),
+            "entrypoint": getattr(compatibility, "entrypoint", None),
+            "ctx_kind": getattr(compatibility, "ctx_kind", None),
+            "probe_result": getattr(compatibility, "probe_result", None),
+            "compatible": getattr(compatibility, "compatible", False),
+            "available": getattr(compatibility, "available", False),
+            "error": getattr(compatibility, "error", None),
         }
-        record_artifact(self.profile, "delta_service_provider_v1", payload)
+        return payload
 
     def table_version(
         self,

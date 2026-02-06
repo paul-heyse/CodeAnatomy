@@ -22,7 +22,18 @@ def build_plan_manifest_for_sql(
     session_runtime: SessionRuntime,
     sql: str,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Build a plan bundle and return ``plan_manifest`` + full plan details."""
+    """Build a plan bundle and return ``plan_manifest`` plus full plan details.
+
+    Returns
+    -------
+    tuple[dict[str, object], dict[str, object]]
+        The plan-manifest payload and the full plan-details mapping.
+
+    Raises
+    ------
+    TypeError
+        If the generated plan bundle does not include a manifest mapping.
+    """
     bundle = build_plan_bundle(
         ctx,
         ctx.sql(sql),
@@ -42,7 +53,13 @@ def persist_plan_artifacts(
     plan_manifest: Mapping[str, object],
     plan_details: Mapping[str, object],
 ) -> tuple[Path, Path]:
-    """Persist manifest/detail JSON payloads for failure triage."""
+    """Persist manifest/detail JSON payloads for failure triage.
+
+    Returns
+    -------
+    tuple[Path, Path]
+        Paths to the persisted manifest and plan-details JSON files.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "plan_manifest.json"
     details_path = output_dir / "plan_details.json"

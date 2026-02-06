@@ -9,8 +9,9 @@ from obs.diagnostics_report import build_diagnostics_report, write_run_diagnosti
 
 def test_runtime_capability_summary_from_runtime_artifact() -> None:
     """Summarize runtime capability payload emitted by runtime profiles."""
+    spans: list[dict[str, object]] = []
     snapshot = {
-        "spans": [],
+        "spans": spans,
         "logs": [
             {
                 "attributes": {
@@ -36,8 +37,9 @@ def test_runtime_capability_summary_from_runtime_artifact() -> None:
 
 def test_provider_mode_summary_includes_strict_violation_counts() -> None:
     """Count strict native-provider violations from provider-mode diagnostics."""
+    spans: list[dict[str, object]] = []
     snapshot = {
-        "spans": [],
+        "spans": spans,
         "logs": [
             {
                 "attributes": {
@@ -68,8 +70,9 @@ def test_provider_mode_summary_includes_strict_violation_counts() -> None:
 
 def test_diagnostics_markdown_includes_runtime_capabilities_section(tmp_path: Path) -> None:
     """Render runtime capabilities summary into the markdown report."""
+    spans: list[dict[str, object]] = []
     snapshot = {
-        "spans": [],
+        "spans": spans,
         "logs": [
             {
                 "attributes": {

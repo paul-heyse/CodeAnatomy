@@ -32,6 +32,7 @@ from datafusion_engine.delta.payload import (
     string_list,
     string_map,
 )
+from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import (
     WriteFormat,
@@ -480,7 +481,14 @@ def _ensure_observability_table(
             location=location,
             options=DatasetRegistrationOptions(runtime_profile=profile),
         )
-    except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
+    except (
+        DataFusionEngineError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        OSError,
+        KeyError,
+    ) as exc:
         profile.record_artifact(
             "delta_observability_register_failed_v1",
             {

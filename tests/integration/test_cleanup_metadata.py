@@ -25,7 +25,9 @@ require_delta_extension()
 @pytest.mark.integration
 def test_checkpoint_and_cleanup_metadata_contract(tmp_path: Path) -> None:
     """Assert checkpoint/cleanup calls return structured diagnostics payloads."""
-    profile, _ = conformance_profile_with_sink()
+    profile, _ = conformance_profile_with_sink(
+        plan_artifacts_root=str(tmp_path / "conformance_artifacts"),
+    )
     ctx = profile.session_context()
     delta_path = tmp_path / "events_delta"
     source = register_arrow_table(

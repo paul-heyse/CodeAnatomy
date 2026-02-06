@@ -844,20 +844,9 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     from datafusion_engine.udf.runtime import rust_udf_snapshot_hash, udf_names_from_snapshot
 
     def _plugin_manifest() -> Mapping[str, object] | None:
-        try:
-            import datafusion_ext
-        except ImportError:
-            return None
-        manifest = getattr(datafusion_ext, "plugin_manifest", None)
-        if not callable(manifest):
-            return None
-        try:
-            payload = manifest()
-        except (RuntimeError, TypeError, ValueError, OSError):
-            return None
-        if not isinstance(payload, Mapping):
-            return None
-        return dict(payload)
+        from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest
+
+        return resolve_plugin_manifest("datafusion_ext").manifest
 
     def _count_seq(key: str) -> int:
         value = snapshot.get(key, ())

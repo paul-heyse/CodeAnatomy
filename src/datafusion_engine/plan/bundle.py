@@ -430,6 +430,33 @@ class _BundleComponents:
 
 
 @dataclass(frozen=True)
+class _BundleAssemblyState:
+    """Intermediate state for bundle component assembly."""
+
+    plan_core: _PlanCoreComponents
+    explain_artifacts: _ExplainArtifacts
+    proto_enabled: bool
+    proto_status: PlanProtoStatus | None
+    udf_artifacts: _UdfArtifacts
+    registry_artifacts: _RegistryArtifacts
+    environment: _EnvironmentArtifacts
+    required: _RequiredUdfArtifacts
+    substrait_validation: Mapping[str, object] | None
+    merged_delta_inputs: tuple[DeltaInputPin, ...]
+    snapshot_keys: tuple[dict[str, object], ...]
+    fingerprint: str
+    artifacts: PlanArtifacts
+
+
+@dataclass(frozen=True)
+class _BundleIdentityResult:
+    """Identity payload/hash derived for a bundle assembly state."""
+
+    payload: Mapping[str, object] | None
+    plan_identity_hash: str | None
+
+
+@dataclass(frozen=True)
 class _PlanCoreComponents:
     """Core logical/physical plan objects for bundling."""
 
@@ -478,6 +505,27 @@ class _PlanArtifactsInputs:
     environment: _EnvironmentArtifacts
     substrait_validation: Mapping[str, object] | None
     proto_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class _PlanDisplaySection:
+    """Display-oriented plan details and physical plan text."""
+
+    payload: dict[str, object]
+    physical_plan: str | None
+
+
+@dataclass
+class _PlanDetailsBuilder:
+    """Mutable builder for plan detail payload assembly."""
+
+    details: dict[str, object] = field(default_factory=dict)
+
+    def add_section(self, section: Mapping[str, object]) -> None:
+        self.details.update(section)
+
+    def build(self) -> dict[str, object]:
+        return dict(self.details)
 
 
 def _plan_core_components(
@@ -1068,6 +1116,31 @@ def _bundle_components(
     *,
     options: PlanBundleOptions,
 ) -> _BundleComponents:
+    state = _collect_bundle_assembly_state(ctx, df, options=options)
+    identity = _resolve_bundle_identity(state, options=options)
+    runtime_profile = options.session_runtime.profile if options.session_runtime else None
+    _record_plan_phase_telemetry(
+        state.plan_core,
+        plan_hash=state.fingerprint,
+        plan_identity_hash=identity.plan_identity_hash,
+        runtime_profile=runtime_profile,
+    )
+    detail_inputs = _build_plan_detail_inputs(state, identity=identity)
+    return _finalize_bundle_components(
+        df,
+        state=state,
+        identity=identity,
+        detail_inputs=detail_inputs,
+        options=options,
+    )
+
+
+def _collect_bundle_assembly_state(
+    ctx: SessionContext,
+    df: DataFrame,
+    *,
+    options: PlanBundleOptions,
+) -> _BundleAssemblyState:
     plan_core = _plan_core_components(ctx, df, options=options)
     explain_artifacts = _capture_explain_artifacts(
         df,
@@ -1088,24 +1161,15 @@ def _bundle_components(
         plan_core.optimized or plan_core.logical,
         snapshot=udf_artifacts.snapshot,
     )
-
-    if options.validate_udfs:
-        from datafusion_engine.udf.runtime import validate_required_udfs
-
-        if required.required_udfs:
-            validate_required_udfs(udf_artifacts.snapshot, required=required.required_udfs)
-
-    substrait_validation = None
-    if (
-        options.session_runtime is not None
-        and options.session_runtime.profile.diagnostics.substrait_validation
-    ):
-        substrait_validation = _substrait_validation_payload(
-            plan_core.substrait_bytes,
-            df=df,
-            ctx=ctx,
-        )
-
+    _validate_bundle_required_udfs(
+        required=required, options=options, snapshot=udf_artifacts.snapshot
+    )
+    substrait_validation = _bundle_substrait_validation(
+        ctx,
+        df=df,
+        options=options,
+        substrait_bytes=plan_core.substrait_bytes,
+    )
     merged_delta_inputs = _merged_delta_inputs_for_bundle(
         ctx,
         plan=plan_core.optimized or plan_core.logical,
@@ -1129,7 +1193,6 @@ def _bundle_components(
             information_schema_hash=environment.information_schema_hash,
         )
     )
-
     artifacts = _plan_artifacts_from_components(
         _PlanArtifactsInputs(
             plan_core=plan_core,
@@ -1141,57 +1204,125 @@ def _bundle_components(
             proto_enabled=proto_enabled,
         )
     )
-    plan_identity_hash = None
-    if options.session_runtime is not None:
-        plan_identity_payload = _plan_identity_payload(
-            _PlanIdentityInputs(
-                plan_fingerprint=fingerprint,
-                artifacts=artifacts,
-                required_udfs=required.required_udfs,
-                required_rewrite_tags=required.required_rewrite_tags,
-                delta_inputs=merged_delta_inputs,
-                scan_units=options.scan_units,
-                profile=options.session_runtime.profile,
-            )
-        )
-        plan_identity_hash = hash_json_default(plan_identity_payload, str_keys=True)
-    _record_plan_phase_telemetry(
-        plan_core,
-        plan_hash=fingerprint,
-        plan_identity_hash=plan_identity_hash,
-        runtime_profile=options.session_runtime.profile if options.session_runtime else None,
-    )
-    detail_inputs = PlanDetailInputs(
-        artifacts=artifacts,
-        plan_fingerprint=fingerprint,
-        logical=plan_core.logical,
-        optimized=plan_core.optimized,
-        execution=plan_core.execution,
-        explain_tree=explain_artifacts.tree,
-        explain_verbose=explain_artifacts.verbose,
-        explain_analyze=explain_artifacts.analyze,
-        substrait_validation=substrait_validation,
+    return _BundleAssemblyState(
+        plan_core=plan_core,
+        explain_artifacts=explain_artifacts,
+        proto_enabled=proto_enabled,
         proto_status=proto_status,
+        udf_artifacts=udf_artifacts,
+        registry_artifacts=registry_artifacts,
+        environment=environment,
+        required=required,
+        substrait_validation=substrait_validation,
+        merged_delta_inputs=merged_delta_inputs,
+        snapshot_keys=snapshot_keys,
+        fingerprint=fingerprint,
+        artifacts=artifacts,
+    )
+
+
+def _validate_bundle_required_udfs(
+    *,
+    required: _RequiredUdfArtifacts,
+    options: PlanBundleOptions,
+    snapshot: Mapping[str, object],
+) -> None:
+    if not options.validate_udfs or not required.required_udfs:
+        return
+    from datafusion_engine.udf.runtime import validate_required_udfs
+
+    validate_required_udfs(snapshot, required=required.required_udfs)
+
+
+def _bundle_substrait_validation(
+    ctx: SessionContext,
+    *,
+    df: DataFrame,
+    options: PlanBundleOptions,
+    substrait_bytes: bytes,
+) -> Mapping[str, object] | None:
+    if (
+        options.session_runtime is None
+        or not options.session_runtime.profile.diagnostics.substrait_validation
+    ):
+        return None
+    return _substrait_validation_payload(
+        substrait_bytes,
+        df=df,
+        ctx=ctx,
+    )
+
+
+def _resolve_bundle_identity(
+    state: _BundleAssemblyState,
+    *,
+    options: PlanBundleOptions,
+) -> _BundleIdentityResult:
+    if options.session_runtime is None:
+        return _BundleIdentityResult(payload=None, plan_identity_hash=None)
+    payload = _plan_identity_payload(
+        _PlanIdentityInputs(
+            plan_fingerprint=state.fingerprint,
+            artifacts=state.artifacts,
+            required_udfs=state.required.required_udfs,
+            required_rewrite_tags=state.required.required_rewrite_tags,
+            delta_inputs=state.merged_delta_inputs,
+            scan_units=options.scan_units,
+            profile=options.session_runtime.profile,
+        )
+    )
+    return _BundleIdentityResult(
+        payload=payload,
+        plan_identity_hash=hash_json_default(payload, str_keys=True),
+    )
+
+
+def _build_plan_detail_inputs(
+    state: _BundleAssemblyState,
+    *,
+    identity: _BundleIdentityResult,
+) -> PlanDetailInputs:
+    _ = identity
+    return PlanDetailInputs(
+        artifacts=state.artifacts,
+        plan_fingerprint=state.fingerprint,
+        logical=state.plan_core.logical,
+        optimized=state.plan_core.optimized,
+        execution=state.plan_core.execution,
+        explain_tree=state.explain_artifacts.tree,
+        explain_verbose=state.explain_artifacts.verbose,
+        explain_analyze=state.explain_artifacts.analyze,
+        substrait_validation=state.substrait_validation,
+        proto_status=state.proto_status,
         detail_context=PlanDetailContext(
-            cdf_windows=environment.cdf_windows,
-            delta_store_policy_hash=environment.delta_store_policy_hash,
-            information_schema_hash=environment.information_schema_hash,
-            snapshot_keys=snapshot_keys,
+            cdf_windows=state.environment.cdf_windows,
+            delta_store_policy_hash=state.environment.delta_store_policy_hash,
+            information_schema_hash=state.environment.information_schema_hash,
+            snapshot_keys=state.snapshot_keys,
         ),
     )
 
+
+def _finalize_bundle_components(
+    df: DataFrame,
+    *,
+    state: _BundleAssemblyState,
+    identity: _BundleIdentityResult,
+    detail_inputs: PlanDetailInputs,
+    options: PlanBundleOptions,
+) -> _BundleComponents:
     return _BundleComponents(
-        logical=plan_core.logical,
-        optimized=plan_core.optimized,
-        execution=plan_core.execution,
-        substrait_bytes=plan_core.substrait_bytes,
-        fingerprint=fingerprint,
-        artifacts=artifacts,
-        merged_delta_inputs=merged_delta_inputs,
+        logical=state.plan_core.logical,
+        optimized=state.plan_core.optimized,
+        execution=state.plan_core.execution,
+        substrait_bytes=state.plan_core.substrait_bytes,
+        fingerprint=state.fingerprint,
+        artifacts=state.artifacts,
+        merged_delta_inputs=state.merged_delta_inputs,
         scan_units=tuple(options.scan_units),
-        plan_identity_hash=plan_identity_hash,
-        required_udfs=required.required_udfs,
-        required_rewrite_tags=required.required_rewrite_tags,
+        plan_identity_hash=identity.plan_identity_hash,
+        required_udfs=state.required.required_udfs,
+        required_rewrite_tags=state.required.required_rewrite_tags,
         plan_details=_plan_details(df, detail_inputs=detail_inputs),
     )
 
@@ -1933,10 +2064,17 @@ def _snapshot_keys_for_manifest(
         key=lambda row: (
             str(row["dataset_name"]),
             str(row["canonical_uri"]),
-            int(row["resolved_version"]),
+            _manifest_resolved_version(row),
         )
     )
     return tuple(payloads)
+
+
+def _manifest_resolved_version(row: Mapping[str, object]) -> int:
+    value = row.get("resolved_version")
+    if isinstance(value, int):
+        return value
+    return 0
 
 
 def _plan_display(plan: object | None, *, method: str) -> str | None:
@@ -1981,6 +2119,89 @@ def _plan_pgjson(plan: object | None) -> str | None:
         return None
 
 
+def _plan_display_section(detail_inputs: PlanDetailInputs) -> _PlanDisplaySection:
+    physical_plan = _plan_display(
+        detail_inputs.execution,
+        method="display_indent",
+    )
+    return _PlanDisplaySection(
+        payload={
+            "logical_plan": _plan_display(
+                detail_inputs.logical,
+                method="display_indent_schema",
+            ),
+            "optimized_plan": _plan_display(
+                detail_inputs.optimized,
+                method="display_indent_schema",
+            ),
+            "physical_plan": physical_plan,
+            "graphviz": _plan_graphviz(detail_inputs.optimized),
+            "optimized_plan_pgjson": _plan_pgjson(detail_inputs.optimized),
+        },
+        physical_plan=physical_plan,
+    )
+
+
+def _plan_statistics_section(
+    *,
+    execution: object | None,
+    physical_plan: str | None,
+) -> dict[str, object]:
+    section: dict[str, object] = {
+        "partition_count": _plan_partition_count(execution),
+        "repartition_count": _repartition_count_from_display(physical_plan),
+        "dynamic_filter_count": _dynamic_filter_count_from_display(physical_plan),
+    }
+    stats_payload = _plan_statistics_payload(execution)
+    if stats_payload is not None:
+        section["statistics"] = stats_payload
+    return section
+
+
+def _plan_explain_section(detail_inputs: PlanDetailInputs) -> dict[str, object]:
+    section: dict[str, object] = {}
+    if detail_inputs.explain_tree is not None:
+        section["explain_tree"] = detail_inputs.explain_tree.text
+    if detail_inputs.explain_verbose is not None:
+        section["explain_verbose"] = detail_inputs.explain_verbose.text
+    if detail_inputs.explain_analyze is not None:
+        section["explain_analyze"] = detail_inputs.explain_analyze.text
+        section["explain_analyze_duration_ms"] = detail_inputs.explain_analyze.duration_ms
+        section["explain_analyze_output_rows"] = detail_inputs.explain_analyze.output_rows
+    if detail_inputs.substrait_validation is not None:
+        section["substrait_validation"] = detail_inputs.substrait_validation
+    if detail_inputs.proto_status is not None:
+        section["proto_serialization"] = to_builtins(
+            detail_inputs.proto_status,
+            str_keys=True,
+        )
+    return section
+
+
+def _plan_schema_section(df: DataFrame) -> dict[str, object]:
+    schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
+    return {
+        "schema_names": schema_names,
+        "schema_describe": _schema_describe_rows(df),
+        "schema_provenance": _schema_provenance(df),
+    }
+
+
+def _plan_context_section(context: PlanDetailContext) -> dict[str, object]:
+    section: dict[str, object] = {}
+    if context.cdf_windows:
+        section["cdf_windows"] = [dict(window) for window in context.cdf_windows]
+    if context.delta_store_policy_hash is not None:
+        section["delta_store_policy_hash"] = context.delta_store_policy_hash
+    if context.information_schema_hash is not None:
+        section["information_schema_hash"] = context.information_schema_hash
+    if context.snapshot_keys:
+        section["snapshot_keys"] = [dict(key) for key in context.snapshot_keys]
+    if context.write_outcomes:
+        section["write_outcomes"] = [dict(outcome) for outcome in context.write_outcomes]
+    return section
+
+
 def _plan_details(
     df: DataFrame,
     *,
@@ -1994,57 +2215,19 @@ def _plan_details(
         Diagnostic plan metadata.
     """
     context = detail_inputs.detail_context or PlanDetailContext()
-    details: dict[str, object] = {}
-    details["logical_plan"] = _plan_display(
-        detail_inputs.logical,
-        method="display_indent_schema",
-    )
-    details["optimized_plan"] = _plan_display(
-        detail_inputs.optimized,
-        method="display_indent_schema",
-    )
-    physical_plan = _plan_display(
-        detail_inputs.execution,
-        method="display_indent",
-    )
-    details["physical_plan"] = physical_plan
-    details["graphviz"] = _plan_graphviz(detail_inputs.optimized)
-    details["optimized_plan_pgjson"] = _plan_pgjson(detail_inputs.optimized)
-    details["partition_count"] = _plan_partition_count(detail_inputs.execution)
-    details["repartition_count"] = _repartition_count_from_display(physical_plan)
-    details["dynamic_filter_count"] = _dynamic_filter_count_from_display(physical_plan)
-    stats_payload = _plan_statistics_payload(detail_inputs.execution)
-    if stats_payload is not None:
-        details["statistics"] = stats_payload
-    if detail_inputs.explain_tree is not None:
-        details["explain_tree"] = detail_inputs.explain_tree.text
-    if detail_inputs.explain_verbose is not None:
-        details["explain_verbose"] = detail_inputs.explain_verbose.text
-    if detail_inputs.explain_analyze is not None:
-        details["explain_analyze"] = detail_inputs.explain_analyze.text
-        details["explain_analyze_duration_ms"] = detail_inputs.explain_analyze.duration_ms
-        details["explain_analyze_output_rows"] = detail_inputs.explain_analyze.output_rows
-    if detail_inputs.substrait_validation is not None:
-        details["substrait_validation"] = detail_inputs.substrait_validation
-    if detail_inputs.proto_status is not None:
-        details["proto_serialization"] = to_builtins(
-            detail_inputs.proto_status,
-            str_keys=True,
+    display_section = _plan_display_section(detail_inputs)
+    builder = _PlanDetailsBuilder()
+    builder.add_section(display_section.payload)
+    builder.add_section(
+        _plan_statistics_section(
+            execution=detail_inputs.execution,
+            physical_plan=display_section.physical_plan,
         )
-    schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
-    details["schema_names"] = schema_names
-    details["schema_describe"] = _schema_describe_rows(df)
-    details["schema_provenance"] = _schema_provenance(df)
-    if context.cdf_windows:
-        details["cdf_windows"] = [dict(window) for window in context.cdf_windows]
-    if context.delta_store_policy_hash is not None:
-        details["delta_store_policy_hash"] = context.delta_store_policy_hash
-    if context.information_schema_hash is not None:
-        details["information_schema_hash"] = context.information_schema_hash
-    if context.snapshot_keys:
-        details["snapshot_keys"] = [dict(key) for key in context.snapshot_keys]
-    if context.write_outcomes:
-        details["write_outcomes"] = [dict(outcome) for outcome in context.write_outcomes]
+    )
+    builder.add_section(_plan_explain_section(detail_inputs))
+    builder.add_section(_plan_schema_section(df))
+    builder.add_section(_plan_context_section(context))
+    details = builder.build()
     details["plan_manifest"] = _plan_manifest_payload(
         detail_inputs=detail_inputs,
         details=details,

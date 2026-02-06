@@ -90,12 +90,11 @@ def test_concurrent_delta_writes_have_classified_outcomes(tmp_path: Path) -> Non
             for index in range(2)
         ]
         for future in futures:
-            try:
-                future.result()
-            except Exception as exc:  # pragma: no cover - conflict timing is nondeterministic
+            exc = future.exception()
+            if exc is not None:  # pragma: no cover - conflict timing is nondeterministic
                 outcomes.append(_conflict_family(exc))
-            else:
-                outcomes.append("ok")
+                continue
+            outcomes.append("ok")
     assert set(outcomes).issubset({"ok", "conflict"})
     table = DeltaTable(destination)
     assert table.to_pyarrow_table().num_rows >= 2

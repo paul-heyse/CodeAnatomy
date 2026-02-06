@@ -36,7 +36,11 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
         plan=plan, query=query, tc=tc, root=repo, argv=["cq", "q", "entity=import"]
     )
 
-    assert result.summary["matches"] == 1
+    languages = result.summary.get("languages")
+    assert isinstance(languages, dict)
+    python_summary = languages.get("python")
+    assert isinstance(python_summary, dict)
+    assert python_summary.get("matches") == 1
     assert len(result.key_findings) == 1
     finding = result.key_findings[0]
     assert finding.message == "from_import: typing"
@@ -64,7 +68,11 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
         plan=plan, query=query, tc=tc, root=repo, argv=["cq", "q", "entity=import"]
     )
 
-    assert result.summary["matches"] == 1
+    languages = result.summary.get("languages")
+    assert isinstance(languages, dict)
+    python_summary = languages.get("python")
+    assert isinstance(python_summary, dict)
+    assert python_summary.get("matches") == 1
     assert len(result.key_findings) == 1
     finding = result.key_findings[0]
     assert finding.message == "from_import: Any"

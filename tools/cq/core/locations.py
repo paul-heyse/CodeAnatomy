@@ -36,7 +36,7 @@ def span_from_rg_match(
     start_col: int,
     end_col: int | None,
 ) -> SourceSpan:
-    """Build a SourceSpan from rpygrep match coordinates.
+    """Build a SourceSpan from ripgrep match coordinates.
 
     Returns
     -------

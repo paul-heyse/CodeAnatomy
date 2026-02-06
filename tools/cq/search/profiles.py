@@ -9,7 +9,7 @@ from tools.cq.core.structs import CqStruct
 
 
 class SearchLimits(CqStruct, frozen=True):
-    """Search limits for rpygrep operations.
+    """Search limits for ripgrep operations.
 
     Parameters
     ----------

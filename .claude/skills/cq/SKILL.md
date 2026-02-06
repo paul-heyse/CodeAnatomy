@@ -43,13 +43,9 @@ Use CQ first for code discovery and structural analysis:
 
 ## Rust Language Support
 
-cq supports searching and querying Rust code (`.rs` files) alongside Python. Rust support is feature-gated and must be enabled with an environment variable.
-
-### Enabling Rust Queries
-
-```bash
-export CQ_ENABLE_RUST_QUERY=1
-```
+cq supports searching and querying Rust code (`.rs` files) alongside Python.
+Language scope defaults to `auto` (search both Python and Rust); use `--lang rust` or
+`lang=rust` to narrow scope.
 
 ### Supported Commands for Rust
 
@@ -261,7 +257,6 @@ All commands support these global options:
 | `--format FMT` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir PATH` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving artifacts |
-| — | `CQ_ENABLE_RUST_QUERY` | `false` | Enable Rust language queries |
 
 ### Filters
 

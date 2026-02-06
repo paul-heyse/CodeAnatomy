@@ -6,7 +6,7 @@ from typing import TypeGuard
 
 import msgspec
 
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
 
 
 class RunPlan(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
@@ -45,7 +45,7 @@ class SearchStep(RunStepBase, tag="search", frozen=True):
     literal: bool = False
     include_strings: bool = False
     in_dir: str | None = None
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
 
 class CallsStep(RunStepBase, tag="calls", frozen=True):

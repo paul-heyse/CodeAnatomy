@@ -1,22 +1,27 @@
-"""Language helpers for CQ query and search execution."""
+"""Language and scope helpers for CQ query/search execution."""
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping
 from typing import Literal, cast
 
 QueryLanguage = Literal["python", "rust"]
+QueryLanguageScope = Literal["auto", "python", "rust"]
 RipgrepLanguageType = Literal["py", "rust"]
 
+# Concrete-language defaults for internals that operate on one language.
 DEFAULT_QUERY_LANGUAGE: QueryLanguage = "python"
-SUPPORTED_QUERY_LANGUAGES: tuple[QueryLanguage, ...] = ("python", "rust")
+# Public execution default: unified multi-language scope.
+DEFAULT_QUERY_LANGUAGE_SCOPE: QueryLanguageScope = "auto"
 
-RUST_QUERY_ENABLE_ENV = "CQ_ENABLE_RUST_QUERY"
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+SUPPORTED_QUERY_LANGUAGES: tuple[QueryLanguage, ...] = ("python", "rust")
+SUPPORTED_QUERY_LANGUAGE_SCOPES: tuple[QueryLanguageScope, ...] = (
+    "auto",
+    "python",
+    "rust",
+)
 
 LANGUAGE_FILE_EXTENSIONS: dict[QueryLanguage, tuple[str, ...]] = {
-    "python": (".py",),
+    "python": (".py", ".pyi"),
     "rust": (".rs",),
 }
 LANGUAGE_FILE_GLOBS: dict[QueryLanguage, list[str]] = {
@@ -30,17 +35,17 @@ LANGUAGE_RIPGREP_TYPES: dict[QueryLanguage, RipgrepLanguageType] = {
 
 
 def parse_query_language(value: str) -> QueryLanguage:
-    """Parse and validate a query language token.
+    """Parse a concrete language token.
 
     Returns
     -------
     QueryLanguage
-        Normalized query language token.
+        Parsed concrete language.
 
     Raises
     ------
     ValueError
-        If the value does not map to a supported query language.
+        Raised when the token is not supported.
     """
     normalized = value.strip().lower()
     if normalized not in SUPPORTED_QUERY_LANGUAGES:
@@ -52,86 +57,150 @@ def parse_query_language(value: str) -> QueryLanguage:
     return cast("QueryLanguage", normalized)
 
 
+def parse_query_language_scope(value: str | None) -> QueryLanguageScope:
+    """Parse a language scope token, defaulting to ``auto`` when omitted.
+
+    Returns
+    -------
+    QueryLanguageScope
+        Parsed language scope.
+
+    Raises
+    ------
+    ValueError
+        Raised when the token is not supported.
+    """
+    if value is None:
+        return DEFAULT_QUERY_LANGUAGE_SCOPE
+    normalized = value.strip().lower()
+    if normalized not in SUPPORTED_QUERY_LANGUAGE_SCOPES:
+        msg = (
+            f"Invalid query language scope: {value!r}. "
+            f"Valid scopes: {', '.join(SUPPORTED_QUERY_LANGUAGE_SCOPES)}"
+        )
+        raise ValueError(msg)
+    return cast("QueryLanguageScope", normalized)
+
+
+def expand_language_scope(scope: QueryLanguageScope) -> tuple[QueryLanguage, ...]:
+    """Expand a scope into ordered concrete languages.
+
+    Returns
+    -------
+    tuple[QueryLanguage, ...]
+        Ordered concrete languages for the given scope.
+    """
+    if scope == "auto":
+        return ("python", "rust")
+    return (cast("QueryLanguage", scope),)
+
+
+def primary_language(scope: QueryLanguageScope) -> QueryLanguage:
+    """Return the primary language for scoring/tie-break defaults.
+
+    Returns
+    -------
+    QueryLanguage
+        Primary language for the scope.
+    """
+    return expand_language_scope(scope)[0]
+
+
 def file_extensions_for_language(lang: QueryLanguage) -> tuple[str, ...]:
-    """Return supported file extensions for a query language.
+    """Return extensions for a concrete language.
 
     Returns
     -------
     tuple[str, ...]
-        Supported source file extensions for the language.
+        Supported source extensions.
     """
     return LANGUAGE_FILE_EXTENSIONS.get(lang, LANGUAGE_FILE_EXTENSIONS[DEFAULT_QUERY_LANGUAGE])
 
 
+def file_extensions_for_scope(scope: QueryLanguageScope) -> tuple[str, ...]:
+    """Return merged extensions for a language scope.
+
+    Returns
+    -------
+    tuple[str, ...]
+        De-duplicated extensions across all scoped languages.
+    """
+    extensions: list[str] = []
+    for lang in expand_language_scope(scope):
+        for extension in file_extensions_for_language(lang):
+            if extension not in extensions:
+                extensions.append(extension)
+    return tuple(extensions)
+
+
 def file_globs_for_language(lang: QueryLanguage) -> list[str]:
-    """Return summary glob patterns for a query language.
+    """Return summary globs for a concrete language.
 
     Returns
     -------
     list[str]
-        Glob patterns used for scanning files in the language.
+        Summary glob patterns for the language.
     """
     return LANGUAGE_FILE_GLOBS.get(lang, LANGUAGE_FILE_GLOBS[DEFAULT_QUERY_LANGUAGE])
 
 
+def file_globs_for_scope(scope: QueryLanguageScope) -> list[str]:
+    """Return merged summary globs for a language scope.
+
+    Returns
+    -------
+    list[str]
+        De-duplicated summary globs across all scoped languages.
+    """
+    globs: list[str] = []
+    for lang in expand_language_scope(scope):
+        for glob in file_globs_for_language(lang):
+            if glob not in globs:
+                globs.append(glob)
+    return globs
+
+
 def ripgrep_type_for_language(lang: QueryLanguage) -> RipgrepLanguageType:
-    """Return ripgrep file type token for a query language.
+    """Return ripgrep type token for a concrete language.
 
     Returns
     -------
     RipgrepLanguageType
-        Ripgrep file type selector for the language.
+        Ripgrep type token.
     """
     return LANGUAGE_RIPGREP_TYPES.get(lang, LANGUAGE_RIPGREP_TYPES[DEFAULT_QUERY_LANGUAGE])
 
 
-def is_query_language_enabled(
-    lang: QueryLanguage,
-    env: Mapping[str, str] | None = None,
-) -> bool:
-    """Return whether the query language is enabled in the current environment.
+def ripgrep_types_for_scope(scope: QueryLanguageScope) -> tuple[RipgrepLanguageType, ...]:
+    """Return ordered ripgrep type tokens for a language scope.
 
     Returns
     -------
-    bool
-        True when the language is enabled under current feature gates.
+    tuple[RipgrepLanguageType, ...]
+        Ordered ripgrep type tokens for all languages in scope.
     """
-    if lang != "rust":
-        return True
-    source_env = os.environ if env is None else env
-    raw_value = source_env.get(RUST_QUERY_ENABLE_ENV, "")
-    return raw_value.strip().lower() in _TRUE_VALUES
-
-
-def disabled_language_message(lang: QueryLanguage) -> str:
-    """Return a deterministic feature-gate message for a language.
-
-    Returns
-    -------
-    str
-        User-facing message describing how to enable the language.
-    """
-    if lang == "rust":
-        return (
-            "Rust queries are disabled. Set "
-            f"{RUST_QUERY_ENABLE_ENV}=1 to enable Rust query execution."
-        )
-    return f"Language {lang!r} is disabled."
+    return tuple(ripgrep_type_for_language(lang) for lang in expand_language_scope(scope))
 
 
 __all__ = [
     "DEFAULT_QUERY_LANGUAGE",
+    "DEFAULT_QUERY_LANGUAGE_SCOPE",
     "LANGUAGE_FILE_EXTENSIONS",
     "LANGUAGE_FILE_GLOBS",
     "LANGUAGE_RIPGREP_TYPES",
-    "RUST_QUERY_ENABLE_ENV",
     "SUPPORTED_QUERY_LANGUAGES",
+    "SUPPORTED_QUERY_LANGUAGE_SCOPES",
     "QueryLanguage",
+    "QueryLanguageScope",
     "RipgrepLanguageType",
-    "disabled_language_message",
+    "expand_language_scope",
     "file_extensions_for_language",
+    "file_extensions_for_scope",
     "file_globs_for_language",
-    "is_query_language_enabled",
+    "file_globs_for_scope",
     "parse_query_language",
+    "parse_query_language_scope",
+    "primary_language",
     "ripgrep_type_for_language",
+    "ripgrep_types_for_scope",
 ]

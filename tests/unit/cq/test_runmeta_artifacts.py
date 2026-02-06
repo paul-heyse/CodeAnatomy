@@ -10,7 +10,7 @@ from tools.cq.core.schema import CqResult, RunMeta, mk_runmeta, ms
 
 
 def _toolchain_dict() -> dict[str, str | None]:
-    return {"rpygrep": None, "sgpy": "0.40.0", "python": "3.13.11"}
+    return {"rg": None, "sgpy": "0.40.0", "python": "3.13.11"}
 
 
 def test_mk_runmeta_generates_run_id(tmp_path: Path) -> None:

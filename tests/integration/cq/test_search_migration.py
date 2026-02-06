@@ -1,6 +1,6 @@
-"""Integration tests for rpygrep search migration.
+"""Integration tests for native rg search migration.
 
-Verifies that the new rpygrep-based search functions work correctly
+Verifies that the native rg-based search functions work correctly
 with the cq macro commands.
 """
 
@@ -19,7 +19,7 @@ from tools.cq.search import (
 
 
 class TestSearchAdapterIntegration:
-    """Test rpygrep adapter functions work with real codebase."""
+    """Test native rg adapter functions work with real codebase."""
 
     def test_find_files_with_pattern_in_repo(self) -> None:
         """Test finding files in the actual repository."""
@@ -123,17 +123,17 @@ class TestMacroIntegration:
         assert callable(cmd_sig_impact)
         assert callable(_collect_sites)
 
-    def test_toolchain_detects_rpygrep(self) -> None:
-        """Test that toolchain correctly detects rpygrep."""
+    def test_toolchain_detects_rg(self) -> None:
+        """Test that toolchain correctly detects ripgrep."""
         from tools.cq.core.toolchain import Toolchain
 
         tc = Toolchain.detect()
 
-        assert tc.has_rpygrep
-        assert tc.rpygrep_available
-        assert tc.rpygrep_version is not None
+        assert tc.has_rg
+        assert tc.rg_available
+        assert tc.rg_version is not None
         # Should not raise
-        tc.require_rpygrep()
+        tc.require_rg()
 
 
 class TestSearchLimitsProfiles:

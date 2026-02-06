@@ -457,20 +457,29 @@ def query_delta_sql(
             register_dataset_df,
         )
         from datafusion_engine.dataset.registry import DatasetLocation
+        from datafusion_engine.delta.service import delta_service_for_profile
         from datafusion_engine.sql.options import statement_sql_options_for_profile
 
         profile = _runtime_profile_for_delta(runtime_profile)
         ctx = profile.session_context()
         resolved_storage = dict(storage_options) if storage_options is not None else {}
+        service = (
+            delta_service_for_profile(profile)
+            if profile.diagnostics.diagnostics_sink is not None
+            else None
+        )
         for name, path in sorted(tables.items()):
+            location = DatasetLocation(
+                path=path,
+                format="delta",
+                storage_options=resolved_storage,
+            )
+            if service is not None:
+                service.provider(location=location, name=name)
             register_dataset_df(
                 ctx,
                 name=name,
-                location=DatasetLocation(
-                    path=path,
-                    format="delta",
-                    storage_options=resolved_storage,
-                ),
+                location=location,
                 options=DatasetRegistrationOptions(runtime_profile=profile),
             )
         df = ctx.sql_with_options(sql, statement_sql_options_for_profile(profile))

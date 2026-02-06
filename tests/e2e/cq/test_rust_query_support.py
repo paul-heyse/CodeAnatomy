@@ -6,30 +6,21 @@ import subprocess
 from collections.abc import Callable
 
 import msgspec
-import pytest
 from tools.cq.core.schema import CqResult
-from tools.cq.query.language import RUST_QUERY_ENABLE_ENV
 
 
-def test_rust_query_gate_off(
-    run_query: Callable[[str], CqResult],
-    monkeypatch: pytest.MonkeyPatch,
+def test_rust_query_available_without_feature_gate(
+    run_query: Callable[[str], CqResult]
 ) -> None:
-    """Rust queries should return a structured gate error when disabled."""
-    monkeypatch.delenv(RUST_QUERY_ENABLE_ENV, raising=False)
+    """Rust queries should execute without feature-gate toggles."""
     result = run_query("entity=function lang=rust in=tests/e2e/cq/_fixtures/")
-    error = str(result.summary.get("error", ""))
-    assert "disabled" in error.lower()
-    assert RUST_QUERY_ENABLE_ENV in error
+    assert "error" not in result.summary
 
 
 def test_rust_core_entities(
     run_query: Callable[[str], CqResult],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Function/import/callsite entity queries should work for Rust when enabled."""
-    monkeypatch.setenv(RUST_QUERY_ENABLE_ENV, "1")
-
+    """Function/import/callsite entity queries should work for Rust."""
     function_result = run_query(
         "entity=function name=build_graph lang=rust in=tests/e2e/cq/_fixtures/"
     )
@@ -44,10 +35,8 @@ def test_rust_core_entities(
 
 def test_run_step_rust_query(
     run_command: Callable[[list[str]], subprocess.CompletedProcess[str]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cq run q-step should support Rust lang queries."""
-    monkeypatch.setenv(RUST_QUERY_ENABLE_ENV, "1")
     proc = run_command(
         [
             "uv",

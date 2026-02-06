@@ -65,7 +65,7 @@ Smart Search automatically:
 - Groups by containing function/scope
 - Hides non-code matches (strings/comments)
 - Suggests follow-up commands
-- Supports Rust via `--lang rust` (requires `CQ_ENABLE_RUST_QUERY=1`)
+- Supports Rust via `--lang rust` (default scope is `auto`, which searches Python+Rust)
 
 **CQ-First Policy**
 - Use `/cq search` for code discovery instead of `rg`/`grep`.
@@ -97,7 +97,6 @@ Only use pattern queries (`/cq q "pattern=..."`) when you need:
 - Rust symbols → `/cq search <query> --lang rust`
 - Rust entities → `/cq q "entity=function lang=rust"`
 - Rust patterns → `/cq q "pattern='pub fn \$F(\$$$)' lang=rust"`
-- Requires `CQ_ENABLE_RUST_QUERY=1` environment variable
 
 **Before refactoring closures:**
 - Find all closures → `/cq q "entity=function scope=closure in=<dir>"`
@@ -131,7 +130,7 @@ imports, comments, etc.
 # Plain queries in /cq q also fall back to search
 /cq q build_graph  # Same as: /cq search build_graph
 
-# Rust search (requires CQ_ENABLE_RUST_QUERY=1)
+# Rust search (Rust-only scope)
 /cq search register_udf --lang rust
 ```
 
@@ -160,7 +159,7 @@ imports, comments, etc.
 # Understand import structure before refactoring
 /cq q "entity=import in=src/extract/"
 
-# Rust entity queries (requires CQ_ENABLE_RUST_QUERY=1)
+# Rust entity queries (Rust-only scope)
 /cq q "entity=function lang=rust in=rust/"
 /cq q "entity=class name=~^Arrow lang=rust"
 ```
@@ -191,7 +190,7 @@ Pattern queries find structural code patterns without false positives from strin
 # Find closures before extraction
 /cq q "entity=function scope=closure in=src/semantics/"
 
-# Rust pattern queries (requires CQ_ENABLE_RUST_QUERY=1)
+# Rust pattern queries (Rust-only scope)
 /cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
 /cq q "pattern='impl \$T for \$Trait' lang=rust"
 ```

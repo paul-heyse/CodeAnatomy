@@ -64,6 +64,16 @@ except IndexError:
 _DELTA_TRACING_LOCK = threading.Lock()
 _DELTA_TRACING_READY = threading.Event()
 _LOGGER = logging.getLogger(__name__)
+_OBSERVABILITY_APPEND_ERRORS = (
+    DataFusionEngineError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    OSError,
+    KeyError,
+    ImportError,
+    AttributeError,
+)
 
 
 def ensure_delta_tracing() -> tuple[bool, str | None]:
@@ -458,7 +468,6 @@ def _ensure_observability_table(
     name: str,
     schema: pa.Schema,
 ) -> DatasetLocation | None:
-    _ = schema
     table_path = _observability_root(profile) / name
     delta_log_path = table_path / "_delta_log"
     has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
@@ -472,6 +481,14 @@ def _ensure_observability_table(
                 "error": "Delta log missing; observability table bootstrap skipped.",
             },
         )
+        return None
+    if not _ensure_observability_schema(
+        ctx,
+        profile,
+        table_path=table_path,
+        schema=schema,
+        operation="delta_observability_schema_reset",
+    ):
         return None
     location = DatasetLocation(path=str(table_path), format="delta")
     try:
@@ -500,6 +517,82 @@ def _ensure_observability_table(
         )
         return None
     return location
+
+
+def _ensure_observability_schema(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    table_path: Path,
+    schema: pa.Schema,
+    operation: str,
+) -> bool:
+    table_name = table_path.name
+    try:
+        from arro3.core import Schema as Arro3Schema
+        from deltalake import DeltaTable
+
+        current_schema = DeltaTable(str(table_path)).schema().to_arrow()
+        expected_schema = Arro3Schema.from_arrow(schema)
+    except (
+        RuntimeError,
+        TypeError,
+        ValueError,
+        OSError,
+        ImportError,
+        AttributeError,
+    ) as exc:
+        profile.record_artifact(
+            "delta_observability_schema_check_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": table_name,
+                "path": str(table_path),
+                "operation": operation,
+                "error": str(exc),
+            },
+        )
+        return False
+    if current_schema.equals(expected_schema):
+        return True
+    profile.record_artifact(
+        "delta_observability_schema_drift_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "table": table_name,
+            "path": str(table_path),
+            "operation": operation,
+            "expected_fields": list(expected_schema.names),
+            "observed_fields": list(current_schema.names),
+        },
+    )
+    try:
+        _bootstrap_observability_table(
+            ctx,
+            profile,
+            table_path=table_path,
+            schema=schema,
+            operation=operation,
+        )
+    except (
+        RuntimeError,
+        TypeError,
+        ValueError,
+        OSError,
+        ImportError,
+    ) as exc:
+        profile.record_artifact(
+            "delta_observability_schema_reset_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": table_name,
+                "path": str(table_path),
+                "operation": operation,
+                "error": str(exc),
+            },
+        )
+        return False
+    return True
 
 
 def _bootstrap_observability_table(
@@ -553,10 +646,10 @@ def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
 
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
     table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
-    append_name = f"{request.location.path}_append_{time.time_ns()}"
-    df = datafusion_from_arrow(request.ctx, name=append_name, value=table)
     pipeline = WritePipeline(ctx=request.ctx, runtime_profile=request.runtime_profile)
     try:
+        append_name = f"{request.location.path}_append_{time.time_ns()}"
+        df = datafusion_from_arrow(request.ctx, name=append_name, value=table)
         result = pipeline.write(
             WriteRequest(
                 source=df,
@@ -571,27 +664,71 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
                 },
             )
         )
-    except (
-        RuntimeError,
-        TypeError,
-        ValueError,
-        OSError,
-        ImportError,
-    ) as exc:  # pragma: no cover - defensive fail-open path
-        if request.runtime_profile is not None:
-            request.runtime_profile.record_artifact(
-                "delta_observability_append_failed_v1",
-                {
-                    "event_time_unix_ms": int(time.time() * 1000),
-                    "table": request.location.path,
-                    "operation": request.operation,
-                    "error": str(exc),
-                },
+    except _OBSERVABILITY_APPEND_ERRORS as exc:  # pragma: no cover - defensive fail-open path
+        if (
+            request.runtime_profile is not None
+            and _is_schema_mismatch_error(exc)
+            and _ensure_observability_schema(
+                request.ctx,
+                request.runtime_profile,
+                table_path=Path(str(request.location.path)),
+                schema=request.schema,
+                operation=f"{request.operation}_schema_repair",
             )
-        return None
+        ):
+            retry_name = f"{request.location.path}_append_retry_{time.time_ns()}"
+            retry_df = datafusion_from_arrow(request.ctx, name=retry_name, value=table)
+            try:
+                result = pipeline.write(
+                    WriteRequest(
+                        source=retry_df,
+                        destination=str(request.location.path),
+                        format=WriteFormat.DELTA,
+                        mode=WriteMode.APPEND,
+                        format_options={
+                            "commit_metadata": {
+                                "operation": request.operation,
+                                **(request.commit_metadata or {}),
+                            }
+                        },
+                    )
+                )
+            except _OBSERVABILITY_APPEND_ERRORS as retry_exc:  # pragma: no cover - defensive fail-open path
+                _record_append_failure(request, retry_exc)
+                return None
+        else:
+            _record_append_failure(request, exc)
+            return None
     if result.delta_result is None:
         return None
     return result.delta_result.version
+
+
+def _is_schema_mismatch_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "schemamismatcherror",
+            "schema mismatch",
+            "cannot cast schema",
+            "number of fields does not match",
+        )
+    )
+
+
+def _record_append_failure(request: _AppendObservabilityRequest, exc: Exception) -> None:
+    if request.runtime_profile is None:
+        return
+    request.runtime_profile.record_artifact(
+        "delta_observability_append_failed_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "table": request.location.path,
+            "operation": request.operation,
+            "error": str(exc),
+        },
+    )
 
 
 def _observability_root(profile: DataFusionRuntimeProfile) -> Path:

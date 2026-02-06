@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
@@ -40,11 +41,11 @@ from tools.cq.query.execution_requests import (
 )
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
-    RUST_QUERY_ENABLE_ENV,
     QueryLanguage,
-    disabled_language_message,
+    QueryLanguageScope,
+    expand_language_scope,
     file_extensions_for_language,
-    is_query_language_enabled,
+    file_extensions_for_scope,
 )
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
@@ -196,14 +197,6 @@ def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
     result.summary["error"] = message
-    return result
-
-
-def _language_disabled_result(ctx: QueryExecutionContext) -> CqResult:
-    result = mk_result(_build_runmeta(ctx))
-    result.summary["error"] = disabled_language_message(ctx.query.lang)
-    result.summary["lang"] = ctx.query.lang
-    result.summary["feature_flag"] = RUST_QUERY_ENABLE_ENV
     return result
 
 
@@ -401,6 +394,7 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
         "need_bytecode": plan.need_bytecode,
         "is_pattern_query": plan.is_pattern_query,
         "lang": plan.lang,
+        "lang_scope": plan.lang_scope,
     }
     file_result = _tabulate_scope_files(
         state.ctx.root,
@@ -420,6 +414,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
     result.summary["plan"] = {
         "is_pattern_query": True,
         "lang": plan.lang,
+        "lang_scope": plan.lang_scope,
         "pattern": query.pattern_spec.pattern if query.pattern_spec else None,
         "strictness": query.pattern_spec.strictness if query.pattern_spec else None,
         "context": query.pattern_spec.context if query.pattern_spec else None,
@@ -457,6 +452,9 @@ def execute_plan(
     CqResult
         Query results
     """
+    if query.lang_scope == "auto":
+        return _execute_auto_scope_plan(query, tc=tc, root=root, argv=argv or [])
+
     ctx = QueryExecutionContext(
         plan=plan,
         query=query,
@@ -465,13 +463,87 @@ def execute_plan(
         argv=argv or [],
         started_ms=ms(),
     )
+    return _execute_single_context(ctx)
 
-    if not is_query_language_enabled(ctx.query.lang):
-        return _language_disabled_result(ctx)
 
-    if plan.is_pattern_query:
+def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
+    if ctx.plan.is_pattern_query:
         return _execute_pattern_query(ctx)
     return _execute_entity_query(ctx)
+
+
+def _execute_auto_scope_plan(
+    query: Query,
+    *,
+    tc: Toolchain,
+    root: Path,
+    argv: list[str],
+) -> CqResult:
+    from tools.cq.query.planner import compile_query
+
+    results: dict[QueryLanguage, CqResult] = {}
+    for lang in expand_language_scope(query.lang_scope):
+        scoped_query = msgspec.structs.replace(query, lang_scope=cast("QueryLanguageScope", lang))
+        scoped_plan = compile_query(scoped_query)
+        scoped_ctx = QueryExecutionContext(
+            plan=scoped_plan,
+            query=scoped_query,
+            tc=tc,
+            root=root,
+            argv=argv,
+            started_ms=ms(),
+        )
+        results[lang] = _execute_single_context(scoped_ctx)
+    return _merge_auto_scope_results(query, results, root=root, argv=argv, tc=tc)
+
+
+def _merge_auto_scope_results(
+    query: Query,
+    results: dict[QueryLanguage, CqResult],
+    *,
+    root: Path,
+    argv: list[str],
+    tc: Toolchain,
+) -> CqResult:
+    run_ctx = RunContext.from_parts(root=root, argv=argv, tc=tc, started_ms=ms())
+    merged = mk_result(run_ctx.to_runmeta("q"))
+    language_order = list(expand_language_scope(query.lang_scope))
+    merged.summary["lang_scope"] = query.lang_scope
+    merged.summary["language_order"] = language_order
+    merged.summary["languages"] = {
+        lang: result.summary for lang, result in results.items()
+    }
+    merged.summary["cross_language_diagnostics"] = []
+
+    for lang in language_order:
+        result = results.get(lang)
+        if result is None:
+            continue
+        for finding in result.key_findings:
+            if finding.details.kind is None:
+                finding.details.kind = finding.category
+            finding.details.data.setdefault("language", lang)
+            merged.key_findings.append(finding)
+        for finding in result.evidence:
+            if finding.details.kind is None:
+                finding.details.kind = finding.category
+            finding.details.data.setdefault("language", lang)
+            merged.evidence.append(finding)
+        for section in result.sections:
+            section_findings: list[Finding] = []
+            for finding in section.findings:
+                if finding.details.kind is None:
+                    finding.details.kind = finding.category
+                finding.details.data.setdefault("language", lang)
+                section_findings.append(finding)
+            merged.sections.append(
+                Section(
+                    title=f"{lang}: {section.title}",
+                    findings=section_findings,
+                    collapsed=section.collapsed,
+                )
+            )
+    return merged
 
 
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
@@ -509,8 +581,6 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
     )
-    if not is_query_language_enabled(ctx.query.lang):
-        return _language_disabled_result(ctx)
     scan_ctx = _build_scan_context(request.records)
     candidates = _build_entity_candidates(scan_ctx, request.records)
     candidates = _apply_rule_spans(
@@ -592,9 +662,6 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         argv=request.argv,
         started_ms=ms(),
     )
-    if not is_query_language_enabled(ctx.query.lang):
-        return _language_disabled_result(ctx)
-
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if request.plan.explain and request.decisions is not None:
@@ -670,7 +737,7 @@ def _execute_ast_grep_rules(
         paths=paths,
         root=root,
         query=query,
-        lang=query.lang if query is not None else DEFAULT_QUERY_LANGUAGE,
+        lang=query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE,
     )
     state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
     _run_ast_grep(ctx, state)
@@ -900,9 +967,14 @@ def _collect_match_spans(
         repo_index,
         paths,
         globs,
-        extensions=file_extensions_for_language(query.lang),
+        extensions=file_extensions_for_scope(query.lang_scope),
     )
-    matches = _collect_ast_grep_match_spans(file_result.files, rules, root, query.lang)
+    matches = _collect_ast_grep_match_spans(
+        file_result.files,
+        rules,
+        root,
+        query.primary_language,
+    )
     if not matches:
         return {}
     if not query.metavar_filters:
@@ -1354,7 +1426,7 @@ def rg_files_with_matches(
     *,
     limits: SearchLimits | None = None,
 ) -> list[Path]:
-    """Use rpygrep to find files matching pattern.
+    """Use ripgrep to find files matching pattern.
 
     Parameters
     ----------

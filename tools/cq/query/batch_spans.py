@@ -38,7 +38,7 @@ def collect_span_filters(
     """
     per_query: list[list[AstGrepMatchSpan]] = [[] for _ in queries]
     rule_sets = [plan.sg_rules if plan.sg_rules else () for plan in plans]
-    query_langs: list[QueryLanguage] = [query.lang for query in queries]
+    query_langs: list[QueryLanguage] = [query.primary_language for query in queries]
 
     for file_path in files:
         _collect_file_matches(

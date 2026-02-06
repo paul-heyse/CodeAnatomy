@@ -28,7 +28,7 @@ class MatchPayload:
 
 @dataclass
 class RgCollector:
-    """Collector for rpygrep JSON output."""
+    """Collector for ripgrep JSON output."""
 
     limits: SearchLimits
     match_factory: Callable[..., RawMatch]

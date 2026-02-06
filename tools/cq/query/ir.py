@@ -9,7 +9,12 @@ from typing import Annotated, Literal, cast, get_args
 
 import msgspec
 
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguage,
+    QueryLanguageScope,
+    expand_language_scope,
+)
 
 # Entity types that can be queried
 EntityType = Literal["function", "class", "method", "module", "callsite", "import", "decorator"]
@@ -597,8 +602,8 @@ class Query(msgspec.Struct, frozen=True):
         Composite rule (all/any/not) for combining patterns
     nth_child
         Positional matching specification
-    lang
-        Query language. Defaults to ``python``.
+    lang_scope
+        Query language scope. Defaults to ``auto``.
     """
 
     entity: EntityType | None = None
@@ -616,7 +621,7 @@ class Query(msgspec.Struct, frozen=True):
     metavar_filters: tuple[MetaVarFilter, ...] = ()
     composite: CompositeRule | None = None
     nth_child: NthChildSpec | None = None
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
     def __post_init__(self) -> None:
         """Validate query configuration.
@@ -664,7 +669,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
     def with_expand(self, *expanders: Expander) -> Query:
@@ -693,7 +698,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
     def with_fields(self, *fields: FieldType) -> Query:
@@ -722,7 +727,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
     def with_relational(self, *constraints: RelationalConstraint) -> Query:
@@ -751,7 +756,7 @@ class Query(msgspec.Struct, frozen=True):
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
     def get_all_relational_constraints(self) -> list[RelationalConstraint]:
@@ -763,3 +768,13 @@ class Query(msgspec.Struct, frozen=True):
             All relational constraints in this query.
         """
         return list(self.relational)
+
+    @property
+    def languages(self) -> tuple[QueryLanguage, ...]:
+        """Concrete languages represented by ``lang_scope``."""
+        return expand_language_scope(self.lang_scope)
+
+    @property
+    def primary_language(self) -> QueryLanguage:
+        """Primary language for deterministic defaults and tie-breaks."""
+        return self.languages[0]

@@ -1,34 +1,55 @@
-"""Toolchain detection for cq.
-
-Detects availability and versions of external tools (ast-grep-py, python, rpygrep).
-"""
+"""Toolchain detection for CQ."""
 
 from __future__ import annotations
+
+import subprocess
 
 from tools.cq.core.structs import CqStruct
 
 
-class Toolchain(CqStruct, frozen=True):
-    """Available tools and their versions.
+def _package_version(name: str) -> str | None:
+    """Return installed package version when available.
 
-    Parameters
-    ----------
-    rpygrep_available : bool
-        Whether rpygrep Python package is available.
-    rpygrep_version : str | None
-        rpygrep package version string.
-    sgpy_available : bool
-        Whether ast-grep-py Python package is available.
-    sgpy_version : str | None
-        ast-grep-py package version string.
-    py_path : str
-        Path to Python interpreter.
-    py_version : str
-        Python version string.
+    Returns
+    -------
+    str | None
+        Package version, otherwise ``None``.
     """
+    try:
+        import importlib.metadata
+    except ImportError:
+        return None
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
-    rpygrep_available: bool
-    rpygrep_version: str | None
+
+def _detect_rg() -> tuple[bool, str | None]:
+    """Detect ripgrep availability.
+
+    Returns
+    -------
+    tuple[bool, str | None]
+        Availability flag and version banner.
+    """
+    proc = subprocess.run(
+        ["rg", "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return False, None
+    line = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
+    return True, line or None
+
+
+class Toolchain(CqStruct, frozen=True):
+    """Available tools and versions."""
+
+    rg_available: bool
+    rg_version: str | None
     sgpy_available: bool
     sgpy_version: str | None
     py_path: str
@@ -41,48 +62,18 @@ class Toolchain(CqStruct, frozen=True):
         Returns
         -------
         Toolchain
-            Detected tool information.
+            Detected toolchain snapshot.
         """
         import sys
 
-        # Detect rpygrep Python package
-        rpygrep_available = False
-        rpygrep_version = None
-        try:
-            import importlib.metadata
-        except ImportError:
-            # importlib.metadata not available (Python < 3.8)
-            pass
-        else:
-            try:
-                rpygrep_version = importlib.metadata.version("rpygrep")
-                rpygrep_available = True
-            except importlib.metadata.PackageNotFoundError:
-                # rpygrep package not installed
-                pass
-
-        # Detect ast-grep-py Python package
-        sgpy_available = False
-        sgpy_version = None
-        try:
-            import importlib.metadata
-        except ImportError:
-            pass
-        else:
-            try:
-                sgpy_version = importlib.metadata.version("ast-grep-py")
-                sgpy_available = True
-            except importlib.metadata.PackageNotFoundError:
-                # ast-grep-py package not installed
-                pass
-
-        # Python is always available
+        rg_available, rg_version = _detect_rg()
+        sgpy_version = _package_version("ast-grep-py")
+        sgpy_available = sgpy_version is not None
         py_path = sys.executable
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-
         return Toolchain(
-            rpygrep_available=rpygrep_available,
-            rpygrep_version=rpygrep_version,
+            rg_available=rg_available,
+            rg_version=rg_version,
             sgpy_available=sgpy_available,
             sgpy_version=sgpy_version,
             py_path=py_path,
@@ -90,67 +81,57 @@ class Toolchain(CqStruct, frozen=True):
         )
 
     def to_dict(self) -> dict[str, str | None]:
-        """Convert to dict for RunMeta.
+        """Convert to run metadata mapping.
 
         Returns
         -------
         dict[str, str | None]
-            Tool version information.
+            Tool version mapping for run metadata.
         """
         return {
-            "rpygrep": self.rpygrep_version,
+            "rg": self.rg_version,
             "sgpy": self.sgpy_version,
             "python": self.py_version,
         }
 
-    def require_rpygrep(self) -> None:
-        """Verify rpygrep package is available, raising if not.
+    def require_rg(self) -> None:
+        """Verify ripgrep is available.
 
         Raises
         ------
         RuntimeError
-            If rpygrep is not installed.
+            Raised when ripgrep is missing.
         """
-        if not self.rpygrep_available:
-            msg = (
-                "rpygrep Python package is required but not found. "
-                "Install with: pip install rpygrep or uv add rpygrep"
-            )
+        if not self.rg_available:
+            msg = "ripgrep (rg) is required but was not found on PATH."
             raise RuntimeError(msg)
 
     def require_sgpy(self) -> None:
-        """Verify ast-grep-py package is available, raising if not.
+        """Verify ast-grep-py package is available.
 
         Raises
         ------
         RuntimeError
-            If ast-grep-py is not installed.
+            Raised when ast-grep-py is missing.
         """
         if not self.sgpy_available:
             msg = (
                 "ast-grep-py Python package is required but not found. "
-                "Install with: pip install ast-grep-py or uv add ast-grep-py"
+                "Install with: uv add ast-grep-py"
             )
             raise RuntimeError(msg)
 
     @property
     def has_sgpy(self) -> bool:
-        """Check if ast-grep-py is available.
-
-        Returns
-        -------
-        bool
-            True if ast-grep-py Python package is installed.
-        """
+        """Check whether ast-grep-py is available."""
         return self.sgpy_available
 
     @property
-    def has_rpygrep(self) -> bool:
-        """Check if rpygrep is available.
+    def has_rg(self) -> bool:
+        """Check whether ripgrep is available."""
+        return self.rg_available
 
-        Returns
-        -------
-        bool
-            True if rpygrep Python package is installed.
-        """
-        return self.rpygrep_available
+
+__all__ = [
+    "Toolchain",
+]

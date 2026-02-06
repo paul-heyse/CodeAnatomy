@@ -626,7 +626,7 @@ def _resolve_dataset_schema_internal(
     if location.format == "delta":
         from datafusion_engine.delta.service import delta_service_for_profile
 
-        schema = delta_service_for_profile(None).table_schema(
+        return delta_service_for_profile(None).table_schema(
             DeltaSchemaRequest(
                 path=str(location.path),
                 storage_options=location.storage_options or None,
@@ -636,10 +636,6 @@ def _resolve_dataset_schema_internal(
                 gate=delta_feature_gate,
             )
         )
-        if schema is None:
-            msg = f"Delta schema unavailable for dataset at {location.path!r}."
-            raise ValueError(msg)
-        return schema
     return None
 
 

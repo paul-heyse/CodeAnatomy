@@ -37,8 +37,8 @@ def test_relational_batching_parses_each_file_once(
     ctx = CliContext.build(argv=["cq", "run"], root=tmp_path)
     plan = RunPlan(
         steps=(
-            QStep(query="entity=function inside='def outer_alpha'"),
-            QStep(query="entity=function inside='def outer_beta'"),
+            QStep(query="entity=function inside='def outer_alpha' lang=python"),
+            QStep(query="entity=function inside='def outer_beta' lang=python"),
         )
     )
     result = execute_run_plan(plan, ctx)

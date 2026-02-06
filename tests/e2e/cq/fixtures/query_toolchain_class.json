@@ -5,18 +5,20 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 37,
-        "end_line": 156,
+        "end_col": 32,
+        "end_line": 132,
         "file": "tools/cq/core/toolchain.py",
-        "line": 11
+        "line": 48
       },
       "category": "definition",
       "details": {
         "data": {
           "calls_within": 0,
           "kind": "class_bases",
+          "language": "python",
           "name": "Toolchain"
         },
+        "kind": "definition",
         "score": {
           "confidence_bucket": "high",
           "confidence_score": 0.95,
@@ -36,15 +38,31 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.12",
-      "rpygrep": "0.2.1",
+      "rg": "ripgrep 15.0.0",
       "sgpy": "0.40.5"
     }
   },
   "sections": [],
   "summary": {
-    "files_scanned": 1,
-    "matches": 1,
-    "total_calls": 5,
-    "total_defs": 7
+    "cross_language_diagnostics": [],
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "languages": {
+      "python": {
+        "files_scanned": 1,
+        "matches": 1,
+        "total_calls": 9,
+        "total_defs": 9
+      },
+      "rust": {
+        "files_scanned": 0,
+        "matches": 0,
+        "total_calls": 0,
+        "total_defs": 0
+      }
+    }
   }
 }

@@ -333,7 +333,7 @@ def _find_function_signature(
     root: Path,
     function_name: str,
 ) -> str:
-    """Find function signature on-demand using rpygrep.
+    """Find function signature on-demand using ripgrep.
 
     Avoids full repo scan by finding only the file containing the
     function definition and parsing just that file.
@@ -603,7 +603,7 @@ def _rg_find_candidates(
     *,
     limits: SearchLimits | None = None,
 ) -> list[tuple[Path, int]]:
-    """Use rpygrep to find candidate files/lines.
+    """Use ripgrep to find candidate files/lines.
 
     Parameters
     ----------
@@ -991,7 +991,7 @@ class CallScanResult:
 
 
 def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
-    """Scan for call sites using ast-grep, falling back to rpygrep if needed.
+    """Scan for call sites using ast-grep, falling back to ripgrep if needed.
 
     Returns
     -------
@@ -1108,7 +1108,7 @@ def _build_calls_summary(
         "scanned_files": len(scan_result.scan_files),
         "call_records": len(scan_result.call_records),
         "rg_candidates": scan_result.rg_candidates,
-        "scan_method": "ast-grep" if not scan_result.used_fallback else "rpygrep",
+        "scan_method": "ast-grep" if not scan_result.used_fallback else "rg",
     }
 
 

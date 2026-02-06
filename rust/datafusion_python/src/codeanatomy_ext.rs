@@ -632,7 +632,9 @@ fn install_codeanatomy_policy_config(
     let state_ref = ctx.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
-    let policy = ensure_policy_config(config.options_mut());
+    let policy = ensure_policy_config(config.options_mut()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Planner policy configuration failed: {err}"))
+    })?;
     if let Some(value) = allow_ddl {
         policy.allow_ddl = value;
     }
@@ -654,7 +656,9 @@ fn install_codeanatomy_physical_config(
     let state_ref = ctx.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
-    let physical = ensure_physical_config(config.options_mut());
+    let physical = ensure_physical_config(config.options_mut()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Physical policy configuration failed: {err}"))
+    })?;
     if let Some(value) = enabled {
         physical.enabled = value;
     }

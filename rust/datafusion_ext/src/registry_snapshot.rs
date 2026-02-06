@@ -90,7 +90,12 @@ fn record_scalar_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
-        record_scalar_flags(name, udf_ref.signature(), udf_ref.inner().as_ref(), snapshot);
+        record_scalar_flags(
+            name,
+            udf_ref.signature(),
+            udf_ref.inner().as_ref(),
+            snapshot,
+        );
         record_signature_details(name, udf_ref.signature(), snapshot, |arg_types| {
             udf_ref.return_type(arg_types).ok()
         });
@@ -359,10 +364,7 @@ fn custom_signatures() -> BTreeMap<String, FunctionSignature> {
         "arrow_metadata".to_string(),
         FunctionSignature {
             inputs: vec![vec![DataType::Null], vec![DataType::Null, DataType::Utf8]],
-            returns: vec![
-                normalized_map_type(),
-                DataType::Utf8,
-            ],
+            returns: vec![normalized_map_type(), DataType::Utf8],
         },
     );
     let stable_id_inputs = (2..=65)
@@ -795,6 +797,7 @@ fn record_signature_details<F>(
 ) where
     F: FnMut(&[DataType]) -> Option<DataType>,
 {
+    let user_defined_signature = matches!(signature.type_signature, TypeSignature::UserDefined);
     let arg_sets = signature_arg_sets(signature);
     if arg_sets.is_empty() {
         return;
@@ -803,12 +806,14 @@ fn record_signature_details<F>(
     let mut return_rows = Vec::with_capacity(arg_sets.len());
     for arg_types in arg_sets {
         input_rows.push(arg_types.iter().map(format_data_type).collect::<Vec<_>>());
-        let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            return_type(&arg_types)
-        }))
-        .ok()
-        .and_then(|value| value)
-        .unwrap_or(DataType::Null);
+        let resolved = if user_defined_signature {
+            DataType::Null
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| return_type(&arg_types)))
+                .ok()
+                .and_then(|value| value)
+                .unwrap_or(DataType::Null)
+        };
         return_rows.push(format_data_type(&resolved));
     }
     snapshot

@@ -11,6 +11,7 @@ use arrow::record_batch::RecordBatch;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::datasource::MemTable;
+use datafusion::optimizer::OptimizerConfig;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -367,7 +368,8 @@ fn simplify_span_len_constant_folds() -> Result<()> {
         None,
     );
     let expr = lit(ScalarValue::Struct(Arc::new(span)));
-    let info = SimplifyContext::new(&ExecutionProps::new());
+    let props = ExecutionProps::new();
+    let info = SimplifyContext::new(&props);
     let result = udf.inner().simplify(vec![expr], &info)?;
     let ExprSimplifyResult::Simplified(expr) = result else {
         panic!("span_len did not simplify");
@@ -391,7 +393,8 @@ fn simplify_list_unique_sorted_constant_folds() -> Result<()> {
     builder.append(true);
     let list_array = builder.finish();
     let expr = lit(ScalarValue::List(Arc::new(list_array)));
-    let info = SimplifyContext::new(&ExecutionProps::new());
+    let props = ExecutionProps::new();
+    let info = SimplifyContext::new(&props);
     let result = udf.inner().simplify(vec![expr], &info)?;
     let ExprSimplifyResult::Simplified(expr) = result else {
         panic!("list_unique_sorted did not simplify");
@@ -399,8 +402,8 @@ fn simplify_list_unique_sorted_constant_folds() -> Result<()> {
     let Expr::Literal(ScalarValue::List(array), _) = expr else {
         panic!("unexpected simplified expr");
     };
-    let values = array
-        .value(0)
+    let list_values = array.value(0);
+    let values = list_values
         .as_any()
         .downcast_ref::<StringArray>()
         .expect("list values");
@@ -420,7 +423,8 @@ fn simplify_map_get_default_constant_folds() -> Result<()> {
     let map_expr = lit(ScalarValue::Map(Arc::new(map_array)));
     let key_expr = lit(ScalarValue::Utf8(Some("alpha".to_string())));
     let default_expr = lit(ScalarValue::Utf8(Some("fallback".to_string())));
-    let info = SimplifyContext::new(&ExecutionProps::new());
+    let props = ExecutionProps::new();
+    let info = SimplifyContext::new(&props);
     let result = udf
         .inner()
         .simplify(vec![map_expr, key_expr, default_expr], &info)?;
@@ -1205,9 +1209,12 @@ fn count_distinct_window_uses_sliding_accumulator() -> Result<()> {
 #[test]
 fn udf_expr_registry_first_resolves_builtin_registry() -> Result<()> {
     let ctx = SessionContext::new();
-    let registry = ctx.state().function_registry();
+    let state = ctx.state();
+    let registry = state
+        .function_registry()
+        .expect("function registry available");
     let expr = udf_expr::expr_from_registry_or_specs(
-        registry.as_ref(),
+        registry,
         "sqrt",
         vec![lit(4_f64)],
         None,

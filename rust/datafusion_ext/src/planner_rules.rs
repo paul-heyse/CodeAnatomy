@@ -41,8 +41,16 @@ crate::impl_extension_options!(
     prefix = PREFIX,
     unknown_key = "Unknown CodeAnatomy policy config key: {key}",
     fields = [
-        (allow_ddl, bool, "Allow DDL logical plans (CREATE/DROP/etc)."),
-        (allow_dml, bool, "Allow DML logical plans (INSERT/UPDATE/DELETE)."),
+        (
+            allow_ddl,
+            bool,
+            "Allow DDL logical plans (CREATE/DROP/etc)."
+        ),
+        (
+            allow_dml,
+            bool,
+            "Allow DML logical plans (INSERT/UPDATE/DELETE)."
+        ),
         (
             allow_statements,
             bool,
@@ -70,14 +78,22 @@ impl AnalyzerRule for CodeAnatomyPolicyRule {
     }
 }
 
-pub fn ensure_policy_config(options: &mut ConfigOptions) -> &mut CodeAnatomyPolicyConfig {
-    if options.extensions.get::<CodeAnatomyPolicyConfig>().is_none() {
-        options.extensions.insert(CodeAnatomyPolicyConfig::default());
+pub fn ensure_policy_config(options: &mut ConfigOptions) -> Result<&mut CodeAnatomyPolicyConfig> {
+    if options
+        .extensions
+        .get::<CodeAnatomyPolicyConfig>()
+        .is_none()
+    {
+        options
+            .extensions
+            .insert(CodeAnatomyPolicyConfig::default());
     }
     options
         .extensions
         .get_mut::<CodeAnatomyPolicyConfig>()
-        .expect("CodeAnatomyPolicyConfig should be installed")
+        .ok_or_else(|| {
+            DataFusionError::Internal("CodeAnatomyPolicyConfig should be installed".to_string())
+        })
 }
 
 pub fn install_policy_rules(ctx: &SessionContext) -> Result<()> {

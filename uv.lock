@@ -693,7 +693,7 @@ dependencies = [
     { name = "pyarrow" },
 ]
 wheels = [
-    { filename = "datafusion-51.0.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:c42b85921ab1eea04b276b50112aecf306ed1b25a638d895d9805c3b63fb7f00" },
+    { filename = "datafusion-51.0.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:46e6ebf13d71a2e68e833a712b21e28c1f2aa751616e7e367fe0ad3ed72bbd28" },
 ]
 
 [package.metadata]
@@ -711,7 +711,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:dd1a73fa48f9f07e0eff937bd51f21aff0858ad9bacfdaf64583752a85eb5447" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl", hash = "sha256:0e33f1fe876ee53a42109bd3684888f11e93192778598dbb39ec3ce9afbe1aaf" },
 ]
 
 [package.metadata]

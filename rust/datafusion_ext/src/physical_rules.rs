@@ -3,11 +3,11 @@ use std::sync::Arc;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::config::{ConfigExtension, ConfigOptions};
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 const PREFIX: &str = "codeanatomy_physical";
 
@@ -43,11 +43,7 @@ crate::impl_extension_options!(
     prefix = PREFIX,
     unknown_key = "Unknown CodeAnatomy physical config key: {key}",
     fields = [
-        (
-            enabled,
-            bool,
-            "Enable CodeAnatomy physical rulepack."
-        ),
+        (enabled, bool, "Enable CodeAnatomy physical rulepack."),
         (
             coalesce_partitions,
             bool,
@@ -65,14 +61,24 @@ impl ConfigExtension for CodeAnatomyPhysicalConfig {
     const PREFIX: &'static str = PREFIX;
 }
 
-pub fn ensure_physical_config(options: &mut ConfigOptions) -> &mut CodeAnatomyPhysicalConfig {
-    if options.extensions.get::<CodeAnatomyPhysicalConfig>().is_none() {
-        options.extensions.insert(CodeAnatomyPhysicalConfig::default());
+pub fn ensure_physical_config(
+    options: &mut ConfigOptions,
+) -> Result<&mut CodeAnatomyPhysicalConfig> {
+    if options
+        .extensions
+        .get::<CodeAnatomyPhysicalConfig>()
+        .is_none()
+    {
+        options
+            .extensions
+            .insert(CodeAnatomyPhysicalConfig::default());
     }
     options
         .extensions
         .get_mut::<CodeAnatomyPhysicalConfig>()
-        .expect("CodeAnatomyPhysicalConfig should be installed")
+        .ok_or_else(|| {
+            DataFusionError::Internal("CodeAnatomyPhysicalConfig should be installed".to_string())
+        })
 }
 
 #[derive(Debug, Default)]
@@ -111,7 +117,7 @@ pub fn install_physical_rules(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
-    let _ = ensure_physical_config(config.options_mut());
+    let _ = ensure_physical_config(config.options_mut())?;
     let builder = SessionStateBuilder::from(state.clone())
         .with_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule::default()));
     *state = builder.build();
